@@ -16,7 +16,8 @@ the feeds its own users configure and delivers only to the addresses in its own 
 
 - An install has one or more **users**, each with an id, a name, one or more Send to Kindle
   addresses and a daily article cap (default 8).
-- **Sources** are RSS or Atom feeds. Each has a name, a URL and optional settings:
+- **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). Each has a name, a URL
+  (feeds) and optional settings:
   - `pinned`: its articles are taken before all other sources.
   - `extract`: `auto` (default), `page` (always use the web page) or `feed` (use only the
     feed's own text; the article page is never fetched).
@@ -200,6 +201,23 @@ Ratings influence delivery only when model ranking is on.
 - The call counts against the daily token cap and is skipped when it would cross it.
   `llm.check_extraction: false` turns it off.
 
+## 7d. Recipe sources (optional)
+
+- A separate **recipes container** holds Calibre. Once a day at `RECIPES_TIME` it runs each
+  recipe listed in `<data>/recipes/recipes.conf` and writes the issue to
+  `<data>/recipes/<folder>/<date>.epub`. An issue is published only when the recipe succeeds;
+  issues older than 7 days are removed.
+- Logins for subscriber publications are given to that container alone, as environment
+  variables from `recipes.env`. It mounts only the `recipes` folder.
+- A source of `type: recipe` reads the newest issue in its folder and splits it into
+  articles, in the issue's order: navigation is removed, the original URL is taken from the
+  issue, and images are taken from the issue itself. Up to 30 articles per issue become
+  candidates.
+- Recipe articles are extracted from the issue only; their pages are never fetched. From
+  there they are treated like feed articles: sanitised, ranked, capped, rated and
+  deduplicated by URL against every other source.
+- No issue from the last `max_age_days`, or an unreadable one, counts as a failed source.
+
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
@@ -245,13 +263,14 @@ place on start-up. Backing up the data folder backs up everything.
 - One image, published to GHCR by CI on every push to `main`. Containers run as UID 1000
   with a read-only root filesystem and no added capabilities.
 - Three containers: the scheduler, the feedback service, and a `cloudflared` tunnel that
-  shares the feedback container's network namespace. No host port is published.
+  shares the feedback container's network namespace. No host port is published. An optional
+  fourth runs Calibre recipes from its own image.
 - `deploy/docker-compose.yml`, or `deploy/deploy.sh` with plain `docker run`.
   `deploy/poll-deploy.sh` redeploys when the app image changes, replaces only the tunnel
   when just its image changed, and restarts the stack after a reboot.
 - The Kindle browser needs TLS 1.2, so the feedback hostname's zone must not require 1.3.
 
-See `docs/setup-deploy.md` and `docs/setup-email.md`.
+See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 
 ## 13. Security properties
 
@@ -277,5 +296,5 @@ See `docs/setup-deploy.md` and `docs/setup-email.md`.
 - Searching Hacker News and Lobsters beyond their front pages; a watch list for vendor
   announcements.
 - A web interface for sources, preferences and a "newsstand" of delivered articles.
-- Sources other than RSS/Atom (newsletters by email, Calibre news recipes).
+- Newsletters by email as a source.
 - E-readers other than Kindle.

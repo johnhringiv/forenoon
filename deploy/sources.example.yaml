@@ -28,5 +28,7 @@ sources:
   # News: feeds are partial text, so extract from the page.
   - {name: Ars Technica Security, url: "https://arstechnica.com/security/feed/", extract: page}
   - {name: Ars Technica AI, url: "https://arstechnica.com/ai/feed/", extract: page}
-  # Wired and the FT are not fetched here: they will come from Calibre news recipes
-  # in a later phase.
+
+  # A publication read through a Calibre news recipe instead of a feed; needs the optional
+  # recipes container (docs/setup-recipes.md).
+  # - {name: Wired, type: recipe, recipe: wired}

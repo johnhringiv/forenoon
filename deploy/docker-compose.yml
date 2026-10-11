@@ -37,6 +37,28 @@ services:
     # No published port: the tunnel below is the only way in. For your own reverse proxy
     # instead, add  ports: ["127.0.0.1:8080:8080"]
 
+  # Enabled by adding "recipes" to COMPOSE_PROFILES in .env. Runs Calibre news recipes into
+  # <data>/recipes; see docs/setup-recipes.md. Logins come from recipes.env only.
+  recipes:
+    build: ../recipes
+    image: ${RECIPES_IMAGE:-forenoon-recipes:local}
+    profiles: [recipes]
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    network_mode: bridge
+    volumes:
+      - ${FORENOON_HOST_DATA}/recipes:/recipes
+    env_file:
+      - path: recipes.env
+        required: false
+    environment:
+      TZ: ${TZ:-UTC}
+      RECIPES_TIME: ${RECIPES_TIME:-05:00}
+
   # Enabled by COMPOSE_PROFILES=cloudflared in .env.
   # In the Cloudflare dashboard, route the public hostname to http://localhost:8080
   cloudflared:

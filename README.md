@@ -42,6 +42,7 @@ Cloudflare Tunnel. Setup guides:
 
 - [docs/setup-email.md](docs/setup-email.md): SMTP relay and Amazon's approved sender list
 - [docs/setup-deploy.md](docs/setup-deploy.md): compose on a NAS, Cloudflare Tunnel, backups
+- [docs/setup-recipes.md](docs/setup-recipes.md): subscriber publications through Calibre news recipes (optional)
 
 ## Security notes
 

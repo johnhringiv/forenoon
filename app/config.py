@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+RECIPE_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
 DISCOVERY_SITES = ("hackernews", "lobsters")
 
 
@@ -88,13 +90,14 @@ class Alerts:
 @dataclass(frozen=True)
 class Source:
     name: str
-    url: str
-    type: str = "rss"
+    url: str = ""
+    type: str = "rss"  # "rss", or "recipe" for issues written by the recipes container
     tier: str = "clean"
     pinned: bool = False
     # auto: extract from the page, fall back to feed content. page / feed force one.
     extract: str = "auto"
     users: tuple[str, ...] = ()
+    recipe: str = ""  # for type "recipe": the folder under <data>/recipes holding its issues
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,10 @@ class Config:
     llm: Llm = field(default_factory=Llm)
     discovery: Discovery = field(default_factory=Discovery)
     sources: tuple[Source, ...] = ()
+
+    @property
+    def recipes_dir(self) -> Path:
+        return self.data_dir / "recipes"
 
     @property
     def pages_dir(self) -> Path:
@@ -167,13 +174,22 @@ def _build(cls: type, raw: dict[str, Any], where: str) -> Any:
 
 def load_sources(path: Path) -> tuple[Source, ...]:
     raw = _load_yaml(path).get("sources") or []
-    sources = tuple(_build(Source, item, f"{path}: source #{i}") for i, item in enumerate(raw))
+    # A recipe's issue is the only copy we may have (subscriber content), so it is not re-fetched.
+    recipe_defaults = {"extract": "feed"}
+    sources = tuple(
+        _build(Source, {**(recipe_defaults if item.get("type") == "recipe" else {}), **item}, f"{path}: source #{i}")
+        for i, item in enumerate(raw)
+    )
     names = [s.name for s in sources]
     if len(names) != len(set(names)):
         raise ConfigError(f"{path}: source names must be unique")
     for source in sources:
-        if source.type != "rss":
-            raise ConfigError(f"{path}: {source.name}: only type 'rss' is supported in Phase 0")
+        if source.type not in ("rss", "recipe"):
+            raise ConfigError(f"{path}: {source.name}: type must be rss or recipe")
+        if source.type == "rss" and not source.url:
+            raise ConfigError(f"{path}: {source.name}: url is required")
+        if source.type == "recipe" and not RECIPE_SLUG.fullmatch(source.recipe):
+            raise ConfigError(f"{path}: {source.name}: recipe must be a folder name (a-z, 0-9, -)")
         if source.extract not in ("auto", "page", "feed"):
             raise ConfigError(f"{path}: {source.name}: extract must be auto, page or feed")
     return sources

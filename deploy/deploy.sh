@@ -8,10 +8,15 @@
 #   sudo sh deploy.sh [env-file] <image-tarball>  # load a saved image instead (offline)
 #
 #   sudo ONLY=tunnel sh deploy.sh [env-file]      # replace just the cloudflared container
+#   sudo ONLY=recipes sh deploy.sh [env-file]     # replace just the recipes container
 #
 # IMAGE comes from the environment, then the env file, then forenoon:local.
 # CLOUDFLARED_IMAGE likewise, defaulting to cloudflare/cloudflared:latest.
 # Roll back with:  sudo IMAGE=ghcr.io/<owner>/<repo>:sha-abc123 sh deploy.sh
+#
+# Recipes (optional): with RECIPES_IMAGE set, a fourth container runs Calibre news recipes
+# into <data>/recipes. Its logins come from recipes.env beside the env file (or
+# RECIPES_ENV_FILE) and reach no other container.
 #
 # The env file is .env.example filled in. FORENOON_HOST_DATA is the data folder; if
 # config.yaml / sources.yaml (and optionally forenoon.sqlite3) sit next
@@ -41,6 +46,11 @@ IMAGE="${IMAGE:-$(env_get IMAGE)}"
 IMAGE="${IMAGE:-forenoon:local}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
+RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
+RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(env_get RECIPES_ENV_FILE)}"
+RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(dirname "$ENV_FILE")/recipes.env}"
+RECIPES_TIME=$(env_get RECIPES_TIME)
+export RECIPES_TIME="${RECIPES_TIME:-05:00}"
 DATA_DIR=$(env_get FORENOON_HOST_DATA)
 [ -n "$DATA_DIR" ] || { echo "FORENOON_HOST_DATA is not set in $ENV_FILE"; exit 1; }
 TZ=$(env_get TZ)
@@ -67,6 +77,43 @@ start_tunnel() {
         -e TUNNEL_TOKEN \
         "$CLOUDFLARED_IMAGE" tunnel --no-autoupdate run >/dev/null
 }
+
+start_recipes() {
+    docker stop -t 30 forenoon-recipes >/dev/null 2>&1 || true
+    docker rm -f forenoon-recipes >/dev/null 2>&1 || true
+    [ -n "$RECIPES_IMAGE" ] || return 0
+    docker pull -q "$RECIPES_IMAGE" >/dev/null ||
+        echo "pull failed; will use local image $RECIPES_IMAGE if present"
+    if [ ! -d "$DATA_DIR/recipes" ]; then
+        mkdir -p "$DATA_DIR/recipes"
+        chown 1000:1000 "$DATA_DIR/recipes"
+    fi
+    if [ -f "$DIR/recipes.conf" ] && [ ! -e "$DATA_DIR/recipes/recipes.conf" ]; then
+        cp "$DIR/recipes.conf" "$DATA_DIR/recipes/recipes.conf"
+        chown 1000:1000 "$DATA_DIR/recipes/recipes.conf"
+        echo "seeded $DATA_DIR/recipes/recipes.conf"
+    fi
+    logins=""
+    [ ! -f "$RECIPES_ENV_FILE" ] || logins="--env-file $RECIPES_ENV_FILE"
+    # Only the recipes folder is mounted: this container never sees the database or config.
+    # shellcheck disable=SC2086
+    docker run -d --name forenoon-recipes --restart unless-stopped \
+        --stop-timeout 30 \
+        --read-only --tmpfs /tmp \
+        --cap-drop ALL --security-opt no-new-privileges:true \
+        -v "$DATA_DIR/recipes:/recipes" \
+        -e TZ -e RECIPES_TIME $logins \
+        "$RECIPES_IMAGE" >/dev/null ||
+        echo "recipes container did not start; the rest of the deploy is unaffected"
+}
+
+if [ "${ONLY:-}" = "recipes" ]; then
+    echo "$(date -u +%FT%TZ) recreating forenoon-recipes from ${RECIPES_IMAGE:-(none set)}"
+    start_recipes
+    sleep 3
+    docker ps --filter name=forenoon-recipes --format '{{.Names}}: {{.Status}}'
+    exit 0
+fi
 
 if [ "${ONLY:-}" = "tunnel" ]; then
     echo "$(date -u +%FT%TZ) recreating forenoon-cloudflared from $CLOUDFLARED_IMAGE"
@@ -134,6 +181,7 @@ until docker exec forenoon-feedback python -c \
 done
 
 start_tunnel
+start_recipes
 
 sleep 5
 docker ps --filter name=forenoon --format '{{.Names}}: {{.Status}}'

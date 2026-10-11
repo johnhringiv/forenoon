@@ -28,6 +28,7 @@ from .images import embed_images
 from .llm import Backend
 from .rank import POLICY, Ranking
 from .rank import rank as rank_candidates
+from .recipes import read_recipe
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
 from .sources import Item, read_feed
@@ -37,6 +38,7 @@ from .tokens import LINK_SIGNALS, make_token
 log = logging.getLogger("forenoon")
 
 MAX_ITEMS_PER_SOURCE = 5
+MAX_ITEMS_PER_ISSUE = 30  # a recipe's issue is a whole publication, not one author's feed
 
 
 @dataclass
@@ -175,6 +177,12 @@ def _item_report(item: Item, result: Extracted, dropped: int) -> ItemReport:
     )  # fmt: skip
 
 
+def _read_source(cfg: Config, source: Source, fetcher: Fetcher, conditional: bool, now: datetime) -> list[Item]:
+    if source.type == "recipe":
+        return read_recipe(source, cfg.recipes_dir, cfg.max_age_days, now)
+    return read_feed(source, fetcher, conditional=conditional)
+
+
 def _newest_first(items: list[Item]) -> list[Item]:
     epoch = datetime.min.replace(tzinfo=UTC)
     return sorted(items, key=lambda i: i.published or epoch, reverse=True)
@@ -187,7 +195,7 @@ def triage(cfg: Config, fetcher: Fetcher, per_source: int = 3) -> RunReport:
         src = SourceReport(source.name)
         report.sources.append(src)
         try:
-            items = _newest_first(read_feed(source, fetcher, conditional=False))[:per_source]
+            items = _newest_first(_read_source(cfg, source, fetcher, False, datetime.now(UTC)))[:per_source]
         except FetchError as exc:
             src.feed_error = str(exc)
             continue
@@ -299,7 +307,7 @@ def run(
         by_source[source.name] = source
         report.sources.append(src)
         try:
-            items = read_feed(source, fetcher, conditional=not dry_run)
+            items = _read_source(cfg, source, fetcher, not dry_run, now)
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: feed failed: %s", source.name, exc)
@@ -321,7 +329,8 @@ def run(
                 continue
             eligible.append(item)
         # Undated feeds would otherwise flood the first run.
-        pools[source.pinned].append(eligible[:MAX_ITEMS_PER_SOURCE])
+        limit = MAX_ITEMS_PER_ISSUE if source.type == "recipe" else MAX_ITEMS_PER_SOURCE
+        pools[source.pinned].append(eligible[:limit])
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     ranking = Ranking(others, {})
@@ -443,7 +452,8 @@ def run(
 
     # A 304 next time would hide items we have not delivered yet.
     for name in leftover & by_source.keys():
-        store.set_validators(by_source[name].url, None, None)
+        if by_source[name].url:
+            store.set_validators(by_source[name].url, None, None)
 
     if attachments:
         try:
@@ -477,7 +487,8 @@ def run(
             report.delivery_error = f"{type(exc).__name__}: {exc}"
             log.error("delivery failed for %s: %s", user.id, report.delivery_error)
             for source in by_source.values():
-                store.set_validators(source.url, None, None)
+                if source.url:
+                    store.set_validators(source.url, None, None)
     log.info(
         "user=%s delivered=%d messages=%d dry_run=%s",
         user.id, len(report.delivered), report.messages, dry_run,

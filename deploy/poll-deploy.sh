@@ -8,8 +8,8 @@
 # minutes, as root; elsewhere: cron). Deploys are pull-based: CI publishes to
 # GHCR and this poller converges on it, so the host needs no inbound access.
 # The cloudflared image is polled the same way; when only it changed, only the
-# tunnel container is replaced. An unchanged healthy pair of tags costs two
-# manifest checks and one /healthz probe.
+# tunnel container is replaced; the optional recipes image likewise. Unchanged
+# healthy tags cost a manifest check each and one /healthz probe.
 #
 #   sh poll-deploy.sh [env-file]
 #
@@ -35,8 +35,11 @@ TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 
+RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
+
 CONTAINERS="forenoon forenoon-feedback"
 [ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
+# The recipes container is healed on its own below: its trouble must never bounce the app.
 
 all_running() {
     for c in $CONTAINERS; do
@@ -73,8 +76,25 @@ if [ -n "$TUNNEL_TOKEN" ] && docker pull -q "$CLOUDFLARED_IMAGE" >/dev/null 2>&1
     [ "$tunnel_latest" = "$tunnel_running" ] || tunnel_changed=true
 fi
 
+# The recipes image likewise: when it changed, or its container stopped, only that
+# container is replaced.
+recipes_changed=false
+if [ -n "$RECIPES_IMAGE" ] && docker pull -q "$RECIPES_IMAGE" >/dev/null 2>&1; then
+    recipes_latest=$(docker image inspect "$RECIPES_IMAGE" --format '{{.Id}}')
+    recipes_running=$(docker inspect forenoon-recipes --format '{{.Image}}' 2>/dev/null || echo none)
+    recipes_up=$(docker inspect forenoon-recipes --format '{{.State.Running}}' 2>/dev/null || echo false)
+    if [ "$recipes_latest" != "$recipes_running" ] || [ "$recipes_up" != "true" ]; then
+        recipes_changed=true
+    fi
+fi
+
 if [ "$latest" = "$running" ]; then
     if all_running; then
+        if [ "$recipes_changed" = true ]; then
+            echo "$(date -u +%FT%TZ) recipes container is stale or stopped; replacing it only"
+            ONLY=recipes sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) recipes container did not start"
+            docker image prune -f >/dev/null
+        fi
         if [ "$tunnel_changed" = true ]; then
             echo "$(date -u +%FT%TZ) new image for $CLOUDFLARED_IMAGE; replacing the tunnel container only"
             ONLY=tunnel sh "$DIR/deploy.sh" "$ENV_FILE"

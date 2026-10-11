@@ -59,11 +59,32 @@ jobs:
           docker logs feedback
           exit 1
 
+  recipes:
+    name: Recipes image build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: recipes
+          load: true
+          tags: forenoon-recipes:ci
+          no-cache: ${{ github.event_name == 'schedule' }} # also how a newer Calibre is picked up
+          cache-from: type=gha,scope=recipes
+          cache-to: type=gha,mode=max,scope=recipes
+      - name: Calibre runs and the runner reads its list
+        run: |
+          docker run --rm --entrypoint ebook-convert forenoon-recipes:ci --list-recipes | grep -q "Financial Times"
+          mkdir -m 777 out && : > out/recipes.conf
+          docker run --rm --read-only --tmpfs /tmp --cap-drop ALL -v "$PWD/out:/recipes" \
+            forenoon-recipes:ci once
+
   # Publishes to GHCR on push to main (and v* tags); the host polls :latest and
   # redeploys when the digest changes. See docs/setup-deploy.md.
   publish:
     if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (github.event_name == 'push' || github.event_name == 'schedule')
-    needs: [checks, docker]
+    needs: [checks, docker, recipes]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -95,3 +116,20 @@ jobs:
           no-cache: ${{ github.event_name == 'schedule' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - uses: docker/metadata-action@v6
+        id: recipes-meta
+        with:
+          images: ghcr.io/${{ github.repository }}-recipes
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=ref,event=tag
+      - uses: docker/build-push-action@v7
+        with:
+          context: recipes
+          push: true
+          tags: ${{ steps.recipes-meta.outputs.tags }}
+          labels: ${{ steps.recipes-meta.outputs.labels }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha,scope=recipes
+          cache-to: type=gha,mode=max,scope=recipes
