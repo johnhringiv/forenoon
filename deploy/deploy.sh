@@ -48,9 +48,10 @@ export TZ="${TZ:-UTC}"
 FORENOON_FEEDBACK_SECRET=$(env_get FORENOON_FEEDBACK_SECRET)
 [ -n "$FORENOON_FEEDBACK_SECRET" ] || { echo "FORENOON_FEEDBACK_SECRET is not set in $ENV_FILE"; exit 1; }
 FORENOON_SMTP_PASSWORD=$(env_get FORENOON_SMTP_PASSWORD)
+FORENOON_ANTHROPIC_API_KEY=$(env_get FORENOON_ANTHROPIC_API_KEY)
 TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
 # Exported so `docker run -e NAME` can pass them without the values appearing in `ps`.
-export FORENOON_FEEDBACK_SECRET FORENOON_SMTP_PASSWORD TUNNEL_TOKEN
+export FORENOON_FEEDBACK_SECRET FORENOON_SMTP_PASSWORD FORENOON_ANTHROPIC_API_KEY TUNNEL_TOKEN
 
 start_tunnel() {
     docker stop -t 30 forenoon-cloudflared >/dev/null 2>&1 || true
@@ -115,7 +116,7 @@ run_app() {
         -e TZ -e FORENOON_FEEDBACK_SECRET "$@" >/dev/null
 }
 
-run_app forenoon -e FORENOON_SMTP_PASSWORD "$IMAGE" schedule
+run_app forenoon -e FORENOON_SMTP_PASSWORD -e FORENOON_ANTHROPIC_API_KEY "$IMAGE" schedule
 run_app forenoon-feedback "$IMAGE" feedback --port 8080
 
 # Health-gate the feedback service from inside its own container (no host port).

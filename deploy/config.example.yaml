@@ -21,6 +21,10 @@ users:
     daily_cap: 8                 # articles per day
     kindle_addresses:
       - your-name@kindle.com     # must be registered here; nothing else can pick a recipient
+    # What you want to read, in your own words. Used only when `llm.enabled` is true.
+    interests: |
+      Compilers and programming-language design. Practical LLM engineering.
+      Less interested in product announcements.
 
 smtp:                            # example values are for Resend; see docs/setup-email.md
   host: smtp.resend.com
@@ -29,6 +33,18 @@ smtp:                            # example values are for Resend; see docs/setup
   username: resend               # the API key goes in FORENOON_SMTP_PASSWORD
   sender: digest@example.com     # must be on Amazon's Approved Personal Document E-mail List
   max_message_bytes: 38000000    # Resend accepts 40 MB after encoding
+
+# Ranking with Claude: the model scores each candidate's title and opening words against your
+# interests and recent ratings. Needs FORENOON_ANTHROPIC_API_KEY in the environment. When it
+# is off, over its cap or failing, articles go newest first as before.
+llm:
+  enabled: false
+  model: claude-haiku-5-5
+  daily_token_cap: 200000        # input + output tokens per day; a ranking call is skipped
+                                 # when it would cross this
+  max_candidates: 80             # abstracts sent per user per run
+  explore_slots: 1               # the day's last slot goes to a random lower-ranked article
+  show_reasons: true             # print the model's one-line reason in the book
 
 # Operator notices by email, through the same relay: failed delivery, a crashed run, a run
 # with nothing to deliver, or a source failing several runs in a row. Off while `to` is empty.

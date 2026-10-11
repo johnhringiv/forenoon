@@ -22,7 +22,7 @@ the feeds its own users configure and delivers only to the addresses in its own 
     feed's own text; the article page is never fetched).
   - `users`: restrict the source to some users; otherwise every user gets it.
 - Configuration lives in `config.yaml` and `sources.yaml`. Unknown keys are rejected at
-  start-up. Secrets (`FORENOON_FEEDBACK_SECRET`, `FORENOON_SMTP_PASSWORD`) come only from the
+  start-up. Secrets (`FORENOON_FEEDBACK_SECRET`, `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`) come only from the
   environment.
 
 ## 3. The daily run
@@ -36,8 +36,9 @@ does the same on demand. For each user:
 2. **Select candidates.** Items older than `max_age_days` (default 3) are ignored, as are
    items already delivered to this user and items whose extraction previously failed. At most
    5 items per source are considered per run.
-3. **Order.** Pinned sources first, then the rest, each group taken round-robin across
-   sources with the newest item of each source first. There is no ranking yet.
+3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
+   (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
+   sources with the newest item of each source first.
 4. **Cap.** Articles are processed in that order until the user's daily cap is reached. The
    cap counts articles delivered during the local calendar day, so a second run on the same
    day only sends what is left of the cap.
@@ -128,7 +129,35 @@ part-way never causes a resend.
   `CF-Connecting-IP` header.
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
-Ratings are stored but do not yet influence what is delivered.
+Ratings influence delivery only when model ranking is on.
+
+## 7a. Ranking with Claude (optional, off by default)
+
+- **Input.** For up to `llm.max_candidates` (80) unpinned candidates: title, source, author,
+  date and the first 100 words of the feed entry as plain text. No article page is fetched for
+  ranking. Also the user's `interests` text and their 30 most recent ratings (title, source,
+  rating, finished).
+- **Output.** A score from 0 to 10 and a reason of at most 15 words per candidate, returned in
+  a fixed structure. Entries for unknown or repeated ids and non-numeric scores are discarded;
+  reasons are cut to 140 characters and escaped like any other text.
+- **Selection.** Pinned articles take slots first. The remaining slots go to the highest
+  scores, except that the day's last slot goes to one article chosen uniformly at random from
+  those outside the top picks (exploration). If an article then fails extraction, the next in
+  order takes its place.
+- **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
+  contents page (`llm.show_reasons`).
+- **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
+  whether it was the exploration pick, and the probability the policy put it forward.
+- **Limits.** One call per user per run. Before each call the day's logged token use plus an
+  estimate for this call is checked against `llm.daily_token_cap` (200,000); over the cap, the
+  call is not made. Every call is logged with model, input and output tokens and outcome;
+  `forenoon usage` prints the log and today's total.
+- **Fallback.** With no API key, a failed or timed-out call, an answer covering fewer than
+  half the candidates, or the cap reached, the run uses the newest-first order, the report
+  says why, and the operator is alerted.
+- **Safety.** Candidate text is untrusted and is passed as delimited data with an instruction
+  to ignore anything in it that reads as an instruction. The model has no tools that act on
+  anything and cannot affect recipients, sources or settings.
 
 ## 8. Delivery
 
@@ -158,6 +187,7 @@ the Amazon account's approved sender list.
 | `forenoon report [--per-source N]`              | Triage sources                                               |
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
 | `forenoon feedback-log`                         | Print taps and current ratings                               |
+| `forenoon usage`                                | Print recent model calls and today's token use               |
 | `forenoon golden [--out DIR]`                   | Write the rendering-test book                                |
 
 ## 11. Storage
@@ -200,8 +230,7 @@ See `docs/setup-deploy.md` and `docs/setup-email.md`.
 
 ## 15. Not built yet
 
-- Ranking of any kind; ratings are only stored.
-- LLM use: ranking or summaries with Claude under a daily token cap, then a local model.
+- Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
 - Discovery from Hacker News, Lobsters and similar; a watch list for vendor announcements.
 - A web interface for sources, preferences and a "newsstand" of delivered articles.
 - Sources other than RSS/Atom (newsletters by email, Calibre news recipes).

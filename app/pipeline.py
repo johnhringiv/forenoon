@@ -23,6 +23,9 @@ from .deliver import (
 from .extract import Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
+from .llm import Backend
+from .rank import POLICY, Ranking
+from .rank import rank as rank_candidates
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .sources import Item, read_feed
 from .store import Store
@@ -72,6 +75,7 @@ class RunReport:
     messages: int = 0
     delivery_error: str = ""
     cap_reached: bool = False  # the day's cap was already used before this run started
+    ranking: str = ""  # "", "model" or "fallback: <why>"
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -80,6 +84,8 @@ class RunReport:
             lines += [f"User `{self.user}`: {len(self.delivered)} delivered{mode}.", ""]
         if self.delivery_error:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
+        if self.ranking:
+            lines += [f"Ranking: {self.ranking}.", ""]
         lines += [
             "| Source | Verdict | Clean | Degraded | Failed | Notes |",
             "|---|---|---|---|---|---|",
@@ -208,8 +214,13 @@ def run(
     dry_run: bool = False,
     out_dir: Path | None = None,
     sender=send,
+    backend: Backend | None = None,
 ) -> RunReport:
-    """One delivery for one user. Safe to rerun: delivered articles are never sent twice."""
+    """One delivery for one user. Safe to rerun: delivered articles are never sent twice.
+
+    With a `backend`, the unpinned candidates are ranked by the model; without one, or when
+    ranking fails, they go newest first, round-robin across sources.
+    """
     zone = ZoneInfo(cfg.timezone)
     now = (now or datetime.now(UTC)).astimezone(zone)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -254,7 +265,27 @@ def run(
         # Undated feeds would otherwise flood the first run.
         pools[source.pinned].append(eligible[:MAX_ITEMS_PER_SOURCE])
 
-    queue = _interleave(pools[True]) + _interleave(pools[False])
+    pinned, others = _interleave(pools[True]), _interleave(pools[False])
+    ranking = Ranking(others, {})
+    if cfg.llm.enabled:
+        pool = others[: cfg.llm.max_candidates]
+        ranking = rank_candidates(
+            cfg.llm,
+            backend,
+            store,
+            user,
+            pool,
+            max(0, remaining - len(pinned)),
+            day_start.astimezone(UTC).isoformat(timespec="seconds"),
+        )
+        ranking.order += others[cfg.llm.max_candidates :]
+        if ranking.choices:
+            report.ranking = "model"
+        elif backend is None:
+            report.ranking = "fallback: no API key"
+        elif ranking.note:
+            report.ranking = f"fallback: {ranking.note}"
+    queue = pinned + ranking.order
     if cfg.format not in ("issue", "articles"):
         raise ValueError(f"format must be 'issue' or 'articles', not {cfg.format!r}")
     attachments: list[Attachment] = []
@@ -267,6 +298,9 @@ def run(
             leftover.add(item.source.name)
             continue
         result, article, dropped = _process(item, fetcher, cfg)
+        choice = ranking.choices.get(item.id)
+        if article is not None and choice and cfg.llm.show_reasons:
+            article.reason = choice.reason
         store.set_extraction(item.id, result.status, result.reason, result.word_count)
         store.set_preview(item.id, result.image_url, result.description)
         reports[item.source.name].items.append(_item_report(item, result, dropped))
@@ -338,6 +372,19 @@ def run(
                 if not dry_run:
                     sender([message], cfg.smtp)
                     store.mark_delivered(user.id, ids, now)
+                    for article_id in ids:
+                        choice = ranking.choices.get(article_id)
+                        if choice:
+                            store.record_selection(
+                                user.id, article_id, now, POLICY,
+                                choice.score, choice.reason, choice.rank, choice.explore, choice.propensity,
+                            )  # fmt: skip
+                        else:
+                            pin = any(article_id == item.id for item in pinned)
+                            store.record_selection(
+                                user.id, article_id, now, "pinned" if pin else "newest-first",
+                                None, "", None, False, None,
+                            )  # fmt: skip
                 report.delivered += ids
         except Exception as exc:  # noqa: BLE001 - keep the extraction report
             report.delivery_error = f"{type(exc).__name__}: {exc}"

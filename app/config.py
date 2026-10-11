@@ -20,6 +20,7 @@ class User:
     name: str
     kindle_addresses: tuple[str, ...]
     daily_cap: int = 8
+    interests: str = ""  # in the user's own words; given to the ranking model
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,19 @@ class Images:
     jpeg_quality: int = 70
     max_bytes_per_article: int = 8 * 1024 * 1024
     max_count_per_article: int = 40
+
+
+@dataclass(frozen=True)
+class Llm:
+    """Ranking with Claude. Off by default; the key comes from FORENOON_ANTHROPIC_API_KEY."""
+
+    enabled: bool = False
+    model: str = "claude-haiku-5-5"
+    daily_token_cap: int = 200_000  # input + output tokens per local day, all users
+    max_candidates: int = 80  # abstracts sent to the model per user per run
+    explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
+    show_reasons: bool = True  # print the model's one-line reason in the book
+    timeout: float = 60.0  # seconds
 
 
 @dataclass(frozen=True)
@@ -84,6 +98,7 @@ class Config:
     smtp: Smtp = field(default_factory=Smtp)
     images: Images = field(default_factory=Images)
     alerts: Alerts = field(default_factory=Alerts)
+    llm: Llm = field(default_factory=Llm)
     sources: tuple[Source, ...] = ()
 
     @property
@@ -152,6 +167,7 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
     smtp = _build(Smtp, raw.pop("smtp", None) or {}, f"{path}: smtp")
     images = _build(Images, raw.pop("images", None) or {}, f"{path}: images")
     alerts = _build(Alerts, raw.pop("alerts", None) or {}, f"{path}: alerts")
+    llm = _build(Llm, raw.pop("llm", None) or {}, f"{path}: llm")
     data_dir = Path(os.environ.get("FORENOON_DATA_DIR") or raw.pop("data_dir", "data"))
     raw.pop("data_dir", None)
     if not data_dir.is_absolute():
@@ -167,6 +183,7 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
             "smtp": smtp,
             "images": images,
             "alerts": alerts,
+            "llm": llm,
             "sources": load_sources(Path(sources_file)),
         },
         str(path),

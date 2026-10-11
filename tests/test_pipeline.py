@@ -264,3 +264,95 @@ def test_alerts_report_failed_delivery_and_a_source_that_keeps_failing(env):
     assert not notify_run(dataclasses.replace(cfg, alerts=Alerts()), first, sender=boom)
     # A relay that is down must not take the run with it.
     assert not notify_run(cfg, first, sender=boom)
+
+
+class FakeBackend:
+    """Scores by a fixed table; records what it was sent."""
+
+    def __init__(self, scores=None, fail=False):
+        self.scores, self.fail, self.prompts = scores, fail, []
+
+    def structured(self, system, user, schema):
+        from app.llm import LlmError, Reply
+
+        self.prompts.append((system, user))
+        if self.fail:
+            raise LlmError("overloaded")
+        ids = [c["id"] for c in __import__("json").loads(user.split("<candidates>\n")[1].split("\n</candidates>")[0])]
+        scores = self.scores(ids) if self.scores else []
+        return Reply({"scores": scores}, 1200, 300)
+
+
+def _llm_cfg(cfg, **kw):
+    from app.config import Llm
+
+    user = dataclasses.replace(cfg.users[0], daily_cap=3, interests="Compilers. Not watches.")
+    return dataclasses.replace(cfg, users=(user,), format="issue", llm=Llm(enabled=True, **kw))
+
+
+def test_model_ranking_orders_delivery_and_records_why(env):
+    import random
+
+    from app import rank as rank_module
+
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg)
+    user = cfg.users[0]
+    store.upsert_article("old", "https://x.example/old", "Blog", "An old favourite", "", None)
+    store.record_feedback(user.id, "old", "f5", "kindle-footer")
+
+    def scores(ids):
+        # Reverse of the order given, plus entries that must be ignored.
+        good = [{"id": i, "score": n, "reason": f"reason <b>{n}</b> " + "x" * 300} for n, i in enumerate(ids)]
+        return [*good, {"id": "made-up", "score": 10, "reason": "inject"}, {"id": ids[0], "score": 9, "reason": "dup"}]
+
+    backend = FakeBackend(scores)
+    rank_module.random = random.Random(7)  # deterministic exploration pick
+    sent = []
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m), backend=backend)
+    rank_module.random = random
+
+    assert report.ranking == "model" and len(report.delivered) == 3
+    system, prompt = backend.prompts[0]
+    assert "untrusted" in system and "Compilers. Not watches." in prompt
+    assert '"title": "An old favourite"' in prompt and '"rating": 5' in prompt
+    assert "<script" not in prompt  # abstracts are plain text
+
+    rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
+    assert set(rows) == set(report.delivered)
+    policies = sorted(r["policy"] for r in rows.values())
+    assert policies == ["claude-rank-v1", "claude-rank-v1", "pinned"]
+    ranked = [r for r in rows.values() if r["policy"] == "claude-rank-v1"]
+    # Two slots after the pinned article: the top score, and one exploration pick.
+    assert min(r["rank"] for r in ranked) == 1 and sum(r["explore"] for r in ranked) == 1
+    assert all(0 < r["propensity"] <= 1 and len(r["reason"]) <= 140 for r in ranked)
+
+    epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    book = "".join(epub.read(n).decode() for n in epub.namelist() if n.endswith(".xhtml"))
+    assert "Picked because: reason &lt;b&gt;" in book and "inject" not in book
+    assert store.llm_tokens_since("2000-01-01") == 1500
+
+
+def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
+    from app.alerts import problems
+
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg)
+    user = cfg.users[0]
+
+    failed = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=FakeBackend(fail=True))
+    assert failed.ranking.startswith("fallback: model call failed") and len(failed.delivered) == 3
+    assert any("Ranking was skipped" in p for p in problems(failed, cfg))
+    assert [r["status"] for r in store.llm_call_rows()] == ["error"]
+
+    empty = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=FakeBackend(lambda ids: []))
+    assert empty.ranking.startswith("fallback: model scored only 0") and len(empty.delivered) == 3
+
+    no_key = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=None)
+    assert no_key.ranking == "fallback: no API key"
+
+    capped = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, daily_token_cap=1000))
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
+    over = run(capped, store, fetcher, user, now=NOW, dry_run=True, backend=backend)
+    assert over.ranking.startswith("fallback: daily token cap reached") and not backend.prompts
+    assert not store.selection_rows(user.id)  # dry runs record no selections

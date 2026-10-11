@@ -46,6 +46,28 @@ CREATE TABLE IF NOT EXISTS ratings (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, article_id)
 );
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS selections (
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    selected_at TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    score REAL,
+    reason TEXT NOT NULL DEFAULT '',
+    rank INTEGER,
+    explore INTEGER NOT NULL DEFAULT 0,
+    propensity REAL,
+    PRIMARY KEY (user_id, article_id)
+);
 CREATE TABLE IF NOT EXISTS source_health (
     source TEXT PRIMARY KEY,
     failures INTEGER NOT NULL DEFAULT 0,
@@ -211,12 +233,72 @@ class Store:
             " FROM feedback_events f LEFT JOIN articles a ON a.id = f.article_id ORDER BY f.id"
         ).fetchall()
 
-    def rating_rows(self) -> list[sqlite3.Row]:
-        """The current rating per user and article."""
-        return self.db.execute(
+    def rating_rows(self, user_id: str | None = None, latest: int | None = None) -> list[sqlite3.Row]:
+        """The current rating per user and article, oldest first; optionally one user's latest."""
+        rows = self.db.execute(
             "SELECT r.updated_at, r.user_id, r.rating, r.finished, r.article_id,"
             " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source"
-            " FROM ratings r LEFT JOIN articles a ON a.id = r.article_id ORDER BY r.updated_at"
+            " FROM ratings r LEFT JOIN articles a ON a.id = r.article_id"
+            " WHERE (? IS NULL OR r.user_id = ?) ORDER BY r.updated_at",
+            (user_id, user_id),
+        ).fetchall()
+        return rows[-latest:] if latest else rows
+
+    # llm use and selection records
+
+    def log_llm_call(
+        self, purpose: str, model: str, input_tokens: int, output_tokens: int, status: str, error: str = ""
+    ) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now_iso(), purpose, model, input_tokens, output_tokens, status, error),
+            )
+
+    def llm_tokens_since(self, start: str) -> int:
+        row = self.db.execute(
+            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS n FROM llm_calls WHERE created_at >= ?",
+            (start,),
+        ).fetchone()
+        return row["n"]
+
+    def llm_call_rows(self, limit: int = 30) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", (limit,)).fetchall()[::-1]
+
+    def record_selection(
+        self,
+        user_id: str,
+        article_id: str,
+        when: datetime,
+        policy: str,
+        score: float | None,
+        reason: str,
+        rank: int | None,
+        explore: bool,
+        propensity: float | None,
+    ) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO selections"
+                " (user_id, article_id, selected_at, policy, score, reason, rank, explore, propensity)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id,
+                    article_id,
+                    when.astimezone(UTC).isoformat(timespec="seconds"),
+                    policy,
+                    score,
+                    reason,
+                    rank,
+                    int(explore),
+                    propensity,
+                ),
+            )
+
+    def selection_rows(self, user_id: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM selections WHERE user_id = ? ORDER BY selected_at, rank", (user_id,)
         ).fetchall()
 
     # source health

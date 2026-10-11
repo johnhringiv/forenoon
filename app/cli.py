@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from .alerts import notify, notify_run
 from .config import Config, ConfigError, load_config
 from .fetch import Fetcher
+from .llm import backend_from_env
 from .pipeline import run, triage
 from .store import Store
 
@@ -23,12 +24,13 @@ log = logging.getLogger("forenoon")
 def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     fetcher = Fetcher(cfg.user_agent, store)
+    backend = backend_from_env(cfg.llm)
     failed = 0
     try:
         users = [cfg.user(args.user)] if args.user else cfg.users
         for user in users:
             try:
-                report = run(cfg, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out)
+                report = run(cfg, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out, backend=backend)
             except Exception as exc:
                 log.exception("run crashed for %s", user.id)
                 if not args.dry_run:
@@ -106,6 +108,19 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _usage(cfg: Config, args: argparse.Namespace) -> int:
+    store = Store(cfg.db_path)
+    for row in store.llm_call_rows():
+        print(
+            f"{row['created_at']}  {row['purpose']:<6} {row['model']:<20} in {row['input_tokens']:>6}"
+            f"  out {row['output_tokens']:>5}  {row['status']} {row['error']}"
+        )
+    day = datetime.now(ZoneInfo(cfg.timezone)).replace(hour=0, minute=0, second=0, microsecond=0)
+    used = store.llm_tokens_since(day.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds"))
+    print(f"\nToday: {used} of {cfg.llm.daily_token_cap} tokens.")
+    return 0
+
+
 def _golden(args: argparse.Namespace) -> int:
     from .golden import golden_epub
 
@@ -142,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)
     sub.add_parser("feedback-log", help="print logged feedback")
+    sub.add_parser("usage", help="print recent model calls and today's token use")
     p = sub.add_parser("golden", help="write the golden rendering-test EPUB")
     p.add_argument("--out", type=Path, default=Path("out"))
 
@@ -165,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
             return _schedule(cfg, args)
         if args.command == "report":
             return _report(cfg, args)
+        if args.command == "usage":
+            return _usage(cfg, args)
         return _feedback_log(cfg, args)
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)

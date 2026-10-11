@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
+    "anthropic>=0.40",
     "feedparser>=6.0.11",
     "httpx>=0.27",
     "lxml>=5.2",

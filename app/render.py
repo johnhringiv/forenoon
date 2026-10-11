@@ -72,6 +72,7 @@ class Article:
     assets: list[Asset] = field(default_factory=list)  # images and fonts
     language: str = "en"
     extra_css: str = ""
+    reason: str = ""  # why it was picked; model output, escaped like any other text
 
 
 def book_title(article: Article, day: datetime) -> str:
@@ -107,6 +108,7 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
         byline.append(f"{article.reading_minutes} min read")
     byline_html = escape(" · ".join(part for part in byline if part))
     footer = _footer(feedback_links, rating_style)
+    why = f'<p class="meta">Picked because: {escape(article.reason)}</p>\n' if article.reason else ""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang={quoteattr(article.language)}>
@@ -115,7 +117,7 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
 <body>
 <h1>{escape(article.title)}</h1>
 <p class="meta">{byline_html}</p>
-<p class="meta"><a href={quoteattr(article.url)}>Read the original</a></p>
+{why}<p class="meta"><a href={quoteattr(article.url)}>Read the original</a></p>
 <hr class="rule"/>
 {_body_xhtml(article.body)}
 {footer}
@@ -249,6 +251,7 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
         items += (
             f'<p class="toc-title"><a href="a{index:02d}.xhtml">{escape(a.title)}</a></p>'
             f'<p class="toc-detail">{escape(detail)}</p>'
+            + (f'<p class="toc-detail">{escape(a.reason)}</p>' if a.reason else "")
         )
     minutes = sum(e.article.reading_minutes for e in entries)
     summary = f"{len(entries)} articles · about {minutes} min"
