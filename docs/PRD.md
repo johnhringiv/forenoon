@@ -59,6 +59,10 @@ All fetched content is treated as untrusted.
 - **Choosing the body.** The article page is reduced to its main content. If the feed carries
   the article's text and it has at least 85% of the page's word count, the feed's copy is
   used, since it is the author's own clean version.
+- **Split articles.** When the chosen content holds under 60% of a long page's text (500
+  words or more), the smallest page element holding at least 90% of it is tried instead, and
+  used if it recovers more without exceeding 1.3 times the page's text. This recovers
+  articles laid out as several sibling blocks.
 - **Sanitising.** The body is reduced to an allowlist of elements (paragraphs, headings,
   lists, quotes, code, tables, figures, images, links and inline emphasis). Scripts, styles,
   forms, embeds, video, navigation and footers are removed. All attributes are dropped except
@@ -78,6 +82,14 @@ All fetched content is treated as untrusted.
 - **Preview data.** The article's lead image URL (`og:image`, else the first image in the
   body) and a description (the page's, else the opening text, up to 400 characters) are
   stored for a future listing page. The image is not downloaded for this.
+
+### Saved pages
+
+Each article's fetched page and feed entry are kept as received in `pages/` in the data
+folder for `keep_pages_days` (default 90; 0 keeps none). `forenoon replay` runs the current
+extractor over every saved page and lists those whose verdict or word count differs from what
+was recorded, so a change to extraction can be checked against real pages. Dry runs and
+`forenoon report` save nothing.
 
 ## 5. Images
 
@@ -159,6 +171,35 @@ Ratings influence delivery only when model ranking is on.
   to ignore anything in it that reads as an instruction. The model has no tools that act on
   anything and cannot affect recipients, sources or settings.
 
+## 7b. Discovery (optional, off by default; needs ranking)
+
+- **Sources.** The front pages of Hacker News and Lobsters, one request each per run.
+- **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
+  video and social sites or to files such as PDFs, anything older than `max_age_days`, and
+  anything already in a feed read this run, already delivered, or previously failed. At most
+  `discovery.per_site` (25) per site.
+- **Scoring.** Found articles go into the same ranking call as feed articles. The model sees
+  the title, the site, points, comment count and (Lobsters) tags and description, since there
+  is no abstract.
+- **Selection.** Found articles scoring at least `discovery.min_score` (6) take up to
+  `discovery.slots` (2) of the day's slots, and never more than half of them; the rest go to
+  feed articles as before. If a found article fails extraction, the next best found article
+  takes its place, then feed articles.
+- **In the book.** The source reads "site via Hacker News", with a link to the discussion.
+- **Without the model** (off, failing or over its cap) no found article is delivered.
+- A listing that fails is reported and alerted like a failed feed.
+
+## 7c. Extraction check by the model (on when ranking is on; log only)
+
+- After extraction, one call per run sends the model each article that is about to be
+  delivered: title, word count, section headings, and the first 120 and last 80 words.
+- It answers `ok`, `suspect` or `bad` per article with a problem of at most 20 words, for
+  example a paywall notice, a teaser, an ending cut short, or menu text.
+- Verdicts are stored and shown in the run report; `forenoon checks` lists the articles it
+  did not judge `ok`, beside the extractor's own verdict. **Delivery is never changed.**
+- The call counts against the daily token cap and is skipped when it would cross it.
+  `llm.check_extraction: false` turns it off.
+
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
@@ -188,6 +229,8 @@ the Amazon account's approved sender list.
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
 | `forenoon feedback-log`                         | Print taps and current ratings                               |
 | `forenoon usage`                                | Print recent model calls and today's token use               |
+| `forenoon checks [--all]`                       | Print articles the model thought were badly extracted        |
+| `forenoon replay [--all]`                       | Re-run extraction over saved pages and show what changed     |
 | `forenoon golden [--out DIR]`                   | Write the rendering-test book                                |
 
 ## 11. Storage
@@ -231,7 +274,8 @@ See `docs/setup-deploy.md` and `docs/setup-email.md`.
 ## 15. Not built yet
 
 - Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
-- Discovery from Hacker News, Lobsters and similar; a watch list for vendor announcements.
+- Searching Hacker News and Lobsters beyond their front pages; a watch list for vendor
+  announcements.
 - A web interface for sources, preferences and a "newsstand" of delivered articles.
 - Sources other than RSS/Atom (newsletters by email, Calibre news recipes).
 - E-readers other than Kindle.

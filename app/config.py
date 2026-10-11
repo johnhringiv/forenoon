@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+DISCOVERY_SITES = ("hackernews", "lobsters")
+
 
 class ConfigError(ValueError):
     pass
@@ -59,7 +61,19 @@ class Llm:
     max_candidates: int = 80  # abstracts sent to the model per user per run
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
+    check_extraction: bool = True  # ask the model whether each article looks complete; log only
     timeout: float = 60.0  # seconds
+
+
+@dataclass(frozen=True)
+class Discovery:
+    """Front pages of link aggregators as extra candidates. Only used when ranking is on."""
+
+    enabled: bool = False
+    sites: tuple[str, ...] = ("hackernews", "lobsters")
+    slots: int = 2  # at most this many of the day's articles, and never more than half
+    min_score: float = 6.0  # a found article needs at least this score to take a slot
+    per_site: int = 25  # candidates sent to the model per site
 
 
 @dataclass(frozen=True)
@@ -91,6 +105,8 @@ class Config:
     public_base_url: str = ""
     max_age_days: int = 3
     token_ttl_days: int = 60
+    # Keep each article's fetched page for this many days, for `forenoon replay`. 0 = keep none.
+    keep_pages_days: int = 90
     # "issue": one book a day with a contents page. "articles": one book per article.
     format: str = "issue"
     user_agent: str = "Forenoon/0.1 (self-hosted personal reader)"
@@ -99,7 +115,12 @@ class Config:
     images: Images = field(default_factory=Images)
     alerts: Alerts = field(default_factory=Alerts)
     llm: Llm = field(default_factory=Llm)
+    discovery: Discovery = field(default_factory=Discovery)
     sources: tuple[Source, ...] = ()
+
+    @property
+    def pages_dir(self) -> Path:
+        return self.data_dir / "pages"
 
     @property
     def db_path(self) -> Path:
@@ -168,6 +189,10 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
     images = _build(Images, raw.pop("images", None) or {}, f"{path}: images")
     alerts = _build(Alerts, raw.pop("alerts", None) or {}, f"{path}: alerts")
     llm = _build(Llm, raw.pop("llm", None) or {}, f"{path}: llm")
+    discovery = _build(Discovery, raw.pop("discovery", None) or {}, f"{path}: discovery")
+    unknown = set(discovery.sites) - set(DISCOVERY_SITES)
+    if unknown:
+        raise ConfigError(f"{path}: discovery: unknown sites {sorted(unknown)}")
     data_dir = Path(os.environ.get("FORENOON_DATA_DIR") or raw.pop("data_dir", "data"))
     raw.pop("data_dir", None)
     if not data_dir.is_absolute():
@@ -184,6 +209,7 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
             "images": images,
             "alerts": alerts,
             "llm": llm,
+            "discovery": discovery,
             "sources": load_sources(Path(sources_file)),
         },
         str(path),

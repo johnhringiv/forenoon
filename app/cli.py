@@ -121,6 +121,30 @@ def _usage(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _checks(cfg: Config, args: argparse.Namespace) -> int:
+    rows = Store(cfg.db_path).review_rows()
+    shown = [row for row in rows if args.all or row["verdict"] != "ok"]
+    for row in shown:
+        print(f"{row['checked_at']}  {row['verdict']:<7} {row['source']} · {row['title']}")
+        print(f"    model: {row['problem'] or 'no problem found'}")
+        print(f"    extractor: {row['status']}, {row['word_count']} words {row['reason']}".rstrip())
+        print(f"    {row['url']}")
+    print(f"\n{len(shown)} shown of {len(rows)} checked.")
+    return 0
+
+
+def _replay(cfg: Config, args: argparse.Namespace) -> int:
+    from .archive import replay
+
+    results = replay(cfg.pages_dir, Store(cfg.db_path))
+    for r in results:
+        if r.changed or args.all:
+            print(f"{'CHANGED' if r.changed else 'same   '}  {r.source} · {r.title}")
+            print(f"    was: {r.was}\n    now: {r.now}\n    {r.url}")
+    print(f"\n{sum(r.changed for r in results)} changed of {len(results)} saved pages.")
+    return 0
+
+
 def _golden(args: argparse.Namespace) -> int:
     from .golden import golden_epub
 
@@ -158,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=8080)
     sub.add_parser("feedback-log", help="print logged feedback")
     sub.add_parser("usage", help="print recent model calls and today's token use")
+    p = sub.add_parser("checks", help="print articles the model thought were badly extracted")
+    p.add_argument("--all", action="store_true", help="include the ones it judged fine")
+    p = sub.add_parser("replay", help="re-run extraction over saved pages and show what changed")
+    p.add_argument("--all", action="store_true", help="also list the unchanged ones")
     p = sub.add_parser("golden", help="write the golden rendering-test EPUB")
     p.add_argument("--out", type=Path, default=Path("out"))
 
@@ -181,6 +209,10 @@ def main(argv: list[str] | None = None) -> int:
             return _schedule(cfg, args)
         if args.command == "report":
             return _report(cfg, args)
+        if args.command == "checks":
+            return _checks(cfg, args)
+        if args.command == "replay":
+            return _replay(cfg, args)
         if args.command == "usage":
             return _usage(cfg, args)
         return _feedback_log(cfg, args)

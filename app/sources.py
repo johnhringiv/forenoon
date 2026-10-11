@@ -22,6 +22,10 @@ class Item:
     author: str
     published: datetime | None
     feed_html: str
+    # Set for items found on an aggregator's front page rather than in a feed.
+    summary: str = ""  # shown to the ranking model in place of an abstract
+    site: str = ""  # the article's host
+    discussion_url: str = ""
 
 
 def _published(entry) -> datetime | None:

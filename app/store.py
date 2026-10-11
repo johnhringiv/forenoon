@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS selections (
     propensity REAL,
     PRIMARY KEY (user_id, article_id)
 );
+CREATE TABLE IF NOT EXISTS extraction_reviews (
+    id INTEGER PRIMARY KEY,
+    article_id TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    problem TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS source_health (
     source TEXT PRIMARY KEY,
     failures INTEGER NOT NULL DEFAULT 0,
@@ -299,6 +307,25 @@ class Store:
     def selection_rows(self, user_id: str) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT * FROM selections WHERE user_id = ? ORDER BY selected_at, rank", (user_id,)
+        ).fetchall()
+
+    # extraction reviews (the model's second opinion; log only)
+
+    def record_review(self, article_id: str, verdict: str, problem: str, model: str) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO extraction_reviews (article_id, checked_at, verdict, problem, model)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (article_id, now_iso(), verdict, problem, model),
+            )
+
+    def review_rows(self, limit: int = 200) -> list[sqlite3.Row]:
+        """Newest first, with the article and the extractor's own verdict beside the model's."""
+        return self.db.execute(
+            "SELECT r.checked_at, r.verdict, r.problem, a.title, a.url, a.source, a.status, a.reason, a.word_count"
+            " FROM extraction_reviews r LEFT JOIN articles a ON a.id = r.article_id"
+            " ORDER BY r.id DESC LIMIT ?",
+            (limit,),
         ).fetchall()
 
     # source health

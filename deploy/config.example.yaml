@@ -14,6 +14,7 @@ format: issue
 
 max_age_days: 3                  # ignore feed items older than this
 token_ttl_days: 60               # how long feedback links stay valid
+keep_pages_days: 90              # keep each fetched page this long for `forenoon replay`; 0 = none
 
 users:
   - id: me
@@ -45,6 +46,17 @@ llm:
   max_candidates: 80             # abstracts sent per user per run
   explore_slots: 1               # the day's last slot goes to a random lower-ranked article
   show_reasons: true             # print the model's one-line reason in the book
+  check_extraction: true         # one more call per run asks whether each article looks
+                                 # complete; logged in the report, never changes delivery
+
+# Discovery: the front pages of Hacker News and Lobsters are added to the day's candidates
+# and scored in the same ranking call. Only used when ranking is on and working.
+discovery:
+  enabled: false
+  sites: [hackernews, lobsters]
+  slots: 2                       # at most this many of the day's articles (never over half)
+  min_score: 6                   # a found article must score at least this (0 to 10)
+  per_site: 25                   # candidates sent to the model per site
 
 # Operator notices by email, through the same relay: failed delivery, a crashed run, a run
 # with nothing to deliver, or a source failing several runs in a row. Off while `to` is empty.

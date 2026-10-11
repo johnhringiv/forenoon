@@ -73,6 +73,7 @@ class Article:
     language: str = "en"
     extra_css: str = ""
     reason: str = ""  # why it was picked; model output, escaped like any other text
+    discussion_url: str = ""  # comment thread where the article was found
 
 
 def book_title(article: Article, day: datetime) -> str:
@@ -109,6 +110,7 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
     byline_html = escape(" · ".join(part for part in byline if part))
     footer = _footer(feedback_links, rating_style)
     why = f'<p class="meta">Picked because: {escape(article.reason)}</p>\n' if article.reason else ""
+    talk = f" · <a href={quoteattr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang={quoteattr(article.language)}>
@@ -117,7 +119,7 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
 <body>
 <h1>{escape(article.title)}</h1>
 <p class="meta">{byline_html}</p>
-{why}<p class="meta"><a href={quoteattr(article.url)}>Read the original</a></p>
+{why}<p class="meta"><a href={quoteattr(article.url)}>Read the original</a>{talk}</p>
 <hr class="rule"/>
 {_body_xhtml(article.body)}
 {footer}

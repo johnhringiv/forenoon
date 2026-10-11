@@ -152,3 +152,28 @@ def test_a_long_linked_section_is_not_turned_into_a_card():
     html = f'<div><p>Before.</p><div><a href="/x"><div><p>{long_text}</p></div></a></div></div>'
     out = sanitize(lxml.html.fragment_fromstring(html), "https://blog.example/post")
     assert not out.xpath('.//*[@class="card"]') and long_text in out.text_content()
+
+
+def test_article_split_across_sibling_containers_is_recovered_whole():
+    def para(n: int) -> str:
+        words = " ".join(f"Sentence {n}.{i} about borrow checking and paths through memory." for i in range(30))
+        return f"<p>{words}</p>"
+
+    slices = "".join(
+        f'<div class="slice"><section><h2>Part {n}</h2>{para(n)}{para(9) if n == 0 else ""}</section></div>'
+        for n in range(5)
+    )
+    page = (
+        "<html><body><nav><a href='/'>Home</a></nav>"
+        f"<div class='page'><!-- a comment --><div class='inner'>{slices}</div></div>"
+        "<script>track()</script><footer>Copyright</footer></body></html>"
+    )
+    result = extract("https://x.example/post", page, "", "page")
+    headings = [h.text_content() for h in result.body.iter("h2")]
+    assert headings == [f"Part {n}" for n in range(5)]
+    assert result.status == "clean" and result.method == "page-wide"
+    assert "track()" not in result.body.text_content() and "Copyright" not in result.body.text_content()
+
+    # An ordinary page is untouched: the first choice already covers it.
+    plain = f"<html><body><article><h2>Only part</h2>{para(1)}{para(2)}</article></body></html>"
+    assert extract("https://x.example/plain", plain, "", "page").method == "page"

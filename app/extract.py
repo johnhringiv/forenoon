@@ -46,6 +46,9 @@ MAX_PREVIEW_URL = 2000
 MAX_DESCRIPTION = 400
 MAX_CARD_CHARS = 600
 SHORT_WORDS = 150
+WIDEN_MIN_WORDS = 500
+WIDEN_COVERAGE = 0.9  # share of the page text an element must hold to be the article
+WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page text is rejected
 WORDS_PER_MINUTE = 230
 
 PAYWALL = re.compile(
@@ -227,6 +230,30 @@ def _readability(page_html: str) -> lxml.html.HtmlElement | None:
         return None
 
 
+def _widest(page_html: str, reference: int) -> lxml.html.HtmlElement | None:
+    """The smallest element holding nearly all of the page's article text.
+
+    For pages that split one article across sibling containers, where readability keeps only
+    the largest of them.
+    """
+    try:
+        node = lxml.html.fromstring(page_html).find(".//body")
+    except (etree.ParserError, ValueError):
+        return None
+    if node is None:
+        return None
+    for junk in node.xpath(".//script | .//style | .//noscript | .//template"):
+        junk.drop_tree()
+    need = WIDEN_COVERAGE * reference
+    while True:
+        elements = (child for child in node if isinstance(child.tag, str))  # not comments
+        inner = next((child for child in elements if _words(child.text_content()) >= need), None)
+        if inner is None:
+            break
+        node = inner
+    return _parse_fragment(lxml.html.tostring(node, encoding="unicode"))
+
+
 def _reference_words(page_html: str) -> int:
     try:
         return _words(trafilatura.extract(page_html, favor_recall=True) or "")
@@ -305,6 +332,14 @@ def extract(
             candidates["page"] = sanitize(page, url)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
+        kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
+        # Long articles only: on a short post the page furniture outweighs the text.
+        if reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
+            wide = _widest(page_html, reference)
+            wide = sanitize(wide, url) if wide is not None else None
+            # Only when it recovers the article without dragging in much else.
+            if wide is not None and kept < _words(wide.text_content()) <= WIDEN_MAX_RATIO * reference:
+                candidates["page-wide"] = wide
     feed = _parse_fragment(feed_html) if mode != "page" or not candidates else None
     if feed is not None:
         candidates["feed"] = sanitize(feed, url)

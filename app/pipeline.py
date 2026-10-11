@@ -1,4 +1,4 @@
-"""Phase 0 pipeline: sources -> extract -> one EPUB per article -> email. No ranking yet."""
+"""The daily run: sources -> candidates -> ranking -> extract -> EPUB -> email."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from . import archive
 from .config import Config, Source, User
 from .deliver import (
     MESSAGE_OVERHEAD,
@@ -20,6 +21,7 @@ from .deliver import (
     safe_filename,
     send,
 )
+from .discover import read_listing, site_source
 from .extract import Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
@@ -27,6 +29,7 @@ from .llm import Backend
 from .rank import POLICY, Ranking
 from .rank import rank as rank_candidates
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
+from .review import review as review_extractions
 from .sources import Item, read_feed
 from .store import Store
 from .tokens import LINK_SIGNALS, make_token
@@ -45,6 +48,7 @@ class ItemReport:
     words: int = 0
     method: str = ""
     images_dropped: int = 0
+    review: str = ""  # the model's view of the extraction: "", "ok", or "suspect: why"
 
 
 @dataclass
@@ -76,6 +80,7 @@ class RunReport:
     delivery_error: str = ""
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
+    reviews: dict[str, int] = field(default_factory=dict)  # model extraction verdicts, counted
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -86,6 +91,9 @@ class RunReport:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
         if self.ranking:
             lines += [f"Ranking: {self.ranking}.", ""]
+        if self.reviews:
+            counts = ", ".join(f"{n} {verdict}" for verdict, n in sorted(self.reviews.items()))
+            lines += [f"Extraction check by the model: {counts}.", ""]
         lines += [
             "| Source | Verdict | Clean | Degraded | Failed | Notes |",
             "|---|---|---|---|---|---|",
@@ -111,6 +119,8 @@ class RunReport:
                     detail += f", {item.images_dropped} images dropped"
                 if item.reason:
                     detail += f" — {item.reason}"
+                if item.review and item.review != "ok":
+                    detail += f" — model check: {item.review}"
                 lines.append(f"- **{item.status}** [{item.title}]({item.url}): {detail}")
             lines.append("")
         return "\n".join(lines)
@@ -124,14 +134,19 @@ class RunReport:
         return path
 
 
-def _process(item: Item, fetcher: Fetcher, cfg: Config) -> tuple[Extracted, Article | None, int]:
-    """Fetch, extract and prepare one item. Never raises for bad content."""
+def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> tuple[Extracted, Article | None, int]:
+    """Fetch, extract and prepare one item. Never raises for bad content.
+
+    With `keep`, what it was extracted from is saved for `forenoon replay`.
+    """
     page_html, fetch_error = None, ""
     if item.source.extract != "feed":
         try:
             page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
         except FetchError as exc:
             fetch_error = str(exc)
+    if keep and cfg.keep_pages_days > 0 and (page_html or item.feed_html):
+        archive.save(cfg.pages_dir, item, page_html)
     result = extract(item.url, page_html, item.feed_html, item.source.extract, fetch_error)
     if result.body is None:
         if fetch_error:
@@ -142,12 +157,13 @@ def _process(item: Item, fetcher: Fetcher, cfg: Config) -> tuple[Extracted, Arti
         id=item.id,
         url=item.url,
         title=item.title,
-        source=item.source.name,
+        source=f"{item.site} via {item.source.name}" if item.site else item.source.name,
         body=result.body,
         author=item.author or result.author,
         published=item.published,
         reading_minutes=result.reading_minutes,
         assets=assets,
+        discussion_url=item.discussion_url,
     )
     return result, article, dropped
 
@@ -194,6 +210,46 @@ def _interleave(pools: list[list[Item]]) -> list[Item]:
     return out
 
 
+def _discover(
+    cfg: Config,
+    store: Store,
+    fetcher: Fetcher,
+    user: User,
+    report: RunReport,
+    reports: dict[str, SourceReport],
+    seen: set[str],
+    cutoff: datetime,
+    dry_run: bool,
+) -> list[Item]:
+    """New articles from the configured front pages that no feed already supplied."""
+    found: list[Item] = []
+    for key in cfg.discovery.sites:
+        source = site_source(key)
+        src = reports[source.name] = SourceReport(source.name)
+        report.sources.append(src)
+        try:
+            items = read_listing(key, fetcher)
+        except FetchError as exc:
+            src.feed_error = str(exc)
+            log.warning("%s: listing failed: %s", source.name, exc)
+            if not dry_run:
+                src.consecutive_failures = store.track_source(source.name, src.feed_error)
+            continue
+        if not dry_run:
+            store.track_source(source.name)
+        fresh = []
+        for item in items:
+            if item.id in seen or (item.published and item.published < cutoff):
+                continue
+            seen.add(item.id)
+            row = store.get_article(item.id)
+            if (row and row.status == "failed") or store.is_delivered(user.id, item.id):
+                continue
+            fresh.append(item)
+        found += fresh[: cfg.discovery.per_site]
+    return found
+
+
 def _feedback_links(cfg: Config, user: User, article_id: str, now: datetime) -> dict[str, str]:
     if not cfg.public_base_url:
         return {}
@@ -237,6 +293,7 @@ def run(
     pools: dict[bool, list[list[Item]]] = {True: [], False: []}
     reports: dict[str, SourceReport] = {}
     by_source: dict[str, Source] = {}
+    seen: set[str] = set()
     for source in cfg.sources_for(user):
         src = reports[source.name] = SourceReport(source.name)
         by_source[source.name] = source
@@ -254,6 +311,7 @@ def run(
         src.not_modified = not items
         eligible = []
         for item in _newest_first(items):
+            seen.add(item.id)
             published = item.published.isoformat() if item.published else None
             store.upsert_article(item.id, item.url, source.name, item.title, item.author, published)
             row = store.get_article(item.id)
@@ -267,16 +325,23 @@ def run(
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     ranking = Ranking(others, {})
+    found: list[Item] = []
     if cfg.llm.enabled:
         pool = others[: cfg.llm.max_candidates]
+        slots = max(0, remaining - len(pinned))
+        if cfg.discovery.enabled and backend is not None and slots:
+            found = _discover(cfg, store, fetcher, user, report, reports, seen, cutoff, dry_run)
         ranking = rank_candidates(
             cfg.llm,
             backend,
             store,
             user,
             pool,
-            max(0, remaining - len(pinned)),
+            slots,
             day_start.astimezone(UTC).isoformat(timespec="seconds"),
+            found=found,
+            found_slots=cfg.discovery.slots,
+            found_min_score=cfg.discovery.min_score,
         )
         ranking.order += others[cfg.llm.max_candidates :]
         if ranking.choices:
@@ -293,11 +358,18 @@ def run(
     ready: list[str] = []
     size_limit = cfg.smtp.max_message_bytes - MESSAGE_OVERHEAD
     leftover: set[str] = set()
+    checked: list[tuple[Article, ItemReport]] = []
+    found_ids = {item.id for item in found}
+    found_ready = 0
     for item in queue:
-        if len(ready) >= remaining:
+        if len(ready) >= remaining or (item.id in found_ids and found_ready >= ranking.found_slots):
             leftover.add(item.source.name)
             continue
-        result, article, dropped = _process(item, fetcher, cfg)
+        if item.id in found_ids:
+            # Feed items are recorded when their feed is read; a find only once it is tried.
+            published = item.published.isoformat() if item.published else None
+            store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
+        result, article, dropped = _process(item, fetcher, cfg, keep=not dry_run)
         choice = ranking.choices.get(item.id)
         if article is not None and choice and cfg.llm.show_reasons:
             article.reason = choice.reason
@@ -333,6 +405,18 @@ def run(
             name = safe_filename(book_title(article, now))
             attachments.append(Attachment(name, epub, (item.id,)))
         ready.append(item.id)
+        found_ready += item.id in found_ids
+        checked.append((article, reports[item.source.name].items[-1]))
+
+    if cfg.llm.enabled:
+        reviews = review_extractions(
+            cfg.llm, backend, store, [a for a, _ in checked], day_start.astimezone(UTC).isoformat(timespec="seconds")
+        )
+        for article, entry in checked:
+            verdict = reviews.get(article.id)
+            if verdict:
+                entry.review = ": ".join(filter(None, [verdict.verdict, verdict.problem]))
+                report.reviews[verdict.verdict] = report.reviews.get(verdict.verdict, 0) + 1
 
     # One book for the day; more parts only when a message could not hold it all. Sizes as
     # separate books overestimate a shared one, so a part always fits.
@@ -354,8 +438,11 @@ def run(
             )
         )
 
+    if not dry_run and cfg.keep_pages_days > 0:
+        archive.prune(cfg.pages_dir, cfg.keep_pages_days)
+
     # A 304 next time would hide items we have not delivered yet.
-    for name in leftover:
+    for name in leftover & by_source.keys():
         store.set_validators(by_source[name].url, None, None)
 
     if attachments:
