@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Runs Calibre news recipes on a schedule and leaves each issue where Forenoon reads it.
 
 Standard library only: this runs in the recipes container, which has Calibre but not Forenoon.
