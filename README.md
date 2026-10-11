@@ -8,6 +8,8 @@ logged for later ranking.
 Status: **Phase 0** (viability test). No ranking and no LLM yet: pinned sources first, then
 the newest articles round-robin across sources, up to a daily cap.
 
+What it does today is described in [docs/PRD.md](docs/PRD.md).
+
 ## Quick start (local)
 
 ```sh

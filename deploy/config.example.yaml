@@ -30,6 +30,13 @@ smtp:                            # example values are for Resend; see docs/setup
   sender: digest@example.com     # must be on Amazon's Approved Personal Document E-mail List
   max_message_bytes: 38000000    # Resend accepts 40 MB after encoding
 
+# Operator notices by email, through the same relay: failed delivery, a crashed run, a run
+# with nothing to deliver, or a source failing several runs in a row. Off while `to` is empty.
+alerts:
+  to: ""                         # your own address
+  source_failures: 3             # consecutive failed runs before a source is reported
+  on_empty: true                 # also tell me when there was nothing new to deliver
+
 images:
   grayscale: true                # false for colour e-readers
   max_width: 1200

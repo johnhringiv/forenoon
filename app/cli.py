@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .alerts import notify, notify_run
 from .config import Config, ConfigError, load_config
 from .fetch import Fetcher
 from .pipeline import run, triage
@@ -26,10 +27,19 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     try:
         users = [cfg.user(args.user)] if args.user else cfg.users
         for user in users:
-            report = run(cfg, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out)
+            try:
+                report = run(cfg, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out)
+            except Exception as exc:
+                log.exception("run crashed for %s", user.id)
+                if not args.dry_run:
+                    notify(cfg, "run crashed", [f"User {user.id}: {type(exc).__name__}: {exc}", "See the logs."])
+                failed += 1
+                continue
             path = report.write(cfg.data_dir / "reports")
             print(report.to_markdown())
             print(f"Report written to {path}", file=sys.stderr)
+            if not args.dry_run:
+                notify_run(cfg, report)
             failed += bool(report.delivery_error)
     finally:
         fetcher.close()

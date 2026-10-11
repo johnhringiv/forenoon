@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS ratings (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, article_id)
 );
+CREATE TABLE IF NOT EXISTS source_health (
+    source TEXT PRIMARY KEY,
+    failures INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS http_cache (
     url TEXT PRIMARY KEY,
     etag TEXT,
@@ -212,6 +218,21 @@ class Store:
             " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source"
             " FROM ratings r LEFT JOIN articles a ON a.id = r.article_id ORDER BY r.updated_at"
         ).fetchall()
+
+    # source health
+
+    def track_source(self, source: str, error: str = "") -> int:
+        """Record one run's outcome for a source. Returns its consecutive failures (0 = fine)."""
+        with self.db:
+            self.db.execute(
+                "INSERT INTO source_health (source, failures, last_error, updated_at) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(source) DO UPDATE SET"
+                " failures = CASE WHEN excluded.failures = 0 THEN 0 ELSE failures + 1 END,"
+                " last_error = excluded.last_error, updated_at = excluded.updated_at",
+                (source, 1 if error else 0, error, now_iso()),
+            )
+        row = self.db.execute("SELECT failures FROM source_health WHERE source = ?", (source,)).fetchone()
+        return row["failures"]
 
     # http cache validators
 

@@ -49,6 +49,15 @@ class Images:
 
 
 @dataclass(frozen=True)
+class Alerts:
+    """Operator notices, sent through the same SMTP relay. Off while `to` is empty."""
+
+    to: str = ""
+    source_failures: int = 3  # consecutive failed runs before a source is reported; 0 = never
+    on_empty: bool = True  # also report a run that had nothing new to deliver
+
+
+@dataclass(frozen=True)
 class Source:
     name: str
     url: str
@@ -74,6 +83,7 @@ class Config:
     users: tuple[User, ...] = ()
     smtp: Smtp = field(default_factory=Smtp)
     images: Images = field(default_factory=Images)
+    alerts: Alerts = field(default_factory=Alerts)
     sources: tuple[Source, ...] = ()
 
     @property
@@ -141,6 +151,7 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
         raise ConfigError(f"{path}: user ids must be unique")
     smtp = _build(Smtp, raw.pop("smtp", None) or {}, f"{path}: smtp")
     images = _build(Images, raw.pop("images", None) or {}, f"{path}: images")
+    alerts = _build(Alerts, raw.pop("alerts", None) or {}, f"{path}: alerts")
     data_dir = Path(os.environ.get("FORENOON_DATA_DIR") or raw.pop("data_dir", "data"))
     raw.pop("data_dir", None)
     if not data_dir.is_absolute():
@@ -155,6 +166,7 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
             "users": users,
             "smtp": smtp,
             "images": images,
+            "alerts": alerts,
             "sources": load_sources(Path(sources_file)),
         },
         str(path),

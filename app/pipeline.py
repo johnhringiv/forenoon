@@ -49,6 +49,7 @@ class SourceReport:
     name: str
     feed_error: str = ""
     not_modified: bool = False
+    consecutive_failures: int = 0
     items: list[ItemReport] = field(default_factory=list)
 
     @property
@@ -70,6 +71,7 @@ class RunReport:
     delivered: list[str] = field(default_factory=list)
     messages: int = 0
     delivery_error: str = ""
+    cap_reached: bool = False  # the day's cap was already used before this run started
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -219,6 +221,7 @@ def run(
         (day_start + timedelta(days=1)).astimezone(UTC).isoformat(timespec="seconds"),
     )
     remaining = max(0, user.daily_cap - sent_today)
+    report.cap_reached = remaining == 0
 
     pools: dict[bool, list[list[Item]]] = {True: [], False: []}
     reports: dict[str, SourceReport] = {}
@@ -232,7 +235,11 @@ def run(
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: feed failed: %s", source.name, exc)
+            if not dry_run:
+                src.consecutive_failures = store.track_source(source.name, src.feed_error)
             continue
+        if not dry_run:
+            store.track_source(source.name)
         src.not_modified = not items
         eligible = []
         for item in _newest_first(items):

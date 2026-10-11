@@ -47,6 +47,13 @@ its images is skipped and reported.
 The password goes in the environment as `FORENOON_SMTP_PASSWORD` (in `.env` for compose), never in
 `config.yaml`. Set SPF and DKIM for the sender's domain so Amazon does not drop the mail.
 
+## Alerts
+
+Set `alerts.to` in `config.yaml` to your own address to be told by email when a delivery
+fails, a run crashes, a run has nothing new to deliver, or a source fails several runs in a
+row. Alerts go through the same relay, so if the relay itself is down the alert cannot be
+sent either; the failure is still in the container log and the run report.
+
 ## Limits
 
 As of October 2026, Amazon accepts up to 25 attachments per email and 50 MB; sources differ

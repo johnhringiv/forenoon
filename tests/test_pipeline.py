@@ -234,3 +234,33 @@ def test_issue_format_sends_one_book_with_contents_and_per_article_ratings(env):
             assert f"OEBPS/{src}" in names
     assert seen == set(report.delivered)
     assert all(store.is_delivered("john", article_id) for article_id in report.delivered)
+
+
+def test_alerts_report_failed_delivery_and_a_source_that_keeps_failing(env):
+    from app.alerts import notify_run, problems
+    from app.config import Alerts
+
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(cfg, alerts=Alerts(to="me@example.com", source_failures=2))
+    outbox = []
+
+    def boom(messages, smtp):
+        raise ConnectionError("relay down")
+
+    first = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=boom)
+    assert problems(first, cfg) == ["Delivery failed: ConnectionError: relay down"]
+    assert notify_run(cfg, first, sender=lambda m, s: outbox.extend(m))
+    assert outbox[0]["To"] == "me@example.com" and "delivery failed" in outbox[0]["Subject"]
+    assert "relay down" in outbox[0].get_content()
+
+    # Second run: "Down" has now failed twice in a row and is named; the delivery itself is fine.
+    second = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
+    assert second.delivered
+    assert problems(second, cfg) == ["Source 'Down' has failed 2 runs in a row: HTTP 404"]
+
+    # A good run with a healthy relay sends nothing; alerts are off without an address.
+    quiet = dataclasses.replace(second, sources=[s for s in second.sources if not s.feed_error])
+    assert problems(quiet, cfg) == []
+    assert not notify_run(dataclasses.replace(cfg, alerts=Alerts()), first, sender=boom)
+    # A relay that is down must not take the run with it.
+    assert not notify_run(cfg, first, sender=boom)
