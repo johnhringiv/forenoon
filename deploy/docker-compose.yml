@@ -1,0 +1,51 @@
+# Forenoon, Phase 0. Copy .env.example to .env and fill it in first.
+# The data folder (FORENOON_HOST_DATA) must contain config.yaml and sources.yaml and be
+# writable by UID 1000 (or by PUID:PGID if you set them).
+name: forenoon
+
+x-app: &app
+  build: ..
+  image: forenoon:local
+  user: "${PUID:-1000}:${PGID:-1000}"
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: [/tmp]
+  # Default bridge, not a compose-created network: Synology's DSM firewall drops egress
+  # from custom bridge networks (DNS and all traffic time out).
+  network_mode: bridge
+  volumes:
+    - ${FORENOON_HOST_DATA}:/data
+
+services:
+  forenoon:
+    <<: *app
+    command: ["schedule"]
+    environment:
+      TZ: ${TZ:-UTC}
+      FORENOON_FEEDBACK_SECRET: ${FORENOON_FEEDBACK_SECRET:?set in .env}
+      FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
+
+  feedback:
+    <<: *app
+    command: ["feedback", "--port", "8080"]
+    environment:
+      TZ: ${TZ:-UTC}
+      FORENOON_FEEDBACK_SECRET: ${FORENOON_FEEDBACK_SECRET:?set in .env}
+    # No published port: the tunnel below is the only way in. For your own reverse proxy
+    # instead, add  ports: ["127.0.0.1:8080:8080"]
+
+  # Enabled by COMPOSE_PROFILES=cloudflared in .env.
+  # In the Cloudflare dashboard, route the public hostname to http://localhost:8080
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
+    profiles: [cloudflared]
+    restart: unless-stopped
+    # Shares the feedback container's network namespace, so localhost:8080 is the service.
+    network_mode: "service:feedback"
+    depends_on: [feedback]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # :- not :? because compose interpolates this file even when the profile is off
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}

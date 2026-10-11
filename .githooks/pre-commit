@@ -1,0 +1,22 @@
+#!/bin/sh
+# Auto-format staged Markdown files with Prettier and re-stage them.
+# Enable with: git config core.hooksPath .githooks
+set -e
+
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
+[ -z "$files" ] && exit 0
+
+if command -v prettier >/dev/null 2>&1; then
+    FMT=prettier
+elif command -v npx >/dev/null 2>&1 && ! command -v npx | grep -q '^/mnt/'; then
+    FMT="npx --yes prettier"
+else
+    # e.g. WSL with only the Windows npx on PATH, which cannot see Linux paths. CI still checks.
+    echo "pre-commit: no usable prettier; committing Markdown unformatted" >&2
+    exit 0
+fi
+
+echo "$files" | while IFS= read -r f; do
+    $FMT --write "$f"
+    git add "$f"
+done

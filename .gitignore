@@ -1,0 +1,17 @@
+docs/LOCAL.md
+.env
+config.yaml
+sources.local.yaml
+data/
+out/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.local/
+.idea/
+# Third-party font used only by the local code-font trial in the golden test
+app/fonts/
+# Build brief; kept out of the repository for now
+docs/SPEC.md

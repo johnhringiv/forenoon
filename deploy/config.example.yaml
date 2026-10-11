@@ -1,0 +1,36 @@
+# Forenoon configuration. Secrets are NOT set here: see .env.example.
+timezone: America/New_York
+delivery_time: "06:00"          # local time of the daily run (`forenoon schedule`)
+data_dir: data                   # relative to this file; overridden by FORENOON_DATA_DIR
+sources_file: sources.yaml
+
+# Public URL of the feedback service (Cloudflare Tunnel hostname). Leave empty to
+# deliver without feedback links.
+public_base_url: ""
+
+# issue: one book a day with a contents page and a chapter per article.
+# articles: one book per article.
+format: issue
+
+max_age_days: 3                  # ignore feed items older than this
+token_ttl_days: 60               # how long feedback links stay valid
+
+users:
+  - id: me
+    name: Me
+    daily_cap: 8                 # articles per day
+    kindle_addresses:
+      - your-name@kindle.com     # must be registered here; nothing else can pick a recipient
+
+smtp:                            # example values are for Resend; see docs/setup-email.md
+  host: smtp.resend.com
+  port: 587
+  starttls: true
+  username: resend               # the API key goes in FORENOON_SMTP_PASSWORD
+  sender: digest@example.com     # must be on Amazon's Approved Personal Document E-mail List
+  max_message_bytes: 38000000    # Resend accepts 40 MB after encoding
+
+images:
+  grayscale: true                # false for colour e-readers
+  max_width: 1200
+  max_height: 1600
