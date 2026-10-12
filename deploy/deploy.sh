@@ -9,6 +9,7 @@
 #
 #   sudo ONLY=tunnel sh deploy.sh [env-file]      # replace just the cloudflared container
 #   sudo ONLY=recipes sh deploy.sh [env-file]     # replace just the recipes container
+#   sudo ONLY=web sh deploy.sh [env-file]         # replace just the newsstand container
 #
 # IMAGE comes from the environment, then the env file, then forenoon:local.
 # CLOUDFLARED_IMAGE likewise, defaulting to cloudflare/cloudflared:latest.
@@ -17,6 +18,10 @@
 # Recipes (optional): with RECIPES_IMAGE set, a fourth container runs Calibre news recipes
 # into <data>/recipes. Its logins come from recipes.env beside the env file (or
 # RECIPES_ENV_FILE) and reach no other container.
+#
+# Newsstand (optional): with WEB_LISTEN set (a port, or address:port), a container serves the
+# read-only newsstand pages there. They have no login: publish them only on a trusted
+# network, and never route the tunnel to them. It is given no secrets.
 #
 # The env file is .env.example filled in. FORENOON_HOST_DATA is the data folder; if
 # config.yaml / sources.yaml (and optionally forenoon.sqlite3) sit next
@@ -49,6 +54,7 @@ CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
 RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(env_get RECIPES_ENV_FILE)}"
 RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(dirname "$ENV_FILE")/recipes.env}"
+WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 RECIPES_TIME=$(env_get RECIPES_TIME)
 export RECIPES_TIME="${RECIPES_TIME:-05:00}"
 DATA_DIR=$(env_get FORENOON_HOST_DATA)
@@ -106,6 +112,31 @@ start_recipes() {
         "$RECIPES_IMAGE" >/dev/null ||
         echo "recipes container did not start; the rest of the deploy is unaffected"
 }
+
+start_web() {
+    docker stop -t 30 forenoon-web >/dev/null 2>&1 || true
+    docker rm -f forenoon-web >/dev/null 2>&1 || true
+    [ -n "$WEB_LISTEN" ] || return 0
+    # No secrets are passed. The data folder is writable only because SQLite needs its
+    # lock files beside the database; the pages themselves change nothing.
+    docker run -d --name forenoon-web --restart unless-stopped \
+        --stop-timeout 30 \
+        --read-only --tmpfs /tmp \
+        --cap-drop ALL --security-opt no-new-privileges:true \
+        -v "$DATA_DIR:/data" \
+        -p "$WEB_LISTEN:8081" \
+        -e TZ \
+        "$IMAGE" web --port 8081 >/dev/null ||
+        echo "newsstand container did not start; the rest of the deploy is unaffected"
+}
+
+if [ "${ONLY:-}" = "web" ]; then
+    echo "$(date -u +%FT%TZ) recreating forenoon-web from $IMAGE on ${WEB_LISTEN:-(WEB_LISTEN not set)}"
+    start_web
+    sleep 3
+    docker ps --filter name=forenoon-web --format '{{.Names}}: {{.Status}}'
+    exit 0
+fi
 
 if [ "${ONLY:-}" = "recipes" ]; then
     echo "$(date -u +%FT%TZ) recreating forenoon-recipes from ${RECIPES_IMAGE:-(none set)}"
@@ -182,6 +213,7 @@ done
 
 start_tunnel
 start_recipes
+start_web
 
 sleep 5
 docker ps --filter name=forenoon --format '{{.Names}}: {{.Status}}'

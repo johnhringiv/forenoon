@@ -103,6 +103,15 @@ def _feedback(args: argparse.Namespace) -> int:
     return 0
 
 
+def _web(cfg: Config, args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from .web import create_app
+
+    uvicorn.run(create_app(cfg.db_path, cfg.timezone), host=args.host, port=args.port, proxy_headers=False)
+    return 0
+
+
 def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     for row in store.feedback_rows():
@@ -194,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("feedback", help="serve the feedback endpoint")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)
+    p = sub.add_parser("web", help="serve the newsstand pages; no login, trusted networks only")
+    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--port", type=int, default=8081)
     sub.add_parser("feedback-log", help="print logged feedback")
     sub.add_parser("usage", help="print recent model calls and today's token use")
     p = sub.add_parser("checks", help="print articles the model thought were badly extracted")
@@ -221,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_all(cfg, args)
         if args.command == "schedule":
             return _schedule(cfg, args)
+        if args.command == "web":
+            return _web(cfg, args)
         if args.command == "report":
             return _report(cfg, args)
         if args.command == "checks":

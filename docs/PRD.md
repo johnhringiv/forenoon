@@ -247,6 +247,21 @@ the Amazon account's approved sender list.
   source has failed a set number of runs in a row (default 3, repeated at each multiple).
   Alerts use the same relay; a failure to send one is logged and does not affect the run.
 
+## 9a. Newsstand (optional web page)
+
+- `forenoon web` serves one page: delivered articles grouped by issue, newest first, 14
+  issues to a page. Each card shows source, author, title linked to the original, lead image
+  and description when the page had them, word count and reading time, how it was chosen
+  (score and rank, pinned, exploration pick, the model's reason) and its rating.
+- Read-only: there are no forms or actions. `?user=<id>` limits the page to one reader.
+- No login. It must be reachable only from a trusted network and never through the public
+  feedback hostname; the deploy script publishes it on a port of its own, in its own
+  container, with no secrets.
+- Article text is untrusted here as elsewhere: everything is escaped, links and images must
+  be plain `http(s)`, and the page's content security policy allows no scripts. Lead images
+  are loaded by the browser from the article's own site, without a referrer.
+- Articles from recipe sources have no lead image (theirs live inside the issue file).
+
 ## 10. Commands
 
 | Command                                         | Purpose                                                      |
@@ -255,6 +270,7 @@ the Amazon account's approved sender list.
 | `forenoon schedule`                             | Run every day at `delivery_time`                             |
 | `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X          |
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
+| `forenoon web [--host] [--port]`                | Serve the newsstand page (no login; trusted networks only)   |
 | `forenoon feedback-log`                         | Print taps and current ratings                               |
 | `forenoon usage`                                | Print recent model calls and today's token use               |
 | `forenoon checks [--all]`                       | Print articles the model thought were badly extracted        |
@@ -274,7 +290,8 @@ place on start-up. Backing up the data folder backs up everything.
   with a read-only root filesystem and no added capabilities.
 - Three containers: the scheduler, the feedback service, and a `cloudflared` tunnel that
   shares the feedback container's network namespace. No host port is published. An optional
-  fourth runs Calibre recipes from its own image.
+  fourth runs Calibre recipes from its own image, and an optional fifth serves the newsstand
+  on a host port chosen with `WEB_LISTEN`.
 - `deploy/docker-compose.yml`, or `deploy/deploy.sh` with plain `docker run`.
   `deploy/poll-deploy.sh` redeploys when the app image changes, replaces only the tunnel
   when just its image changed, and restarts the stack after a reboot.
@@ -286,6 +303,8 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 
 - Fetched content cannot choose recipients, run code, or reach private network addresses.
 - The public endpoint accepts only signed, expiring tokens and writes only ratings.
+- The newsstand has no login and offers no actions; keeping it off untrusted networks is the
+  operator's job.
 - Secrets are never read from or written to config files, reports or logs.
 - The address check on fetches resolves names separately from the connection, so it does not
   stop DNS rebinding; the containers should not sit on a network with sensitive services.
@@ -305,6 +324,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 - Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
 - Searching Hacker News and Lobsters beyond their front pages; a watch list for vendor
   announcements.
-- A web interface for sources, preferences and a "newsstand" of delivered articles.
+- A web interface for sources and preferences, adding articles by hand, and a login for the
+  newsstand.
 - Newsletters by email as a source.
 - E-readers other than Kindle.

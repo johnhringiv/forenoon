@@ -309,6 +309,44 @@ class Store:
             "SELECT * FROM selections WHERE user_id = ? ORDER BY selected_at, rank", (user_id,)
         ).fetchall()
 
+    # newsstand (read by the web pages)
+
+    def issue_times(self, user_id: str | None, before: str | None, limit: int) -> list[str]:
+        """Delivery timestamps, newest first: one per book sent."""
+        return [
+            row[0]
+            for row in self.db.execute(
+                "SELECT DISTINCT delivered_at FROM deliveries"
+                " WHERE (?1 IS NULL OR user_id = ?1) AND (?2 IS NULL OR delivered_at < ?2)"
+                " ORDER BY delivered_at DESC LIMIT ?3",
+                (user_id, before, limit),
+            )
+        ]
+
+    def newsstand_rows(self, user_id: str | None, oldest: str, newest: str) -> list[sqlite3.Row]:
+        """Delivered articles between two delivery timestamps, with why each was picked and its rating."""
+        return self.db.execute(
+            "SELECT d.user_id, d.delivered_at, a.id, a.url, a.source, a.title, a.author, a.word_count,"
+            " a.image_url, a.description, s.policy, s.score, s.reason, s.rank, s.explore,"
+            " r.rating, r.finished"
+            " FROM deliveries d JOIN articles a ON a.id = d.article_id"
+            " LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id"
+            " LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id"
+            " WHERE (?1 IS NULL OR d.user_id = ?1) AND d.delivered_at BETWEEN ?2 AND ?3"
+            " ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title",
+            (user_id, oldest, newest),
+        ).fetchall()
+
+    def delivery_totals(self, user_id: str | None) -> tuple[int, int, int]:
+        """Articles delivered, books sent, and articles rated."""
+        row = self.db.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT d.delivered_at), COUNT(r.rating)"
+            " FROM deliveries d LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id"
+            " WHERE (?1 IS NULL OR d.user_id = ?1)",
+            (user_id,),
+        ).fetchone()
+        return row[0], row[1], row[2]
+
     # extraction reviews (the model's second opinion; log only)
 
     def record_review(self, article_id: str, verdict: str, problem: str, model: str) -> None:

@@ -37,6 +37,16 @@ services:
     # No published port: the tunnel below is the only way in. For your own reverse proxy
     # instead, add  ports: ["127.0.0.1:8080:8080"]
 
+  # Enabled by adding "web" to COMPOSE_PROFILES in .env. Read-only newsstand pages with no
+  # login: publish them only on a trusted network, never through the tunnel.
+  web:
+    <<: *app
+    profiles: [web]
+    command: ["web", "--port", "8081"]
+    ports: ["${WEB_LISTEN:-127.0.0.1:8081}:8081"]
+    environment:
+      TZ: ${TZ:-UTC}
+
   # Enabled by adding "recipes" to COMPOSE_PROFILES in .env. Runs Calibre news recipes into
   # <data>/recipes; see docs/setup-recipes.md. Logins come from recipes.env only.
   recipes:

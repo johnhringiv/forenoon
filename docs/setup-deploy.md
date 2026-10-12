@@ -119,6 +119,22 @@ for a few seconds. The poller also restarts the stack after a reboot if a contai
 that lands while the daily run is in progress interrupts it; articles already emailed are
 recorded and not resent, and the rest go out with the next run.
 
+## Newsstand page (optional)
+
+A read-only page listing what was delivered, why each article was picked and how you rated
+it. It has **no login**, so publish it only where you trust everyone who can reach it: your
+LAN or a VPN such as Tailscale. Never point the Cloudflare Tunnel at it.
+
+1. In `.env`, set `WEB_LISTEN` to a port (`8081`) or, to limit it to one of the host's
+   addresses, `address:port` (`192.168.1.20:8081`). For docker compose, also add `web` to
+   `COMPOSE_PROFILES`.
+2. Start it: `sudo ONLY=web sh deploy.sh .env` (a full deploy starts it too), or
+   `docker compose up -d web`.
+3. Open `http://<host>:8081/`.
+
+The container gets no secrets. Check that your router does not forward the port from the
+internet.
+
 ## Backups
 
 Everything is in the data folder: `config.yaml`, `sources.yaml`, `forenoon.sqlite3`

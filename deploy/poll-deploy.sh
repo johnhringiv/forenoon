@@ -39,6 +39,7 @@ RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
 
 CONTAINERS="forenoon forenoon-feedback"
 [ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
+WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 # The recipes container is healed on its own below: its trouble must never bounce the app.
 
 all_running() {
@@ -90,6 +91,12 @@ fi
 
 if [ "$latest" = "$running" ]; then
     if all_running; then
+        # The newsstand runs the app image, so a new image replaces it with the rest; here
+        # it is only restarted when it has stopped, without touching the other containers.
+        if [ -n "$WEB_LISTEN" ] && [ "$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
+            echo "$(date -u +%FT%TZ) newsstand container is not running; replacing it only"
+            ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) newsstand container did not start"
+        fi
         if [ "$recipes_changed" = true ]; then
             echo "$(date -u +%FT%TZ) recipes container is stale or stopped; replacing it only"
             ONLY=recipes sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) recipes container did not start"
