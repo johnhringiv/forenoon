@@ -78,7 +78,9 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
             header::CONTENT_SECURITY_POLICY,
             "default-src 'none'; img-src http: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'",
         ),
-        (header::REFERRER_POLICY, "no-referrer"),
+        // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
+        // Links and images to article sites opt out of the referrer one by one.
+        (header::REFERRER_POLICY, "same-origin"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
         (header::CACHE_CONTROL, "no-store"),
@@ -94,12 +96,17 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
 /// Whether a form post came from one of our own pages, as far as the browser says.
 fn same_origin(headers: &HeaderMap) -> bool {
     let text = |name| headers.get(name).and_then(|value: &HeaderValue| value.to_str().ok());
-    if let Some(origin) = text(header::ORIGIN) {
-        let host = origin.split_once("://").map_or(origin, |(_, host)| host);
-        return text(header::HOST) == Some(host);
+    // The browser's own verdict, when it gives one (it does on https and localhost).
+    if let Some(site) = text(header::HeaderName::from_static("sec-fetch-site")) {
+        return site == "same-origin";
     }
-    // No Origin header: trust the browser's own verdict when it gives one.
-    text(header::HeaderName::from_static("sec-fetch-site")).is_none_or(|site| site == "same-origin" || site == "none")
+    // Otherwise the Origin header, which form posts carry. `null` (a sandboxed or
+    // referrer-less page) is not us. Our own pages send a real one because the referrer
+    // policy is `same-origin`; under `no-referrer` browsers would send `null` here.
+    match text(header::ORIGIN) {
+        Some(origin) => text(header::HOST) == Some(origin.split_once("://").map_or(origin, |(_, host)| host)),
+        None => true,
+    }
 }
 
 fn random_token() -> Result<String, AppError> {
@@ -657,7 +664,9 @@ mod tests {
         };
         assert!(same_origin(&headers(&[("origin", "http://nas:8787"), ("host", "nas:8787")])));
         assert!(!same_origin(&headers(&[("origin", "https://evil.example"), ("host", "nas:8787")])));
+        assert!(!same_origin(&headers(&[("origin", "null"), ("host", "nas:8787")])));
         assert!(!same_origin(&headers(&[("sec-fetch-site", "cross-site"), ("host", "nas:8787")])));
+        assert!(same_origin(&headers(&[("sec-fetch-site", "same-origin"), ("origin", "https://x"), ("host", "x")])));
         assert!(same_origin(&headers(&[("host", "nas:8787")])));
     }
 }
