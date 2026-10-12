@@ -132,14 +132,26 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
 
 def _usage(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
+
+    def cost(tokens_in: int, tokens_out: int) -> float:
+        return (tokens_in * cfg.llm.input_price + tokens_out * cfg.llm.output_price) / 1_000_000
+
     for row in store.llm_call_rows():
         print(
             f"{row['created_at']}  {row['purpose']:<6} {row['model']:<20} in {row['input_tokens']:>6}"
-            f"  out {row['output_tokens']:>5}  {row['status']} {row['error']}"
+            f"  out {row['output_tokens']:>5}  ${cost(row['input_tokens'], row['output_tokens']):.4f}"
+            f"  {row['status']} {row['error']}"
         )
+    utc = ZoneInfo("UTC")
     day = datetime.now(ZoneInfo(cfg.timezone)).replace(hour=0, minute=0, second=0, microsecond=0)
-    used = store.llm_tokens_since(day.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds"))
-    print(f"\nToday: {used} of {cfg.llm.daily_token_cap} tokens.")
+    today = store.llm_tokens_split_since(day.astimezone(utc).isoformat(timespec="seconds"))
+    month = store.llm_tokens_split_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
+    print(f"\nToday: {sum(today)} of {cfg.llm.daily_token_cap} tokens, about ${cost(*today):.4f}.")
+    print(f"This month: {sum(month)} tokens, about ${cost(*month):.2f}.")
+    print(
+        f"Cost is an estimate at ${cfg.llm.input_price:g} in and ${cfg.llm.output_price:g} out per million"
+        " tokens (llm.input_price, llm.output_price); every call is priced at today's rates."
+    )
     return 0
 
 

@@ -274,6 +274,8 @@ class FakeBackend:
     def __init__(self, scores=None, fail=False):
         self.scores, self.fail, self.prompts = scores, fail, []
         self.checks, self.checked = None, []
+        self.groups = None  # titles -> list of title lists that are one story
+        self.subjects = None  # article title -> the link numbers it is about
 
     def structured(self, system, user, schema, shared=""):
         from app.llm import LlmError, Reply
@@ -285,6 +287,16 @@ class FakeBackend:
             listed = __import__("json").loads(user.split("<articles>\n")[1].split("\n</articles>")[0])
             self.checked = listed
             return Reply({"checks": self.checks(listed) if self.checks else []}, 0, 0)
+        if "<chosen>" in user:
+            listed = __import__("json").loads(user.split("<chosen>\n")[1].split("\n</chosen>")[0])
+            self.linking = listed
+            answers = [{"id": a["id"], "links": (self.subjects or {}).get(a["title"], [])} for a in listed]
+            return Reply({"articles": [*answers, {"id": "made-up", "links": [1]}]}, 300, 40)
+        if "<headlines>" in user:
+            listed = __import__("json").loads(user.split("<headlines>\n")[1].split("\n</headlines>")[0])
+            ids = {c["title"]: c["id"] for c in listed}
+            stories = [{"ids": [ids[t] for t in g if t in ids]} for g in (self.groups or [])]
+            return Reply({"stories": [*stories, {"ids": ["made-up", "another"]}]}, 400, 50)
         ids = [c["id"] for c in __import__("json").loads(user.split("<candidates>\n")[1].split("\n</candidates>")[0])]
         scores = self.scores(ids) if self.scores else []
         return Reply({"scores": scores}, 1200, 300)
@@ -337,7 +349,7 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     book = "".join(epub.read(n).decode() for n in epub.namelist() if n.endswith(".xhtml"))
     assert "Picked because: reason &lt;b&gt;" in book and "inject" not in book
-    assert store.llm_tokens_since("2000-01-01") == 1500
+    assert store.llm_tokens_since("2000-01-01") == 1950  # the ranking call and the grouping call
 
 
 def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
@@ -523,7 +535,7 @@ def test_extraction_check_is_logged_and_never_changes_delivery(env):
     off = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, check_extraction=False))
     quiet = FakeBackend(backend.scores)
     run(off, Store(cfg.data_dir / "off.sqlite3"), fetcher, user, now=NOW, dry_run=True, backend=quiet)
-    assert not quiet.checked and len(quiet.prompts) == 1
+    assert not quiet.checked and len(quiet.prompts) == 2  # ranking and grouping, no check
 
 
 def test_fetched_pages_are_kept_for_replay_and_pruned(env):
@@ -557,11 +569,11 @@ def test_fetched_pages_are_kept_for_replay_and_pruned(env):
 
 
 def test_front_page_links_are_not_articles():
-    from app.sources import _is_front_page
+    from app.sources import is_front_page
 
-    assert _is_front_page("https://example.com/") and _is_front_page("https://example.com")
-    assert not _is_front_page("https://example.com/?p=12")
-    assert not _is_front_page("https://example.com/blog/post/")
+    assert is_front_page("https://example.com/") and is_front_page("https://example.com")
+    assert not is_front_page("https://example.com/?p=12")
+    assert not is_front_page("https://example.com/blog/post/")
 
 
 def test_scheduler_rereads_config_and_keeps_the_old_one_when_broken(tmp_path):
@@ -582,3 +594,133 @@ def test_scheduler_rereads_config_and_keeps_the_old_one_when_broken(tmp_path):
 
     path.write_text("delivery_time: [broken")
     assert cli._reload(cfg, args).delivery_time == "07:30"
+
+
+def test_pointer_post_is_replaced_by_the_articles_it_links_to_as_one_story(env, tmp_path):
+    cfg, store, _ = env
+    quote = "A short quote from the piece, lightly trimmed. " * 9
+    pointer = (
+        f'<blockquote><p>{quote}<a href="https://orig.example/post-7?utm_source=x">a blog post</a></p></blockquote>'
+        '<p>From <a href="https://walled.example/story">The Walled Times</a>. '
+        'Tags: <a href="https://links.example/tags/ai">ai</a></p>'
+    )
+    routes = {
+        "https://links.example/feed": _rss(_entry(4, "Tue, 10 Mar 2026 10:00:00 GMT", pointer)).replace(
+            b"blog.example/post-4", b"links.example/quoting"
+        ),
+        "https://orig.example/post-7": (
+            f"<html><head><title>The original report</title></head><body><article>{BODY}</article></body></html>"
+        ).encode(),
+    }
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        return httpx.Response(200, content=routes[url]) if url in routes else handler(request)
+
+    fetcher = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(routed))
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)
+    cfg = dataclasses.replace(
+        cfg,
+        users=(user,),
+        format="issue",
+        sources=(
+            Source("Links", "https://links.example/feed", extract="feed"),
+            Source("Blog", "https://blog.example/feed"),
+        ),
+    )
+    sent = []
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
+
+    # Two stories fill the cap of two; the pointer itself is not an article in the book.
+    titles = [store.get_article(i).title for i in report.delivered]
+    assert titles == ["The original report", "Post 1"] and report.stories == 2
+    assert store.delivered_on("john", "2000", "3000") == 2
+    pointer_row = next(i for i in report.sources[0].items if i.title == "Post 4")
+    assert "replaced by 1 of the articles it links to" in pointer_row.reason
+    assert any(i.status == "error" and "walled.example" in i.url for i in report.sources[0].items)
+
+    epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    first = epub.read("OEBPS/a01.xhtml").decode()
+    # Strict replacement: the post's own text is not printed, only a credit.
+    assert "Found through Links: Post 4" in first and "A short quote from the piece" not in first
+    assert "orig.example via Links" in first and '<a href="https://orig.example/post-7">Read the original' in first
+    assert "Found through Links: Post 4" in epub.read("OEBPS/contents.xhtml").decode()
+    # A copy of the sent book is kept, and the pointer is not offered again.
+    assert [p.name for p in cfg.issues_dir.iterdir()] == ["Forenoon 2026-03-10.epub"]
+    again = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: pytest.fail("cap reached"))
+    assert again.cap_reached and not again.delivered
+
+    # When nothing it links to can be fetched, the short post goes out as before.
+    routes.pop("https://orig.example/post-7")
+    fresh = Store(tmp_path / "second.sqlite3")
+    fetcher = Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(routed))
+    alone = run(cfg, fresh, fetcher, user, now=NOW, dry_run=True)
+    assert [fresh.get_article(i).title for i in alone.delivered] == ["Post 4", "Post 1"]
+
+
+def test_candidates_on_the_same_event_are_delivered_as_one_story(env):
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, explore_slots=0)
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)
+    cfg = dataclasses.replace(cfg, users=(user,))
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 9 - n, "reason": "r"} for n, i in enumerate(ids)])
+    backend.groups = [["Post 1", "Post 2"]]
+    sent = []
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m), backend=backend)
+
+    # The pinned article is one story; the two posts on one event are the other.
+    titles = [store.get_article(i).title for i in report.delivered]
+    assert titles == ["Post 9", "Post 1", "Post 2"] and report.stories == 2
+    assert "2 stories delivered (3 articles)" in report.to_markdown()
+    assert store.delivered_on("john", "2000", "3000") == 2
+    assert ("group", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+    rows = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
+    assert sorted(rows.values()) == ["claude-rank-v1", "claude-rank-v1", "pinned"]
+
+    epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    contents = epub.read("OEBPS/contents.xhtml").decode()
+    assert "2 stories, 3 articles" in contents and contents.count('class="toc-more"') == 1
+    assert "More on: Post 1" in epub.read("OEBPS/a03.xhtml").decode()
+
+
+def test_model_picks_which_links_are_the_subject_and_responses_keep_both(env):
+    cfg, store, _ = env
+    aside = '<p>See also <a href="https://aside.example/post-1">an unrelated page</a>.</p>'
+    response = f'<p>My response to <a href="https://orig.example/post-7">their report</a>.</p>{BODY}{aside}'
+    short = (
+        '<p>Worth a look: <a href="https://aside.example/post-2">a thing</a>. ' + "Filler words here. " * 30 + "</p>"
+    )
+    routes = {
+        "https://links.example/feed": _rss(
+            _entry(4, "Tue, 10 Mar 2026 10:00:00 GMT", response), _entry(6, "Tue, 10 Mar 2026 09:00:00 GMT", short)
+        ).replace(b"blog.example/post-", b"links.example/item-"),
+        "https://orig.example/post-7": (
+            f"<html><head><title>The original report</title></head><body><article>{BODY}</article></body></html>"
+        ).encode(),
+    }
+
+    def routed(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        return httpx.Response(200, content=routes[url]) if url in routes else handler(request)
+
+    fetcher = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(routed))
+    cfg = _llm_cfg(cfg, explore_slots=0)
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)
+    cfg = dataclasses.replace(
+        cfg, users=(user,), sources=(Source("Links", "https://links.example/feed", extract="feed"),)
+    )
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 9 - n, "reason": "r"} for n, i in enumerate(ids)])
+    backend.subjects = {"Post 4": [1, 1, 7]}  # the report it responds to; repeats and bad numbers are dropped
+    sent = []
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m), backend=backend)
+
+    # The response and its subject are one story. The short post's link was judged an aside,
+    # so it goes out as itself and nothing is fetched from that site.
+    titles = [store.get_article(i).title for i in report.delivered]
+    assert titles == ["Post 4", "The original report", "Post 6"] and report.stories == 2
+    sent_links = {a["title"]: [link["site"] for link in a["links"]] for a in backend.linking}
+    assert sent_links == {"Post 4": ["orig.example", "aside.example"], "Post 6": ["aside.example"]}
+    assert not any("aside.example" in i.url for s in report.sources for i in s.items)
+    epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    assert "More on: Post 4" in epub.read("OEBPS/a02.xhtml").decode()
+    assert ("links", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]

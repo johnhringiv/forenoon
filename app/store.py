@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     user_id TEXT NOT NULL,
     article_id TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
+    story TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS feedback_events (
@@ -129,6 +130,9 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         have = {row["name"] for row in self.db.execute("PRAGMA table_info(articles)")}
+        if "story" not in {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE deliveries ADD COLUMN story TEXT NOT NULL DEFAULT ''")
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -163,6 +167,10 @@ class Store:
                 (status, reason, word_count, id),
             )
 
+    def set_title(self, id: str, title: str) -> None:
+        with self.db:
+            self.db.execute("UPDATE articles SET title = ? WHERE id = ?", (title, id))
+
     def set_preview(self, id: str, image_url: str, description: str) -> None:
         with self.db:
             self.db.execute(
@@ -189,17 +197,22 @@ class Store:
             is not None
         )
 
-    def mark_delivered(self, user_id: str, article_ids: list[str], when: datetime) -> None:
+    def mark_delivered(
+        self, user_id: str, article_ids: list[str], when: datetime, stories: dict[str, str] | None = None
+    ) -> None:
+        """`stories` maps an article to its story; articles sharing one count once against the cap."""
         stamp = when.astimezone(UTC).isoformat(timespec="seconds")
         with self.db:
             self.db.executemany(
-                "INSERT OR IGNORE INTO deliveries (user_id, article_id, delivered_at) VALUES (?, ?, ?)",
-                [(user_id, a, stamp) for a in article_ids],
+                "INSERT OR IGNORE INTO deliveries (user_id, article_id, delivered_at, story) VALUES (?, ?, ?, ?)",
+                [(user_id, a, stamp, (stories or {}).get(a, "")) for a in article_ids],
             )
 
     def delivered_on(self, user_id: str, utc_start: str, utc_end: str) -> int:
+        """Stories delivered in the period: articles that share a story count once."""
         return self.db.execute(
-            "SELECT COUNT(*) FROM deliveries WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ?",
+            "SELECT COUNT(DISTINCT CASE WHEN story = '' THEN article_id ELSE story END) FROM deliveries"
+            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ?",
             (user_id, utc_start, utc_end),
         ).fetchone()[0]
 
@@ -270,6 +283,15 @@ class Store:
             (start,),
         ).fetchone()
         return row["n"]
+
+    def llm_tokens_split_since(self, start: str) -> tuple[int, int]:
+        """Input and output tokens logged since `start`."""
+        row = self.db.execute(
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM llm_calls"
+            " WHERE created_at >= ?",
+            (start,),
+        ).fetchone()
+        return row[0], row[1]
 
     def llm_call_rows(self, limit: int = 30) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", (limit,)).fetchall()[::-1]

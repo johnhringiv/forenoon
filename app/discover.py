@@ -21,7 +21,10 @@ MAX_LISTING_BYTES = 2 * 1024 * 1024
 MAX_TITLE_CHARS = 300
 DESCRIPTION_WORDS = 60
 # Not articles: nothing useful to extract.
-SKIP_HOSTS = ("youtube.com", "youtu.be", "twitter.com", "x.com", "news.ycombinator.com", "lobste.rs")
+SKIP_HOSTS = (
+    "youtube.com", "youtu.be", "twitter.com", "x.com", "news.ycombinator.com", "lobste.rs",
+    "reddit.com", "bsky.app", "linkedin.com", "facebook.com", "instagram.com", "chatgpt.com", "claude.ai",
+)  # fmt: skip
 SKIP_SUFFIXES = (".pdf", ".mp4", ".mp3", ".zip", ".png", ".jpg", ".gif")
 
 
@@ -78,13 +81,13 @@ def site_source(key: str) -> Source:
     return Source(site.name, site.url, extract="page")
 
 
-def _host(url: str) -> str:
+def site_host(url: str) -> str:
     host = (urlsplit(url).hostname or "").lower()
     return host.removeprefix("www.")
 
 
-def _is_article(url: str) -> bool:
-    host = _host(url)
+def is_article(url: str) -> bool:
+    host = site_host(url)
     if not host or any(host == skip or host.endswith("." + skip) for skip in SKIP_HOSTS):
         return False
     return not urlsplit(url).path.lower().endswith(SKIP_SUFFIXES)
@@ -134,12 +137,12 @@ def read_listing(key: str, fetcher: Fetcher) -> list[Item]:
         url, title = story.get("url"), story.get("title")
         if not isinstance(url, str) or not isinstance(title, str):
             continue
-        if not url.startswith(("http://", "https://")) or not _is_article(url):
+        if not url.startswith(("http://", "https://")) or not is_article(url):
             continue
         discussion = story.get("discussion")
         if not isinstance(discussion, str) or not discussion.startswith("https://"):
             discussion = ""
-        host = _host(url)
+        host = site_host(url)
         item = Item(
             id=article_id(url),
             url=url,

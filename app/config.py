@@ -23,7 +23,7 @@ class User:
     id: str
     name: str
     kindle_addresses: tuple[str, ...]
-    daily_cap: int = 8
+    daily_cap: int = 8  # stories a day; a story is one article, or a few on one subject
     interests: str = ""  # in the user's own words; given to the ranking model
 
 
@@ -62,10 +62,16 @@ class Llm:
     daily_token_cap: int = 300_000  # input + output tokens per local day, all users
     max_candidates: int = 600  # ceiling on abstracts sent to the model per user per run
     batch_size: int = 80  # candidates per ranking call
+    group_stories: bool = True  # one more call finds candidates that cover the same event
+    follow_links: bool = True  # one more call finds articles that are about a page they link to
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
     check_extraction: bool = True  # ask the model whether each article looks complete; log only
     timeout: float = 60.0  # seconds
+    # US dollars per million tokens for `model`, used only to show cost in `forenoon usage`.
+    # The API does not report prices, so update these when the model or its price changes.
+    input_price: float = 0.10
+    output_price: float = 0.50
 
 
 @dataclass(frozen=True)
@@ -111,6 +117,10 @@ class Config:
     token_ttl_days: int = 60
     # Keep each article's fetched page for this many days, for `forenoon replay`. 0 = keep none.
     keep_pages_days: int = 90
+    # Keep a copy of each book sent for this many days, in `issues/`. 0 = keep none.
+    keep_issues_days: int = 30
+    # The most articles one story may bring. The daily cap counts stories, not articles.
+    max_story_entries: int = 3
     # "issue": one book a day with a contents page. "articles": one book per article.
     format: str = "issue"
     user_agent: str = "Forenoon/0.1 (self-hosted personal reader)"
@@ -129,6 +139,10 @@ class Config:
     @property
     def pages_dir(self) -> Path:
         return self.data_dir / "pages"
+
+    @property
+    def issues_dir(self) -> Path:
+        return self.data_dir / "issues"
 
     @property
     def db_path(self) -> Path:

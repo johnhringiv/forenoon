@@ -74,6 +74,9 @@ class Article:
     extra_css: str = ""
     reason: str = ""  # why it was picked; model output, escaped like any other text
     discussion_url: str = ""  # comment thread where the article was found
+    # Stories: several articles on one subject, delivered together.
+    story: str = ""  # on an article delivered in place of the post that pointed to it: the credit
+    continues: str = ""  # on later articles: the title of the story's first article
 
 
 def book_title(article: Article, day: datetime) -> str:
@@ -111,6 +114,10 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
     footer = _footer(feedback_links, rating_style)
     why = f'<p class="meta">Picked because: {escape(article.reason)}</p>\n' if article.reason else ""
     talk = f" · <a href={quoteattr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
+    if article.continues:
+        why += f'<p class="meta">More on: {escape(article.continues)}</p>\n'
+    if article.story:
+        why += f'<p class="meta">{escape(article.story)}</p>\n'
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang={quoteattr(article.language)}>
@@ -220,6 +227,7 @@ def render_epub(
 class IssueEntry:
     article: Article
     feedback_links: dict[str, str] = field(default_factory=dict)
+    covers: tuple[str, ...] = ()  # other article ids this chapter stands in for
 
 
 def issue_title(day: datetime, part: int = 0) -> str:
@@ -250,13 +258,23 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
         detail = " · ".join(
             part for part in (a.source, f"{a.reading_minutes} min" if a.reading_minutes else "") if part
         )
+        if a.continues:
+            # A later article of the story above: listed under it, without repeating the reason.
+            items += (
+                f'<p class="toc-more"><a href="a{index:02d}.xhtml">{escape(a.title)}</a></p>'
+                f'<p class="toc-more toc-detail">{escape(detail)}</p>'
+            )
+            continue
         items += (
             f'<p class="toc-title"><a href="a{index:02d}.xhtml">{escape(a.title)}</a></p>'
             f'<p class="toc-detail">{escape(detail)}</p>'
+            + (f'<p class="toc-detail">{escape(a.story)}</p>' if a.story else "")
             + (f'<p class="toc-detail">{escape(a.reason)}</p>' if a.reason else "")
         )
     minutes = sum(e.article.reading_minutes for e in entries)
-    summary = f"{len(entries)} articles · about {minutes} min"
+    stories = sum(not e.article.continues for e in entries)
+    count = f"{len(entries)} articles" if stories == len(entries) else f"{stories} stories, {len(entries)} articles"
+    summary = f"{count} · about {minutes} min"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
@@ -275,6 +293,8 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
 ISSUE_CSS = """\
 .toc-title { font-weight: bold; margin: 1.1em 0 0; text-indent: 0; }
 .toc-detail { font-size: 0.85em; margin: 0.1em 0 0; text-indent: 0; }
+.toc-more { margin: 0.5em 0 0 1.5em; text-indent: 0; }
+.toc-more.toc-detail { margin-top: 0.1em; }
 """
 
 

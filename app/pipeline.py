@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,23 +21,30 @@ from .deliver import (
     safe_filename,
     send,
 )
-from .discover import read_listing, site_source
+from .discover import is_article, read_listing, site_host, site_source
 from .extract import Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
 from .llm import Backend
-from .rank import POLICY, Ranking
+from .rank import LINK_WORDS, POLICY, Ranking, group_stories, subject_links
 from .rank import rank as rank_candidates
 from .recipes import read_recipe
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
-from .sources import Item, read_feed
+from .sources import Item, is_front_page, read_feed
 from .store import Store
 from .tokens import LINK_SIGNALS, make_token
+from .urls import article_id, without_tracking
 
 log = logging.getLogger("forenoon")
 
 MAX_ITEMS_PER_SOURCE = 5
+# A feed post this short that is about a page it links to is a pointer: that page is
+# delivered in its place. A longer one that responds to a page is delivered along with it.
+POINTER_MAX_WORDS = 150
+MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links matter
+MAX_LINKS_SHOWN = 8  # per article, to the model
+LINK_CONTEXT_CHARS = 220
 
 
 @dataclass
@@ -77,6 +84,7 @@ class RunReport:
     dry_run: bool = False
     sources: list[SourceReport] = field(default_factory=list)
     delivered: list[str] = field(default_factory=list)
+    stories: int = 0  # what the daily cap counts; several delivered articles can share one
     messages: int = 0
     delivery_error: str = ""
     cap_reached: bool = False  # the day's cap was already used before this run started
@@ -87,7 +95,10 @@ class RunReport:
         lines = [f"# Extraction report {self.started}", ""]
         if self.user:
             mode = " (dry run)" if self.dry_run else ""
-            lines += [f"User `{self.user}`: {len(self.delivered)} delivered{mode}.", ""]
+            count = f"{len(self.delivered)} delivered"
+            if self.stories and self.stories != len(self.delivered):
+                count = f"{self.stories} stories delivered ({len(self.delivered)} articles)"
+            lines += [f"User `{self.user}`: {count}{mode}.", ""]
         if self.delivery_error:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
         if self.ranking:
@@ -157,7 +168,7 @@ def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> t
     article = Article(
         id=item.id,
         url=item.url,
-        title=item.title,
+        title=item.title or result.title or item.url,
         source=f"{item.site} via {item.source.name}" if item.site else item.source.name,
         body=result.body,
         author=item.author or result.author,
@@ -167,6 +178,67 @@ def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> t
         discussion_url=item.discussion_url,
     )
     return result, article, dropped
+
+
+@dataclass
+class _Prepared:
+    """One extracted article, ready to go in a book."""
+
+    item: Item
+    article: Article
+    result: Extracted
+    links: dict[str, str]
+    size: int  # encoded size as a book of its own
+    entry: ItemReport
+
+
+@dataclass
+class _Link:
+    """A link from a chosen article to a page on another site."""
+
+    item: Item
+    text: str
+    context: str  # the text around it
+
+
+@dataclass
+class _Story:
+    """What takes one slot of the day: one article, or a few on one subject."""
+
+    id: str  # the candidate it came from
+    members: list[_Prepared]
+    reason: str = ""
+    covers: tuple[str, ...] = ()  # articles delivered only through these members
+    links: list[_Link] = field(default_factory=list)
+
+
+def _linked_items(item: Item, body, store: Store, user: User, taken: set[str]) -> list[_Link]:
+    """Pages on other sites that an article links to, in the order they appear."""
+    home = site_host(item.url)
+    out: dict[str, _Link] = {}
+    for anchor in body.iter("a"):
+        url = without_tracking((anchor.get("href") or "").strip())
+        if not url.startswith(("http://", "https://")) or not is_article(url) or is_front_page(url):
+            continue
+        host = site_host(url)
+        if host == home or host.endswith("." + home) or home.endswith("." + host):
+            continue
+        linked = article_id(url)
+        if linked in out or linked in taken or store.is_delivered(user.id, linked):
+            continue
+        known = store.get_article(linked)
+        if known and known.status == "failed":
+            continue
+        # The page is the only copy we have, whatever the pointing feed's own setting.
+        source = replace(item.source, extract="page")
+        parent = anchor.getparent()
+        around = " ".join((parent if parent is not None else anchor).text_content().split())
+        out[linked] = _Link(
+            Item(linked, url, source, "", "", None, "", site=host),
+            " ".join(anchor.text_content().split())[:120],
+            around[:LINK_CONTEXT_CHARS],
+        )
+    return list(out.values())
 
 
 def _item_report(item: Item, result: Extracted, dropped: int) -> ItemReport:
@@ -341,6 +413,7 @@ def run(
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     ranking = Ranking(others, {})
     found: list[Item] = []
+    grouped: dict[str, list[Item]] = {}  # candidate id -> the candidates covering the same event
     if cfg.llm.enabled:
         pool = others[: cfg.llm.max_candidates]
         slots = max(0, remaining - len(pinned))
@@ -361,6 +434,9 @@ def run(
         ranking.order += others[cfg.llm.max_candidates :]
         if ranking.choices:
             report.ranking = f"model ({ranking.note})" if ranking.note else "model"
+            grouped = group_stories(
+                cfg.llm, backend, store, ranking.order, day_start.astimezone(UTC).isoformat(timespec="seconds")
+            )
         elif backend is None:
             report.ranking = "fallback: no API key"
         elif ranking.note:
@@ -370,31 +446,33 @@ def run(
         raise ValueError(f"format must be 'issue' or 'articles', not {cfg.format!r}")
     attachments: list[Attachment] = []
     entries: list[tuple[IssueEntry, int]] = []  # with the article's size as its own book
-    ready: list[str] = []
+    # The day's cap counts stories. A story is one article, or a few on one subject.
+    stories = 0
+    story_of: dict[str, str] = {}  # article id -> the id of the candidate its story came from
+    covered: set[str] = set()  # pointer posts delivered only through the articles they link to
     size_limit = cfg.smtp.max_message_bytes - MESSAGE_OVERHEAD
     leftover: set[str] = set()
     checked: list[tuple[Article, ItemReport]] = []
     found_ids = {item.id for item in found}
     found_ready = 0
-    for item in queue:
-        if len(ready) >= remaining or (item.id in found_ids and found_ready >= ranking.found_slots):
-            leftover.add(item.source.name)
-            continue
-        if item.id in found_ids:
-            # Feed items are recorded when their feed is read; a find only once it is tried.
-            published = item.published.isoformat() if item.published else None
-            store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
+    taken: set[str] = set()
+
+    def prepare(item: Item, reason: str = "") -> _Prepared | None:
+        """Extract one item and check it fits a message; None when it cannot be delivered."""
         result, article, dropped = _process(item, fetcher, cfg, keep=not dry_run)
-        choice = ranking.choices.get(item.id)
-        if article is not None and choice and cfg.llm.show_reasons:
-            article.reason = choice.reason
+        if not item.title:
+            item = replace(item, title=article.title if article else item.url)
+            store.set_title(item.id, item.title)
+        if article is not None and reason and cfg.llm.show_reasons:
+            article.reason = reason
         store.set_extraction(item.id, result.status, result.reason, result.word_count)
         store.set_preview(item.id, result.image_url, result.description)
-        reports[item.source.name].items.append(_item_report(item, result, dropped))
+        entry = _item_report(item, result, dropped)
+        reports[item.source.name].items.append(entry)
         if article is None:
             if result.status == "error":
                 leftover.add(item.source.name)
-            continue
+            return None
         links = _feedback_links(cfg, user, item.id, now)
         epub = render_epub(article, now, links)
         note = ""
@@ -408,20 +486,121 @@ def run(
         if too_large:
             note = "too large for one message"
         if note:
-            entry = reports[item.source.name].items[-1]
             entry.status = "failed" if too_large else "degraded"
             entry.reason = "; ".join(filter(None, [entry.reason, note]))
             store.set_extraction(item.id, entry.status, entry.reason, result.word_count)
             if too_large:
+                return None
+        return _Prepared(item, article, result, links, encoded_size(len(epub)), entry)
+
+    picked: list[_Story] = []
+    for item in queue:
+        if item.id in taken:
+            continue  # already delivered today as part of another story
+        is_found = item.id in found_ids
+        if stories >= remaining or (is_found and found_ready >= ranking.found_slots):
+            leftover.add(item.source.name)
+            continue
+        if is_found:
+            # Feed items are recorded when their feed is read; a find only once it is tried.
+            published = item.published.isoformat() if item.published else None
+            store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
+        taken.add(item.id)
+        choice = ranking.choices.get(item.id)
+        reason = choice.reason if choice else ""
+        lead = prepare(item, reason)
+        if lead is None:
+            continue
+        story = _Story(item.id, [lead], reason)
+        # Other candidates on the same event join this story instead of taking a slot each.
+        for other in grouped.get(item.id, []):
+            if other.id in taken:
                 continue
-        if cfg.format == "issue":
-            entries.append((IssueEntry(article, links), encoded_size(len(epub))))
+            taken.add(other.id)
+            if len(story.members) >= cfg.max_story_entries:
+                continue  # still marked taken: the story has had its share of the day
+            if other.id in found_ids:
+                published = other.published.isoformat() if other.published else None
+                store.upsert_article(other.id, other.url, other.source.name, other.title, other.author, published)
+            choice = ranking.choices.get(other.id)
+            extra = prepare(other, choice.reason if choice else "")
+            if extra is not None:
+                extra.article.continues = lead.article.title
+                story.members.append(extra)
+        if item.source.type == "rss" and not is_found:
+            story.links = _linked_items(item, lead.article.body, store, user, taken)[:MAX_LINKS_SHOWN]
+        picked.append(story)
+        stories += 1
+        found_ready += is_found
+
+    # Articles that are about another page bring that page into their story. The model says
+    # which links those are; without it, only short posts are followed, through every link.
+    asked = [
+        {
+            "id": story.id,
+            "title": story.members[0].item.title,
+            "words": story.members[0].result.word_count,
+            "opening": " ".join(story.members[0].article.body.text_content().split()[:LINK_WORDS]),
+            "links": [{"site": link.item.site, "text": link.text, "context": link.context} for link in story.links],
+        }
+        for story in picked
+        if story.links
+    ]
+    today = day_start.astimezone(UTC).isoformat(timespec="seconds")
+    subjects = subject_links(cfg.llm, backend, store, asked, today) if cfg.llm.enabled else None
+    for story in picked:
+        if not story.links:
+            continue
+        lead = story.members[0]
+        pointer = lead.result.word_count < POINTER_MAX_WORDS
+        if subjects is not None:
+            wanted = [story.links[n - 1].item for n in subjects.get(story.id, [])]
+        elif pointer:
+            wanted = [link.item for link in story.links[:MAX_LINKS_TRIED]]
         else:
-            name = safe_filename(book_title(article, now))
-            attachments.append(Attachment(name, epub, (item.id,)))
-        ready.append(item.id)
-        found_ready += item.id in found_ids
-        checked.append((article, reports[item.source.name].items[-1]))
+            continue
+        room = cfg.max_story_entries - (0 if pointer else len(story.members))
+        originals: list[_Prepared] = []
+        for linked in wanted:
+            if len(originals) >= room or linked.id in taken:
+                continue
+            taken.add(linked.id)
+            source_name = f"{linked.site} via {lead.item.source.name}"
+            store.upsert_article(linked.id, linked.url, source_name, linked.url, "", None)
+            ready = prepare(linked, story.reason)
+            if ready is not None and ready.result.status == "clean":
+                originals.append(ready)
+        if not originals:
+            continue
+        if pointer:
+            # The short post only pointed at these: they are delivered in its place.
+            first = originals[0].article
+            first.story = f"Found through {lead.item.source.name}: {lead.item.title}"
+            for later in [*originals[1:], *story.members[1:]]:
+                later.article.continues = first.title
+            story.members[:1] = originals
+            story.covers = (lead.item.id,)
+            covered.add(lead.item.id)
+            note = f"replaced by {len(originals)} of the articles it links to"
+            lead.entry.reason = "; ".join(filter(None, [lead.entry.reason, note]))
+        else:
+            # A response or commentary: delivered together with what it responds to.
+            for original in originals:
+                original.article.continues = lead.article.title
+            story.members[1:1] = originals
+
+    for story in picked:
+        for position, member in enumerate(story.members):
+            also = story.covers if position == 0 else ()
+            if cfg.format == "issue":
+                entries.append((IssueEntry(member.article, member.links, also), member.size))
+            else:
+                name = safe_filename(book_title(member.article, now))
+                book = render_epub(member.article, now, member.links)
+                attachments.append(Attachment(name, book, (member.item.id, *also)))
+            for covered_id in (member.item.id, *also):
+                story_of[covered_id] = story.id
+            checked.append((member.article, member.entry))
 
     if cfg.llm.enabled:
         reviews = review_extractions(
@@ -449,12 +628,14 @@ def run(
             Attachment(
                 safe_filename(issue_title(now, label)),
                 render_issue(part, now, label),
-                tuple(e.article.id for e in part),
+                tuple(i for e in part for i in (e.article.id, *e.covers)),
             )
         )
 
     if not dry_run and cfg.keep_pages_days > 0:
         archive.prune(cfg.pages_dir, cfg.keep_pages_days)
+    if not dry_run and cfg.keep_issues_days > 0:
+        archive.prune(cfg.issues_dir, cfg.keep_issues_days, "*.epub")
 
     # A 304 next time would hide items we have not delivered yet.
     for name in leftover & by_source.keys():
@@ -474,21 +655,28 @@ def run(
                 ids = [i for attachment in group for i in attachment.article_ids]
                 if not dry_run:
                     sender([message], cfg.smtp)
-                    store.mark_delivered(user.id, ids, now)
+                    store.mark_delivered(user.id, ids, now, story_of)
+                    if cfg.keep_issues_days > 0:
+                        # A copy of what was sent, for checking a book without the device.
+                        cfg.issues_dir.mkdir(parents=True, exist_ok=True)
+                        for attachment in group:
+                            (cfg.issues_dir / attachment.filename).write_bytes(attachment.data)
                     for article_id in ids:
-                        choice = ranking.choices.get(article_id)
+                        # An article brought in by a story is recorded with that story's choice.
+                        choice = ranking.choices.get(article_id) or ranking.choices.get(story_of.get(article_id, ""))
                         if choice:
                             store.record_selection(
                                 user.id, article_id, now, POLICY,
                                 choice.score, choice.reason, choice.rank, choice.explore, choice.propensity,
                             )  # fmt: skip
                         else:
-                            pin = any(article_id == item.id for item in pinned)
+                            pin = any(story_of.get(article_id, article_id) == item.id for item in pinned)
                             store.record_selection(
                                 user.id, article_id, now, "pinned" if pin else "newest-first",
                                 None, "", None, False, None,
                             )  # fmt: skip
-                report.delivered += ids
+                report.delivered += [i for i in ids if i not in covered]
+                report.stories += len({story_of.get(i, i) for i in ids})
         except Exception as exc:  # noqa: BLE001 - keep the extraction report
             report.delivery_error = f"{type(exc).__name__}: {exc}"
             log.error("delivery failed for %s: %s", user.id, report.delivery_error)

@@ -15,7 +15,7 @@ the feeds its own users configure and delivers only to the addresses in its own 
 ## 2. Users and configuration
 
 - An install has one or more **users**, each with an id, a name, one or more Send to Kindle
-  addresses and a daily article cap (default 8).
+  addresses and a daily cap on stories (default 8; section 7e).
 - **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). Each has a name, a URL
   (feeds) and optional settings:
   - `pinned`: its articles are taken before all other sources.
@@ -43,9 +43,9 @@ logs the error and alerts the operator. For each user:
 3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
    (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
    sources with the newest item of each source first.
-4. **Cap.** Articles are processed in that order until the user's daily cap is reached. The
-   cap counts articles delivered during the local calendar day, so a second run on the same
-   day only sends what is left of the cap.
+4. **Cap.** Candidates are processed in that order until the user's daily cap is reached. The
+   cap counts stories delivered during the local calendar day (section 7e), so a second run on
+   the same day only sends what is left of the cap. Most stories are a single article.
 5. **Extract, render, deliver** (sections 4 to 6).
 6. **Report.** A Markdown and JSON report is written to `reports/` in the data folder.
 
@@ -170,7 +170,9 @@ Ratings influence delivery only when model ranking is on.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
   checked against `llm.daily_token_cap` (300,000); over the cap, the call is not made and
   later batches are skipped. Every call is logged with model, input and output tokens and outcome;
-  `forenoon usage` prints the log and today's total.
+  `forenoon usage` prints the log, today's total and this month's, each with an estimated cost
+  from the prices in `llm.input_price` and `llm.output_price` (the API does not report
+  prices).
 - **Fallback.** With no API key, or when fewer than half the candidates end up scored
   (failed or timed-out calls, unusable answers, the cap reached), the run uses the
   newest-first order, the report says why, and the operator is alerted. When some batches
@@ -227,6 +229,37 @@ Ratings influence delivery only when model ranking is on.
   deduplicated by URL against every other source.
 - No issue from the last `max_age_days`, or an unreadable one, counts as a failed source.
 
+## 7e. Stories
+
+The daily cap counts stories, not articles. A story is one article, or up to
+`max_story_entries` (3) articles on one subject delivered together. The number of articles in
+a day's book is therefore a target, not a limit.
+
+- **Articles about another page.** After the day's stories are chosen, one model call
+  (`llm.follow_links`, on by default) is shown each chosen feed article's opening words and
+  up to eight of its links to other sites, and returns the links that are the article's
+  subject: the page it quotes, announces, summarises or responds to. Usually that is none.
+  Those pages are fetched, and the ones that extract cleanly join the story:
+  - A post of fewer than 150 words is a pointer. The pages replace it: the post itself is not
+    printed, the first page carries a "Found through …" credit, and the post is recorded as
+    delivered so it is not offered again.
+  - A longer article is a response or commentary. It is delivered first and the pages follow
+    it.
+  - When no page can be delivered, the article goes out as it was.
+  - Without a working model, only pointers are followed, through their first four links.
+  - Links to the article's own site, to video, social and chat sites, to files and to front
+    pages are never followed. Recipe articles and discovered articles are not examined.
+- **Same event.** When ranking is on (`llm.group_stories`, on by default), one more model
+  call compares the 40 best-scored candidates and returns those that cover the same specific
+  event, announcement or release. When one of them is chosen, the others are delivered right
+  after it as part of its story; any beyond the limit are dropped for the day rather than
+  taking a slot of their own. Ids the model invents or repeats are ignored, and a failed call
+  means every article is its own story.
+- **In the book.** A story's later articles are listed under its first on the contents page
+  and carry a "More on: …" line. The contents page gives the count of stories and articles. Each article keeps its own rating links.
+- **Recorded.** Each delivery stores the story it belonged to. An article brought in by a
+  story is recorded with the choice (score, reason) of the candidate that brought it.
+
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
@@ -278,6 +311,9 @@ the Amazon account's approved sender list.
 | `forenoon golden [--out DIR]`                   | Write the rendering-test book                                |
 
 ## 11. Storage
+
+A copy of each book sent is kept in `issues/` for `keep_issues_days` (default 30; 0 keeps
+none).
 
 One SQLite database in the data folder, shared by the pipeline and the feedback service:
 articles (with extraction verdict and preview data), deliveries, the tap event log, current

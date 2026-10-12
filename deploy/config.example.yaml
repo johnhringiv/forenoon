@@ -15,11 +15,13 @@ format: issue
 max_age_days: 3                  # ignore feed items older than this
 token_ttl_days: 60               # how long feedback links stay valid
 keep_pages_days: 90              # keep each fetched page this long for `forenoon replay`; 0 = none
+keep_issues_days: 30             # keep a copy of each book sent, in issues/; 0 = none
+max_story_entries: 3             # the most articles one story may bring (see daily_cap)
 
 users:
   - id: me
     name: Me
-    daily_cap: 8                 # articles per day
+    daily_cap: 8                 # stories per day: one article, or a few on one subject
     kindle_addresses:
       - your-name@kindle.com     # must be registered here; nothing else can pick a recipient
     # What you want to read, in your own words. Used only when `llm.enabled` is true.
@@ -46,7 +48,13 @@ llm:
   max_candidates: 600            # ceiling on abstracts sent per user per run
   batch_size: 80                 # candidates scored per call
   explore_slots: 1               # the day's last slot goes to a random lower-ranked article
+  input_price: 0.10              # US dollars per million tokens for this model; used only
+  output_price: 0.50             # to show cost in `forenoon usage`
   show_reasons: true             # print the model's one-line reason in the book
+  group_stories: true            # one more call finds candidates covering the same event;
+                                 # they are delivered together and count as one story
+  follow_links: true             # one more call finds chosen articles that are about a page
+                                 # they link to; that page is delivered too, or instead
   check_extraction: true         # one more call per run asks whether each article looks
                                  # complete; logged in the report, never changes delivery
 
