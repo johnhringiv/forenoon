@@ -6,7 +6,7 @@ Forenoon delivers by emailing EPUB attachments to your Send to Kindle address.
 
 Amazon → Account & Lists → Content Library → **Preferences** → Personal Document Settings →
 _Send-to-Kindle E-Mail Settings_. Each device has an address ending in `@kindle.com`. Put it
-under `users[].kindle_addresses` in `config.yaml`.
+on the reader's account page in the web pages (or `forenoon-web add-user <id> --kindle <address>`).
 
 ## 2. Approve the sender
 

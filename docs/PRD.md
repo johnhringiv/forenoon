@@ -10,12 +10,16 @@ owner configured, extracts the new articles, and emails them to the owner's Kind
 book. Each article ends with rating links; ratings are recorded for later use in ranking.
 
 It runs as containers on a home server. It is not a hosted service: each install fetches only
-the feeds its own users configure and delivers only to the addresses in its own config.
+the feeds its own users configure and delivers only to the addresses its admin has set.
 
 ## 2. Users and configuration
 
-- An install has one or more **users**, each with an id, a name, one or more Send to Kindle
-  addresses and a daily cap on stories (default 8; section 7e).
+- An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
+  addresses, a daily target of stories (default 8; section 7e) and an interests text. They
+  live in the database, not in `config.yaml`: a reader is an account of the web pages
+  (section 9a), created with `forenoon-web add-user` and edited on its account page. The
+  pipeline reads them at the start of every run. With no readers, or for a reader with no
+  Kindle address, nothing is delivered and an alert is sent.
 - **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). Each has a name, a URL
   (feeds) and optional settings:
   - `pinned`: its articles are taken before all other sources.
@@ -327,9 +331,9 @@ the Amazon account's approved sender list.
 A separate program, `forenoon-web` (Rust, in `web/`), with its own image. It shares the
 database with the pipeline.
 
-- **Accounts.** Every page except sign-in and the health check needs a session. An account's
-  id is the reader's id in `config.yaml`, and a signed-in reader sees and changes only their
-  own deliveries and ratings. Accounts are created from the command line
+- **Accounts.** Every page except sign-in and the health check needs a session. An account
+  is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
+  reader sees and changes only their own deliveries, ratings and settings. Accounts are created from the command line
   (`forenoon-web add-user <id>`); there is no sign-up page. The first account is an admin,
   later ones readers; the role is stored but grants nothing yet.
 - **Passwords and sessions.** Passwords are stored as Argon2id hashes, at least 10 characters.
@@ -345,7 +349,9 @@ database with the pipeline.
 - **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
   choose the reason, or clear the rating. Changes are logged like taps, with `web` as their
   source.
-- **Account page.** Display name, time zone, and password.
+- **Account page.** Display name, time zone, password, and the reading settings the
+  pipeline uses: interests, stories a day, and Kindle addresses. Only an admin can change
+  Kindle addresses, because they decide where content is emailed.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
@@ -353,8 +359,10 @@ database with the pipeline.
   be plain `http(s)`, and the content security policy allows no scripts. Lead images are
   loaded by the browser from the article's own site, without a referrer.
 - Articles from recipe sources have no lead image (theirs live inside the issue file).
-- Who owns what in the database: the web program owns accounts and sessions; the pipeline
-  owns everything else. Of the pipeline's tables the web program writes only ratings and the
+- Who owns what in the database: the web program owns accounts (with the readers' settings)
+  and sessions; the pipeline owns everything else and only reads the accounts. A Python
+  test applies the web program's migrations and reads readers through them, so a column the
+  pipeline needs cannot be dropped unnoticed. Of the pipeline's tables the web program writes only ratings and the
   tap log, by the same rules as the feedback service. Its queries are checked at build time
   against a copy of the pipeline's schema (`web/pipeline-schema.sql`), and a test fails when
   the copy and `app/store.py` differ.

@@ -45,6 +45,9 @@ enum Command {
         /// Zone the reader's dates are shown in; defaults to $TZ, then UTC.
         #[arg(long)]
         timezone: Option<String>,
+        /// A Send to Kindle address the reader's books go to; may be given more than once.
+        #[arg(long)]
+        kindle: Vec<String>,
     },
     /// Change an account's password, signing it out everywhere.
     SetPassword { id: String },
@@ -112,7 +115,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 })
                 .await?;
         }
-        Command::AddUser { id, name, role, timezone } => {
+        Command::AddUser { id, name, role, timezone, kindle } => {
             if !auth::valid_id(&id) {
                 return Err("the id must be 1 to 64 letters, digits, '_', '.' or '-'".into());
             }
@@ -129,11 +132,16 @@ async fn run(cli: Cli) -> Result<(), Error> {
             if Tz::from_str(&timezone).is_err() {
                 return Err(format!("{timezone} is not a time zone name; use one such as America/New_York").into());
             }
+            let kindle = auth::kindle_addresses(&kindle.join("\n"))?;
             let hash = auth::hash_password(read_password()?).await?;
             db::add_user(&pool, &id, name.as_deref().unwrap_or(&id), &hash, &role, &timezone).await?;
+            db::set_kindle_addresses(&pool, &id, &kindle.join("\n")).await?;
             println!("Created {role} account {id} ({timezone}).");
+            if kindle.is_empty() {
+                println!("It has no Kindle address, so nothing will be sent to it; set one on the account page.");
+            }
             if !db::pipeline_ready(&pool).await? || db::totals(&pool, &id).await?.articles == 0 {
-                println!("Nothing has been delivered to {id} yet. The id must match a user id in config.yaml.");
+                println!("Nothing has been delivered to {id} yet.");
             }
         }
         Command::SetPassword { id } => {
@@ -145,7 +153,11 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Command::Users => {
             for user in db::list_users(&pool).await? {
-                println!("{:<16} {:<7} {:<24} {}  {}", user.id, user.role, user.timezone, user.created_at, user.name);
+                let kindle = user.kindle_addresses.lines().collect::<Vec<_>>().join(", ");
+                println!(
+                    "{:<16} {:<7} {:<24} {}  {}  [{}]",
+                    user.id, user.role, user.timezone, user.created_at, user.name, kindle
+                );
             }
         }
         Command::Health { .. } => unreachable!("handled above"),

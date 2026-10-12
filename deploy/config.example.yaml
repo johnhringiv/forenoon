@@ -18,16 +18,9 @@ keep_pages_days: 90              # keep each fetched page this long for `forenoo
 keep_issues_days: 30             # keep a copy of each book sent, in issues/; 0 = none
 max_story_entries: 3             # the most articles one story may bring (see daily_cap)
 
-users:
-  - id: me
-    name: Me
-    daily_cap: 8                 # stories per day: one article, or a few on one subject
-    kindle_addresses:
-      - your-name@kindle.com     # must be registered here; nothing else can pick a recipient
-    # What you want to read, in your own words. Used only when `llm.enabled` is true.
-    interests: |
-      Compilers and programming-language design. Practical LLM engineering.
-      Less interested in product announcements.
+# Readers (Kindle addresses, stories per day, interests) are not set here: create an account
+# with `forenoon-web add-user <id> --kindle you@kindle.com` and edit the rest on its account
+# page. See docs/setup-deploy.md.
 
 smtp:                            # example values are for Resend; see docs/setup-email.md
   host: smtp.resend.com

@@ -25,7 +25,7 @@ use tower_sessions_sqlx_store::SqliteStore;
 use crate::{auth::Backend, limit::Limiter, pages::AppState};
 
 const SESSION_DAYS: i64 = 30;
-const MAX_FORM_BYTES: usize = 4096;
+const MAX_FORM_BYTES: usize = 32 * 1024; // room for the interests text, percent-encoded
 const SIGN_IN_WINDOW: Duration = Duration::from_secs(300);
 
 pub struct Options {
@@ -52,6 +52,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/rate", post(pages::rate))
         .route("/account", get(pages::account))
         .route("/account/profile", post(pages::set_profile))
+        .route("/account/reading", post(pages::set_reading))
         .route("/account/password", post(pages::set_password))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.

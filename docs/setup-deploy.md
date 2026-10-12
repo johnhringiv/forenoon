@@ -119,14 +119,17 @@ for a few seconds. The poller also restarts the stack after a reboot if a contai
 that lands while the daily run is in progress interrupts it; articles already emailed are
 recorded and not resent, and the rest go out with the next run.
 
-## Web pages (optional)
+## Web pages and readers
 
-A newsstand listing what was delivered, why each article was picked and how you rated it;
-you can change ratings there. It is behind a login, and each account sees only its own
-reader's articles. It runs from its own image.
+The web pages are where readers are set up: who gets a book, at which Kindle address, how
+many stories a day and what they are interested in. They also show a newsstand of what was
+delivered, why each article was picked and how you rated it, where ratings can be changed.
+Everything is behind a login, and each account sees only its own reader's articles. They run
+from their own image. Without at least one reader the daily run delivers nothing.
 
-Keep it on your LAN or a VPN such as Tailscale for now, and do not point the Cloudflare
-Tunnel at it: it has a login, but it has not been hardened for the public internet.
+Keep the pages on your LAN or a VPN such as Tailscale for now, and do not point the
+Cloudflare Tunnel at them: they have a login, but have not been hardened for the public
+internet.
 
 1. In `.env`, set `WEB_IMAGE=ghcr.io/<owner>/<repo>-web:latest` and `WEB_LISTEN` to a port
    (`8081`) or, to limit it to one of the host's addresses, `address:port`
@@ -134,12 +137,12 @@ Tunnel at it: it has a login, but it has not been hardened for the public intern
    package must be public, like the others.
 2. Start it: `sudo ONLY=web sh deploy.sh .env` (a full deploy starts it too), or
    `docker compose up -d web`.
-3. Create your account. The id must be your user id in `config.yaml`; you are asked for a
-   password of at least 10 characters:
-   `sudo docker exec -it forenoon-web forenoon-web add-user <id>`
+3. Create your reader. You are asked for a password of at least 10 characters:
+   `sudo docker exec -it forenoon-web forenoon-web add-user <id> --kindle <you>@kindle.com`
    The first account is an admin. Dates are shown in the container's `TZ` unless you pass
-   `--timezone`; you can change it later on the account page.
-4. Open `http://<host>:8081/` and sign in.
+   `--timezone`.
+4. Open `http://<host>:8081/`, sign in, and on **Account** write your interests and set the
+   stories a day. Changes apply from the next run.
 
 Other account commands, run the same way: `set-password <id>` (also signs the account out
 everywhere) and `users`.

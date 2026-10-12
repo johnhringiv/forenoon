@@ -361,6 +361,48 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(browser.get(&site, &saved.location).await.text.contains("Saved."));
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.name.as_str(), user.timezone.as_str()), ("John R", "Europe/London"));
+    // Reading settings: the pipeline reads these. Only an admin's Kindle addresses change.
+    let reading = |interests: &'static str, daily: &'static str, kindle: &'static str| {
+        [
+            ("csrf", csrf.clone()),
+            ("interests", interests.to_owned()),
+            ("daily_stories", daily.to_owned()),
+            ("kindle_addresses", kindle.to_owned()),
+        ]
+    };
+    for (form, message) in [
+        (reading("Compilers.", "0", "a@kindle.com"), "Stories a day must be a number from 1 to 50."),
+        (reading("Compilers.", "16", "not an address"), "not an address is not an email address."),
+    ] {
+        let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let reply = browser.post(&site, "/account/reading", &form).await;
+        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
+    }
+    let form = reading("Compilers.\r\nNot watches. <b>", "16", " a@kindle.com \n\nb@kindle.com");
+    let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    let saved = browser.post(&site, "/account/reading", &form).await;
+    assert_eq!(saved.location, "/account?saved=reading");
+    let page = browser.get(&site, &saved.location).await.text;
+    assert!(page.contains("Not watches. &#60;b&#62;</textarea>") && page.contains(r#"value="16""#), "{page}");
+    let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
+    assert_eq!((user.interests.as_str(), user.daily_stories), ("Compilers.\nNot watches. <b>", 16));
+    assert_eq!(user.kindle_addresses, "a@kindle.com\nb@kindle.com");
+
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    let page = mary.get(&site, "/account").await;
+    assert!(page.text.contains("An admin sets this.") && !page.text.contains(r#"name="kindle_addresses""#));
+    let token = page.csrf();
+    let form = [
+        ("csrf", token.as_str()),
+        ("interests", "Sailing."),
+        ("daily_stories", "5"),
+        ("kindle_addresses", "evil@example.com"),
+    ];
+    assert_eq!(mary.post(&site, "/account/reading", &form).await.status, StatusCode::SEE_OTHER);
+    let user = auth::find_user(&site.pool, "mary").await.unwrap().unwrap();
+    assert_eq!((user.interests.as_str(), user.daily_stories, user.kindle_addresses.as_str()), ("Sailing.", 5, ""));
+
     let no_token = [("csrf", "wrong"), ("name", "X"), ("timezone", "UTC")];
     assert_eq!(browser.post(&site, "/account/profile", &no_token).await.status, StatusCode::FORBIDDEN);
 

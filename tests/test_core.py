@@ -255,3 +255,20 @@ def test_web_app_schema_copy_matches_the_store():
     copy = (Path(__file__).parent.parent / "web" / "pipeline-schema.sql").read_text()
     tables = "\n".join(line for line in copy.splitlines() if not line.startswith("--"))
     assert tables.strip() == SCHEMA.strip(), "regenerate web/pipeline-schema.sql and run web/dev-db.sh"
+
+
+def test_readers_come_from_the_web_apps_accounts_table(tmp_path):
+    """Applies the web app's own migrations, so a column it renames or drops fails here."""
+    from pathlib import Path
+
+    store = Store(tmp_path / "forenoon.sqlite3")
+    assert store.readers() == ()  # the web app has not run yet
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses, daily_stories, interests)"
+        " VALUES ('john', 'John', 'x', '2026-01-01', ' a@kindle.com \n\nb@kindle.com\n', 16, 'Compilers.')"
+    )
+    (reader,) = store.readers()
+    assert reader.id == "john" and reader.kindle_addresses == ("a@kindle.com", "b@kindle.com")
+    assert (reader.daily_cap, reader.interests, reader.name) == (16, "Compilers.", "John")

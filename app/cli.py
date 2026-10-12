@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import sys
@@ -27,8 +28,21 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     backend = backend_from_env(cfg.llm)
     failed = 0
     try:
+        # Read at every run, so a change made on the account page applies to the next one.
+        cfg = dataclasses.replace(cfg, users=store.readers())
         users = [cfg.user(args.user)] if args.user else cfg.users
+        if not users:
+            log.error("no readers: create an account with `forenoon-web add-user <id>`")
+            if not args.dry_run:
+                notify(cfg, "nothing delivered", ["There are no readers. Create an account in the web pages."])
+            return 1
         for user in users:
+            if not user.kindle_addresses:
+                log.error("%s has no Kindle address; set one on the account page", user.id)
+                if not args.dry_run:
+                    notify(cfg, "nothing delivered", [f"Reader {user.id} has no Kindle address."])
+                failed += 1
+                continue
             try:
                 report = run(cfg, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out, backend=backend)
             except Exception as exc:
@@ -179,8 +193,9 @@ def _golden(args: argparse.Namespace) -> int:
         from .pipeline import _feedback_links
 
         cfg = load_config(args.config, args.sources)
-        if cfg.public_base_url and cfg.users:
-            links = _feedback_links(cfg, cfg.users[0], "golden", datetime.now(ZoneInfo("UTC")))
+        readers = Store(cfg.db_path).readers()
+        if cfg.public_base_url and readers:
+            links = _feedback_links(cfg, readers[0], "golden", datetime.now(ZoneInfo("UTC")))
     args.out.mkdir(parents=True, exist_ok=True)
     path = args.out / "FN golden rendering test.epub"
     path.write_bytes(golden_epub(links or None))
