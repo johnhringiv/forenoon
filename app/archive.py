@@ -40,11 +40,11 @@ def save(directory: Path, item: Item, page_html: str | None) -> None:
         log.warning("could not keep the page for %s: %s", item.url, exc)
 
 
-def prune(directory: Path, keep_days: int) -> int:
-    """Delete saved pages older than `keep_days`. Returns how many were removed."""
+def prune(directory: Path, keep_days: int, pattern: str = "*.json.gz") -> int:
+    """Delete saved files older than `keep_days`. Returns how many were removed."""
     cutoff = time.time() - keep_days * 86400
     removed = 0
-    for path in directory.glob("*.json.gz") if directory.is_dir() else ():
+    for path in directory.glob(pattern) if directory.is_dir() else ():
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()

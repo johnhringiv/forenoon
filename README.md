@@ -1,12 +1,22 @@
 # Forenoon
 
-Self-hosted reading digest for e-readers. It reads the feeds you configure, extracts each
-article, and emails them to your Kindle every morning as one book with a contents page (or
-one book per article). Each article ends with rating links (1 to 5, finished or not) that are
-logged for later ranking.
+Self-hosted reading digest for e-readers. Every morning it goes through your feeds, your
+newspaper subscriptions and the front pages of Hacker News and Lobsters, has Claude pick what
+you would want to read, and emails it to your Kindle as one book with a contents page. Each
+article ends with rating links (1 to 5, finished or not) that feed the next day's choices.
 
-Status: **Phase 0** (viability test). No ranking and no LLM yet: pinned sources first, then
-the newest articles round-robin across sources, up to a daily cap.
+On one measured day it read 23 sources including a whole Financial Times, ranked about 165
+candidate articles against a plain-English description of the reader's interests, read the
+best 40 in full, and delivered 16 stories (25 articles) in 80 seconds, for **about two cents**
+of Claude Haiku. With no API key it still works: pinned sources first, then the newest
+articles round-robin across sources.
+
+- **Stories, not links.** A short post that only points at an article is replaced by the
+  article. Several reports of one event share a slot.
+- **Subscriptions.** Publications you pay for come in through Calibre news recipes, with
+  your login kept in one isolated container.
+- **Yours.** One SQLite file and a folder on your own machine. The only public endpoint
+  accepts signed rating links and nothing else.
 
 What it does today is described in [docs/PRD.md](docs/PRD.md).
 

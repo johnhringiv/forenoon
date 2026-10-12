@@ -15,7 +15,7 @@ the feeds its own users configure and delivers only to the addresses in its own 
 ## 2. Users and configuration
 
 - An install has one or more **users**, each with an id, a name, one or more Send to Kindle
-  addresses and a daily article cap (default 8).
+  addresses and a daily cap on stories (default 8; section 7e).
 - **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). Each has a name, a URL
   (feeds) and optional settings:
   - `pinned`: its articles are taken before all other sources.
@@ -43,9 +43,9 @@ logs the error and alerts the operator. For each user:
 3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
    (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
    sources with the newest item of each source first.
-4. **Cap.** Articles are processed in that order until the user's daily cap is reached. The
-   cap counts articles delivered during the local calendar day, so a second run on the same
-   day only sends what is left of the cap.
+4. **Cap.** Candidates are processed in that order until the user's daily cap is reached. The
+   cap counts stories delivered during the local calendar day (section 7e), so a second run on
+   the same day only sends what is left of the cap. Most stories are a single article.
 5. **Extract, render, deliver** (sections 4 to 6).
 6. **Report.** A Markdown and JSON report is written to `reports/` in the data folder.
 
@@ -168,9 +168,11 @@ Ratings influence delivery only when model ranking is on.
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
-  checked against `llm.daily_token_cap` (300,000); over the cap, the call is not made and
+  checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
   later batches are skipped. Every call is logged with model, input and output tokens and outcome;
-  `forenoon usage` prints the log and today's total.
+  `forenoon usage` prints the log, today's total and this month's, each with an estimated cost
+  from the prices in `llm.input_price` and `llm.output_price` (the API does not report
+  prices).
 - **Fallback.** With no API key, or when fewer than half the candidates end up scored
   (failed or timed-out calls, unusable answers, the cap reached), the run uses the
   newest-first order, the report says why, and the operator is alerted. When some batches
@@ -182,11 +184,13 @@ Ratings influence delivery only when model ranking is on.
 
 ## 7b. Discovery (optional, off by default; needs ranking)
 
-- **Sources.** The front pages of Hacker News and Lobsters, one request each per run.
+- **Sources.** Hacker News: the front page, plus stories from the last day with more than 40
+  points. Lobsters: the first three pages of its hottest list. Three requests per site per
+  run; if a further page fails, the rest are still used.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
   anything already in a feed read this run, already delivered, or previously failed. At most
-  `discovery.per_site` (25) per site.
+  `discovery.per_site` (100) per site.
 - **Scoring.** Found articles go into the same ranking call as feed articles. The model sees
   the title, the site, points, comment count and (Lobsters) tags and description, since there
   is no abstract.
@@ -200,8 +204,10 @@ Ratings influence delivery only when model ranking is on.
 
 ## 7c. Extraction check by the model (on when ranking is on; log only)
 
-- After extraction, one call per run sends the model each article that is about to be
-  delivered: title, word count, section headings, and the first 120 and last 80 words.
+- This covers the articles the reading pass (section 7f) did not see: pinned articles and
+  pages brought in by a story. After extraction, one call per run sends the model each such
+  article that is about to be delivered: title, word count, section headings, and the first
+  120 and last 80 words.
 - It answers `ok`, `suspect` or `bad` per article with a problem of at most 20 words, for
   example a paywall notice, a teaser, an ending cut short, or menu text.
 - Verdicts are stored and shown in the run report; `forenoon checks` lists the articles it
@@ -226,6 +232,63 @@ Ratings influence delivery only when model ranking is on.
   there they are treated like feed articles: sanitised, ranked, capped, rated and
   deduplicated by URL against every other source.
 - No issue from the last `max_age_days`, or an unreadable one, counts as a failed source.
+
+## 7e. Stories
+
+The daily cap counts stories, not articles. A story is one article, or up to
+`max_story_entries` (3) articles on one subject delivered together. The number of articles in
+a day's book is therefore a target, not a limit.
+
+- **Articles about another page.** After the day's stories are chosen, one model call
+  (`llm.follow_links`, on by default) is shown each chosen feed article's opening words and
+  up to eight of its links to other sites, and returns the links that are the article's
+  subject: the page it quotes, announces, summarises or responds to. Usually that is none.
+  Those pages are fetched, and the ones that extract cleanly join the story:
+  - A post of fewer than 150 words is a pointer. The pages replace it: the post itself is not
+    printed, the first page carries a "Found through …" credit, and the post is recorded as
+    delivered so it is not offered again.
+  - A longer article is a response or commentary. It is delivered first and the pages follow
+    it.
+  - When no page can be delivered, the article goes out as it was.
+  - Without a working model, only pointers are followed, through their first four links.
+  - Links to the article's own site, to video, social and chat sites, to files and to front
+    pages are never followed. Recipe articles and discovered articles are not examined.
+- **Same event.** When ranking is on (`llm.group_stories`, on by default), one more model
+  call compares the 40 best-scored candidates and returns those that cover the same specific
+  event, announcement or release. When one of them is chosen, the others are delivered right
+  after it as part of its story; any beyond the limit are dropped for the day rather than
+  taking a slot of their own. Ids the model invents or repeats are ignored, and a failed call
+  means every article is its own story.
+- **In the book.** A story's later articles are listed under its first on the contents page
+  and carry a "More on: …" line. The contents page gives the count of stories and articles. Each article keeps its own rating links.
+- **Recorded.** Each delivery stores the story it belonged to. An article brought in by a
+  story is recorded with the choice (score, reason) of the candidate that brought it.
+
+## 7f. The reading pass (on when ranking is on)
+
+Ranking judges a title and an opening. Before the day is chosen, the model also reads the
+best candidates in full.
+
+- The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted. Their
+  text, up to `llm.read_words` (2,500) words each, goes to the model about ten articles to a
+  call, with the reader's interests and ratings. Recipe articles need no fetch.
+- Per article the model returns a score from 0 to 10, a reason, whether the text is a
+  complete article (`ok`, `suspect`, `bad`), and which of its links are its subject (section
+  7e, in place of the separate link call).
+- The read articles are tried first, best score first; candidates that were not read follow
+  in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
+  reading replace the ranking ones in the book and in what is recorded.
+- An article judged `bad` (a paywall notice, a teaser, an error page) is held back for the
+  day and listed in the report. `suspect` is reported and does not change delivery.
+- Both prompts tell the model that news of major consequence scores at least 7 whatever the
+  reader's interests.
+- What was extracted for reading is reused when the article is built, so each page is fetched
+  once. Images are fetched only for the articles that are delivered.
+- A batch that fails or would cross the daily token cap is skipped; its articles keep their
+  ranking order. `llm.read_candidates: 0` turns the pass off.
+- Measured on one day (October 2026, Claude Haiku 5.5): 23 sources including a full FT issue,
+  about 165 candidates ranked, 40 read in full, 16 stories (25 articles) chosen, 167,000
+  tokens, about $0.02, 80 seconds.
 
 ## 8. Delivery
 
@@ -279,6 +342,9 @@ the Amazon account's approved sender list.
 
 ## 11. Storage
 
+A copy of each book sent is kept in `issues/` for `keep_issues_days` (default 30; 0 keeps
+none).
+
 One SQLite database in the data folder, shared by the pipeline and the feedback service:
 articles (with extraction verdict and preview data), deliveries, the tap event log, current
 ratings, per-source failure counts and feed cache validators. Older databases are upgraded in
@@ -322,7 +388,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 ## 15. Not built yet
 
 - Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
-- Searching Hacker News and Lobsters beyond their front pages; a watch list for vendor
+- Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
 - A web interface for sources and preferences, adding articles by hand, and a login for the
   newsstand.

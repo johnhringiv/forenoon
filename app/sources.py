@@ -43,7 +43,7 @@ def _feed_html(entry) -> str:
     return max(bodies, key=len)
 
 
-def _is_front_page(url: str) -> bool:
+def is_front_page(url: str) -> bool:
     """A link to a site's root is the site itself, not an article."""
     parts = urlsplit(url)
     return parts.path in ("", "/") and not parts.query
@@ -61,7 +61,7 @@ def read_feed(source: Source, fetcher: Fetcher, conditional: bool = True) -> lis
     items: dict[str, Item] = {}
     for entry in parsed.entries:
         url = entry.get("link", "")
-        if not url.startswith(("http://", "https://")) or _is_front_page(url):
+        if not url.startswith(("http://", "https://")) or is_front_page(url):
             continue
         item = Item(
             id=article_id(url),
