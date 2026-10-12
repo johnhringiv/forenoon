@@ -190,7 +190,7 @@ Ratings influence delivery only when model ranking is on.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
   anything already in a feed read this run, already delivered, or previously failed. At most
-  `discovery.per_site` (25) per site.
+  `discovery.per_site` (100) per site.
 - **Scoring.** Found articles go into the same ranking call as feed articles. The model sees
   the title, the site, points, comment count and (Lobsters) tags and description, since there
   is no abstract.
