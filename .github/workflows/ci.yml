@@ -115,8 +115,8 @@ jobs:
         run: |
           mkdir -m 777 webdata
           flags="--read-only --tmpfs /tmp --cap-drop ALL -v $PWD/webdata:/data"
-          echo "a password for ci" | docker run --rm -i $flags forenoon-web:ci add-user ci
-          docker run --rm $flags forenoon-web:ci users | grep -q "^ci .*admin"
+          echo "a password for ci" | docker run --rm -i $flags forenoon-web:ci add-user ci --email ci@example.com
+          docker run --rm $flags forenoon-web:ci users | grep -q "^ci .*admin .*ci@example.com"
           docker run -d --name web $flags forenoon-web:ci serve
           for i in $(seq 1 20); do
             if docker exec web forenoon-web health; then

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Forgot password · Forenoon{% endblock %}
+{% block header %}<p>Reset a forgotten password.</p>{% endblock %}
+{% block main %}
+{% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+<form class="sheet" method="post" action="/forgot">
+<label>Email <input name="email" type="email" maxlength="254" autocomplete="username" autocapitalize="none" required autofocus></label>
+<p class="hint">We email a link to choose a new password. It only works for an address you have confirmed.</p>
+<button>Send the link</button>
+<p class="hint"><a href="/login">Back to sign in</a></p>
+</form>
+{% endblock %}

@@ -24,6 +24,32 @@ impl User {
     pub fn is_admin(&self) -> bool {
         self.role == "admin"
     }
+
+    /// The address still waiting to be confirmed, if any: a requested change, else an
+    /// unconfirmed current one.
+    pub fn unconfirmed_email(&self) -> Option<&str> {
+        match (&self.pending_email, &self.email, &self.email_verified_at) {
+            (Some(pending), _, _) => Some(pending),
+            (None, Some(email), None) => Some(email),
+            _ => None,
+        }
+    }
+}
+
+fn email_shaped(address: &str) -> bool {
+    let shaped = address.split_once('@').is_some_and(|(name, host)| {
+        !name.is_empty() && host.contains('.') && !host.starts_with('.') && !host.ends_with('.') && !host.contains('@')
+    });
+    shaped
+        && address.len() <= 254
+        && !address.chars().any(|c| c.is_whitespace() || c.is_control() || ",;<>\"".contains(c))
+}
+
+/// An address as it is stored and compared: trimmed and lowercase, so casing or stray spaces
+/// cannot make two accounts of one address. `None` when it is not an email address.
+pub fn normal_email(text: &str) -> Option<String> {
+    let email = text.trim().to_lowercase();
+    email_shaped(&email).then_some(email)
 }
 
 /// The addresses in a block of text, one per line, or what is wrong with it.
@@ -33,22 +59,10 @@ pub fn kindle_addresses(text: &str) -> Result<Vec<String>, String> {
     if addresses.len() > MAX_KINDLE_ADDRESSES {
         return Err(format!("At most {MAX_KINDLE_ADDRESSES} Kindle addresses."));
     }
-    for address in &addresses {
-        let shaped = address.split_once('@').is_some_and(|(name, host)| {
-            !name.is_empty()
-                && host.contains('.')
-                && !host.starts_with('.')
-                && !host.ends_with('.')
-                && !host.contains('@')
-        });
-        if !shaped
-            || address.len() > 254
-            || address.chars().any(|c| c.is_whitespace() || c.is_control() || ",;<>\"".contains(c))
-        {
-            return Err(format!("{address} is not an email address."));
-        }
+    match addresses.iter().find(|address| !email_shaped(address)) {
+        Some(address) => Err(format!("{address} is not an email address.")),
+        None => Ok(addresses),
     }
-    Ok(addresses)
 }
 
 #[derive(Clone, sqlx::FromRow)]
@@ -62,6 +76,11 @@ pub struct User {
     pub kindle_addresses: String,
     pub daily_stories: i64,
     pub interests: String,
+    /// What the reader signs in with; `None` only on an account made before sign-in by email.
+    pub email: Option<String>,
+    pub email_verified_at: Option<String>,
+    /// A requested change of address, until the link sent to it is opened.
+    pub pending_email: Option<String>,
 }
 
 // Written by hand so that a logged user never includes the password hash.
@@ -149,7 +168,7 @@ pub async fn verify_password(password: String, stored: String) -> Result<bool, A
 
 #[derive(Clone, Deserialize)]
 pub struct Credentials {
-    pub id: String,
+    pub email: String,
     pub password: String,
 }
 
@@ -169,9 +188,23 @@ impl Backend {
 pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as!(
         User,
-        r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests
+        r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
+           email, email_verified_at, pending_email
            FROM users WHERE id = ?"#,
         id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+/// The account that signs in with this address (already normalised).
+pub async fn find_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as!(
+        User,
+        r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
+           email, email_verified_at, pending_email
+           FROM users WHERE email = ?"#,
+        email
     )
     .fetch_optional(pool)
     .await
@@ -183,10 +216,13 @@ impl AuthnBackend for Backend {
     type Error = AuthError;
 
     async fn authenticate(&self, creds: Credentials) -> Result<Option<User>, AuthError> {
-        if creds.password.chars().count() > MAX_PASSWORD || creds.id.len() > MAX_ID {
+        if creds.password.chars().count() > MAX_PASSWORD {
             return Ok(None);
         }
-        let user = find_user(&self.pool, &creds.id).await?;
+        let user = match normal_email(&creds.email) {
+            Some(email) => find_user_by_email(&self.pool, &email).await?,
+            None => None,
+        };
         let stored = user.as_ref().map_or_else(|| self.decoy_hash.clone(), |u| u.password_hash.clone());
         let matches = verify_password(creds.password, stored).await?;
         Ok(user.filter(|_| matches))

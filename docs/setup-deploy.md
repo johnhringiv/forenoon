@@ -137,18 +137,29 @@ internet.
    package must be public, like the others.
 2. Start it: `sudo ONLY=web sh deploy.sh .env` (a full deploy starts it too), or
    `docker compose up -d web`.
-3. Create your reader. You are asked for a password of at least 10 characters:
-   `sudo docker exec -it forenoon-web forenoon-web add-user <id> --kindle <you>@kindle.com`
+3. So the pages can email you (to confirm your address and to reset a forgotten password),
+   also set in `.env`: `FORENOON_WEB_URL` to the address you open the pages at, and
+   `FORENOON_SMTP_HOST`, `FORENOON_SMTP_PORT`, `FORENOON_SMTP_USERNAME` and
+   `FORENOON_SMTP_SENDER` to the same mail server as `smtp` in `config.yaml`. Without a
+   host these emails are written to the container's log (`docker logs forenoon-web`), which
+   is enough on a one-person install.
+4. Create your reader. You sign in with the email address; the id names you in the
+   pipeline's records. You are asked for a password of at least 10 characters:
+   `sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <you>@example.com --kindle <you>@kindle.com`
    The first account is an admin. Dates are shown in the container's `TZ` unless you pass
    `--timezone`.
-4. Open `http://<host>:8081/`, sign in, and on **Account** write your interests and set the
-   stories a day. Changes apply from the next run.
+5. Open `http://<host>:8081/` and sign in. A banner asks you to confirm your address: press
+   **Send it again** and open the link in the email. Everything works before you do, but a
+   forgotten password can only be reset through a confirmed address.
+6. On **Account**, write your interests and set the stories a day. Changes apply from the
+   next run.
 
 Other account commands, run the same way: `set-password <id>` (also signs the account out
-everywhere) and `users`.
+everywhere), `set-email <id> <address>` and `users`. They are the way back in if the email
+route fails.
 
-The container gets no secrets. Check that your router does not forward the port from the
-internet.
+The mail password is the only secret the container gets. Check that your router does not
+forward the port from the internet.
 
 ## Backups
 

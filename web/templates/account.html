@@ -6,6 +6,8 @@
 <div class="who"><form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
 {% endblock %}
 {% block main %}
+{% let unconfirmed = user.unconfirmed_email() %}
+{% include "_confirm.html" %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 <form class="sheet" method="post" action="/account/profile">
@@ -31,6 +33,18 @@
 {% endif %}
 <button>Save</button>
 </form>
+<form class="sheet" method="post" action="/account/email">
+<h2>Email</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="hint">You sign in with {% if let Some(email) = user.email %}<b>{{ email }}</b>{% if user.email_verified_at.is_some() %} (confirmed){% else %} (not confirmed yet){% endif %}{% else %}no address yet{% endif %}.{% if let Some(pending) = user.pending_email %} A change to <b>{{ pending }}</b> is waiting for its link to be opened.{% endif %}</p>
+<label>New email <input name="email" type="email" maxlength="254" autocomplete="email" autocapitalize="none" required></label>
+<label>Current password <input name="current" type="password" maxlength="256" autocomplete="current-password" required></label>
+<p class="hint">We email a link to the new address. The old one keeps working until that link is opened.</p>
+<button>Change email</button>
+</form>
+{% if user.pending_email.is_some() %}
+<form class="sheet" method="post" action="/account/email/cancel"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Cancel the email change</button></form>
+{% endif %}
 <form class="sheet" method="post" action="/account/password">
 <h2>Password</h2>
 <input type="hidden" name="csrf" value="{{ csrf }}">

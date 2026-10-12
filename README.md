@@ -30,7 +30,7 @@ export FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
 
 uv run forenoon --config run/config.yaml report               # per-source extraction report
 # a reader to deliver to; asks for a password for the web pages
-(cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --kindle you@kindle.com)
+(cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)
 uv run forenoon --config run/config.yaml run --dry-run --out run/out   # build EPUBs, send nothing
 uv run forenoon golden --out run/out                           # rendering test file for the device
 ```
@@ -68,8 +68,9 @@ Setup guides:
   rebinding, so do not give the container network access to anything sensitive.
 - Feedback links carry an HMAC-signed, expiring token. The endpoint needs no login, is
   idempotent and is rate limited.
-- The web pages need a login (Argon2id password hashes, limited sign-in attempts) and show
-  each reader only their own articles. Keep them on a trusted network for now.
+- The web pages need a login by email address (Argon2id password hashes, limited sign-in
+  attempts) and show each reader only their own articles. A forgotten password is reset
+  through a link emailed to a confirmed address. Keep them on a trusted network for now.
 
 ## Development
 

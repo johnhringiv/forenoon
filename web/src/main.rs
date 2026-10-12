@@ -11,7 +11,10 @@ use std::{
 
 use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
-use forenoon_web::{Error, Options, app, auth, db};
+use forenoon_web::{
+    Error, Options, app, auth, db,
+    mail::{Mailer, Smtp},
+};
 
 #[derive(Parser)]
 #[command(name = "forenoon-web", about = "Forenoon's web pages", version)]
@@ -32,10 +35,30 @@ enum Command {
         /// Send the session cookie only over https.
         #[arg(long, env = "FORENOON_WEB_SECURE_COOKIES")]
         secure_cookies: bool,
+        /// Where readers reach the pages, for the links in emails: http://nas.lan:8081
+        #[arg(long, env = "FORENOON_WEB_URL")]
+        url: Option<String>,
+        /// Mail server for confirmation and password-reset emails. Without one they are
+        /// written to the log.
+        #[arg(long, env = "FORENOON_SMTP_HOST")]
+        smtp_host: Option<String>,
+        #[arg(long, env = "FORENOON_SMTP_PORT", default_value_t = 587)]
+        smtp_port: u16,
+        /// TLS from the start (port 465) instead of STARTTLS.
+        #[arg(long, env = "FORENOON_SMTP_IMPLICIT_TLS")]
+        smtp_implicit_tls: bool,
+        #[arg(long, env = "FORENOON_SMTP_USERNAME", default_value = "")]
+        smtp_username: String,
+        /// The From address.
+        #[arg(long, env = "FORENOON_SMTP_SENDER", default_value = "")]
+        smtp_sender: String,
     },
-    /// Create an account. The id must be the reader's id in the pipeline's config.
+    /// Create an account. The id names the reader in the pipeline's records and never changes.
     AddUser {
         id: String,
+        /// What the reader signs in with.
+        #[arg(long)]
+        email: String,
         /// Display name; defaults to the id.
         #[arg(long)]
         name: Option<String>,
@@ -51,6 +74,8 @@ enum Command {
     },
     /// Change an account's password, signing it out everywhere.
     SetPassword { id: String },
+    /// Set the address an account signs in with. It starts unconfirmed.
+    SetEmail { id: String, email: String },
     /// List the accounts.
     Users,
     /// Exit 0 when a server on this machine answers its health check.
@@ -98,11 +123,39 @@ async fn run(cli: Cli) -> Result<(), Error> {
     }
     let pool = db::open(&cli.db).await?;
     match cli.command {
-        Command::Serve { listen, secure_cookies } => {
+        Command::Serve {
+            listen,
+            secure_cookies,
+            url,
+            smtp_host,
+            smtp_port,
+            smtp_implicit_tls,
+            smtp_username,
+            smtp_sender,
+        } => {
             if db::user_count(&pool).await? == 0 {
-                eprintln!("No accounts yet, so nobody can sign in. Create one with: forenoon-web add-user <id>");
+                eprintln!("No accounts yet. Create one with: forenoon-web add-user <id> --email <address>");
             }
-            let router = app(pool, Options { secure_cookies }).await?;
+            let mailer = match smtp_host.filter(|host| !host.is_empty()) {
+                Some(host) => Mailer::smtp(Smtp {
+                    host,
+                    port: smtp_port,
+                    starttls: !smtp_implicit_tls,
+                    username: smtp_username,
+                    // Only ever from the environment, so it cannot show up in a process list.
+                    password: std::env::var("FORENOON_SMTP_PASSWORD").unwrap_or_default(),
+                    sender: smtp_sender,
+                })?,
+                None => {
+                    eprintln!("No mail server set (FORENOON_SMTP_HOST): account emails go to this log.");
+                    Mailer::Log
+                }
+            };
+            let base_url = url.filter(|url| !url.is_empty()).unwrap_or_else(|| {
+                eprintln!("FORENOON_WEB_URL is not set: links in emails will point at http://{listen}");
+                format!("http://{listen}")
+            });
+            let router = app(pool, Options { secure_cookies, mailer, base_url }).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");
             axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
@@ -115,9 +168,15 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 })
                 .await?;
         }
-        Command::AddUser { id, name, role, timezone, kindle } => {
+        Command::AddUser { id, email, name, role, timezone, kindle } => {
             if !auth::valid_id(&id) {
                 return Err("the id must be 1 to 64 letters, digits, '_', '.' or '-'".into());
+            }
+            let Some(email) = auth::normal_email(&email) else {
+                return Err(format!("{email} is not an email address").into());
+            };
+            if db::email_taken(&pool, &email, &id).await? {
+                return Err(format!("another account already uses {email}").into());
             }
             if auth::find_user(&pool, &id).await?.is_some() {
                 return Err(format!("account {id} already exists; use set-password to change its password").into());
@@ -134,9 +193,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
             }
             let kindle = auth::kindle_addresses(&kindle.join("\n"))?;
             let hash = auth::hash_password(read_password()?).await?;
-            db::add_user(&pool, &id, name.as_deref().unwrap_or(&id), &hash, &role, &timezone).await?;
+            db::add_user(&pool, &id, &email, name.as_deref().unwrap_or(&id), &hash, &role, &timezone).await?;
             db::set_kindle_addresses(&pool, &id, &kindle.join("\n")).await?;
-            println!("Created {role} account {id} ({timezone}).");
+            println!("Created {role} account {id} ({timezone}). Sign in with {email}.");
             if kindle.is_empty() {
                 println!("It has no Kindle address, so nothing will be sent to it; set one on the account page.");
             }
@@ -151,12 +210,31 @@ async fn run(cli: Cli) -> Result<(), Error> {
             }
             println!("Password changed for {id}; it is signed out everywhere.");
         }
+        Command::SetEmail { id, email } => {
+            let Some(email) = auth::normal_email(&email) else {
+                return Err(format!("{email} is not an email address").into());
+            };
+            if db::email_taken(&pool, &email, &id).await? {
+                return Err(format!("another account already uses {email}").into());
+            }
+            if !db::set_email(&pool, &id, &email).await? {
+                return Err(format!("no account {id}").into());
+            }
+            println!(
+                "{id} now signs in with {email}. It is not confirmed yet; sign in and use the banner to confirm it."
+            );
+        }
         Command::Users => {
             for user in db::list_users(&pool).await? {
                 let kindle = user.kindle_addresses.lines().collect::<Vec<_>>().join(", ");
+                let email = match (&user.email, &user.email_verified_at) {
+                    (Some(email), Some(_)) => format!("{email} (confirmed)"),
+                    (Some(email), None) => format!("{email} (not confirmed)"),
+                    (None, _) => "no email: cannot sign in".to_owned(),
+                };
                 println!(
-                    "{:<16} {:<7} {:<24} {}  {}  [{}]",
-                    user.id, user.role, user.timezone, user.created_at, user.name, kindle
+                    "{:<12} {:<7} {}  {}  kindle [{}]  {}",
+                    user.id, user.role, email, user.name, kindle, user.timezone
                 );
             }
         }

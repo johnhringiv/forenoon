@@ -10,6 +10,7 @@
 </div>
 {% endblock %}
 {% block main %}
+{% include "_confirm.html" %}
 {% if issues.is_empty() %}<p class="empty">{{ empty }}</p>{% endif %}
 {% for issue in issues %}
 <section><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>

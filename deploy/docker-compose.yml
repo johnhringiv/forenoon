@@ -38,7 +38,8 @@ services:
     # instead, add  ports: ["127.0.0.1:8080:8080"]
 
   # Enabled by adding "web" to COMPOSE_PROFILES in .env. The newsstand pages, behind a login;
-  # create the first account with: docker compose exec web forenoon-web add-user <id>
+  # create the first account with:
+  #   docker compose exec web forenoon-web add-user <id> --email <address>
   # Publish them only on a trusted network for now, never through the tunnel.
   web:
     build: ../web
@@ -56,6 +57,14 @@ services:
     ports: ["${WEB_LISTEN:-127.0.0.1:8081}:8081"]
     environment:
       TZ: ${TZ:-UTC}
+      # For the links in account emails, and the mail server that sends them. Without a
+      # host, the emails are written to this container's log instead.
+      FORENOON_WEB_URL: ${FORENOON_WEB_URL:-}
+      FORENOON_SMTP_HOST: ${FORENOON_SMTP_HOST:-}
+      FORENOON_SMTP_PORT: ${FORENOON_SMTP_PORT:-587}
+      FORENOON_SMTP_USERNAME: ${FORENOON_SMTP_USERNAME:-}
+      FORENOON_SMTP_SENDER: ${FORENOON_SMTP_SENDER:-}
+      FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
 
   # Enabled by adding "recipes" to COMPOSE_PROFILES in .env. Runs Calibre news recipes into
   # <data>/recipes; see docs/setup-recipes.md. Logins come from recipes.env only.

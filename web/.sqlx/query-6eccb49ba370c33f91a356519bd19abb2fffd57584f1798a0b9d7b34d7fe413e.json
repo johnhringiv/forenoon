@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET pending_email = CASE WHEN email IS NULL THEN NULL ELSE ?1 END,\n         email = COALESCE(email, ?1) WHERE id = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6eccb49ba370c33f91a356519bd19abb2fffd57584f1798a0b9d7b34d7fe413e"
+}
