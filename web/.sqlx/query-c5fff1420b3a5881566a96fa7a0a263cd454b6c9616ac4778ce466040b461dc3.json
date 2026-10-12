@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"articles!: i64\", COUNT(DISTINCT d.delivered_at) AS \"issues!: i64\",\n           COUNT(r.rating) AS \"rated!: i64\"\n           FROM deliveries d LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "articles!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "issues!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "rated!: i64",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c5fff1420b3a5881566a96fa7a0a263cd454b6c9616ac4778ce466040b461dc3"
+}

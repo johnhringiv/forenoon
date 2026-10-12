@@ -1,0 +1,116 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.delivered_at, a.id AS \"id!\", a.url, a.source, a.title, a.author, a.word_count,\n           a.image_url, a.description, s.policy AS \"policy?\", s.score AS \"score?: f64\",\n           s.reason AS \"picked?\", s.rank AS \"rank?: i64\", s.explore AS \"explore?: bool\",\n           r.rating AS \"rating?: i64\", r.finished AS \"finished?: bool\",\n           COALESCE(r.reason, '') AS \"why!: String\"\n           FROM deliveries d JOIN articles a ON a.id = d.article_id\n           LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id\n           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3\n           ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title",
+  "describe": {
+    "columns": [
+      {
+        "name": "delivered_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "source",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "author",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "word_count",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "image_url",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "description",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "policy?",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "score?: f64",
+        "ordinal": 10,
+        "type_info": "Float"
+      },
+      {
+        "name": "picked?",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "rank?: i64",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "explore?: bool",
+        "ordinal": 13,
+        "type_info": "Integer"
+      },
+      {
+        "name": "rating?: i64",
+        "ordinal": 14,
+        "type_info": "Integer"
+      },
+      {
+        "name": "finished?: bool",
+        "ordinal": 15,
+        "type_info": "Integer"
+      },
+      {
+        "name": "why!: String",
+        "ordinal": 16,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "53f90941b8d0780ae3980b314a178c2e85f9595bd5a3ddf93585b7ef12b24c27"
+}

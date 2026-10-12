@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rating AS \"rating?: i64\", reason FROM ratings WHERE user_id = ? AND article_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rating?: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "reason",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "4c7ecaff31bdb84eea9a361f79157b1305d4957d50d3ef02fe2975cd648363f8"
+}

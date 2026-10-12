@@ -37,12 +37,22 @@ services:
     # No published port: the tunnel below is the only way in. For your own reverse proxy
     # instead, add  ports: ["127.0.0.1:8080:8080"]
 
-  # Enabled by adding "web" to COMPOSE_PROFILES in .env. Newsstand pages (ratings can be changed) with no
-  # login: publish them only on a trusted network, never through the tunnel.
+  # Enabled by adding "web" to COMPOSE_PROFILES in .env. The newsstand pages, behind a login;
+  # create the first account with: docker compose exec web forenoon-web add-user <id>
+  # Publish them only on a trusted network for now, never through the tunnel.
   web:
-    <<: *app
+    build: ../web
+    image: ${WEB_IMAGE:-forenoon-web:local}
     profiles: [web]
-    command: ["web", "--port", "8081"]
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    network_mode: bridge
+    volumes:
+      - ${FORENOON_HOST_DATA}:/data
     ports: ["${WEB_LISTEN:-127.0.0.1:8081}:8081"]
     environment:
       TZ: ${TZ:-UTC}

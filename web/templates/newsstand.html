@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Forenoon newsstand{% endblock %}
+{% block header %}
+<p>{{ summary }}</p>
+<div class="bar">
+{% for filter in filters %}{% if filter.current %}<b>{{ filter.label }}</b>{% else %}<a href="{{ filter.href }}">{{ filter.label }}</a>{% endif %}
+{% endfor %}
+<span class="who">{{ name }} <a href="/account">Account</a>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></span>
+</div>
+{% endblock %}
+{% block main %}
+{% if issues.is_empty() %}<p class="empty">Nothing has been delivered yet.</p>{% endif %}
+{% for issue in issues %}
+<section><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
+<div class="grid">
+{% for card in issue.cards %}
+<article id="a-{{ card.id }}">
+{% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
+<div class="body">
+<p class="kicker">{{ card.kicker }}</p>
+<h3>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h3>
+{% if let Some(desc) = card.desc %}<p class="desc">{{ desc }}</p>{% endif %}
+{% if let Some(picked) = card.picked %}<p class="why">Picked because: {{ picked }}</p>{% endif %}
+<div class="meta">
+{% for tag in card.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+{% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
+{% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
+{% if card.unrated %}<span>Not rated</span>{% endif %}
+</div>
+<form class="rate" method="post" action="/rate">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
+{% for star in card.stars %}<button name="rating" value="{{ star.n }}"{% if star.on %} class="on"{% endif %}>{{ star.n }}</button>{% endfor %}
+<button class="gap{% if card.finished %} on{% endif %}" name="finished" value="{% if card.finished %}0{% else %}1{% endif %}">Finished</button>
+{% if !card.reasons.is_empty() %}<select class="gap" name="reason"><option value="">Why? (optional)</option>{% for reason in card.reasons %}<option value="{{ reason.key }}"{% if reason.selected %} selected{% endif %}>{{ reason.label }}</option>{% endfor %}</select><button name="set" value="reason">Save</button>{% endif %}
+{% if !card.unrated %}<button class="gap" name="clear" value="1">Clear</button>{% endif %}
+</form>
+</div>
+</article>
+{% endfor %}
+</div></section>
+{% endfor %}
+{% if newest.is_some() || older.is_some() %}<nav>
+{% if let Some(href) = newest %}<a href="{{ href }}">Newest</a>{% endif %}
+{% if let Some(href) = older %}<a href="{{ href }}">Older issues</a>{% endif %}
+</nav>{% endif %}
+{% endblock %}

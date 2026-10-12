@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT delivered_at FROM deliveries\n           WHERE user_id = ?1 AND (?2 IS NULL OR delivered_at < ?2)\n           ORDER BY delivered_at DESC LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "delivered_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8b7dd1be29852a22415abbfabb868eb81fe2f081ce03706ce5e3daaa8bb26fb4"
+}

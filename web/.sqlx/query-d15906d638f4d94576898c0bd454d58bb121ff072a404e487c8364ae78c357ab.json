@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d15906d638f4d94576898c0bd454d58bb121ff072a404e487c8364ae78c357ab"
+}

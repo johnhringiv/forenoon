@@ -1,0 +1,159 @@
+//! Accounts and passwords.
+//!
+//! Passwords are stored as Argon2id hashes. Sessions are handled by `axum-login`: a session
+//! is tied to the account's password hash, so changing a password signs out every other
+//! browser.
+
+use std::fmt;
+
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
+};
+use axum_login::{AuthUser, AuthnBackend, UserId};
+use serde::Deserialize;
+use sqlx::SqlitePool;
+
+pub const MIN_PASSWORD: usize = 10;
+pub const MAX_PASSWORD: usize = 256;
+pub const MAX_ID: usize = 64;
+pub const ROLES: [&str; 2] = ["admin", "reader"];
+
+#[derive(Clone, sqlx::FromRow)]
+pub struct User {
+    pub id: String,
+    pub name: String,
+    pub password_hash: String,
+    pub role: String,
+    pub timezone: String,
+}
+
+// Written by hand so that a logged user never includes the password hash.
+impl fmt::Debug for User {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("User").field("id", &self.id).field("role", &self.role).finish_non_exhaustive()
+    }
+}
+
+impl AuthUser for User {
+    type Id = String;
+
+    fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    fn session_auth_hash(&self) -> &[u8] {
+        self.password_hash.as_bytes()
+    }
+}
+
+#[derive(Debug)]
+pub enum AuthError {
+    Db(sqlx::Error),
+    Hash(String),
+}
+
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AuthError::Db(e) => write!(f, "database: {e}"),
+            AuthError::Hash(e) => write!(f, "password hashing: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+
+impl From<sqlx::Error> for AuthError {
+    fn from(e: sqlx::Error) -> Self {
+        AuthError::Db(e)
+    }
+}
+
+/// Why this password cannot be used, or `None` when it can.
+pub fn password_problem(password: &str) -> Option<String> {
+    let length = password.chars().count();
+    if length < MIN_PASSWORD {
+        Some(format!("The password must be at least {MIN_PASSWORD} characters."))
+    } else if length > MAX_PASSWORD {
+        Some(format!("The password must be at most {MAX_PASSWORD} characters."))
+    } else {
+        None
+    }
+}
+
+/// Whether this can be an account id: the pipeline's reader ids are short plain words.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= MAX_ID && id.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+}
+
+/// Slow by design; call it off the async threads (see `hash_password`).
+fn hash_blocking(password: &str) -> Result<String, AuthError> {
+    Argon2::default()
+        .hash_password(password.as_bytes())
+        .map(|hash| hash.to_string())
+        .map_err(|e| AuthError::Hash(e.to_string()))
+}
+
+fn verify_blocking(password: &str, stored: &str) -> bool {
+    PasswordHash::new(stored)
+        .map(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
+        .unwrap_or(false)
+}
+
+pub async fn hash_password(password: String) -> Result<String, AuthError> {
+    tokio::task::spawn_blocking(move || hash_blocking(&password)).await.map_err(|e| AuthError::Hash(e.to_string()))?
+}
+
+pub async fn verify_password(password: String, stored: String) -> Result<bool, AuthError> {
+    tokio::task::spawn_blocking(move || verify_blocking(&password, &stored))
+        .await
+        .map_err(|e| AuthError::Hash(e.to_string()))
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Credentials {
+    pub id: String,
+    pub password: String,
+}
+
+#[derive(Clone)]
+pub struct Backend {
+    pool: SqlitePool,
+    /// Checked when the account does not exist, so that case takes as long as a wrong password.
+    decoy_hash: String,
+}
+
+impl Backend {
+    pub fn new(pool: SqlitePool) -> Result<Self, AuthError> {
+        Ok(Self { pool, decoy_hash: hash_blocking("no such account")? })
+    }
+}
+
+pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as!(User, r#"SELECT id AS "id!", name, password_hash, role, timezone FROM users WHERE id = ?"#, id)
+        .fetch_optional(pool)
+        .await
+}
+
+impl AuthnBackend for Backend {
+    type User = User;
+    type Credentials = Credentials;
+    type Error = AuthError;
+
+    async fn authenticate(&self, creds: Credentials) -> Result<Option<User>, AuthError> {
+        if creds.password.chars().count() > MAX_PASSWORD || creds.id.len() > MAX_ID {
+            return Ok(None);
+        }
+        let user = find_user(&self.pool, &creds.id).await?;
+        let stored = user.as_ref().map_or_else(|| self.decoy_hash.clone(), |u| u.password_hash.clone());
+        let matches = verify_password(creds.password, stored).await?;
+        Ok(user.filter(|_| matches))
+    }
+
+    async fn get_user(&self, id: &UserId<Self>) -> Result<Option<User>, AuthError> {
+        Ok(find_user(&self.pool, id).await?)
+    }
+}
+
+pub type AuthSession = axum_login::AuthSession<Backend>;
