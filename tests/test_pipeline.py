@@ -481,7 +481,7 @@ def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model
         titles = sorted(sent_titles.values())
         assert titles == ["Dull find", "Great find", "Post 1", "Post 2", "Post 5", "Second find"]
         prompt = backend.prompts[0][1]
-        assert "On the Hacker News front page: 300 points, 80 comments. Site: found.example." in prompt
+        assert "On Hacker News: 300 points, 80 comments. Site: found.example." in prompt
         assert "Tags: rust." in prompt
 
         # One slot for finds: the best one only, though a second also scored well.

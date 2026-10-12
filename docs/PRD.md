@@ -184,7 +184,9 @@ Ratings influence delivery only when model ranking is on.
 
 ## 7b. Discovery (optional, off by default; needs ranking)
 
-- **Sources.** The front pages of Hacker News and Lobsters, one request each per run.
+- **Sources.** Hacker News: the front page, plus stories from the last day with more than 40
+  points. Lobsters: the first three pages of its hottest list. Three requests per site per
+  run; if a further page fails, the rest are still used.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
   anything already in a feed read this run, already delivered, or previously failed. At most
@@ -386,7 +388,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 ## 15. Not built yet
 
 - Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
-- Searching Hacker News and Lobsters beyond their front pages; a watch list for vendor
+- Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
 - A web interface for sources and preferences, adding articles by hand, and a login for the
   newsstand.

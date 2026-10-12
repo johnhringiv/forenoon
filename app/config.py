@@ -86,7 +86,7 @@ class Discovery:
     sites: tuple[str, ...] = ("hackernews", "lobsters")
     slots: int = 2  # at most this many of the day's articles, and never more than half
     min_score: float = 6.0  # a found article needs at least this score to take a slot
-    per_site: int = 25  # candidates sent to the model per site
+    per_site: int = 100  # candidates sent to the model per site
 
 
 @dataclass(frozen=True)

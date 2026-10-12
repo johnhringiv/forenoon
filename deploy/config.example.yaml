@@ -61,14 +61,14 @@ llm:
   check_extraction: true         # one more call per run asks whether each article looks
                                  # complete; logged in the report, never changes delivery
 
-# Discovery: the front pages of Hacker News and Lobsters are added to the day's candidates
+# Discovery: recent popular stories on Hacker News and Lobsters are added to the day's candidates
 # and scored in the same ranking call. Only used when ranking is on and working.
 discovery:
   enabled: false
   sites: [hackernews, lobsters]
   slots: 2                       # at most this many of the day's articles (never over half)
   min_score: 6                   # a found article must score at least this (0 to 10)
-  per_site: 25                   # candidates sent to the model per site
+  per_site: 100                  # candidates sent to the model per site
 
 # Operator notices by email, through the same relay: failed delivery, a crashed run, a run
 # with nothing to deliver, or a source failing several runs in a row. Off while `to` is empty.
