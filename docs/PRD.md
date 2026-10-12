@@ -106,6 +106,8 @@ are dropped and counted in the report.
 ## 6. The book
 
 - **Format `issue` (default).** One EPUB per day, titled `Forenoon · YYYY-MM-DD`:
+  - a cover image for the library view: the Forenoon mark, the date, the story count and the
+    first few headlines, drawn in grayscale with no font files needed;
   - a contents page with the date, article count and total reading time, then each article's
     title, source and reading time;
   - one chapter per article: title, author, source, date, reading time, a link to the
@@ -138,14 +140,24 @@ part-way never causes a resend.
   `GET /f/<token>`, verifies the token, records the tap and returns a small page stating what
   is now stored ("Rated 4 of 5, finished.") with links to change it. It has no login and takes
   no other input. `GET /healthz` returns `ok`.
-- **Latest tap wins** for both rating and finished. Every tap is also kept in an event log.
+- **Why (optional).** After a rating, the page always offers one more tap for the reason.
+  For 1 to 3: not interested in the topic, too thin, already knew this, broken or incomplete,
+  too long. For 4 and 5: more on this topic, more from this source, liked the depth. The
+  rating counts without it. A later rating that no longer fits the reason drops it. "Broken
+  or incomplete" is also written to the extraction log.
+- **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
+  log.
 - Links in articles delivered before ratings existed still work: "more like this" counts as
   5, "less like this" as 1, "finished" sets the finished flag only.
 - Requests are rate limited to 30 per minute per client address, taken from Cloudflare's
   `CF-Connecting-IP` header.
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
-Ratings influence delivery only when model ranking is on.
+Ratings influence delivery only when model ranking is on. The model is given the 40 most
+recent, each with the article's length, whether it was finished, why it was picked and the
+reader's reason when there is one, and is told to work out what a rating is about before
+learning from it (a low rating on a short post is a verdict on thin posts, not on its
+source; "broken" says nothing about topic or source).
 
 ## 7a. Ranking with Claude (optional, off by default)
 
@@ -316,7 +328,12 @@ the Amazon account's approved sender list.
   issues to a page. Each card shows source, author, title linked to the original, lead image
   and description when the page had them, word count and reading time, how it was chosen
   (score and rank, pinned, exploration pick, the model's reason) and its rating.
-- Read-only: there are no forms or actions. `?user=<id>` limits the page to one reader.
+- `?user=<id>` limits the page to one reader; `?show=rated` or `?show=unrated` filters it.
+- **Ratings can be changed here**, the page's only action: set or change the 1 to 5 rating,
+  mark finished or not, choose the reason, or clear the rating. Changes are logged like taps,
+  with `web` as their source. A change is accepted only with a token issued by the page and,
+  when the browser says where the form came from, only from the page's own address, so
+  another site open in the same browser cannot make one.
 - No login. It must be reachable only from a trusted network and never through the public
   feedback hostname; the deploy script publishes it on a port of its own, in its own
   container, with no secrets.

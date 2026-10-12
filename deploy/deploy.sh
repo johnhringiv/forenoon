@@ -20,8 +20,9 @@
 # RECIPES_ENV_FILE) and reach no other container.
 #
 # Newsstand (optional): with WEB_LISTEN set (a port, or address:port), a container serves the
-# read-only newsstand pages there. They have no login: publish them only on a trusted
-# network, and never route the tunnel to them. It is given no secrets.
+# newsstand pages there (what was delivered; ratings can be changed). They have no login:
+# publish them only on a trusted network, and never route the tunnel to them. The container
+# is given no secrets.
 #
 # The env file is .env.example filled in. FORENOON_HOST_DATA is the data folder; if
 # config.yaml / sources.yaml (and optionally forenoon.sqlite3) sit next

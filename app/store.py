@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .tokens import meaning
+from .tokens import REASON_SIGNALS, meaning, reasons_for
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS ratings (
     rating INTEGER,
     finished INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS llm_calls (
@@ -114,6 +115,7 @@ class ArticleRow:
 class Rating:
     rating: int | None  # 1-5, None when only "finished" was recorded
     finished: bool
+    reason: str = ""  # a key of tokens.REASONS, when the reader said why
 
 
 class Store:
@@ -130,6 +132,9 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         have = {row["name"] for row in self.db.execute("PRAGMA table_info(articles)")}
+        if "reason" not in {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE ratings ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
         if "story" not in {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN story TEXT NOT NULL DEFAULT ''")
@@ -221,8 +226,13 @@ class Store:
     def record_feedback(
         self, user_id: str, article_id: str, signal: str, source: str, when: str | None = None
     ) -> Rating:
-        """Log the tap and apply it: the latest tap decides the stored rating and finished flag."""
+        """Log the tap and apply it: the latest tap decides the stored rating and finished flag.
+
+        A reason tap sets only the reason. A rating tap drops a stored reason that no longer
+        fits it (a "too thin" on an article now rated 5).
+        """
         rating, finished = meaning(signal)
+        reason = signal.removeprefix("why-") if signal in REASON_SIGNALS else None
         when = when or now_iso()
         with self.db:
             self.db.execute(
@@ -237,14 +247,32 @@ class Store:
                 " finished = COALESCE(?, finished), updated_at = excluded.updated_at",
                 (user_id, article_id, rating, finished, when, finished),
             )
+            if reason is not None:
+                self.db.execute(
+                    "UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", (reason, user_id, article_id)
+                )
+            now = self.get_rating(user_id, article_id)
+            if now.reason and now.reason not in reasons_for(now.rating):
+                self.db.execute(
+                    "UPDATE ratings SET reason = '' WHERE user_id = ? AND article_id = ?", (user_id, article_id)
+                )
         return self.get_rating(user_id, article_id)
+
+    def clear_rating(self, user_id: str, article_id: str, source: str) -> None:
+        """Forget an article's rating, finished flag and reason; the event log keeps the history."""
+        with self.db:
+            self.db.execute(
+                "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, article_id, "clear", source, now_iso()),
+            )
+            self.db.execute("DELETE FROM ratings WHERE user_id = ? AND article_id = ?", (user_id, article_id))
 
     def get_rating(self, user_id: str, article_id: str) -> Rating | None:
         row = self.db.execute(
-            "SELECT rating, finished FROM ratings WHERE user_id = ? AND article_id = ?",
+            "SELECT rating, finished, reason FROM ratings WHERE user_id = ? AND article_id = ?",
             (user_id, article_id),
         ).fetchone()
-        return Rating(row["rating"], bool(row["finished"])) if row else None
+        return Rating(row["rating"], bool(row["finished"]), row["reason"]) if row else None
 
     def feedback_rows(self) -> list[sqlite3.Row]:
         """Every tap, oldest first."""
@@ -257,9 +285,11 @@ class Store:
     def rating_rows(self, user_id: str | None = None, latest: int | None = None) -> list[sqlite3.Row]:
         """The current rating per user and article, oldest first; optionally one user's latest."""
         rows = self.db.execute(
-            "SELECT r.updated_at, r.user_id, r.rating, r.finished, r.article_id,"
-            " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source"
+            "SELECT r.updated_at, r.user_id, r.rating, r.finished, r.reason, r.article_id,"
+            " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source,"
+            " COALESCE(a.word_count, 0) AS word_count, COALESCE(s.reason, '') AS picked_because"
             " FROM ratings r LEFT JOIN articles a ON a.id = r.article_id"
+            " LEFT JOIN selections s ON s.user_id = r.user_id AND s.article_id = r.article_id"
             " WHERE (? IS NULL OR r.user_id = ?) ORDER BY r.updated_at",
             (user_id, user_id),
         ).fetchall()
@@ -350,7 +380,7 @@ class Store:
         return self.db.execute(
             "SELECT d.user_id, d.delivered_at, a.id, a.url, a.source, a.title, a.author, a.word_count,"
             " a.image_url, a.description, s.policy, s.score, s.reason, s.rank, s.explore,"
-            " r.rating, r.finished"
+            " r.rating, r.finished, COALESCE(r.reason, '') AS why"
             " FROM deliveries d JOIN articles a ON a.id = d.article_id"
             " LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id"
             " LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id"
