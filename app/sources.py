@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import feedparser
 
@@ -42,6 +43,12 @@ def _feed_html(entry) -> str:
     return max(bodies, key=len)
 
 
+def _is_front_page(url: str) -> bool:
+    """A link to a site's root is the site itself, not an article."""
+    parts = urlsplit(url)
+    return parts.path in ("", "/") and not parts.query
+
+
 def read_feed(source: Source, fetcher: Fetcher, conditional: bool = True) -> list[Item]:
     """Fetch and parse one feed. Raises FetchError; returns [] when not modified."""
     resp = fetcher.get(source.url, max_bytes=MAX_FEED_BYTES, conditional=conditional)
@@ -54,7 +61,7 @@ def read_feed(source: Source, fetcher: Fetcher, conditional: bool = True) -> lis
     items: dict[str, Item] = {}
     for entry in parsed.entries:
         url = entry.get("link", "")
-        if not url.startswith(("http://", "https://")):
+        if not url.startswith(("http://", "https://")) or _is_front_page(url):
             continue
         item = Item(
             id=article_id(url),

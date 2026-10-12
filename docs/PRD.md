@@ -33,7 +33,8 @@ does the same on demand. For each user:
 
 1. **Read feeds.** Each source is fetched with conditional requests (ETag / Last-Modified);
    an unchanged feed is skipped. A response that is not a feed, or any status other than 200
-   or 304, counts as a failed source for this run.
+   or 304, counts as a failed source for this run. A feed entry that links to a site's front
+   page rather than an article is ignored.
 2. **Select candidates.** Items older than `max_age_days` (default 3) are ignored, as are
    items already delivered to this user and items whose extraction previously failed. At most
    5 items per source are considered per run.
@@ -146,10 +147,13 @@ Ratings influence delivery only when model ranking is on.
 
 ## 7a. Ranking with Claude (optional, off by default)
 
-- **Input.** For up to `llm.max_candidates` (80) unpinned candidates: title, source, author,
-  date and the first 100 words of the feed entry as plain text. No article page is fetched for
-  ranking. Also the user's `interests` text and their 30 most recent ratings (title, source,
-  rating, finished).
+- **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
+  title, source, author, date and the first 100 words of the feed entry as plain text. No
+  article page is fetched for ranking. Also the user's `interests` text and their 30 most
+  recent ratings (title, source, rating, finished).
+- **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
+  interests and ratings, marked for the provider's prompt cache. Scores from all batches are
+  merged into one order.
 - **Output.** A score from 0 to 10 and a reason of at most 15 words per candidate, returned in
   a fixed structure. Entries for unknown or repeated ids and non-numeric scores are discarded;
   reasons are cut to 140 characters and escaped like any other text.
@@ -161,13 +165,15 @@ Ratings influence delivery only when model ranking is on.
   contents page (`llm.show_reasons`).
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
   whether it was the exploration pick, and the probability the policy put it forward.
-- **Limits.** One call per user per run. Before each call the day's logged token use plus an
-  estimate for this call is checked against `llm.daily_token_cap` (200,000); over the cap, the
-  call is not made. Every call is logged with model, input and output tokens and outcome;
+- **Limits.** Before each call the day's logged token use plus an estimate for this call is
+  checked against `llm.daily_token_cap` (300,000); over the cap, the call is not made and
+  later batches are skipped. Every call is logged with model, input and output tokens and outcome;
   `forenoon usage` prints the log and today's total.
-- **Fallback.** With no API key, a failed or timed-out call, an answer covering fewer than
-  half the candidates, or the cap reached, the run uses the newest-first order, the report
-  says why, and the operator is alerted.
+- **Fallback.** With no API key, or when fewer than half the candidates end up scored
+  (failed or timed-out calls, unusable answers, the cap reached), the run uses the
+  newest-first order, the report says why, and the operator is alerted. When some batches
+  fail but at least half the candidates are scored, the scores are used, unscored candidates
+  go last, and the report says how many were scored.
 - **Safety.** Candidate text is untrusted and is passed as delimited data with an instruction
   to ignore anything in it that reads as an instruction. The model has no tools that act on
   anything and cannot affect recipients, sources or settings.
@@ -211,8 +217,8 @@ Ratings influence delivery only when model ranking is on.
   variables from `recipes.env`. It mounts only the `recipes` folder.
 - A source of `type: recipe` reads the newest issue in its folder and splits it into
   articles, in the issue's order: navigation is removed, the original URL is taken from the
-  issue, and images are taken from the issue itself. Up to 30 articles per issue become
-  candidates.
+  issue, and images are taken from the issue itself. Every article in the issue becomes a
+  candidate (the 5 newest when the source is pinned).
 - Recipe articles are extracted from the issue only; their pages are never fetched. From
   there they are treated like feed articles: sanitised, ranked, capped, rated and
   deduplicated by URL against every other source.
@@ -231,7 +237,8 @@ the Amazon account's approved sender list.
   the most common reason; per article: status, word count, extraction method, images dropped
   and reason. Also the number delivered and any delivery error.
 - **Triage.** `forenoon report` extracts the latest items of every source without delivering
-  or recording anything.
+  or recording anything. It fetches every feed and page again, so `--source` limits it to the
+  sources whose name contains the given text.
 - **Alerts.** When `alerts.to` is set, the operator is emailed if a delivery fails, a run
   crashes, a run has nothing new to deliver (unless the day's cap was already used), or a
   source has failed a set number of runs in a row (default 3, repeated at each multiple).
@@ -243,7 +250,7 @@ the Amazon account's approved sender list.
 | ----------------------------------------------- | ------------------------------------------------------------ |
 | `forenoon run [--dry-run] [--out DIR] [--user]` | One delivery now; `--dry-run` builds files and sends nothing |
 | `forenoon schedule`                             | Run every day at `delivery_time`                             |
-| `forenoon report [--per-source N]`              | Triage sources                                               |
+| `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X          |
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
 | `forenoon feedback-log`                         | Print taps and current ratings                               |
 | `forenoon usage`                                | Print recent model calls and today's token use               |

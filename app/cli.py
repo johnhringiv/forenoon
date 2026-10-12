@@ -71,7 +71,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
 def _report(cfg: Config, args: argparse.Namespace) -> int:
     fetcher = Fetcher(cfg.user_agent)
     try:
-        report = triage(cfg, fetcher, args.per_source)
+        report = triage(cfg, fetcher, args.per_source, args.source)
     finally:
         fetcher.close()
     path = report.write(cfg.data_dir / "reports")
@@ -177,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--out", type=Path, help="also write the EPUBs to this folder")
     p = sub.add_parser("report", help="extraction report for every source; delivers nothing")
     p.add_argument("--per-source", type=int, default=3)
+    p.add_argument("--source", default="", help="only sources whose name contains this")
     p = sub.add_parser("feedback", help="serve the feedback endpoint")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)

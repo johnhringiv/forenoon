@@ -162,6 +162,8 @@ def test_dry_run_and_triage_record_nothing(env, tmp_path):
     assert store.delivered_on("john", "2000", "3000") == 0
     table = triage(cfg, fetcher, per_source=2).to_markdown()
     assert "| Blog | clean | 2 | 0 | 0 |" in table and "| Down | failed |" in table
+    only = triage(cfg, fetcher, per_source=2, only="blo").to_markdown()
+    assert "| Blog |" in only and "| Down |" not in only
 
 
 def test_private_addresses_are_refused():
@@ -273,10 +275,10 @@ class FakeBackend:
         self.scores, self.fail, self.prompts = scores, fail, []
         self.checks, self.checked = None, []
 
-    def structured(self, system, user, schema):
+    def structured(self, system, user, schema, shared=""):
         from app.llm import LlmError, Reply
 
-        self.prompts.append((system, user))
+        self.prompts.append((system, shared + user))
         if self.fail:
             raise LlmError("overloaded")
         if "<articles>" in user:
@@ -364,6 +366,43 @@ def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
     assert not store.selection_rows(user.id)  # dry runs record no selections
 
 
+def test_ranking_is_batched_and_survives_one_failed_batch(env):
+    import json
+
+    from app.llm import LlmError
+
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, batch_size=2)
+    user = cfg.users[0]
+
+    def ids_in(prompt):
+        return [c["id"] for c in json.loads(prompt.split("<candidates>\n")[1].split("\n</candidates>")[0])]
+
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
+    whole = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=backend)
+    batches = [ids_in(p) for _, p in backend.prompts if "<candidates>" in p]
+    assert whole.ranking == "model" and len(batches) >= 2 and all(len(b) <= 2 for b in batches)
+    sent_ids = [i for b in batches for i in b]
+    assert len(sent_ids) == len(set(sent_ids))  # every candidate is sent once
+    # Each batch repeats the reader's interests ahead of its own candidates.
+    assert all("Compilers. Not watches." in p for _, p in backend.prompts if "<candidates>" in p)
+
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
+    original, calls = backend.structured, []
+
+    def flaky(system, prompt, schema, shared=""):
+        if "<candidates>" in prompt:
+            calls.append(prompt)
+            if len(calls) == len(batches):  # the last batch fails
+                raise LlmError("overloaded")
+        return original(system, prompt, schema, shared)
+
+    backend.structured = flaky
+    partial = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=backend)
+    assert partial.ranking.startswith("model (") and "model call failed" in partial.ranking
+    assert len(partial.delivered) == 3
+
+
 def _listings(hn: list[dict], lobsters: list[dict]) -> None:
     import json
 
@@ -409,13 +448,13 @@ def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model
         backend = FakeBackend(scores)
         original = backend.structured
 
-        def structured(system, prompt, schema):
+        def structured(system, prompt, schema, shared=""):
             import json
 
             if "<candidates>" in prompt:
                 listed = json.loads(prompt.split("<candidates>\n")[1].split("\n</candidates>")[0])
                 sent_titles.update({c["id"]: c["title"] for c in listed})
-            return original(system, prompt, schema)
+            return original(system, prompt, schema, shared)
 
         backend.structured = structured
         sent = []
@@ -515,3 +554,11 @@ def test_fetched_pages_are_kept_for_replay_and_pruned(env):
     off.data_dir.mkdir()
     run(off, Store(off.db_path), fetcher, user, now=NOW, sender=lambda m, s: None)
     assert not off.pages_dir.exists()
+
+
+def test_front_page_links_are_not_articles():
+    from app.sources import _is_front_page
+
+    assert _is_front_page("https://example.com/") and _is_front_page("https://example.com")
+    assert not _is_front_page("https://example.com/?p=12")
+    assert not _is_front_page("https://example.com/blog/post/")

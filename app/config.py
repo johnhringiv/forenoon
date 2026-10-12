@@ -59,8 +59,9 @@ class Llm:
 
     enabled: bool = False
     model: str = "claude-haiku-5-5"
-    daily_token_cap: int = 200_000  # input + output tokens per local day, all users
-    max_candidates: int = 80  # abstracts sent to the model per user per run
+    daily_token_cap: int = 300_000  # input + output tokens per local day, all users
+    max_candidates: int = 600  # ceiling on abstracts sent to the model per user per run
+    batch_size: int = 80  # candidates per ranking call
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
     check_extraction: bool = True  # ask the model whether each article looks complete; log only

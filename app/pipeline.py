@@ -38,7 +38,6 @@ from .tokens import LINK_SIGNALS, make_token
 log = logging.getLogger("forenoon")
 
 MAX_ITEMS_PER_SOURCE = 5
-MAX_ITEMS_PER_ISSUE = 30  # a recipe's issue is a whole publication, not one author's feed
 
 
 @dataclass
@@ -188,10 +187,16 @@ def _newest_first(items: list[Item]) -> list[Item]:
     return sorted(items, key=lambda i: i.published or epoch, reverse=True)
 
 
-def triage(cfg: Config, fetcher: Fetcher, per_source: int = 3) -> RunReport:
-    """Extract the latest items of every source without delivering or recording anything."""
+def triage(cfg: Config, fetcher: Fetcher, per_source: int = 3, only: str = "") -> RunReport:
+    """Extract the latest items of every source without delivering or recording anything.
+
+    With `only`, just the sources whose name contains it (any case), so one source can be
+    checked without fetching the rest.
+    """
     report = RunReport(started=_stamp())
     for source in cfg.sources:
+        if only.lower() not in source.name.lower():
+            continue
         src = SourceReport(source.name)
         report.sources.append(src)
         try:
@@ -328,9 +333,10 @@ def run(
             if row.status == "failed" or store.is_delivered(user.id, item.id):
                 continue
             eligible.append(item)
-        # Undated feeds would otherwise flood the first run.
-        limit = MAX_ITEMS_PER_ISSUE if source.type == "recipe" else MAX_ITEMS_PER_SOURCE
-        pools[source.pinned].append(eligible[:limit])
+        # Undated feeds would otherwise flood the first run. A recipe's issue is a whole
+        # publication, so all of it is considered unless it is pinned (pinned items skip ranking).
+        whole = source.type == "recipe" and not source.pinned
+        pools[source.pinned].append(eligible if whole else eligible[:MAX_ITEMS_PER_SOURCE])
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     ranking = Ranking(others, {})
@@ -354,7 +360,7 @@ def run(
         )
         ranking.order += others[cfg.llm.max_candidates :]
         if ranking.choices:
-            report.ranking = "model"
+            report.ranking = f"model ({ranking.note})" if ranking.note else "model"
         elif backend is None:
             report.ranking = "fallback: no API key"
         elif ranking.note:

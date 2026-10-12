@@ -29,7 +29,7 @@ MAX_REASON_CHARS = 140
 RECENT_RATINGS = 30
 # Rough size of one ranking request, used to refuse a call that would cross the daily cap.
 TOKENS_PER_CANDIDATE = 260
-TOKENS_OVERHEAD = 2500
+TOKENS_OVERHEAD = 2500  # per call: instructions, interests and recent ratings
 
 SYSTEM = """\
 You rank articles for one reader's daily digest.
@@ -97,7 +97,8 @@ def abstract(item: Item) -> str:
     return " ".join(text.split()[:ABSTRACT_WORDS])
 
 
-def _prompt(user: User, candidates: list[Item], store: Store) -> str:
+def _reader(user: User, store: Store) -> str:
+    """The part of the prompt that is the same for every batch of a run."""
     rated = [
         {
             "title": row["title"],
@@ -108,6 +109,13 @@ def _prompt(user: User, candidates: list[Item], store: Store) -> str:
         for row in store.rating_rows(user.id, RECENT_RATINGS)
         if row["rating"] and row["title"]
     ]
+    interests = user.interests.strip() or "(none given: rely on the ratings and on general quality)"
+    return (
+        f"<interests>\n{interests}\n</interests>\n\n<ratings>\n{json.dumps(rated, ensure_ascii=False)}\n</ratings>\n\n"
+    )
+
+
+def _listing(candidates: Sequence[Item]) -> str:
     listed = [
         {
             "id": item.id,
@@ -119,15 +127,10 @@ def _prompt(user: User, candidates: list[Item], store: Store) -> str:
         }
         for item in candidates
     ]
-    interests = user.interests.strip() or "(none given: rely on the ratings and on general quality)"
-    return (
-        f"<interests>\n{interests}\n</interests>\n\n"
-        f"<ratings>\n{json.dumps(rated, ensure_ascii=False)}\n</ratings>\n\n"
-        f"<candidates>\n{json.dumps(listed, ensure_ascii=False)}\n</candidates>"
-    )
+    return f"<candidates>\n{json.dumps(listed, ensure_ascii=False)}\n</candidates>"
 
 
-def _validated(data: dict, candidates: list[Item]) -> dict[str, tuple[float, str]]:
+def _validated(data: dict, candidates: Sequence[Item]) -> dict[str, tuple[float, str]]:
     """Keep only well-formed entries for ids we actually sent."""
     wanted = {item.id for item in candidates}
     out: dict[str, tuple[float, str]] = {}
@@ -158,7 +161,7 @@ def rank(
 ) -> Ranking:
     """Order `candidates` for delivery. `slots` is how many the user can still receive today.
 
-    `found` are discovered articles, scored in the same call. Those scoring at least
+    `found` are discovered articles, scored alongside the rest. Those scoring at least
     `found_min_score` may take up to `found_slots` slots, and never more than half; they are
     left out entirely when the fallback order is used.
     """
@@ -167,23 +170,35 @@ def rank(
     candidates = [*feed, *found]
     if backend is None or not candidates or slots <= 0:
         return fallback
-    estimate = TOKENS_OVERHEAD + TOKENS_PER_CANDIDATE * len(candidates)
-    used = store.llm_tokens_since(today_start)
-    if used + estimate > cfg.daily_token_cap:
-        fallback.note = f"daily token cap reached ({used} of {cfg.daily_token_cap} used)"
+    # Scored in batches: one reply holds about 200 scores, and a short list is judged with
+    # more care than a long one. A batch that fails leaves its candidates unscored.
+    reader = _reader(user, store)
+    size = max(1, cfg.batch_size)
+    scores: dict[str, tuple[float, str]] = {}
+    problem = ""
+    for start in range(0, len(candidates), size):
+        batch = candidates[start : start + size]
+        used = store.llm_tokens_since(today_start)
+        if used + TOKENS_OVERHEAD + TOKENS_PER_CANDIDATE * len(batch) > cfg.daily_token_cap:
+            problem = f"daily token cap reached ({used} of {cfg.daily_token_cap} used)"
+            break
+        try:
+            reply = backend.structured(SYSTEM, _listing(batch), SCHEMA, shared=reader)
+        except LlmError as exc:
+            store.log_llm_call("rank", cfg.model, 0, 0, "error", str(exc)[:300])
+            problem = f"model call failed: {exc}"[:200]
+            continue
+        got = _validated(reply.data, batch)
+        ok = len(got) >= max(1, len(batch) // 2)
+        store.log_llm_call("rank", cfg.model, reply.input_tokens, reply.output_tokens, "ok" if ok else "invalid")
+        if ok:
+            scores.update(got)
+        else:
+            problem = f"model scored only {len(got)} of {len(batch)} candidates in one batch"
+    if len(scores) < max(1, len(candidates) // 2):
+        fallback.note = problem or f"model scored only {len(scores)} of {len(candidates)} candidates"
         return fallback
-    try:
-        reply = backend.structured(SYSTEM, _prompt(user, candidates, store), SCHEMA)
-    except LlmError as exc:
-        store.log_llm_call("rank", cfg.model, 0, 0, "error", str(exc)[:300])
-        fallback.note = f"model call failed: {exc}"[:200]
-        return fallback
-    scores = _validated(reply.data, candidates)
-    usable = len(scores) >= max(1, len(candidates) // 2)
-    store.log_llm_call("rank", cfg.model, reply.input_tokens, reply.output_tokens, "ok" if usable else "invalid")
-    if not usable:
-        fallback.note = f"model scored only {len(scores)} of {len(candidates)} candidates"
-        return fallback
+    note = f"{len(scores)} of {len(candidates)} candidates scored; {problem}" if problem else ""
 
     # Unscored candidates sort last; ties keep the caller's order.
     def by_score(items: Sequence[Item]) -> list[Item]:
@@ -222,4 +237,4 @@ def rank(
         choices[item.id] = Choice(score, reason, overall[item.id], False, 1.0 if n < reserved else 0.0)
     # Every worthy find follows the feed picks, so one that fails extraction is replaced by
     # the next find; the caller stops taking them at `found_slots`.
-    return Ranking(order[:slots] + worthy + order[slots:], choices, found_slots=reserved)
+    return Ranking(order[:slots] + worthy + order[slots:], choices, note, found_slots=reserved)
