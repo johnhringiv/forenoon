@@ -29,7 +29,9 @@ the feeds its own users configure and delivers only to the addresses in its own 
 ## 3. The daily run
 
 A scheduler runs once a day at `delivery_time` in the configured time zone. `forenoon run`
-does the same on demand. For each user:
+does the same on demand. The scheduler reads the config and sources files again before each
+run, so edits need no restart; if they cannot be read it keeps the previous configuration,
+logs the error and alerts the operator. For each user:
 
 1. **Read feeds.** Each source is fetched with conditional requests (ETag / Last-Modified);
    an unchanged feed is skipped. A response that is not a feed, or any status other than 200
@@ -217,7 +219,8 @@ Ratings influence delivery only when model ranking is on.
   variables from `recipes.env`. It mounts only the `recipes` folder.
 - A source of `type: recipe` reads the newest issue in its folder and splits it into
   articles, in the issue's order: navigation is removed, the original URL is taken from the
-  issue, and images are taken from the issue itself. Every article in the issue becomes a
+  issue (minus tracking parameters, including the marker Calibre's FT recipe adds), and images
+  are taken from the issue itself. Every article in the issue becomes a
   candidate (the 5 newest when the source is pinned).
 - Recipe articles are extracted from the issue only; their pages are never fetched. From
   there they are treated like feed articles: sanitised, ranked, capped, rated and

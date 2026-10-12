@@ -183,3 +183,12 @@ def test_runner_publishes_an_issue_only_when_the_recipe_succeeds(tmp_path, monke
     assert runner.run_all(out) == 1
     assert [p.name for p in (out / "good").iterdir()] == [f"{datetime.now():%Y-%m-%d}.epub"]  # old issue pruned
     assert list((out / "bad").iterdir()) == []  # nothing half-written is left behind
+
+
+def test_recipe_link_markers_are_dropped():
+    from app.urls import article_id, without_tracking
+
+    marked = "https://www.ft.com/content/7dc561ba?syn-25a6b1a6=1"
+    assert without_tracking(marked) == "https://www.ft.com/content/7dc561ba"
+    assert without_tracking("https://example.com/?p=12&utm_source=x#top") == "https://example.com/?p=12#top"
+    assert article_id(marked) == article_id("https://ft.com/content/7dc561ba")

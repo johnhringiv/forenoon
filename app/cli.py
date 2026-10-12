@@ -55,13 +55,26 @@ def _next_run(cfg: Config, now: datetime) -> datetime:
     return target if target > now else target + timedelta(days=1)
 
 
+def _reload(cfg: Config, args: argparse.Namespace, alert: bool = False) -> Config:
+    """The config files as they are now, so an edit needs no restart; the old one if they are broken."""
+    try:
+        return load_config(args.config, args.sources)
+    except (ConfigError, OSError) as exc:
+        log.error("config not reloaded, keeping the previous one: %s", exc)
+        if alert:
+            notify(cfg, "config not reloaded", [str(exc), "The run used the previous configuration."])
+        return cfg
+
+
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
-    zone = ZoneInfo(cfg.timezone)
     while True:
+        cfg = _reload(cfg, args)
+        zone = ZoneInfo(cfg.timezone)
         target = _next_run(cfg, datetime.now(zone))
         log.info("next delivery at %s", target.isoformat())
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
             time.sleep(min(wait, 300))
+        cfg = _reload(cfg, args, alert=True)
         try:
             _run_all(cfg, args)
         except Exception:

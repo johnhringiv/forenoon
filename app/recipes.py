@@ -22,7 +22,7 @@ from lxml import etree
 from .config import Source
 from .fetch import FetchError
 from .sources import Item
-from .urls import article_id
+from .urls import article_id, without_tracking
 
 ARTICLE_FILE = re.compile(r"(?:^|/)feed_(\d+)/article_(\d+)/[^/]+\.x?html?$")
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif"}
@@ -102,6 +102,7 @@ def _article(issue: zipfile.ZipFile, names: list[str], source: Source, published
         body.tag = "div"
         body.attrib.clear()
         parts.append(lxml.html.tostring(body, encoding="unicode"))
+    url = without_tracking(url)
     if not url.startswith(("http://", "https://")) or not parts:
         return None
     return Item(

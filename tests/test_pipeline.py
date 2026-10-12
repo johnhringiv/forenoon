@@ -562,3 +562,23 @@ def test_front_page_links_are_not_articles():
     assert _is_front_page("https://example.com/") and _is_front_page("https://example.com")
     assert not _is_front_page("https://example.com/?p=12")
     assert not _is_front_page("https://example.com/blog/post/")
+
+
+def test_scheduler_rereads_config_and_keeps_the_old_one_when_broken(tmp_path):
+    import argparse
+
+    from app import cli
+    from app.config import load_config
+
+    path = tmp_path / "config.yaml"
+    path.write_text("delivery_time: '06:00'\nusers: []\nsmtp: {host: smtp.example, sender: a@example.com}\n")
+    (tmp_path / "sources.yaml").write_text("sources: []\n")
+    args = argparse.Namespace(config=path, sources=None)
+    cfg = load_config(path)
+
+    path.write_text(path.read_text().replace("06:00", "07:30"))
+    cfg = cli._reload(cfg, args)
+    assert cfg.delivery_time == "07:30"
+
+    path.write_text("delivery_time: [broken")
+    assert cli._reload(cfg, args).delivery_time == "07:30"

@@ -156,6 +156,8 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ConfigError(f"missing config file: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{path}: not valid YAML: {' '.join(str(exc).split())[:300]}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{path}: expected a mapping at the top level")
     return data
