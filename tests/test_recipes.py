@@ -113,7 +113,8 @@ def test_recipe_source_is_delivered_without_fetching_any_page(tmp_path, monkeypa
     assert len(report.delivered) == 3 and not requests
     assert next(s for s in report.sources if s.name == "Missing").feed_error == "no issue in recipes/missing"
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
-    assert sum(n.endswith(".jpg") for n in epub.namelist()) == 1  # the issue's own image, re-encoded
+    images = [n for n in epub.namelist() if n.endswith(".jpg")]
+    assert len(images) == 2 and "OEBPS/cover.jpg" in images  # the issue's own image, re-encoded, and the cover
     again = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
     assert not again.delivered  # the same issue read twice delivers nothing twice
 

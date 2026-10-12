@@ -13,6 +13,7 @@ from xml.sax.saxutils import escape, quoteattr
 import lxml.html
 from lxml import etree
 
+from .cover import cover_image
 from .images import Asset
 
 CSS = """\
@@ -251,6 +252,13 @@ def _chapter(entry: IssueEntry, index: int, rating_style: str) -> tuple[str, lis
     return page, assets
 
 
+def _issue_summary(entries: list[IssueEntry]) -> str:
+    minutes = sum(e.article.reading_minutes for e in entries)
+    stories = sum(not e.article.continues for e in entries)
+    count = f"{len(entries)} articles" if stories == len(entries) else f"{stories} stories, {len(entries)} articles"
+    return f"{count} · about {minutes} min"
+
+
 def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str:
     items = ""
     for index, entry in enumerate(entries, 1):
@@ -271,10 +279,7 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
             + (f'<p class="toc-detail">{escape(a.story)}</p>' if a.story else "")
             + (f'<p class="toc-detail">{escape(a.reason)}</p>' if a.reason else "")
         )
-    minutes = sum(e.article.reading_minutes for e in entries)
-    stories = sum(not e.article.continues for e in entries)
-    count = f"{len(entries)} articles" if stories == len(entries) else f"{stories} stories, {len(entries)} articles"
-    summary = f"{count} · about {minutes} min"
+    summary = _issue_summary(entries)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
@@ -329,11 +334,13 @@ def render_issue(entries: list[IssueEntry], day: datetime, part: int = 0, rating
     <dc:creator>Forenoon</dc:creator>
     <dc:date>{day:%Y-%m-%d}</dc:date>
     <meta property="dcterms:modified">{day:%Y-%m-%dT%H:%M:%SZ}</meta>
+    <meta name="cover" content="cover"/>
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     <item id="css" href="style.css" media-type="text/css"/>
+    <item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>
 {manifest}
   </manifest>
   <spine toc="ncx">
@@ -379,6 +386,9 @@ def render_issue(entries: list[IssueEntry], day: datetime, part: int = 0, rating
         add("OEBPS/nav.xhtml", nav)
         add("OEBPS/toc.ncx", ncx)
         add("OEBPS/style.css", CSS + ISSUE_CSS + extra_css)
+        # The library thumbnail: the mark, the date and the day's lead headlines.
+        leads = [e.article.title for e in entries if not e.article.continues]
+        add("OEBPS/cover.jpg", cover_image(day, _issue_summary(entries), leads, part), zipfile.ZIP_STORED)
         add("OEBPS/contents.xhtml", _issue_contents(entries, title, day))
         for name, _, page in chapters:
             add(f"OEBPS/{name}.xhtml", page)
