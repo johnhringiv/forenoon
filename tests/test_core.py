@@ -257,3 +257,80 @@ def test_newsstand_shows_deliveries_and_treats_article_text_as_untrusted(tmp_pat
     assert "Rated 4 of 5" in text and "Finished" in text and "2,300 words, 10 min" in text
     assert "Newest" in text and web.get("/?before=nonsense").status_code == 200
     assert "0 articles" in web.get("/?user=nobody").text
+
+
+def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
+    db = tmp_path / "forenoon.sqlite3"
+    client = TestClient(create_app(db, SECRET))
+    store = Store(db)
+    store.upsert_article("abc", "https://x.example/a", "Blog", "A post", "", None)
+    expires = int(time.time()) + 3600
+
+    def tap(signal):
+        return client.get("/f/" + make_token(SECRET, "john", "abc", signal, expires))
+
+    page = tap("r2").text
+    # The reasons for a low rating are always offered; the rating counts without one.
+    assert "Why? (optional)" in page and "Too thin, nothing in it" in page and "More on this topic" not in page
+    assert store.get_rating("john", "abc") == Rating(2, False, "")
+
+    assert "Rated 2 of 5, not finished. Too thin, nothing in it." in tap("why-thin").text
+    assert store.get_rating("john", "abc") == Rating(2, False, "thin")
+    tap("why-broken")
+    assert [(r["verdict"], r["problem"]) for r in store.review_rows()] == [("bad", "reader: broken or incomplete")]
+
+    # Re-rating high drops a reason that no longer fits and offers the other list.
+    page = tap("f5").text
+    assert "More from this source" in page and "Too thin" not in page
+    assert store.get_rating("john", "abc") == Rating(5, True, "")
+    tap("why-depth")
+    row = store.rating_rows("john")[-1]
+    assert (row["rating"], row["reason"], row["word_count"]) == (5, "depth", 0)
+
+    store.clear_rating("john", "abc", "web")
+    assert store.get_rating("john", "abc") is None and store.feedback_rows()[-1]["signal"] == "clear"
+
+
+def test_newsstand_changes_ratings_only_from_its_own_page(tmp_path):
+    import re
+    from datetime import UTC, datetime
+
+    from app.web import create_app as create_web
+
+    db = tmp_path / "forenoon.sqlite3"
+    store = Store(db)
+    for n in (1, 2):
+        store.upsert_article(f"a{n}", f"https://blog.example/{n}", "Blog", f"Post {n}", "", None)
+    store.mark_delivered("john", ["a1", "a2"], datetime(2026, 10, 10, 10, 0, tzinfo=UTC))
+    web = TestClient(create_web(db, "UTC"), follow_redirects=False)
+    page = web.get("/").text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    assert "form-action 'self'" in web.get("/").headers["content-security-policy"]
+
+    def post(headers=None, **fields):
+        body = {"csrf": csrf, "user": "john", "article": "a1", "back": "/?show=rated", **fields}
+        return web.post("/rate", data=body, headers=headers or {})
+
+    done = post(rating="2")
+    assert done.status_code == 303 and done.headers["location"] == "/?show=rated#a-a1"
+    post(finished="1")
+    post(set="reason", reason="thin")
+    assert store.get_rating("john", "a1") == Rating(2, True, "thin")
+    assert store.feedback_rows()[-1]["source"] == "web"
+    post(set="reason", reason="more-topic")  # not a reason for a low rating: ignored
+    assert store.get_rating("john", "a1").reason == "thin"
+
+    # The filter shows one or the other; the rated card shows its reason and a selected option.
+    rated, unrated = web.get("/?show=rated").text, web.get("/?show=unrated").text
+    assert "Post 1" in rated and "Post 2" not in rated and "Post 2" in unrated and "Post 1" not in unrated
+    assert "Too thin, nothing in it" in rated and '<option value="thin" selected>' in rated
+
+    # Refused: a wrong token, another site's form, an article never delivered, an open redirect.
+    assert post(csrf="wrong", rating="5").status_code == 403
+    assert post(headers={"Origin": "https://evil.example"}, rating="5").status_code == 403
+    assert post(article="nope", rating="5").status_code == 404
+    assert post(back="//evil.example/x", rating="3").headers["location"] == "/#a-a1"
+    assert store.get_rating("john", "a1").rating == 3
+
+    post(clear="1")
+    assert store.get_rating("john", "a1") is None

@@ -12,7 +12,29 @@ RATINGS = (1, 2, 3, 4, 5)
 # r<n>: rated n, not finished. f<n>: rated n and finished. One tap carries both facts.
 LINK_SIGNALS = tuple(f"{kind}{n}" for kind in ("f", "r") for n in RATINGS)
 LEGACY_SIGNALS = ("up", "down", "done")  # links in articles delivered before ratings
-SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS
+# Why a rating was given: one optional tap after rating. Offered by how the article was rated.
+LOW_REASONS = {
+    "topic": "Not interested in the topic",
+    "thin": "Too thin, nothing in it",
+    "known": "Already knew this",
+    "broken": "Broken or incomplete",
+    "long": "Too long",
+}
+HIGH_REASONS = {
+    "more-topic": "More on this topic",
+    "more-source": "More from this source",
+    "depth": "Liked the depth",
+}
+REASONS = LOW_REASONS | HIGH_REASONS
+REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
+SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS
+
+
+def reasons_for(rating: int | None) -> dict[str, str]:
+    """The reasons that fit a rating: one list for 4 and 5, the other for the rest."""
+    return HIGH_REASONS if rating and rating >= 4 else LOW_REASONS
+
+
 _VERSION = "1"
 
 
@@ -20,6 +42,8 @@ def meaning(signal: str) -> tuple[int | None, bool | None]:
     """(rating, finished) a signal sets; None leaves that fact as it was."""
     if signal in LINK_SIGNALS:
         return int(signal[1]), signal[0] == "f"
+    if signal in REASON_SIGNALS:
+        return None, None  # a reason changes neither
     return {"up": (5, None), "down": (1, None), "done": (None, True)}[signal]
 
 

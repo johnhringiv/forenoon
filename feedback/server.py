@@ -18,7 +18,7 @@ from starlette.responses import HTMLResponse, PlainTextResponse
 from starlette.routing import Route
 
 from app.store import Store
-from app.tokens import RATINGS, TokenError, make_token, verify_token
+from app.tokens import RATINGS, REASONS, TokenError, make_token, reasons_for, verify_token
 
 RATE_LIMIT = 30  # requests
 RATE_WINDOW = 60.0  # seconds, per client address
@@ -31,7 +31,9 @@ PAGE = """<!DOCTYPE html>
 <style>body{{font-family:serif;font-size:1.6em;margin:2em 1em;text-align:center;color:#000;
 background:#fff}}p.small{{font-size:.7em}}p.rate a{{display:inline-block;border:1px solid #000;
 padding:0 .5em;margin:0 .1em;color:#000;text-decoration:none;font-weight:bold}}
-div.change{{margin-top:2.5em;font-size:.8em}}</style></head>
+div.change{{margin-top:2.5em;font-size:.8em}}div.why{{margin-top:1.5em;font-size:.8em}}
+p.why a{{display:block;border:1px solid #000;padding:.3em .5em;margin:.4em auto;max-width:16em;
+color:#000;text-decoration:none}}</style></head>
 <body><p>{message}</p><p class="small">{detail}</p>{extra}</body></html>
 """
 CHANGE_ROWS = (("f", "Finished:"), ("r", "Not finished:"))
@@ -74,7 +76,23 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
         now = store.record_feedback(claim.user_id, claim.article_id, claim.signal, "kindle-footer")
         rated = f"Rated {now.rating} of 5" if now.rating else "Not rated"
         message = f"{rated}, {'finished' if now.finished else 'not finished'}."
+        if now.reason in REASONS:
+            message += f" {REASONS[now.reason]}."
+        if claim.signal == "why-broken":
+            # A delivery problem, not a verdict on the article: it also goes to the extraction log.
+            store.record_review(claim.article_id, "bad", "reader: broken or incomplete", "reader")
         article = store.get_article(claim.article_id)
+        # One more tap says why. Always offered, never required: the rating already counts.
+        why = ""
+        if now.rating:
+            options = "".join(
+                '<a href="/f/{}">{}</a>'.format(
+                    make_token(secret, claim.user_id, claim.article_id, f"why-{key}", claim.expires),
+                    escape(label),
+                )
+                for key, label in reasons_for(now.rating).items()
+            )
+            why = f'<div class="why"><p>Why? (optional)</p><p class="why">{options}</p></div>'
         # Same user, article and expiry as the link that was tapped: a mis-tap is fixed here
         # without going back to the book.
         rows = ""
@@ -87,7 +105,7 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
                 for n in RATINGS
             )
             rows += f'<p>{label}</p><p class="rate">{links}</p>'
-        extra = f'<div class="change"><p>Change it:</p>{rows}</div>'
+        extra = f'{why}<div class="change"><p>Change it:</p>{rows}</div>'
         return _page(message, article.title if article else "", extra=extra)
 
     async def health(request: Request) -> PlainTextResponse:

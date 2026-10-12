@@ -33,7 +33,9 @@ SYSTEM = """\
 You choose articles for one reader's daily digest by reading them.
 
 You are given the reader's interests, articles they rated recently (1 = less like this,
-5 = more like this), and the text of today's best candidates as it would be delivered. When
+5 = more like this, with length, why each was picked and sometimes the reader's own reason:
+trust "reader_said", and read a low rating on a short post as a verdict on thin posts rather
+than on its source), and the text of today's best candidates as it would be delivered. When
 "truncated" is true you were shown only the beginning of a longer article. For each article
 return:
 

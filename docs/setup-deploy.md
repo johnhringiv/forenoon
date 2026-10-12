@@ -121,8 +121,8 @@ recorded and not resent, and the rest go out with the next run.
 
 ## Newsstand page (optional)
 
-A read-only page listing what was delivered, why each article was picked and how you rated
-it. It has **no login**, so publish it only where you trust everyone who can reach it: your
+A page listing what was delivered, why each article was picked and how you rated it. You
+can change ratings there; it does nothing else. It has **no login**, so publish it only where you trust everyone who can reach it: your
 LAN or a VPN such as Tailscale. Never point the Cloudflare Tunnel at it.
 
 1. In `.env`, set `WEB_LISTEN` to a port (`8081`) or, to limit it to one of the host's
