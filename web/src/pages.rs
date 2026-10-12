@@ -36,6 +36,13 @@ const MAX_DESCRIPTION_CHARS: usize = 260;
 const WORDS_PER_MINUTE: f64 = 230.0;
 const MAX_NAME: usize = 80;
 const CSRF_KEY: &str = "csrf";
+const SEEN_KEY: &str = "seen";
+// Sign-in attempts allowed in the limiter's window: from one address, from one address for
+// one name, and for one name from anywhere. The last is high enough that one address cannot
+// lock a reader out by guessing at their name.
+const ATTEMPTS_PER_CLIENT: usize = 30;
+const ATTEMPTS_PER_CLIENT_AND_NAME: usize = 10;
+const ATTEMPTS_PER_NAME: usize = 100;
 const SHOW: [(&str, &str); 3] = [("", "All"), ("rated", "Rated"), ("unrated", "Not rated")];
 
 #[derive(Clone)]
@@ -146,13 +153,30 @@ impl<S: Sync> FromRequestParts<S> for Client {
     }
 }
 
-/// The signed-in reader. The routes using this sit behind `login_required`, so a request
+/// The signed-in reader. The routes using this sit behind `require_login`, so a request
 /// without one is a bug rather than an anonymous visitor.
 fn reader(auth: &AuthSession) -> Result<User, AppError> {
     auth.user.clone().ok_or_else(|| AppError("no signed-in user on a protected page".to_owned()))
 }
 
 // sign in and out
+
+/// Sends anyone without a session to the sign-in page. A 303, so a form posted from a page
+/// whose session has ended becomes a plain visit to sign-in instead of being posted there.
+pub async fn require_login(auth: AuthSession, session: Session, request: Request, next: Next) -> Response {
+    if auth.user.is_none() {
+        return Redirect::to("/login").into_response();
+    }
+    // A session lasts 30 days from its last use, but its expiry only moves when it is saved,
+    // and it is saved only when changed. Noting the day does that once a day.
+    let today = chrono::Utc::now().date_naive().to_string();
+    if session.get::<String>(SEEN_KEY).await.ok().flatten().as_deref() != Some(today.as_str())
+        && let Err(error) = session.insert(SEEN_KEY, &today).await
+    {
+        eprintln!("error: could not extend a session: {error}");
+    }
+    next.run(request).await
+}
 
 #[derive(Template)]
 #[template(path = "login.html")]
@@ -171,6 +195,7 @@ pub async fn login_page(auth: AuthSession) -> Page {
 pub async fn login(
     State(state): State<AppState>,
     mut auth: AuthSession,
+    session: Session,
     Client(client): Client,
     headers: HeaderMap,
     Form(creds): Form<Credentials>,
@@ -181,12 +206,20 @@ pub async fn login(
     let id = creds.id.trim().to_owned();
     let failed =
         |status, error| html(status, LoginPage { id: id.chars().take(auth::MAX_ID).collect(), error: Some(error) });
-    // Both are counted on every attempt, so neither many names from one address nor one
-    // name from many addresses gets unlimited guesses.
-    let by_client = state.sign_ins.allow(&format!("client {client}"));
-    let by_name = state.sign_ins.allow(&format!("name {}", id.to_lowercase()));
-    if !by_client || !by_name {
+    // Checked in this order and stopping at the first refusal, so a blocked address cannot
+    // fill the table with names.
+    let name = id.to_lowercase();
+    let allowed = state.sign_ins.allow(&format!("client {client}"), ATTEMPTS_PER_CLIENT)
+        && state.sign_ins.allow(&format!("client {client} name {name}"), ATTEMPTS_PER_CLIENT_AND_NAME)
+        && state.sign_ins.allow(&format!("name {name}"), ATTEMPTS_PER_NAME);
+    if !allowed {
         return failed(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Try again in a few minutes.");
+    }
+    // Start from a fresh session. One that is already signed in would keep its id and its
+    // token, and `logout` alone empties it without changing the id.
+    if auth.user.is_some() {
+        auth.logout().await?;
+        session.cycle_id().await?;
     }
     let Some(user) = auth.authenticate(Credentials { id: id.clone(), password: creds.password }).await? else {
         return failed(StatusCode::UNAUTHORIZED, "Wrong name or password.");
@@ -260,6 +293,8 @@ struct NewsstandPage {
     summary: String,
     filters: Vec<Filter>,
     issues: Vec<Issue>,
+    /// Shown when there are no issues.
+    empty: &'static str,
     back: String,
     newest: Option<String>,
     older: Option<String>,
@@ -400,6 +435,7 @@ pub async fn newsstand(
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),
         filters,
         issues: Vec::new(),
+        empty: if show.is_empty() { "Nothing has been delivered yet." } else { "No articles match this filter." },
         back: page_url(show, before.as_deref()),
         newest: before.as_ref().map(|_| page_url(show, None)),
         older: None,
@@ -415,7 +451,7 @@ pub async fn newsstand(
         totals.rated
     );
     // One more than a page, to know whether an older page exists.
-    let mut times = db::issue_times(&state.pool, &user.id, before.as_deref(), ISSUES_PER_PAGE as i64 + 1).await?;
+    let mut times = db::issue_times(&state.pool, &user.id, before.as_deref(), show, ISSUES_PER_PAGE as i64 + 1).await?;
     if times.len() > ISSUES_PER_PAGE {
         times.truncate(ISSUES_PER_PAGE);
         page.older = times.last().map(|oldest| page_url(show, Some(oldest)));
@@ -423,10 +459,7 @@ pub async fn newsstand(
     let (Some(newest), Some(oldest)) = (times.first(), times.last()) else {
         return html(StatusCode::OK, page);
     };
-    for row in db::delivered(&state.pool, &user.id, oldest, newest).await? {
-        if (show == "rated" && row.rating.is_none()) || (show == "unrated" && row.rating.is_some()) {
-            continue;
-        }
+    for row in db::delivered(&state.pool, &user.id, oldest, newest, show).await? {
         match page.issues.last_mut() {
             Some(issue) if issue.stamp == row.delivered_at => issue.cards.push(card(row)),
             _ => page.issues.push(Issue {
@@ -531,8 +564,18 @@ struct AccountPage {
     notice: Option<&'static str>,
 }
 
-pub async fn account(auth: AuthSession, session: Session) -> Page {
-    let page = AccountPage { user: reader(&auth)?, csrf: csrf_token(&session).await?, error: None, notice: None };
+#[derive(Deserialize)]
+pub struct AccountQuery {
+    saved: Option<String>,
+}
+
+pub async fn account(auth: AuthSession, session: Session, Query(query): Query<AccountQuery>) -> Page {
+    let notice = match query.saved.as_deref() {
+        Some("profile") => Some("Saved."),
+        Some("password") => Some("Password changed."),
+        _ => None,
+    };
+    let page = AccountPage { user: reader(&auth)?, csrf: csrf_token(&session).await?, error: None, notice };
     html(StatusCode::OK, page)
 }
 
@@ -550,7 +593,7 @@ pub async fn set_profile(
     headers: HeaderMap,
     Form(form): Form<ProfileForm>,
 ) -> Page {
-    let mut user = reader(&auth)?;
+    let user = reader(&auth)?;
     if !allowed(&headers, &session, &form.csrf).await? {
         return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
     }
@@ -567,8 +610,8 @@ pub async fn set_profile(
         return html(StatusCode::BAD_REQUEST, AccountPage { user, csrf, error: Some(error), notice: None });
     }
     db::set_profile(&state.pool, &user.id, name, timezone).await?;
-    (user.name, user.timezone) = (name.to_owned(), timezone.to_owned());
-    html(StatusCode::OK, AccountPage { user, csrf, error: None, notice: Some("Saved.") })
+    // A redirect, so reloading the result does not post the form again.
+    Ok(Redirect::to("/account?saved=profile").into_response())
 }
 
 #[derive(Deserialize)]
@@ -592,7 +635,7 @@ pub async fn set_password(
     }
     let csrf = form.csrf;
     // Guessing the current password here is limited like guessing it at sign-in.
-    let problem = if !state.sign_ins.allow(&format!("name {}", user.id.to_lowercase())) {
+    let problem = if !state.sign_ins.allow(&format!("change {}", user.id), ATTEMPTS_PER_CLIENT_AND_NAME) {
         Some("Too many attempts. Try again in a few minutes.".to_owned())
     } else if form.current.chars().count() > auth::MAX_PASSWORD
         || !auth::verify_password(form.current, user.password_hash.clone()).await?
@@ -611,8 +654,7 @@ pub async fn set_password(
     // Sessions are tied to the hash, so every browser is now signed out; sign this one back in.
     let user = User { password_hash: hash, ..user };
     auth.login(&user).await?;
-    let csrf = csrf_token(&session).await.unwrap_or(csrf);
-    html(StatusCode::OK, AccountPage { user, csrf, error: None, notice: Some("Password changed.") })
+    Ok(Redirect::to("/account?saved=password").into_response())
 }
 
 pub async fn health() -> &'static str {

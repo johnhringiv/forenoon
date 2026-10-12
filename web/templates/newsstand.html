@@ -5,12 +5,12 @@
 <div class="bar">
 {% for filter in filters %}{% if filter.current %}<b>{{ filter.label }}</b>{% else %}<a href="{{ filter.href }}">{{ filter.label }}</a>{% endif %}
 {% endfor %}
-<span class="who">{{ name }} <a href="/account">Account</a>
-<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></span>
+<div class="who">{{ name }} <a href="/account">Account</a>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div>
 </div>
 {% endblock %}
 {% block main %}
-{% if issues.is_empty() %}<p class="empty">Nothing has been delivered yet.</p>{% endif %}
+{% if issues.is_empty() %}<p class="empty">{{ empty }}</p>{% endif %}
 {% for issue in issues %}
 <section><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
 <div class="grid">

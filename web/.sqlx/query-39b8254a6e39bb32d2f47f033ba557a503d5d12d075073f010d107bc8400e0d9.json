@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT d.delivered_at, a.id AS \"id!\", a.url, a.source, a.title, a.author, a.word_count,\n           a.image_url, a.description, s.policy AS \"policy?\", s.score AS \"score?: f64\",\n           s.reason AS \"picked?\", s.rank AS \"rank?: i64\", s.explore AS \"explore?: bool\",\n           r.rating AS \"rating?: i64\", r.finished AS \"finished?: bool\",\n           COALESCE(r.reason, '') AS \"why!: String\"\n           FROM deliveries d JOIN articles a ON a.id = d.article_id\n           LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id\n           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3\n           ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title",
+  "query": "SELECT d.delivered_at, a.id AS \"id!\", a.url, a.source, a.title, a.author, a.word_count,\n           a.image_url, a.description, s.policy AS \"policy?\", s.score AS \"score?: f64\",\n           s.reason AS \"picked?\", s.rank AS \"rank?: i64\", s.explore AS \"explore?: bool\",\n           r.rating AS \"rating?: i64\", r.finished AS \"finished?: bool\",\n           COALESCE(r.reason, '') AS \"why!: String\"\n           FROM deliveries d JOIN articles a ON a.id = d.article_id\n           LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id\n           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3\n           AND (?4 = '' OR (?4 = 'rated') = (r.rating IS NOT NULL))\n           ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title",
   "describe": {
     "columns": [
       {
@@ -90,7 +90,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false,
@@ -112,5 +112,5 @@
       null
     ]
   },
-  "hash": "53f90941b8d0780ae3980b314a178c2e85f9595bd5a3ddf93585b7ef12b24c27"
+  "hash": "39b8254a6e39bb32d2f47f033ba557a503d5d12d075073f010d107bc8400e0d9"
 }

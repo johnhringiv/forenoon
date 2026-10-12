@@ -145,6 +145,13 @@ if [ "${ONLY:-}" = "web" ]; then
     start_web
     sleep 3
     docker ps --filter name=forenoon-web --format '{{.Names}}: {{.Status}}'
+    # Fail loudly when it should be up and is not, so a scheduler's failure notice fires.
+    if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ] &&
+        [ "$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
+        echo "forenoon-web is not running"
+        docker logs forenoon-web 2>&1 | tail -5
+        exit 1
+    fi
     exit 0
 fi
 

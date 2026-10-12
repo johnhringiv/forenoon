@@ -333,7 +333,8 @@ database with the pipeline.
   (`forenoon-web add-user <id>`); there is no sign-up page. The first account is an admin,
   later ones readers; the role is stored but grants nothing yet.
 - **Passwords and sessions.** Passwords are stored as Argon2id hashes, at least 10 characters.
-  Sign-in is limited to 10 attempts in 5 minutes per client address and per account name.
+  Sign-in is limited, in any 5 minutes, to 30 attempts from one client address, 10 from one
+  address for one account name, and 100 for one name from anywhere.
   A session lasts 30 days from its last use, in an `HttpOnly`, `SameSite=Lax` cookie.
   Changing a password signs out every other browser.
 - **Newsstand.** Delivered articles grouped by issue, newest first, 14 issues to a page, in

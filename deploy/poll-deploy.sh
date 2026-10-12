@@ -90,14 +90,19 @@ if [ -n "$RECIPES_IMAGE" ] && docker pull -q "$RECIPES_IMAGE" >/dev/null 2>&1; t
     fi
 fi
 
-# The web pages image, the same way.
+# The web pages image, the same way. A failed pull is logged: a newly published package is
+# private until made public, and the container is then neither updated nor restarted.
 web_changed=false
-if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ] && docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
-    web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
-    web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
-    web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
-    if [ "$web_latest" != "$web_running" ] || [ "$web_up" != "true" ]; then
-        web_changed=true
+if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ]; then
+    if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
+        web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
+        web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
+        web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
+        if [ "$web_latest" != "$web_running" ] || [ "$web_up" != "true" ]; then
+            web_changed=true
+        fi
+    else
+        echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); web container left as it is"
     fi
 fi
 

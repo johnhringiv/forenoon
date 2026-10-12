@@ -114,19 +114,24 @@ pub async fn totals(pool: &SqlitePool, user: &str) -> Result<Totals, sqlx::Error
     .await
 }
 
-/// Delivery timestamps, newest first: one per book sent.
+/// Delivery timestamps, newest first: one per book sent that has an article matching `show`
+/// ("" for all, "rated" or "unrated").
 pub async fn issue_times(
     pool: &SqlitePool,
     user: &str,
     before: Option<&str>,
+    show: &str,
     limit: i64,
 ) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar!(
-        r#"SELECT DISTINCT delivered_at FROM deliveries
-           WHERE user_id = ?1 AND (?2 IS NULL OR delivered_at < ?2)
-           ORDER BY delivered_at DESC LIMIT ?3"#,
+        r#"SELECT DISTINCT d.delivered_at AS "delivered_at!" FROM deliveries d
+           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
+           WHERE d.user_id = ?1 AND (?2 IS NULL OR d.delivered_at < ?2)
+           AND (?3 = '' OR (?3 = 'rated') = (r.rating IS NOT NULL))
+           ORDER BY d.delivered_at DESC LIMIT ?4"#,
         user,
         before,
+        show,
         limit
     )
     .fetch_all(pool)
@@ -153,13 +158,14 @@ pub struct Delivered {
     pub why: String,
 }
 
-/// This reader's delivered articles between two delivery timestamps, with why each was picked
-/// and its rating.
+/// This reader's delivered articles between two delivery timestamps that match `show`, with
+/// why each was picked and its rating.
 pub async fn delivered(
     pool: &SqlitePool,
     user: &str,
     oldest: &str,
     newest: &str,
+    show: &str,
 ) -> Result<Vec<Delivered>, sqlx::Error> {
     sqlx::query_as!(
         Delivered,
@@ -172,10 +178,12 @@ pub async fn delivered(
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
            WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3
+           AND (?4 = '' OR (?4 = 'rated') = (r.rating IS NOT NULL))
            ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title"#,
         user,
         oldest,
-        newest
+        newest,
+        show
     )
     .fetch_all(pool)
     .await

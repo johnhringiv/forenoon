@@ -28,6 +28,7 @@ struct Reply {
     status: StatusCode,
     location: String,
     csp: String,
+    set_cookie: String,
     text: String,
 }
 
@@ -91,7 +92,7 @@ impl Browser {
         let (status, location, csp) =
             (response.status(), text(header::LOCATION), text(header::CONTENT_SECURITY_POLICY));
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        Reply { status, location, csp, text: String::from_utf8(body.to_vec()).unwrap() }
+        Reply { status, location, csp, set_cookie: set, text: String::from_utf8(body.to_vec()).unwrap() }
     }
 
     async fn get(&mut self, site: &Site, path: &str) -> Reply {
@@ -128,12 +129,12 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
     // Anonymous: every page and every change leads to the sign-in page; only health is open.
     for path in ["/", "/account"] {
         let reply = browser.get(&site, path).await;
-        assert_eq!(reply.status, StatusCode::TEMPORARY_REDIRECT, "{path}");
-        assert!(reply.location.starts_with("/login"), "{}", reply.location);
+        assert!(reply.status == StatusCode::SEE_OTHER && reply.location == "/login", "{path}");
     }
     for path in ["/rate", "/logout", "/account/password", "/account/profile"] {
         let reply = browser.post(&site, path, &[("csrf", "x"), ("article", "a1")]).await;
-        assert!(reply.status.is_redirection() && reply.location.starts_with("/login"), "{path}");
+        // A 303, not a 307: the browser must not re-post the form to the sign-in page.
+        assert!(reply.status == StatusCode::SEE_OTHER && reply.location == "/login", "{path}");
     }
     assert_eq!(browser.get(&site, "/healthz").await.text, "ok");
     let page = browser.get(&site, "/login").await;
@@ -155,6 +156,9 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
     assert!(reply.status == StatusCode::SEE_OTHER && reply.location == "/");
     let page = browser.get(&site, "/").await;
     assert!(page.status == StatusCode::OK && page.text.contains("Nothing has been delivered yet."));
+    // The day's first visit saves the session, which is what moves its expiry; later ones do not.
+    assert!(page.set_cookie.contains("Max-Age=2592000"), "{}", page.set_cookie);
+    assert!(browser.get(&site, "/").await.set_cookie.is_empty());
     assert_eq!(browser.post(&site, "/logout", &[("csrf", "wrong")]).await.status, StatusCode::FORBIDDEN);
     assert_eq!(browser.post(&site, "/logout", &[("csrf", &page.csrf())]).await.location, "/login");
     assert!(browser.get(&site, "/").await.status.is_redirection());
@@ -238,8 +242,14 @@ async fn newsstand_shows_only_the_readers_own_deliveries_as_untrusted_text() {
     assert_eq!(browser.get(&site, "/?before=nonsense&show=nonsense").await.status, StatusCode::OK);
 
     // Another reader sees only their own, whatever the address says.
+    // Signing in over a session that is already signed in starts a new one.
     let mut other = Browser::default();
+    other.sign_in(&site, "john").await;
+    let johns = other.cookie.clone();
     other.sign_in(&site, "mary").await;
+    assert!(other.cookie.is_some() && other.cookie != johns);
+    let mut stale = Browser { cookie: johns };
+    assert!(stale.get(&site, "/").await.status.is_redirection(), "the old session id must be dead");
     let page = other.get(&site, "/?user=john").await;
     assert!(page.text.contains("1 article in 1 issue. 0 rated.") && page.text.contains("Mary&#39;s article"));
     assert!(!page.text.contains("Post 29"));
@@ -267,6 +277,8 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     let page = browser.get(&site, "/").await;
     let csrf = page.csrf();
     assert!(page.csp.contains("form-action 'self'"));
+    let none_yet = browser.get(&site, "/?show=rated").await.text;
+    assert!(none_yet.contains("No articles match this filter.") && !none_yet.contains("Older issues"));
     let rating = |article: &'static str| db::get_rating(pool, "john", article);
     let stored = |rating, finished, reason: &str| Some(db::Rating { rating, finished, reason: reason.to_owned() });
 
@@ -343,7 +355,10 @@ async fn account_page_changes_the_profile_and_the_password() {
     let bad = [("csrf", csrf.as_str()), ("name", "John R"), ("timezone", "Mars/Olympus")];
     assert_eq!(browser.post(&site, "/account/profile", &bad).await.status, StatusCode::BAD_REQUEST);
     let good = [("csrf", csrf.as_str()), ("name", "John R"), ("timezone", "Europe/London")];
-    assert!(browser.post(&site, "/account/profile", &good).await.text.contains("Saved."));
+    // A change answers with a redirect, so reloading the result does not post the form again.
+    let saved = browser.post(&site, "/account/profile", &good).await;
+    assert!(saved.status == StatusCode::SEE_OTHER && saved.location == "/account?saved=profile");
+    assert!(browser.get(&site, &saved.location).await.text.contains("Saved."));
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.name.as_str(), user.timezone.as_str()), ("John R", "Europe/London"));
     let no_token = [("csrf", "wrong"), ("name", "X"), ("timezone", "UTC")];
@@ -374,7 +389,9 @@ async fn account_page_changes_the_profile_and_the_password() {
     }
     let form = change(PASSWORD, new, new);
     let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
-    assert!(browser.post(&site, "/account/password", &form).await.text.contains("Password changed."));
+    let changed = browser.post(&site, "/account/password", &form).await;
+    assert_eq!(changed.location, "/account?saved=password");
+    assert!(browser.get(&site, &changed.location).await.text.contains("Password changed."));
 
     assert_eq!(browser.get(&site, "/").await.status, StatusCode::OK); // this browser stays signed in
     assert!(second.get(&site, "/").await.status.is_redirection()); // the other does not

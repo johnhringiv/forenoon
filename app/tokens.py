@@ -12,6 +12,8 @@ RATINGS = (1, 2, 3, 4, 5)
 # r<n>: rated n, not finished. f<n>: rated n and finished. One tap carries both facts.
 LINK_SIGNALS = tuple(f"{kind}{n}" for kind in ("f", "r") for n in RATINGS)
 LEGACY_SIGNALS = ("up", "down", "done")  # links in articles delivered before ratings
+# The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
+# not in SIGNALS; anything replaying feedback_events must handle it.
 # Why a rating was given: one optional tap after rating. Offered by how the article was rated.
 LOW_REASONS = {
     "topic": "Not interested in the topic",
