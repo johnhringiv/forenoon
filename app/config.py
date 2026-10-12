@@ -219,9 +219,9 @@ def load_sources(path: Path) -> tuple[Source, ...]:
 def load_config(path: Path, sources_path: Path | None = None) -> Config:
     raw = _load_yaml(path)
     base = path.parent
-    users = tuple(_build(User, u, f"{path}: user #{i}") for i, u in enumerate(raw.pop("users", None) or []))
-    if len({u.id for u in users}) != len(users):
-        raise ConfigError(f"{path}: user ids must be unique")
+    # Readers live in the database now (see Store.readers); a `users` list left in an old
+    # file is ignored.
+    raw.pop("users", None)
     smtp = _build(Smtp, raw.pop("smtp", None) or {}, f"{path}: smtp")
     images = _build(Images, raw.pop("images", None) or {}, f"{path}: images")
     alerts = _build(Alerts, raw.pop("alerts", None) or {}, f"{path}: alerts")
@@ -241,7 +241,6 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
         {
             **raw,
             "data_dir": data_dir,
-            "users": users,
             "smtp": smtp,
             "images": images,
             "alerts": alerts,

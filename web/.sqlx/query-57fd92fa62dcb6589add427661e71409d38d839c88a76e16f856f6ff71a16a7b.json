@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, password_hash, role, timezone FROM users WHERE id = ?",
+  "query": "SELECT id AS \"id!\", name, role, timezone, created_at, kindle_addresses FROM users ORDER BY created_at",
   "describe": {
     "columns": [
       {
@@ -14,25 +14,31 @@
         "type_info": "Text"
       },
       {
-        "name": "password_hash",
+        "name": "role",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "role",
+        "name": "timezone",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "timezone",
+        "name": "created_at",
         "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "kindle_addresses",
+        "ordinal": 5,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -40,5 +46,5 @@
       false
     ]
   },
-  "hash": "5246ad5809a26c0431c29e888288cbe000054a46f2a88ff77ec458c09101a623"
+  "hash": "57fd92fa62dcb6589add427661e71409d38d839c88a76e16f856f6ff71a16a7b"
 }

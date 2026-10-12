@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .config import User
 from .tokens import REASON_SIGNALS, meaning, reasons_for
 
 SCHEMA = """
@@ -159,6 +160,26 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+
+    # readers (owned and edited by the web app; see web/migrations)
+
+    def readers(self) -> tuple[User, ...]:
+        """Every reader with their delivery settings; none until the web app has made an account."""
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
+            return ()
+        rows = self.db.execute(
+            "SELECT id, name, kindle_addresses, daily_stories, interests FROM users ORDER BY created_at, id"
+        ).fetchall()
+        return tuple(
+            User(
+                id=row["id"],
+                name=row["name"],
+                kindle_addresses=tuple(line.strip() for line in row["kindle_addresses"].splitlines() if line.strip()),
+                daily_cap=row["daily_stories"],
+                interests=row["interests"],
+            )
+            for row in rows
+        )
 
     # articles
 

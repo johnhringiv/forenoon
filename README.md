@@ -29,11 +29,13 @@ cp deploy/sources.example.yaml run/sources.yaml
 export FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
 
 uv run forenoon --config run/config.yaml report               # per-source extraction report
+# a reader to deliver to; asks for a password for the web pages
+(cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --kindle you@kindle.com)
 uv run forenoon --config run/config.yaml run --dry-run --out run/out   # build EPUBs, send nothing
 uv run forenoon golden --out run/out                           # rendering test file for the device
 ```
 
-Then fill in `users`, `smtp` and `public_base_url` in `run/config.yaml`, set
+Then fill in `smtp` and `public_base_url` in `run/config.yaml`, set
 `FORENOON_SMTP_PASSWORD`, and run `forenoon run` to deliver for real.
 
 | Command                                            | What it does                                                                                                               |

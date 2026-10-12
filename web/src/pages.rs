@@ -35,6 +35,8 @@ const ISSUES_PER_PAGE: usize = 14;
 const MAX_DESCRIPTION_CHARS: usize = 260;
 const WORDS_PER_MINUTE: f64 = 230.0;
 const MAX_NAME: usize = 80;
+const MAX_INTERESTS: usize = 4000;
+const MAX_DAILY_STORIES: i64 = 50;
 const CSRF_KEY: &str = "csrf";
 const SEEN_KEY: &str = "seen";
 // Sign-in attempts allowed in the limiter's window: from one address, from one address for
@@ -571,7 +573,7 @@ pub struct AccountQuery {
 
 pub async fn account(auth: AuthSession, session: Session, Query(query): Query<AccountQuery>) -> Page {
     let notice = match query.saved.as_deref() {
-        Some("profile") => Some("Saved."),
+        Some("profile") | Some("reading") => Some("Saved."),
         Some("password") => Some("Password changed."),
         _ => None,
     };
@@ -612,6 +614,51 @@ pub async fn set_profile(
     db::set_profile(&state.pool, &user.id, name, timezone).await?;
     // A redirect, so reloading the result does not post the form again.
     Ok(Redirect::to("/account?saved=profile").into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ReadingForm {
+    csrf: String,
+    interests: String,
+    daily_stories: String,
+    /// Sent only by an admin's form; anyone else's is ignored.
+    kindle_addresses: Option<String>,
+}
+
+/// What the pipeline should pick for this reader, how much, and (admins only) where it is sent.
+pub async fn set_reading(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<ReadingForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let interests = form.interests.replace("\r\n", "\n");
+    let interests = interests.trim();
+    let daily = form.daily_stories.trim().parse::<i64>().ok().filter(|n| (1..=MAX_DAILY_STORIES).contains(n));
+    // The addresses decide where content is emailed, so only an admin may change them.
+    let addresses = form.kindle_addresses.filter(|_| user.is_admin()).map(|text| auth::kindle_addresses(&text));
+    let problem = if interests.chars().count() > MAX_INTERESTS {
+        Some(format!("Interests can be at most {MAX_INTERESTS} characters."))
+    } else if daily.is_none() {
+        Some(format!("Stories a day must be a number from 1 to {MAX_DAILY_STORIES}."))
+    } else if let Some(Err(problem)) = &addresses {
+        Some(problem.clone())
+    } else {
+        None
+    };
+    if let (None, Some(daily)) = (&problem, daily) {
+        db::set_reading(&state.pool, &user.id, interests, daily).await?;
+        if let Some(Ok(addresses)) = addresses {
+            db::set_kindle_addresses(&state.pool, &user.id, &addresses.join("\n")).await?;
+        }
+        return Ok(Redirect::to("/account?saved=reading").into_response());
+    }
+    html(StatusCode::BAD_REQUEST, AccountPage { user, csrf: form.csrf, error: problem, notice: None })
 }
 
 #[derive(Deserialize)]

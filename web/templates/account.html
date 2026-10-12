@@ -16,6 +16,21 @@
 <p class="hint">A zone name such as America/New_York or Europe/London. Issue dates and times are shown in it.</p>
 <button>Save</button>
 </form>
+<form class="sheet wide" method="post" action="/account/reading">
+<h2>Reading</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Interests <textarea name="interests" rows="10" maxlength="4000">{{ user.interests }}</textarea></label>
+<p class="hint">What you want to read, in your own words. The model that picks your articles is given this. It applies from the next run.</p>
+<label>Stories a day <input name="daily_stories" type="number" min="1" max="50" value="{{ user.daily_stories }}" required></label>
+<p class="hint">A target, not a hard limit. A story is one article, or a few on one subject.</p>
+{% if user.is_admin() %}
+<label>Kindle addresses <textarea name="kindle_addresses" rows="2" maxlength="1300">{{ user.kindle_addresses }}</textarea></label>
+<p class="hint">One per line. Each must have this install's sender on its approved list at Amazon.</p>
+{% else %}
+<p class="hint">Sent to: {% if user.kindle_addresses.is_empty() %}no address yet{% else %}{{ user.kindle_addresses }}{% endif %}. An admin sets this.</p>
+{% endif %}
+<button>Save</button>
+</form>
 <form class="sheet" method="post" action="/account/password">
 <h2>Password</h2>
 <input type="hidden" name="csrf" value="{{ csrf }}">

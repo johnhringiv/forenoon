@@ -18,6 +18,38 @@ pub const MIN_PASSWORD: usize = 10;
 pub const MAX_PASSWORD: usize = 256;
 pub const MAX_ID: usize = 64;
 pub const ROLES: [&str; 2] = ["admin", "reader"];
+pub const MAX_KINDLE_ADDRESSES: usize = 5;
+
+impl User {
+    pub fn is_admin(&self) -> bool {
+        self.role == "admin"
+    }
+}
+
+/// The addresses in a block of text, one per line, or what is wrong with it.
+pub fn kindle_addresses(text: &str) -> Result<Vec<String>, String> {
+    let addresses: Vec<String> =
+        text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
+    if addresses.len() > MAX_KINDLE_ADDRESSES {
+        return Err(format!("At most {MAX_KINDLE_ADDRESSES} Kindle addresses."));
+    }
+    for address in &addresses {
+        let shaped = address.split_once('@').is_some_and(|(name, host)| {
+            !name.is_empty()
+                && host.contains('.')
+                && !host.starts_with('.')
+                && !host.ends_with('.')
+                && !host.contains('@')
+        });
+        if !shaped
+            || address.len() > 254
+            || address.chars().any(|c| c.is_whitespace() || c.is_control() || ",;<>\"".contains(c))
+        {
+            return Err(format!("{address} is not an email address."));
+        }
+    }
+    Ok(addresses)
+}
 
 #[derive(Clone, sqlx::FromRow)]
 pub struct User {
@@ -26,6 +58,10 @@ pub struct User {
     pub password_hash: String,
     pub role: String,
     pub timezone: String,
+    /// Where this reader's books are sent, one address per line.
+    pub kindle_addresses: String,
+    pub daily_stories: i64,
+    pub interests: String,
 }
 
 // Written by hand so that a logged user never includes the password hash.
@@ -131,9 +167,14 @@ impl Backend {
 }
 
 pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx::Error> {
-    sqlx::query_as!(User, r#"SELECT id AS "id!", name, password_hash, role, timezone FROM users WHERE id = ?"#, id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as!(
+        User,
+        r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests
+           FROM users WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(pool)
+    .await
 }
 
 impl AuthnBackend for Backend {

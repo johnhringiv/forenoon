@@ -78,18 +78,36 @@ pub async fn set_profile(pool: &SqlitePool, id: &str, name: &str, timezone: &str
     Ok(())
 }
 
+/// The settings the pipeline reads for this reader.
+pub async fn set_reading(pool: &SqlitePool, id: &str, interests: &str, daily_stories: i64) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE users SET interests = ?, daily_stories = ? WHERE id = ?", interests, daily_stories, id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Where the reader's books are sent; `addresses` is one per line.
+pub async fn set_kindle_addresses(pool: &SqlitePool, id: &str, addresses: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE users SET kindle_addresses = ? WHERE id = ?", addresses, id).execute(pool).await?;
+    Ok(())
+}
+
 pub struct UserLine {
     pub id: String,
     pub name: String,
     pub role: String,
     pub timezone: String,
     pub created_at: String,
+    pub kindle_addresses: String,
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserLine>, sqlx::Error> {
-    sqlx::query_as!(UserLine, r#"SELECT id AS "id!", name, role, timezone, created_at FROM users ORDER BY created_at"#)
-        .fetch_all(pool)
-        .await
+    sqlx::query_as!(
+        UserLine,
+        r#"SELECT id AS "id!", name, role, timezone, created_at, kindle_addresses FROM users ORDER BY created_at"#
+    )
+    .fetch_all(pool)
+    .await
 }
 
 // the newsstand
