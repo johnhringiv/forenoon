@@ -28,6 +28,8 @@ from .images import embed_images
 from .llm import Backend
 from .rank import LINK_WORDS, POLICY, Ranking, group_stories, subject_links
 from .rank import rank as rank_candidates
+from .read import Reading, Verdict
+from .read import read as read_candidates
 from .recipes import read_recipe
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
@@ -45,6 +47,8 @@ POINTER_MAX_WORDS = 150
 MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links matter
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
+# Never followed as an article's subject: project and package pages, and reference works.
+NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
 
 
 @dataclass
@@ -146,8 +150,8 @@ class RunReport:
         return path
 
 
-def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> tuple[Extracted, Article | None, int]:
-    """Fetch, extract and prepare one item. Never raises for bad content.
+def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> Extracted:
+    """Fetch and extract one item. Never raises for bad content.
 
     With `keep`, what it was extracted from is saved for `forenoon replay`.
     """
@@ -160,10 +164,15 @@ def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> t
     if keep and cfg.keep_pages_days > 0 and (page_html or item.feed_html):
         archive.save(cfg.pages_dir, item, page_html)
     result = extract(item.url, page_html, item.feed_html, item.source.extract, fetch_error)
+    if result.body is None and fetch_error:
+        result.status = "error"  # transient: retried on later runs
+    return result
+
+
+def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> tuple[Article | None, int]:
+    """The article as it goes in a book, with its images fetched; None when nothing was extracted."""
     if result.body is None:
-        if fetch_error:
-            result.status = "error"  # transient: retried on later runs
-        return result, None, 0
+        return None, 0
     assets, dropped = embed_images(result.body, fetcher, cfg.images)
     article = Article(
         id=item.id,
@@ -177,6 +186,12 @@ def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> t
         assets=assets,
         discussion_url=item.discussion_url,
     )
+    return article, dropped
+
+
+def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> tuple[Extracted, Article | None, int]:
+    result = _extract(item, fetcher, cfg, keep)
+    article, dropped = _assemble(item, result, fetcher, cfg)
     return result, article, dropped
 
 
@@ -222,6 +237,8 @@ def _linked_items(item: Item, body, store: Store, user: User, taken: set[str]) -
             continue
         host = site_host(url)
         if host == home or host.endswith("." + home) or home.endswith("." + host):
+            continue
+        if any(host == skip or host.endswith("." + skip) for skip in NOT_A_SUBJECT):
             continue
         linked = article_id(url)
         if linked in out or linked in taken or store.is_delivered(user.id, linked):
@@ -456,10 +473,64 @@ def run(
     found_ids = {item.id for item in found}
     found_ready = 0
     taken: set[str] = set()
+    today = day_start.astimezone(UTC).isoformat(timespec="seconds")
+
+    def record_found(item: Item) -> None:
+        # Feed items are recorded when their feed is read; a find only once it is tried.
+        published = item.published.isoformat() if item.published else None
+        store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
+
+    def outbound(item: Item, body) -> list[_Link]:
+        if item.source.type != "rss" or item.id in found_ids:
+            return []
+        return _linked_items(item, body, store, user, taken)[:MAX_LINKS_SHOWN]
+
+    # The reading pass: the best-ranked candidates are extracted now and read by the model,
+    # whose scores decide the final order. What it read is reused when the article is built.
+    extracted: dict[str, Extracted] = {}
+    links_of: dict[str, list[_Link]] = {}
+    verdicts: dict[str, Verdict] = {}
+    if cfg.llm.enabled and backend is not None and ranking.choices and cfg.llm.read_candidates > 0:
+        pool = ranking.order[: cfg.llm.read_candidates]
+        readings = []
+        for item in pool:
+            if item.id in found_ids:
+                record_found(item)
+            result = extracted[item.id] = _extract(item, fetcher, cfg, keep=not dry_run)
+            if result.body is None:
+                continue
+            links_of[item.id] = outbound(item, result.body)
+            words = result.body.text_content().split()
+            readings.append(
+                Reading(
+                    item.id,
+                    item.title,
+                    item.source.name,
+                    len(words),
+                    " ".join(words[: cfg.llm.read_words]),
+                    [{"site": k.item.site, "text": k.text, "context": k.context} for k in links_of[item.id]],
+                )
+            )
+        verdicts = read_candidates(cfg.llm, backend, store, user, readings, today)
+        if verdicts:
+            # Read articles go first, best first; the rest keep the order ranking gave them.
+            read_first = sorted((i for i in pool if i.id in verdicts), key=lambda i: -verdicts[i.id].score)
+            unread = [i for i in ranking.order if i.id not in verdicts]
+            explored = next((i for i in read_first if ranking.choices[i.id].explore), None)
+            if explored is not None:
+                # The exploration pick keeps the day's last slot whatever its score.
+                read_first.remove(explored)
+                read_first.insert(max(0, remaining - len(pinned) - 1), explored)
+            ranking.order = read_first + unread
+            for item_id, verdict in verdicts.items():
+                ranking.choices[item_id] = replace(ranking.choices[item_id], score=verdict.score, reason=verdict.reason)
+            report.ranking += f", {len(verdicts)} read in full"
+            queue = pinned + ranking.order
 
     def prepare(item: Item, reason: str = "") -> _Prepared | None:
         """Extract one item and check it fits a message; None when it cannot be delivered."""
-        result, article, dropped = _process(item, fetcher, cfg, keep=not dry_run)
+        result = extracted.pop(item.id, None) or _extract(item, fetcher, cfg, keep=not dry_run)
+        article, dropped = _assemble(item, result, fetcher, cfg)
         if not item.title:
             item = replace(item, title=article.title if article else item.url)
             store.set_title(item.id, item.title)
@@ -468,7 +539,15 @@ def run(
         store.set_extraction(item.id, result.status, result.reason, result.word_count)
         store.set_preview(item.id, result.image_url, result.description)
         entry = _item_report(item, result, dropped)
+        verdict = verdicts.get(item.id)
+        if verdict:
+            entry.review = ": ".join(filter(None, [verdict.complete, verdict.problem]))
+            report.reviews[verdict.complete] = report.reviews.get(verdict.complete, 0) + 1
         reports[item.source.name].items.append(entry)
+        if verdict and verdict.complete == "bad":
+            # What the model read is what would be sent: not worth a slot today.
+            entry.reason = "; ".join(filter(None, [entry.reason, "held back: the model judged it not the article"]))
+            return None
         if article is None:
             if result.status == "error":
                 leftover.add(item.source.name)
@@ -502,9 +581,7 @@ def run(
             leftover.add(item.source.name)
             continue
         if is_found:
-            # Feed items are recorded when their feed is read; a find only once it is tried.
-            published = item.published.isoformat() if item.published else None
-            store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
+            record_found(item)
         taken.add(item.id)
         choice = ranking.choices.get(item.id)
         reason = choice.reason if choice else ""
@@ -520,15 +597,14 @@ def run(
             if len(story.members) >= cfg.max_story_entries:
                 continue  # still marked taken: the story has had its share of the day
             if other.id in found_ids:
-                published = other.published.isoformat() if other.published else None
-                store.upsert_article(other.id, other.url, other.source.name, other.title, other.author, published)
+                record_found(other)
             choice = ranking.choices.get(other.id)
             extra = prepare(other, choice.reason if choice else "")
             if extra is not None:
                 extra.article.continues = lead.article.title
                 story.members.append(extra)
-        if item.source.type == "rss" and not is_found:
-            story.links = _linked_items(item, lead.article.body, store, user, taken)[:MAX_LINKS_SHOWN]
+        # The same links, in the same order, as the model was shown when it read the article.
+        story.links = links_of[item.id] if item.id in links_of else outbound(item, lead.article.body)
         picked.append(story)
         stories += 1
         found_ready += is_found
@@ -544,16 +620,17 @@ def run(
             "links": [{"site": link.item.site, "text": link.text, "context": link.context} for link in story.links],
         }
         for story in picked
-        if story.links
+        if story.links and story.id not in verdicts
     ]
-    today = day_start.astimezone(UTC).isoformat(timespec="seconds")
     subjects = subject_links(cfg.llm, backend, store, asked, today) if cfg.llm.enabled else None
     for story in picked:
         if not story.links:
             continue
         lead = story.members[0]
         pointer = lead.result.word_count < POINTER_MAX_WORDS
-        if subjects is not None:
+        if story.id in verdicts:
+            wanted = [story.links[n - 1].item for n in verdicts[story.id].links] if cfg.llm.follow_links else []
+        elif subjects is not None:
             wanted = [story.links[n - 1].item for n in subjects.get(story.id, [])]
         elif pointer:
             wanted = [link.item for link in story.links[:MAX_LINKS_TRIED]]
@@ -603,10 +680,10 @@ def run(
             checked.append((member.article, member.entry))
 
     if cfg.llm.enabled:
-        reviews = review_extractions(
-            cfg.llm, backend, store, [a for a, _ in checked], day_start.astimezone(UTC).isoformat(timespec="seconds")
-        )
-        for article, entry in checked:
+        # Articles the reading pass did not see (pinned ones, and pages brought in by a story).
+        unread = [(article, entry) for article, entry in checked if article.id not in verdicts]
+        reviews = review_extractions(cfg.llm, backend, store, [a for a, _ in unread], today)
+        for article, entry in unread:
             verdict = reviews.get(article.id)
             if verdict:
                 entry.review = ": ".join(filter(None, [verdict.verdict, verdict.problem]))

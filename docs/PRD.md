@@ -168,7 +168,7 @@ Ratings influence delivery only when model ranking is on.
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
-  checked against `llm.daily_token_cap` (300,000); over the cap, the call is not made and
+  checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
   later batches are skipped. Every call is logged with model, input and output tokens and outcome;
   `forenoon usage` prints the log, today's total and this month's, each with an estimated cost
   from the prices in `llm.input_price` and `llm.output_price` (the API does not report
@@ -202,8 +202,10 @@ Ratings influence delivery only when model ranking is on.
 
 ## 7c. Extraction check by the model (on when ranking is on; log only)
 
-- After extraction, one call per run sends the model each article that is about to be
-  delivered: title, word count, section headings, and the first 120 and last 80 words.
+- This covers the articles the reading pass (section 7f) did not see: pinned articles and
+  pages brought in by a story. After extraction, one call per run sends the model each such
+  article that is about to be delivered: title, word count, section headings, and the first
+  120 and last 80 words.
 - It answers `ok`, `suspect` or `bad` per article with a problem of at most 20 words, for
   example a paywall notice, a teaser, an ending cut short, or menu text.
 - Verdicts are stored and shown in the run report; `forenoon checks` lists the articles it
@@ -259,6 +261,32 @@ a day's book is therefore a target, not a limit.
   and carry a "More on: …" line. The contents page gives the count of stories and articles. Each article keeps its own rating links.
 - **Recorded.** Each delivery stores the story it belonged to. An article brought in by a
   story is recorded with the choice (score, reason) of the candidate that brought it.
+
+## 7f. The reading pass (on when ranking is on)
+
+Ranking judges a title and an opening. Before the day is chosen, the model also reads the
+best candidates in full.
+
+- The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted. Their
+  text, up to `llm.read_words` (2,500) words each, goes to the model about ten articles to a
+  call, with the reader's interests and ratings. Recipe articles need no fetch.
+- Per article the model returns a score from 0 to 10, a reason, whether the text is a
+  complete article (`ok`, `suspect`, `bad`), and which of its links are its subject (section
+  7e, in place of the separate link call).
+- The read articles are tried first, best score first; candidates that were not read follow
+  in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
+  reading replace the ranking ones in the book and in what is recorded.
+- An article judged `bad` (a paywall notice, a teaser, an error page) is held back for the
+  day and listed in the report. `suspect` is reported and does not change delivery.
+- Both prompts tell the model that news of major consequence scores at least 7 whatever the
+  reader's interests.
+- What was extracted for reading is reused when the article is built, so each page is fetched
+  once. Images are fetched only for the articles that are delivered.
+- A batch that fails or would cross the daily token cap is skipped; its articles keep their
+  ranking order. `llm.read_candidates: 0` turns the pass off.
+- Measured on one day (October 2026, Claude Haiku 5.5): 23 sources including a full FT issue,
+  about 165 candidates ranked, 40 read in full, 16 stories (25 articles) chosen, 167,000
+  tokens, about $0.02, 80 seconds.
 
 ## 8. Delivery
 

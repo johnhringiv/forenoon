@@ -59,11 +59,15 @@ class Llm:
 
     enabled: bool = False
     model: str = "claude-haiku-5-5"
-    daily_token_cap: int = 300_000  # input + output tokens per local day, all users
+    daily_token_cap: int = 600_000  # input + output tokens per local day, all users
     max_candidates: int = 600  # ceiling on abstracts sent to the model per user per run
     batch_size: int = 80  # candidates per ranking call
     group_stories: bool = True  # one more call finds candidates that cover the same event
     follow_links: bool = True  # one more call finds articles that are about a page they link to
+    # The reading pass: this many of the best-ranked candidates are fetched and read in full
+    # by the model, which gives the final scores. 0 turns it off.
+    read_candidates: int = 40
+    read_words: int = 2500  # of each article; the rest is not sent
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
     check_extraction: bool = True  # ask the model whether each article looks complete; log only

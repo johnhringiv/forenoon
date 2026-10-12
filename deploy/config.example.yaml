@@ -43,7 +43,7 @@ smtp:                            # example values are for Resend; see docs/setup
 llm:
   enabled: false
   model: claude-haiku-5-5
-  daily_token_cap: 300000        # input + output tokens per day; a ranking call is skipped
+  daily_token_cap: 600000        # input + output tokens per day; a ranking call is skipped
                                  # when it would cross this
   max_candidates: 600            # ceiling on abstracts sent per user per run
   batch_size: 80                 # candidates scored per call
@@ -53,6 +53,9 @@ llm:
   show_reasons: true             # print the model's one-line reason in the book
   group_stories: true            # one more call finds candidates covering the same event;
                                  # they are delivered together and count as one story
+  read_candidates: 40            # the model reads this many of the best-ranked candidates in
+                                 # full before the day is chosen; 0 = judge on abstracts only
+  read_words: 2500               # of each article
   follow_links: true             # one more call finds chosen articles that are about a page
                                  # they link to; that page is delivered too, or instead
   check_extraction: true         # one more call per run asks whether each article looks

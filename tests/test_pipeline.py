@@ -276,6 +276,8 @@ class FakeBackend:
         self.checks, self.checked = None, []
         self.groups = None  # titles -> list of title lists that are one story
         self.subjects = None  # article title -> the link numbers it is about
+        self.readings = None  # articles as read -> verdicts
+        self.read = []
 
     def structured(self, system, user, schema, shared=""):
         from app.llm import LlmError, Reply
@@ -287,6 +289,10 @@ class FakeBackend:
             listed = __import__("json").loads(user.split("<articles>\n")[1].split("\n</articles>")[0])
             self.checked = listed
             return Reply({"checks": self.checks(listed) if self.checks else []}, 0, 0)
+        if "<reading>" in user:
+            listed = __import__("json").loads(user.split("<reading>\n")[1].split("\n</reading>")[0])
+            self.read += listed
+            return Reply({"articles": self.readings(listed) if self.readings else []}, 0, 0)
         if "<chosen>" in user:
             listed = __import__("json").loads(user.split("<chosen>\n")[1].split("\n</chosen>")[0])
             self.linking = listed
@@ -535,7 +541,7 @@ def test_extraction_check_is_logged_and_never_changes_delivery(env):
     off = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, check_extraction=False))
     quiet = FakeBackend(backend.scores)
     run(off, Store(cfg.data_dir / "off.sqlite3"), fetcher, user, now=NOW, dry_run=True, backend=quiet)
-    assert not quiet.checked and len(quiet.prompts) == 2  # ranking and grouping, no check
+    assert not quiet.checked and len(quiet.prompts) == 3  # ranking, grouping and reading; no check
 
 
 def test_fetched_pages_are_kept_for_replay_and_pruned(env):
@@ -724,3 +730,52 @@ def test_model_picks_which_links_are_the_subject_and_responses_keep_both(env):
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     assert "More on: Post 4" in epub.read("OEBPS/a02.xhtml").decode()
     assert ("links", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+
+
+def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_article(env):
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, explore_slots=0, read_words=40)
+    user = dataclasses.replace(cfg.users[0], daily_cap=3)
+    cfg = dataclasses.replace(cfg, users=(user,))
+    # On abstracts the model prefers Post 1; having read them it prefers Post 2 and calls
+    # Post 1 a paywall notice.
+    backend = FakeBackend(
+        lambda ids: [{"id": i, "score": 9 - n, "reason": "from the abstract"} for n, i in enumerate(ids)]
+    )
+
+    def readings(listed):
+        table = {"Post 1": (9, "bad", "Paywall notice only"), "Post 2": (8, "ok", "")}
+        out = []
+        for a in listed:
+            score, complete, problem = table.get(a["title"], (1, "ok", ""))
+            out.append(
+                {
+                    "id": a["id"],
+                    "score": score,
+                    "reason": "after reading",
+                    "complete": complete,
+                    "problem": problem,
+                    "links": [5],
+                }
+            )
+        return [*out, {"id": "made-up", "score": 10, "reason": "x", "complete": "ok", "problem": "", "links": []}]
+
+    backend.readings = readings
+    sent = []
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m), backend=backend)
+
+    assert report.ranking.startswith("model") and "read in full" in report.ranking
+    titles = [store.get_article(i).title for i in report.delivered]
+    assert titles[:2] == ["Post 9", "Post 2"] and "Post 1" not in titles  # pinned first, then the best read
+    held = next(i for s in report.sources for i in s.items if i.title == "Post 1")
+    assert "held back" in held.reason and held.review == "bad: Paywall notice only"
+    # The model saw the article text, cut to the word limit and marked as cut.
+    read = {a["title"]: a for a in backend.read}
+    assert read["Post 2"]["words"] == 350 and read["Post 2"]["truncated"] is True
+    assert len(read["Post 2"]["text"].split()) == 40 and "<script" not in read["Post 1"]["text"]
+    # The delivered article carries the reading pass's reason, and each page was fetched once.
+    rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
+    post2 = next(r for r in rows.values() if r["score"] == 8)
+    assert post2["reason"] == "after reading"
+    assert sorted(r["verdict"] for r in store.review_rows())[:1] == ["bad"]
+    assert ("read", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
