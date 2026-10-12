@@ -48,7 +48,9 @@ Then fill in `users`, `smtp` and `public_base_url` in `run/config.yaml`, set
 ## Deploy
 
 `deploy/docker-compose.yml` runs the pipeline, the feedback endpoint and (optionally) a
-Cloudflare Tunnel. Setup guides:
+Cloudflare Tunnel, the recipes runner and the web pages. The web pages are a separate Rust
+program in `web/`: a newsstand of what was delivered and how you rated it, behind a login.
+Setup guides:
 
 - [docs/setup-email.md](docs/setup-email.md): SMTP relay and Amazon's approved sender list
 - [docs/setup-deploy.md](docs/setup-deploy.md): compose on a NAS, Cloudflare Tunnel, backups
@@ -64,6 +66,8 @@ Cloudflare Tunnel. Setup guides:
   rebinding, so do not give the container network access to anything sensitive.
 - Feedback links carry an HMAC-signed, expiring token. The endpoint needs no login, is
   idempotent and is rate limited.
+- The web pages need a login (Argon2id password hashes, limited sign-in attempts) and show
+  each reader only their own articles. Keep them on a trusted network for now.
 
 ## Development
 
@@ -72,3 +76,16 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check .
 git config core.hooksPath .githooks   # once: prettier-formats staged Markdown on commit
 ```
+
+The web pages (`web/`, Rust):
+
+```sh
+cd web
+cargo test
+cargo fmt --check && cargo clippy --all-targets -- -D warnings
+./dev-db.sh   # after changing a query, a migration or the pipeline's schema: refreshes .sqlx
+```
+
+Their SQL is checked at build time against saved query data in `web/.sqlx`, so no database
+is needed to build. `web/pipeline-schema.sql` is a copy of the pipeline's tables; a Python
+test fails when it differs from `app/store.py`.

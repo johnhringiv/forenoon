@@ -40,6 +40,7 @@ RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
 CONTAINERS="forenoon forenoon-feedback"
 [ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
 WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
+WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
 # The recipes container is healed on its own below: its trouble must never bounce the app.
 
 all_running() {
@@ -89,13 +90,28 @@ if [ -n "$RECIPES_IMAGE" ] && docker pull -q "$RECIPES_IMAGE" >/dev/null 2>&1; t
     fi
 fi
 
+# The web pages image, the same way. A failed pull is logged: a newly published package is
+# private until made public, and the container is then neither updated nor restarted.
+web_changed=false
+if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ]; then
+    if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
+        web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
+        web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
+        web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
+        if [ "$web_latest" != "$web_running" ] || [ "$web_up" != "true" ]; then
+            web_changed=true
+        fi
+    else
+        echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); web container left as it is"
+    fi
+fi
+
 if [ "$latest" = "$running" ]; then
     if all_running; then
-        # The newsstand runs the app image, so a new image replaces it with the rest; here
-        # it is only restarted when it has stopped, without touching the other containers.
-        if [ -n "$WEB_LISTEN" ] && [ "$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
-            echo "$(date -u +%FT%TZ) newsstand container is not running; replacing it only"
-            ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) newsstand container did not start"
+        if [ "$web_changed" = true ]; then
+            echo "$(date -u +%FT%TZ) web container is stale or stopped; replacing it only"
+            ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) web container did not start"
+            docker image prune -f >/dev/null
         fi
         if [ "$recipes_changed" = true ]; then
             echo "$(date -u +%FT%TZ) recipes container is stale or stopped; replacing it only"

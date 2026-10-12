@@ -119,18 +119,30 @@ for a few seconds. The poller also restarts the stack after a reboot if a contai
 that lands while the daily run is in progress interrupts it; articles already emailed are
 recorded and not resent, and the rest go out with the next run.
 
-## Newsstand page (optional)
+## Web pages (optional)
 
-A page listing what was delivered, why each article was picked and how you rated it. You
-can change ratings there; it does nothing else. It has **no login**, so publish it only where you trust everyone who can reach it: your
-LAN or a VPN such as Tailscale. Never point the Cloudflare Tunnel at it.
+A newsstand listing what was delivered, why each article was picked and how you rated it;
+you can change ratings there. It is behind a login, and each account sees only its own
+reader's articles. It runs from its own image.
 
-1. In `.env`, set `WEB_LISTEN` to a port (`8081`) or, to limit it to one of the host's
-   addresses, `address:port` (`192.168.1.20:8081`). For docker compose, also add `web` to
-   `COMPOSE_PROFILES`.
+Keep it on your LAN or a VPN such as Tailscale for now, and do not point the Cloudflare
+Tunnel at it: it has a login, but it has not been hardened for the public internet.
+
+1. In `.env`, set `WEB_IMAGE=ghcr.io/<owner>/<repo>-web:latest` and `WEB_LISTEN` to a port
+   (`8081`) or, to limit it to one of the host's addresses, `address:port`
+   (`192.168.1.20:8081`). For docker compose, also add `web` to `COMPOSE_PROFILES`. The GHCR
+   package must be public, like the others.
 2. Start it: `sudo ONLY=web sh deploy.sh .env` (a full deploy starts it too), or
    `docker compose up -d web`.
-3. Open `http://<host>:8081/`.
+3. Create your account. The id must be your user id in `config.yaml`; you are asked for a
+   password of at least 10 characters:
+   `sudo docker exec -it forenoon-web forenoon-web add-user <id>`
+   The first account is an admin. Dates are shown in the container's `TZ` unless you pass
+   `--timezone`; you can change it later on the account page.
+4. Open `http://<host>:8081/` and sign in.
+
+Other account commands, run the same way: `set-password <id>` (also signs the account out
+everywhere) and `users`.
 
 The container gets no secrets. Check that your router does not forward the port from the
 internet.

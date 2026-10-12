@@ -1,0 +1,81 @@
+-- The tables the Python pipeline owns, copied from app/store.py (a test keeps the two equal).
+-- The web app reads them, and writes only ratings and feedback_events.
+CREATE TABLE IF NOT EXISTS articles (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL,
+    title TEXT NOT NULL,
+    author TEXT NOT NULL DEFAULT '',
+    published TEXT,
+    first_seen TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    reason TEXT NOT NULL DEFAULT '',
+    word_count INTEGER NOT NULL DEFAULT 0,
+    image_url TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS deliveries (
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    delivered_at TEXT NOT NULL,
+    story TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, article_id)
+);
+CREATE TABLE IF NOT EXISTS feedback_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    signal TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ratings (
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    rating INTEGER,
+    finished INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, article_id)
+);
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS selections (
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    selected_at TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    score REAL,
+    reason TEXT NOT NULL DEFAULT '',
+    rank INTEGER,
+    explore INTEGER NOT NULL DEFAULT 0,
+    propensity REAL,
+    PRIMARY KEY (user_id, article_id)
+);
+CREATE TABLE IF NOT EXISTS extraction_reviews (
+    id INTEGER PRIMARY KEY,
+    article_id TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    problem TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS source_health (
+    source TEXT PRIMARY KEY,
+    failures INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS http_cache (
+    url TEXT PRIMARY KEY,
+    etag TEXT,
+    last_modified TEXT
+);

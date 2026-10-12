@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Account · Forenoon{% endblock %}
+{% block header %}
+<p>Account <b>{{ user.id }}</b>, {{ user.role }}.</p>
+<div class="bar"><a href="/">Back to the newsstand</a>
+<div class="who"><form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+{% endblock %}
+{% block main %}
+{% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+{% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
+<form class="sheet" method="post" action="/account/profile">
+<h2>Profile</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Display name <input name="name" value="{{ user.name }}" maxlength="80" required></label>
+<label>Time zone <input name="timezone" value="{{ user.timezone }}" maxlength="64" required></label>
+<p class="hint">A zone name such as America/New_York or Europe/London. Issue dates and times are shown in it.</p>
+<button>Save</button>
+</form>
+<form class="sheet" method="post" action="/account/password">
+<h2>Password</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Current password <input name="current" type="password" maxlength="256" autocomplete="current-password" required></label>
+<label>New password <input name="password" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
+<label>New password again <input name="again" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
+<p class="hint">At least 10 characters. Changing it signs out every other browser.</p>
+<button>Change password</button>
+</form>
+{% endblock %}

@@ -322,25 +322,45 @@ the Amazon account's approved sender list.
   source has failed a set number of runs in a row (default 3, repeated at each multiple).
   Alerts use the same relay; a failure to send one is logged and does not affect the run.
 
-## 9a. Newsstand (optional web page)
+## 9a. Web pages (optional)
 
-- `forenoon web` serves one page: delivered articles grouped by issue, newest first, 14
-  issues to a page. Each card shows source, author, title linked to the original, lead image
-  and description when the page had them, word count and reading time, how it was chosen
-  (score and rank, pinned, exploration pick, the model's reason) and its rating.
-- `?user=<id>` limits the page to one reader; `?show=rated` or `?show=unrated` filters it.
-- **Ratings can be changed here**, the page's only action: set or change the 1 to 5 rating,
-  mark finished or not, choose the reason, or clear the rating. Changes are logged like taps,
-  with `web` as their source. A change is accepted only with a token issued by the page and,
-  when the browser says where the form came from, only from the page's own address, so
-  another site open in the same browser cannot make one.
-- No login. It must be reachable only from a trusted network and never through the public
-  feedback hostname; the deploy script publishes it on a port of its own, in its own
-  container, with no secrets.
+A separate program, `forenoon-web` (Rust, in `web/`), with its own image. It shares the
+database with the pipeline.
+
+- **Accounts.** Every page except sign-in and the health check needs a session. An account's
+  id is the reader's id in `config.yaml`, and a signed-in reader sees and changes only their
+  own deliveries and ratings. Accounts are created from the command line
+  (`forenoon-web add-user <id>`); there is no sign-up page. The first account is an admin,
+  later ones readers; the role is stored but grants nothing yet.
+- **Passwords and sessions.** Passwords are stored as Argon2id hashes, at least 10 characters.
+  Sign-in is limited, in any 5 minutes, to 30 attempts from one client address, 10 from one
+  address for one account name, and 100 for one name from anywhere.
+  A session lasts 30 days from its last use, in an `HttpOnly`, `SameSite=Lax` cookie.
+  Changing a password signs out every other browser.
+- **Newsstand.** Delivered articles grouped by issue, newest first, 14 issues to a page, in
+  the reader's time zone. Each card shows source, author, title linked to the original, lead
+  image and description when the page had them, word count and reading time, how it was
+  chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
+  `?show=rated` or `?show=unrated` filters it.
+- **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
+  choose the reason, or clear the rating. Changes are logged like taps, with `web` as their
+  source.
+- **Account page.** Display name, time zone, and password.
+- Every change is a form post that must carry the session's token and, when the browser says
+  where the form came from, must come from the site itself, so another site open in the same
+  browser cannot make one.
 - Article text is untrusted here as elsewhere: everything is escaped, links and images must
-  be plain `http(s)`, and the page's content security policy allows no scripts. Lead images
-  are loaded by the browser from the article's own site, without a referrer.
+  be plain `http(s)`, and the content security policy allows no scripts. Lead images are
+  loaded by the browser from the article's own site, without a referrer.
 - Articles from recipe sources have no lead image (theirs live inside the issue file).
+- Who owns what in the database: the web program owns accounts and sessions; the pipeline
+  owns everything else. Of the pipeline's tables the web program writes only ratings and the
+  tap log, by the same rules as the feedback service. Its queries are checked at build time
+  against a copy of the pipeline's schema (`web/pipeline-schema.sql`), and a test fails when
+  the copy and `app/store.py` differ.
+- It is still meant for a trusted network only. Before it is exposed publicly it needs: the
+  secure-cookie setting behind https, and the client address taken from the proxy for the
+  sign-in limit.
 
 ## 10. Commands
 
@@ -350,31 +370,42 @@ the Amazon account's approved sender list.
 | `forenoon schedule`                             | Run every day at `delivery_time`                             |
 | `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X          |
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
-| `forenoon web [--host] [--port]`                | Serve the newsstand page (no login; trusted networks only)   |
 | `forenoon feedback-log`                         | Print taps and current ratings                               |
 | `forenoon usage`                                | Print recent model calls and today's token use               |
 | `forenoon checks [--all]`                       | Print articles the model thought were badly extracted        |
 | `forenoon replay [--all]`                       | Re-run extraction over saved pages and show what changed     |
 | `forenoon golden [--out DIR]`                   | Write the rendering-test book                                |
 
+The web pages have their own program:
+
+| Command                                                   | Purpose                                    |
+| --------------------------------------------------------- | ------------------------------------------ |
+| `forenoon-web serve [--listen ADDR] [--secure-cookies]`   | Serve the pages                            |
+| `forenoon-web add-user ID [--name] [--role] [--timezone]` | Create an account; asks for the password   |
+| `forenoon-web set-password ID`                            | Change a password, signing the account out |
+| `forenoon-web users`                                      | List the accounts                          |
+| `forenoon-web health`                                     | Exit 0 when the local server answers       |
+
 ## 11. Storage
 
 A copy of each book sent is kept in `issues/` for `keep_issues_days` (default 30; 0 keeps
 none).
 
-One SQLite database in the data folder, shared by the pipeline and the feedback service:
-articles (with extraction verdict and preview data), deliveries, the tap event log, current
-ratings, per-source failure counts and feed cache validators. Older databases are upgraded in
+One SQLite database in the data folder, shared by the pipeline, the feedback service and the
+web pages: articles (with extraction verdict and preview data), deliveries, the tap event
+log, current ratings, per-source failure counts, feed cache validators, and the web pages'
+accounts and sessions. Older databases are upgraded in
 place on start-up. Backing up the data folder backs up everything.
 
 ## 12. Deployment
 
-- One image, published to GHCR by CI on every push to `main`. Containers run as UID 1000
-  with a read-only root filesystem and no added capabilities.
+- Images are published to GHCR by CI on every push to `main`: the app, the recipes runner
+  and the web pages. Containers run as UID 1000 with a read-only root filesystem and no
+  added capabilities.
 - Three containers: the scheduler, the feedback service, and a `cloudflared` tunnel that
   shares the feedback container's network namespace. No host port is published. An optional
-  fourth runs Calibre recipes from its own image, and an optional fifth serves the newsstand
-  on a host port chosen with `WEB_LISTEN`.
+  fourth runs Calibre recipes from its own image, and an optional fifth serves the web pages
+  from theirs (`WEB_IMAGE`) on a host port chosen with `WEB_LISTEN`.
 - `deploy/docker-compose.yml`, or `deploy/deploy.sh` with plain `docker run`.
   `deploy/poll-deploy.sh` redeploys when the app image changes, replaces only the tunnel
   when just its image changed, and restarts the stack after a reboot.
@@ -386,7 +417,8 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 
 - Fetched content cannot choose recipients, run code, or reach private network addresses.
 - The public endpoint accepts only signed, expiring tokens and writes only ratings.
-- The newsstand has no login and offers no actions; keeping it off untrusted networks is the
+- The web pages need a login and show each reader only their own data. They have not been
+  hardened for the public internet yet; keeping them on a trusted network is still the
   operator's job.
 - Secrets are never read from or written to config files, reports or logs.
 - The address check on fetches resolves names separately from the connection, so it does not
@@ -407,7 +439,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 - Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
 - Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
-- A web interface for sources and preferences, adding articles by hand, and a login for the
-  newsstand.
+- A web interface for sources and preferences, adding articles by hand, and account
+  management in the browser (sign-up, password reset, admin pages).
 - Newsletters by email as a source.
 - E-readers other than Kindle.

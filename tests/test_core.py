@@ -218,47 +218,6 @@ def test_store_adds_preview_columns_to_an_existing_database(tmp_path):
     assert store.get_article("a").description == "Summary"
 
 
-def test_newsstand_shows_deliveries_and_treats_article_text_as_untrusted(tmp_path):
-    from datetime import UTC, datetime
-
-    from app.web import create_app as create_web
-
-    db = tmp_path / "forenoon.sqlite3"
-    web = TestClient(create_web(db, "America/New_York"))
-    assert "Nothing has been delivered yet." in web.get("/").text
-
-    store = Store(db)
-    store.upsert_article("a1", "https://blog.example/post", "Blog <b>", "A <script>title</script>", "Ann", None)
-    store.set_extraction("a1", "clean", "", 2300)
-    store.set_preview("a1", "https://blog.example/lead.jpg", "A description. " * 40)
-    store.upsert_article("a2", "javascript:alert(1)", "Other", "Second", "", None)
-    store.set_preview("a2", "data:image/png;base64,AAAA", "")
-    first = datetime(2026, 10, 10, 10, 0, tzinfo=UTC)
-    store.mark_delivered("john", ["a1", "a2"], first)
-    store.record_selection("john", "a1", first, "claude-rank-v1", 8.5, 'Deep "compiler" work', 1, False, 1.0)
-    store.record_feedback("john", "a1", "f4", "kindle-footer")
-    for day in range(11, 30):  # enough issues for a second page
-        store.upsert_article(f"b{day}", f"https://blog.example/{day}", "Blog", f"Post {day}", "", None)
-        store.mark_delivered("john", [f"b{day}"], datetime(2026, 10, day, 10, 0, tzinfo=UTC))
-
-    page = web.get("/")
-    assert page.status_code == 200 and "script-src" not in page.headers["content-security-policy"]
-    assert "default-src 'none'" in page.headers["content-security-policy"]
-    assert "21 articles in 20 issues. 1 rated." in page.text
-    assert "Post 29" in page.text and "A &lt;script&gt;" not in page.text and "Older issues" in page.text
-
-    older = web.get(page.text.split('<a href="')[-1].split('"')[0].replace("&amp;", "&"))
-    text = older.text
-    assert "Saturday 10 October 2026" in text and "2 articles, sent 06:00" in text  # local time
-    assert "A &lt;script&gt;title&lt;/script&gt;" in text and "<script" not in text
-    assert 'href="https://blog.example/post"' in text and 'src="https://blog.example/lead.jpg"' in text
-    assert "javascript:" not in text and "data:image" not in text
-    assert "Picked because: Deep &quot;compiler&quot; work" in text and "Score 8.5, no. 1 of the day" in text
-    assert "Rated 4 of 5" in text and "Finished" in text and "2,300 words, 10 min" in text
-    assert "Newest" in text and web.get("/?before=nonsense").status_code == 200
-    assert "0 articles" in web.get("/?user=nobody").text
-
-
 def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
     db = tmp_path / "forenoon.sqlite3"
     client = TestClient(create_app(db, SECRET))
@@ -287,50 +246,12 @@ def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
     row = store.rating_rows("john")[-1]
     assert (row["rating"], row["reason"], row["word_count"]) == (5, "depth", 0)
 
-    store.clear_rating("john", "abc", "web")
-    assert store.get_rating("john", "abc") is None and store.feedback_rows()[-1]["signal"] == "clear"
 
+def test_web_app_schema_copy_matches_the_store():
+    from pathlib import Path
 
-def test_newsstand_changes_ratings_only_from_its_own_page(tmp_path):
-    import re
-    from datetime import UTC, datetime
+    from app.store import SCHEMA
 
-    from app.web import create_app as create_web
-
-    db = tmp_path / "forenoon.sqlite3"
-    store = Store(db)
-    for n in (1, 2):
-        store.upsert_article(f"a{n}", f"https://blog.example/{n}", "Blog", f"Post {n}", "", None)
-    store.mark_delivered("john", ["a1", "a2"], datetime(2026, 10, 10, 10, 0, tzinfo=UTC))
-    web = TestClient(create_web(db, "UTC"), follow_redirects=False)
-    page = web.get("/").text
-    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
-    assert "form-action 'self'" in web.get("/").headers["content-security-policy"]
-
-    def post(headers=None, **fields):
-        body = {"csrf": csrf, "user": "john", "article": "a1", "back": "/?show=rated", **fields}
-        return web.post("/rate", data=body, headers=headers or {})
-
-    done = post(rating="2")
-    assert done.status_code == 303 and done.headers["location"] == "/?show=rated#a-a1"
-    post(finished="1")
-    post(set="reason", reason="thin")
-    assert store.get_rating("john", "a1") == Rating(2, True, "thin")
-    assert store.feedback_rows()[-1]["source"] == "web"
-    post(set="reason", reason="more-topic")  # not a reason for a low rating: ignored
-    assert store.get_rating("john", "a1").reason == "thin"
-
-    # The filter shows one or the other; the rated card shows its reason and a selected option.
-    rated, unrated = web.get("/?show=rated").text, web.get("/?show=unrated").text
-    assert "Post 1" in rated and "Post 2" not in rated and "Post 2" in unrated and "Post 1" not in unrated
-    assert "Too thin, nothing in it" in rated and '<option value="thin" selected>' in rated
-
-    # Refused: a wrong token, another site's form, an article never delivered, an open redirect.
-    assert post(csrf="wrong", rating="5").status_code == 403
-    assert post(headers={"Origin": "https://evil.example"}, rating="5").status_code == 403
-    assert post(article="nope", rating="5").status_code == 404
-    assert post(back="//evil.example/x", rating="3").headers["location"] == "/#a-a1"
-    assert store.get_rating("john", "a1").rating == 3
-
-    post(clear="1")
-    assert store.get_rating("john", "a1") is None
+    copy = (Path(__file__).parent.parent / "web" / "pipeline-schema.sql").read_text()
+    tables = "\n".join(line for line in copy.splitlines() if not line.startswith("--"))
+    assert tables.strip() == SCHEMA.strip(), "regenerate web/pipeline-schema.sql and run web/dev-db.sh"

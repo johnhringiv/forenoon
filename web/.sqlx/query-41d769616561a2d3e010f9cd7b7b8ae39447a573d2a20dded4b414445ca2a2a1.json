@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM ratings WHERE user_id = ? AND article_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "41d769616561a2d3e010f9cd7b7b8ae39447a573d2a20dded4b414445ca2a2a1"
+}

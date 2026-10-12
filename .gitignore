@@ -16,3 +16,5 @@ app/fonts/
 # Build brief; kept out of the repository for now
 docs/SPEC.md
 recipes.env
+# Rust build output and the dev database for the web app
+web/target/

@@ -80,11 +80,58 @@ jobs:
           docker run --rm --read-only --tmpfs /tmp --cap-drop ALL -v "$PWD/out:/recipes" \
             forenoon-recipes:ci once
 
+  web:
+    name: Web app checks, image build and smoke test
+    runs-on: ubuntu-latest
+    env:
+      SQLX_OFFLINE: "true" # queries are checked against web/.sqlx, not a live database
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web
+      - run: cargo fmt --check
+        working-directory: web
+      - run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: web
+      - run: cargo test --locked
+        working-directory: web
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: web
+          load: true
+          tags: forenoon-web:ci
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+      # Same hardening flags as deploy.sh. An account is created, then the server must
+      # answer its own health check.
+      - name: Create an account and answer the health check
+        run: |
+          mkdir -m 777 webdata
+          flags="--read-only --tmpfs /tmp --cap-drop ALL -v $PWD/webdata:/data"
+          echo "a password for ci" | docker run --rm -i $flags forenoon-web:ci add-user ci
+          docker run --rm $flags forenoon-web:ci users | grep -q "^ci .*admin"
+          docker run -d --name web $flags forenoon-web:ci serve
+          for i in $(seq 1 20); do
+            if docker exec web forenoon-web health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs web
+          exit 1
+
   # Publishes to GHCR on push to main (and v* tags); the host polls :latest and
   # redeploys when the digest changes. See docs/setup-deploy.md.
   publish:
     if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (github.event_name == 'push' || github.event_name == 'schedule')
-    needs: [checks, docker, recipes]
+    needs: [checks, docker, recipes, web]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,3 +180,20 @@ jobs:
           no-cache: ${{ github.event_name == 'schedule' }}
           cache-from: type=gha,scope=recipes
           cache-to: type=gha,mode=max,scope=recipes
+      - uses: docker/metadata-action@v6
+        id: web-meta
+        with:
+          images: ghcr.io/${{ github.repository }}-web
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=ref,event=tag
+      - uses: docker/build-push-action@v7
+        with:
+          context: web
+          push: true
+          tags: ${{ steps.web-meta.outputs.tags }}
+          labels: ${{ steps.web-meta.outputs.labels }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
