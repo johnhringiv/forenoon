@@ -140,6 +140,26 @@ def read_issue(path: Path, source: Source) -> list[Item]:
     return list(items.values())
 
 
-def read_recipe(source: Source, root: Path, max_age_days: int, now: datetime) -> list[Item]:
-    issue = newest_issue(root / source.recipe, timedelta(days=max_age_days), now)
-    return read_issue(issue, source)
+def read_recipe(source: Source, root: Path, max_age_days: int, now: datetime, known=None) -> list[Item]:
+    """The newest issue's articles, and those of any earlier recent issue not read yet.
+
+    A run that was missed must not lose that day's paper. `known` says whether an article id
+    has been seen before; an earlier issue is read only when it holds one that has not.
+    """
+    folder = root / source.recipe
+    newest = newest_issue(folder, timedelta(days=max_age_days), now)
+    items = {item.id: item for item in read_issue(newest, source)}
+    if known is None:
+        return list(items.values())
+    earlier = sorted((p for p in folder.glob("*.epub") if p != newest), key=lambda p: p.stat().st_mtime, reverse=True)
+    for issue in earlier:
+        if datetime.fromtimestamp(issue.stat().st_mtime, tz=UTC) < now - timedelta(days=max_age_days):
+            break
+        try:
+            missed = read_issue(issue, source)
+        except FetchError:
+            continue
+        if any(not known(item.id) for item in missed):
+            for item in missed:
+                items.setdefault(item.id, item)
+    return list(items.values())
