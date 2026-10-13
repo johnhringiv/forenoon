@@ -74,8 +74,6 @@ enum Command {
     },
     /// Change an account's password, signing it out everywhere.
     SetPassword { id: String },
-    /// Set the address an account signs in with. It starts unconfirmed.
-    SetEmail { id: String, email: String },
     /// List the accounts.
     Users,
     /// Exit 0 when a server on this machine answers its health check.
@@ -209,20 +207,6 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 return Err(format!("no account {id}").into());
             }
             println!("Password changed for {id}; it is signed out everywhere.");
-        }
-        Command::SetEmail { id, email } => {
-            let Some(email) = auth::normal_email(&email) else {
-                return Err(format!("{email} is not an email address").into());
-            };
-            if db::email_taken(&pool, &email, &id).await? {
-                return Err(format!("another account already uses {email}").into());
-            }
-            if !db::set_email(&pool, &id, &email).await? {
-                return Err(format!("no account {id}").into());
-            }
-            println!(
-                "{id} now signs in with {email}. It is not confirmed yet; sign in and use the banner to confirm it."
-            );
         }
         Command::Users => {
             for user in db::list_users(&pool).await? {

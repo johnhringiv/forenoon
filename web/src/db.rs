@@ -151,20 +151,6 @@ pub async fn request_email(pool: &SqlitePool, id: &str, email: &str) -> Result<(
     Ok(())
 }
 
-/// Set the address outright, unconfirmed, dropping any pending change and emailed links.
-/// For the command line: fixing a mistyped address, or giving one to an older account.
-pub async fn set_email(pool: &SqlitePool, id: &str, email: &str) -> Result<bool, sqlx::Error> {
-    let done = sqlx::query!(
-        "UPDATE users SET email = ?, email_verified_at = NULL, pending_email = NULL WHERE id = ?",
-        email,
-        id
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ?", id).execute(pool).await?;
-    Ok(done.rows_affected() > 0)
-}
-
 pub async fn cancel_email_change(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
     sqlx::query!("UPDATE users SET pending_email = NULL WHERE id = ?", id).execute(pool).await?;
     sqlx::query!("DELETE FROM email_tokens WHERE user_id = ? AND purpose = 'verify'", id).execute(pool).await?;

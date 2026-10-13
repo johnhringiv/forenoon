@@ -155,8 +155,8 @@ internet.
    next run.
 
 Other account commands, run the same way: `set-password <id>` (also signs the account out
-everywhere), `set-email <id> <address>` and `users`. They are the way back in if the email
-route fails.
+everywhere) and `users`, which lists each account's email. `set-password` is the way back in
+if the email route fails.
 
 The mail password is the only secret the container gets. Check that your router does not
 forward the port from the internet.

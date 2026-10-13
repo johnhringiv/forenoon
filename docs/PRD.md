@@ -409,7 +409,6 @@ The web pages have their own program:
 | `forenoon-web serve [--listen ADDR] [--secure-cookies]`                                | Serve the pages                            |
 | `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone]` | Create an account; asks for the password   |
 | `forenoon-web set-password ID`                                                         | Change a password, signing the account out |
-| `forenoon-web set-email ID ADDR`                                                       | Set the sign-in address, unconfirmed       |
 | `forenoon-web users`                                                                   | List the accounts                          |
 | `forenoon-web health`                                                                  | Exit 0 when the local server answers       |
 
