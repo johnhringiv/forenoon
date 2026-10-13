@@ -492,6 +492,15 @@ struct Issue {
     stamp: String,
     heading: String,
     count: String,
+    stories: Vec<Story>,
+}
+
+/// What one card on the page holds: an article, or a story's articles with its lead first.
+struct Story {
+    /// The story's key (its lead article's id), or "" for an article on its own.
+    key: String,
+    /// The heading over the articles after the lead.
+    more: String,
     cards: Vec<Card>,
 }
 
@@ -673,18 +682,33 @@ pub async fn newsstand(
         return html(StatusCode::OK, page);
     };
     for row in db::delivered(&state.pool, &user.id, oldest, newest, show).await? {
-        match page.issues.last_mut() {
-            Some(issue) if issue.stamp == row.delivered_at => issue.cards.push(card(row)),
-            _ => page.issues.push(Issue {
+        if page.issues.last().is_none_or(|issue| issue.stamp != row.delivered_at) {
+            page.issues.push(Issue {
                 stamp: row.delivered_at.clone(),
                 heading: String::new(),
                 count: String::new(),
-                cards: vec![card(row)],
-            }),
+                stories: Vec::new(),
+            });
+        }
+        let Some(issue) = page.issues.last_mut() else { continue };
+        let (key, leads) = (row.story.clone(), row.story == row.id);
+        // Articles of one story are not always next to each other in the ranking order.
+        match issue.stories.iter_mut().find(|story| !key.is_empty() && story.key == key) {
+            Some(story) if leads => story.cards.insert(0, card(row)),
+            Some(story) => story.cards.push(card(row)),
+            None => issue.stories.push(Story { key, more: String::new(), cards: vec![card(row)] }),
         }
     }
     for issue in &mut page.issues {
-        issue.count = count(issue.cards.len(), "article");
+        let articles: usize = issue.stories.iter().map(|story| story.cards.len()).sum();
+        issue.count = count(articles, "article");
+        if articles > issue.stories.len() {
+            let stories = issue.stories.len();
+            issue.count = format!("{} in {stories} {}", issue.count, if stories == 1 { "story" } else { "stories" });
+        }
+        for story in &mut issue.stories {
+            story.more = format!("{} more on this story", story.cards.len().saturating_sub(1));
+        }
         match local(&issue.stamp, zone) {
             Some(when) => {
                 issue.heading = when.format("%A %-d %B %Y").to_string();

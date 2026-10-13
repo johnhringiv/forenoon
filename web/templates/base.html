@@ -22,6 +22,7 @@ h2 span { font:400 .85rem system-ui,sans-serif; color:var(--soft) }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:16px }
 article { background:var(--card); border:1px solid var(--line); border-radius:6px; overflow:hidden;
   display:flex; flex-direction:column }
+article .lead { display:flex; flex-direction:column; flex:1; min-width:0 }
 article img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:var(--line) }
 .body { padding:12px 14px 14px; display:flex; flex-direction:column; gap:.45rem; flex:1 }
 .kicker { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--accent);
@@ -33,6 +34,22 @@ h3 a:hover { text-decoration:underline }
 .why { margin:0; font-size:.84rem; font-style:italic; overflow-wrap:anywhere }
 .meta { margin-top:auto; padding-top:.5rem; border-top:1px solid var(--line); font-size:.78rem;
   color:var(--soft); display:flex; flex-wrap:wrap; gap:.3rem .8rem }
+/* A story: its lead article beside (or above) the other articles delivered with it. */
+article.story { grid-column:span 2; flex-direction:row; border-left:4px solid var(--accent) }
+article.story .lead { flex:1 1 52% }
+article.story .more { flex:1 1 48%; min-width:0; border-left:1px solid var(--line); padding:12px 14px 14px;
+  display:flex; flex-direction:column; gap:.9rem; background:var(--bg) }
+.more-title { margin:0; font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--soft) }
+.member { display:flex; flex-direction:column; gap:.35rem; padding-bottom:.8rem; border-bottom:1px solid var(--line) }
+.member:last-child { border-bottom:0; padding-bottom:0 }
+.member .meta { margin-top:0; border-top:0; padding-top:0 }
+h4 { font:700 .98rem/1.25 Georgia,serif; margin:0; overflow-wrap:anywhere }
+h4 a { color:inherit; text-decoration:none }
+h4 a:hover { text-decoration:underline }
+@media (max-width:640px) {
+  article.story { grid-column:auto; flex-direction:column }
+  article.story .more { border-left:0; border-top:1px solid var(--line) }
+}
 .tag { border:1px solid var(--line); border-radius:3px; padding:0 .35rem }
 .rated { color:var(--ink); font-weight:600 }
 nav { margin:2rem 0 3rem; display:flex; gap:1.2rem; font-size:.95rem }
