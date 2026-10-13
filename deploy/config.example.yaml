@@ -14,8 +14,8 @@ format: issue
 
 max_age_days: 3                  # ignore feed items older than this
 token_ttl_days: 60               # how long feedback links stay valid
-keep_pages_days: 90              # keep each fetched page this long for `forenoon replay`; 0 = none
-keep_issues_days: 30             # keep a copy of each book sent, in issues/; 0 = none
+keep_pages_days: -1              # each fetched page is kept for good; a number of days prunes, 0 = none
+keep_issues_days: -1             # so is a copy of each book sent, in issues/
 max_story_entries: 3             # the most articles one story may bring (see daily_cap)
 
 # Readers (Kindle addresses, stories per day, interests) are not set here: create an account

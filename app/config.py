@@ -119,10 +119,11 @@ class Config:
     public_base_url: str = ""
     max_age_days: int = 3
     token_ttl_days: int = 60
-    # Keep each article's fetched page for this many days, for `forenoon replay`. 0 = keep none.
-    keep_pages_days: int = 90
-    # Keep a copy of each book sent for this many days, in `issues/`. 0 = keep none.
-    keep_issues_days: int = 30
+    # Each article's fetched page and a copy of each book sent are kept for good by default:
+    # they are the only copies of what was read, for re-sending, for `forenoon replay`, and for
+    # learning from later. A number of days prunes older ones; 0 keeps none; -1 keeps all.
+    keep_pages_days: int = -1
+    keep_issues_days: int = -1
     # A failsafe, not the main control (the model choosing articles is): anything longer is a
     # manual or a book and is not delivered. A 77,000-word chapter was in the issue an older
     # Kindle rebooted on. 0 = no limit.

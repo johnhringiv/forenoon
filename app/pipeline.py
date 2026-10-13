@@ -171,7 +171,7 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> E
             page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
         except FetchError as exc:
             fetch_error = str(exc)
-    if keep and cfg.keep_pages_days > 0 and (page_html or item.feed_html):
+    if keep and cfg.keep_pages_days != 0 and (page_html or item.feed_html):
         archive.save(cfg.pages_dir, item, page_html)
     result = extract(item.url, page_html, item.feed_html, item.source.extract, fetch_error)
     if result.body is None and fetch_error:
@@ -747,7 +747,7 @@ def run(
                 if not dry_run:
                     sender([message], cfg.smtp)
                     store.mark_delivered(user.id, ids, now, story_of)
-                    if cfg.keep_issues_days > 0:
+                    if cfg.keep_issues_days != 0:
                         # A copy of what was sent, for checking a book without the device.
                         cfg.issues_dir.mkdir(parents=True, exist_ok=True)
                         for attachment in group:
