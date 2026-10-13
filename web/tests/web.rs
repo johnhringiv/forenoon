@@ -22,7 +22,7 @@ struct Site {
     pool: SqlitePool,
     /// Every email the app sent.
     mail: Arc<Mutex<Vec<Message>>>,
-    _folder: tempfile::TempDir,
+    folder: tempfile::TempDir,
 }
 
 impl Site {
@@ -77,9 +77,10 @@ async fn site(with_pipeline: bool) -> Site {
         mailer: Mailer::Memory(mail.clone()),
         base_url: "http://nas:8787/".to_owned(),
         data_dir: folder.path().to_owned(),
+        logins_dir: Some(folder.path().join("logins")),
     };
     let router = app(pool.clone(), options).await.unwrap();
-    Site { router, pool, mail, _folder: folder }
+    Site { router, pool, mail, folder }
 }
 
 async fn article(pool: &SqlitePool, id: &str, url: &str, source: &str, title: &str, user: &str, sent: &str) {
@@ -633,7 +634,7 @@ async fn sources_are_managed_by_admins_only() {
     let mut admin = Browser::default();
     admin.sign_in(&site, "john").await;
     let page = admin.get(&site, "/sources").await;
-    assert!(page.status == StatusCode::OK && page.text.contains("No sources yet"));
+    assert!(page.status == StatusCode::OK && page.text.contains("No feeds yet"));
     assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/sources">Sources</a>"#));
     let csrf = page.csrf();
 
@@ -656,7 +657,6 @@ async fn sources_are_managed_by_admins_only() {
     for (form, message) in [
         (add("", "https://blog.example/feed", &[]), "A source needs a name"),
         (add("Blog", "javascript:alert(1)", &[]), "A feed needs an http(s) address."),
-        (add("Paper", "../etc", &[("kind", "recipe")]), "A recipe is named by its folder"),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
         let reply = admin.post(&site, "/sources", &form).await;
@@ -664,14 +664,14 @@ async fn sources_are_managed_by_admins_only() {
     }
     for form in [
         add("Blog <b>", "https://blog.example/feed", &[("extract", "page"), ("pinned", "1")]),
-        add("Paper", "ft", &[("kind", "recipe"), ("extract", "page")]),
+        add("Other", "https://other.example/", &[]),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
         assert_eq!(admin.post(&site, "/sources", &form).await.location, "/sources?saved=added");
     }
-    let again = add("Paper", "https://other.example/feed", &[]);
+    let again = add("Other", "https://third.example/feed", &[]);
     let again: Vec<(&str, &str)> = again.iter().map(|(key, value)| (*key, value.as_str())).collect();
-    assert!(admin.post(&site, "/sources", &again).await.text.contains("already a source named Paper"));
+    assert!(admin.post(&site, "/sources", &again).await.text.contains("already a source named Other"));
     assert_eq!(
         admin
             .post(&site, "/sources", &[("csrf", "wrong"), ("name", "X"), ("address", "https://x.example/f")])
@@ -680,77 +680,305 @@ async fn sources_are_managed_by_admins_only() {
         StatusCode::FORBIDDEN
     );
 
-    // A new source waits for the pipeline to check its address, and the page reloads meanwhile.
+    // A new feed waits for the pipeline to check its address, and the page reloads meanwhile.
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains("Checking this address") && text.contains(r#"<meta http-equiv="refresh""#));
-    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    let feeds = |all: Vec<forenoon_web::sources::Source>| -> Vec<forenoon_web::sources::Source> {
+        all.into_iter().filter(|source| source.kind == "rss").collect()
+    };
+    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
     assert!(stored.iter().all(|source| source.check_state == "pending"));
-    sqlx::query("UPDATE sources SET check_state = 'ok', check_note = 'Feed found at https://blog.example/rss.xml: 3 articles.' WHERE kind = 'rss'")
+    sqlx::query("UPDATE sources SET check_state = 'ok', check_note = 'Feed found at https://blog.example/rss.xml: 3 articles.' WHERE name != 'Other'")
         .execute(&site.pool).await.unwrap();
-    sqlx::query(
-        "UPDATE sources SET check_state = 'failed', check_note = 'No issue in recipes/ft yet.' WHERE kind = 'recipe'",
-    )
-    .execute(&site.pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE sources SET check_state = 'failed', check_note = 'Not usable: no feed found at this address.' WHERE name = 'Other'")
+        .execute(&site.pool)
+        .await
+        .unwrap();
     let text = admin.get(&site, "/sources").await.text;
     assert!(
         text.contains("Feed found at https://blog.example/rss.xml")
-            && text.contains(r#"<p class="hint failing">No issue in recipes/ft yet.</p>"#)
+            && text.contains(r#"<p class="hint failing">Not usable: no feed found at this address.</p>"#)
     );
     assert!(!text.contains("http-equiv"));
-    let rows: Vec<_> = stored
-        .iter()
-        .map(|s| {
-            (
-                s.name.as_str(),
-                s.kind.as_str(),
-                s.url.as_str(),
-                s.recipe.as_str(),
-                s.extract.as_str(),
-                s.pinned,
-                s.enabled,
-            )
-        })
-        .collect();
+    let rows: Vec<_> =
+        stored.iter().map(|s| (s.name.as_str(), s.url.as_str(), s.extract.as_str(), s.pinned, s.enabled)).collect();
     assert_eq!(
         rows,
         [
-            ("Blog <b>", "rss", "https://blog.example/feed", "", "page", true, true), // pinned first
-            ("Paper", "recipe", "", "ft", "feed", false, true),                       // a recipe is never re-fetched
+            ("Blog <b>", "https://blog.example/feed", "page", true, true), // pinned first
+            ("Other", "https://other.example/", "auto", false, true),
         ]
     );
 
     // The pipeline's record of each source's last runs is shown beside it.
-    sqlx::query("INSERT INTO source_health (source, failures, last_error, updated_at) VALUES ('Paper', 2, 'no issue in recipes/ft', '2026-10-12T10:00:00+00:00')")
+    sqlx::query("INSERT INTO source_health (source, failures, last_error, updated_at) VALUES ('Other', 2, 'HTTP 404', '2026-10-12T10:00:00+00:00')")
         .execute(&site.pool).await.unwrap();
     let text = admin.get(&site, "/sources").await.text;
-    assert!(
-        text.contains("2 sources, 0 paused, 1 failing.")
-            && text.contains("Failed 2 runs in a row: no issue in recipes/ft")
-    );
+    assert!(text.contains("4 sources, 0 paused, 1 failing.") && text.contains("Failed 2 runs in a row: HTTP 404"));
     assert!(text.contains("Blog &#60;b&#62;") && !text.contains("Blog <b>"));
 
     // Pause one, rename it, then remove the other.
-    let (blog, paper) = (stored[0].id, stored[1].id);
+    let (blog, other) = (stored[0].id, stored[1].id);
     let edit =
         [("csrf", csrf.as_str()), ("name", "The Blog"), ("address", "https://blog.example/atom"), ("extract", "auto")];
     assert_eq!(admin.post(&site, &format!("/sources/{blog}"), &edit).await.location, "/sources?saved=saved");
     assert_eq!(
-        admin.post(&site, &format!("/sources/{paper}/delete"), &[("csrf", &csrf)]).await.location,
+        admin.post(&site, &format!("/sources/{other}/delete"), &[("csrf", &csrf)]).await.location,
         "/sources?saved=removed"
     );
     assert_eq!(
         mary.post(&site, &format!("/sources/{blog}/delete"), &[("csrf", &token)]).await.status,
         StatusCode::FORBIDDEN
     );
-    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
     assert_eq!(stored.len(), 1);
     assert_eq!(
         (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].enabled),
         ("The Blog", "https://blog.example/atom", false, false)
     );
-    assert!(admin.get(&site, "/sources").await.text.contains("1 source, 1 paused, 0 failing."));
+    assert!(admin.get(&site, "/sources").await.text.contains("3 sources, 1 paused, 0 failing."));
+}
+
+#[tokio::test]
+async fn built_in_sources_are_only_switched_on_or_off() {
+    let site = site(true).await;
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    let page = admin.get(&site, "/sources").await;
+    let csrf = page.csrf();
+    assert!(page.text.contains("<b class=\"wide\">Hacker News</b>") && page.text.contains("Lobsters"));
+    let builtin = |all: Vec<forenoon_web::sources::Source>, key: &str| {
+        all.into_iter().find(|source| source.builtin == key).expect("a built-in source")
+    };
+    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    assert!(hn.kind == "builtin" && hn.enabled);
+
+    let path = format!("/sources/{}/toggle", hn.id);
+    assert_eq!(admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "0")]).await.location, "/sources?saved=saved");
+    assert!(!builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews").enabled);
+    assert!(admin.get(&site, "/sources").await.text.contains(r#"<button name="enabled" value="1">Turn on</button>"#));
+
+    // It cannot be renamed, given an address or removed; and a feed cannot be toggled this way.
+    let edit = [("csrf", csrf.as_str()), ("name", "Mine"), ("address", "https://evil.example/feed"), ("enabled", "1")];
+    admin.post(&site, &format!("/sources/{}", hn.id), &edit).await;
+    admin.post(&site, &format!("/sources/{}/delete", hn.id), &[("csrf", &csrf)]).await;
+    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    assert_eq!((hn.name.as_str(), hn.url.as_str(), hn.enabled), ("Hacker News", "", false));
+
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    let token = mary.get(&site, "/account").await.csrf();
+    assert_eq!(mary.post(&site, &path, &[("csrf", &token), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(admin.post(&site, &path, &[("csrf", "wrong"), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
+    assert!(!builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews").enabled);
+}
+
+#[tokio::test]
+async fn calibre_recipes_are_chosen_from_the_list_with_logins_kept_apart() {
+    let site = site(true).await;
+    let (recipes, logins) = (site.folder.path().join("recipes"), site.folder.path().join("logins"));
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    let page = admin.get(&site, "/sources").await;
+    let csrf = page.csrf();
+    assert!(page.text.contains("has not published its list") && !page.text.contains(r#"action="/sources/recipe""#));
+
+    // The recipes container publishes what it can fetch.
+    std::fs::create_dir_all(&recipes).unwrap();
+    std::fs::write(
+        recipes.join("catalogue.json"),
+        r#"{"recipes": [{"title": "Free Paper", "language": "en", "login": "no"},
+            {"title": "Paid <Paper>", "language": "en_GB", "login": "yes"}], "custom": ["mine.recipe"]}"#,
+    )
+    .unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains(r#"<option value="Paid &#60;Paper&#62;">en_GB · needs a login</option>"#));
+    assert!(text.contains(r#"<option value="mine.recipe">your own recipe file</option>"#));
+
+    let bad = admin.post(&site, "/sources/recipe", &[("csrf", &csrf), ("name", ""), ("recipe", "Made Up")]).await;
+    assert!(bad.status == StatusCode::BAD_REQUEST && bad.text.contains("Made Up is not a recipe this Calibre has"));
+    for (name, recipe) in [("", "Free Paper"), ("The Paid One", "Paid <Paper>")] {
+        let form = [("csrf", csrf.as_str()), ("name", name), ("recipe", recipe)];
+        assert_eq!(admin.post(&site, "/sources/recipe", &form).await.location, "/sources?saved=recipe");
+    }
+    let stored: Vec<_> = forenoon_web::sources::list(&site.pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|source| source.kind == "recipe")
+        .collect();
+    let rows: Vec<_> = stored
+        .iter()
+        .map(|s| {
+            (s.name.as_str(), s.recipe.as_str(), s.recipe_title.as_str(), s.extract.as_str(), s.check_state.as_str())
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Free Paper", "free-paper", "Free Paper", "feed", ""),
+            ("The Paid One", "paid-paper", "Paid <Paper>", "feed", "")
+        ]
+    );
+    // The list the recipes container runs is written for it, and each new recipe is asked for now.
+    let conf = std::fs::read_to_string(recipes.join("recipes.conf")).unwrap();
+    assert!(conf.ends_with("free-paper = Free Paper\npaid-paper = Paid <Paper>\n"), "{conf}");
+    assert!(recipes.join(".requests/free-paper").exists() && recipes.join(".requests/paid-paper").exists());
+
+    // While it is being fetched the page says so and reloads; then it shows how the run went.
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Fetching now") && text.contains("http-equiv"));
+    assert!(text.contains(r#"<summary class="hint failing">This recipe needs a subscriber"#));
+    assert!(text.contains(r#"<summary class="hint">This recipe does not ask for a login.</summary>"#));
+    assert_eq!(text.matches("<details open>").count(), 1, "only the one that needs a login is opened");
+    std::fs::remove_dir_all(recipes.join(".requests")).unwrap();
+    std::fs::write(
+        recipes.join("status.json"),
+        r#"{"free-paper": {"at": "2026-10-13T05:02:11-04:00", "ok": true, "note": "wrote 2026-10-13.epub (31415 bytes)"},
+            "paid-paper": {"at": "2026-10-13T05:03:40-04:00", "ok": false, "note": "failed (exit 1): <b>Login failed</b>"}}"#,
+    )
+    .unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Fetched 2026-10-13 05:02: wrote 2026-10-13.epub (31415 bytes)."));
+    assert!(text.contains(
+        r#"<p class="hint failing">Fetch failed 2026-10-13 05:03: failed (exit 1): &#60;b&#62;Login failed&#60;/b&#62;</p>"#
+    ));
+    assert!(!text.contains("http-equiv"));
+
+    // A login goes to its own folder, is never shown again, and the recipe is fetched with it.
+    let paid = stored[1].id;
+    let login = format!("/sources/{paid}/login");
+    let empty = admin.post(&site, &login, &[("csrf", &csrf), ("username", "me@example.com"), ("password", "")]).await;
+    assert!(empty.status == StatusCode::BAD_REQUEST && empty.text.contains("needs a username and a password"));
+    let form = [("csrf", csrf.as_str()), ("username", "me@example.com"), ("password", "s3cret \"quoted\"")];
+    assert_eq!(admin.post(&site, &login, &form).await.location, "/sources?saved=login");
+    let saved: String = std::fs::read_to_string(logins.join("paid-paper.json")).unwrap();
+    assert_eq!(saved, r#"{"password":"s3cret \"quoted\"","username":"me@example.com"}"#);
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(logins.join("paid-paper.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    assert!(recipes.join(".requests/paid-paper").exists() && !recipes.join("paid-paper.json").exists());
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Login saved for me@example.com.") && !text.contains("s3cret"));
+
+    // Fetch now, pause (it leaves the list), and remove (its login goes with it).
+    std::fs::remove_dir_all(recipes.join(".requests")).unwrap();
+    let free = stored[0].id;
+    assert_eq!(
+        admin.post(&site, &format!("/sources/{free}/fetch"), &[("csrf", &csrf)]).await.location,
+        "/sources?saved=fetching"
+    );
+    assert!(recipes.join(".requests/free-paper").exists());
+    let edit = [("csrf", csrf.as_str()), ("name", "Free"), ("recipe", "mine.recipe"), ("pinned", "1")];
+    assert_eq!(admin.post(&site, &format!("/sources/{free}"), &edit).await.location, "/sources?saved=saved");
+    assert!(!std::fs::read_to_string(recipes.join("recipes.conf")).unwrap().contains("free-paper"));
+    let edit = [("csrf", csrf.as_str()), ("name", "Free"), ("recipe", "mine.recipe"), ("enabled", "1")];
+    admin.post(&site, &format!("/sources/{free}"), &edit).await;
+    assert!(std::fs::read_to_string(recipes.join("recipes.conf")).unwrap().contains("free-paper = mine.recipe\n"));
+    assert_eq!(
+        admin.post(&site, &format!("/sources/{paid}/delete"), &[("csrf", &csrf)]).await.location,
+        "/sources?saved=removed"
+    );
+    assert!(!logins.join("paid-paper.json").exists());
+    assert!(!std::fs::read_to_string(recipes.join("recipes.conf")).unwrap().contains("paid-paper"));
+
+    // None of it is open to a reader.
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    let token = mary.get(&site, "/account").await.csrf();
+    for path in [format!("/sources/{free}/login"), format!("/sources/{free}/fetch"), "/sources/recipe".to_owned()] {
+        let form =
+            [("csrf", token.as_str()), ("username", "x"), ("password", "y"), ("name", ""), ("recipe", "Free Paper")];
+        assert_eq!(mary.post(&site, &path, &form).await.status, StatusCode::FORBIDDEN, "{path}");
+    }
+    assert!(!logins.join("free-paper.json").exists());
+}
+
+#[tokio::test]
+async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_default() {
+    let site = site(true).await;
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    let page = admin.get(&site, "/settings").await;
+    let csrf = page.csrf();
+    assert!(page.text.contains(r#"<input name="delivery_time" type="time" value="06:00" required>"#));
+    assert!(page.text.contains(r#"name="llm.enabled" value="1" checked"#) && !page.text.contains("changed"));
+    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/settings">Settings</a>"#));
+
+    // Every field as the page shows it, with a few changed.
+    let defaults = [
+        ("format", "issue"),
+        ("max_age_days", "3"),
+        ("max_story_entries", "3"),
+        ("max_article_words", "45000"),
+        ("images.grayscale", "1"),
+        ("llm.enabled", "1"),
+        ("llm.model", "claude-haiku-5-5"),
+        ("llm.daily_token_cap", "600000"),
+        ("llm.input_price", "0.1"),
+        ("llm.output_price", "0.5"),
+        ("llm.read_candidates", "40"),
+        ("llm.explore_slots", "1"),
+        ("llm.group_stories", "1"),
+        ("llm.follow_links", "1"),
+        ("llm.show_reasons", "1"),
+        ("llm.check_extraction", "1"),
+        ("discovery.min_score", "6.0"),
+        ("alerts.enabled", "1"),
+        ("alerts.source_failures", "3"),
+        ("keep_pages_days", "-1"),
+        ("keep_issues_days", "-1"),
+    ];
+    let form = |changes: &[(&'static str, &'static str)]| -> Vec<(&'static str, String)> {
+        let mut form: Vec<(&'static str, String)> = vec![("csrf", csrf.clone())];
+        form.extend(defaults.iter().map(|(key, value)| (*key, (*value).to_owned())));
+        form.extend(changes.iter().map(|(key, value)| (*key, (*value).to_owned())));
+        form
+    };
+    let send = |form: Vec<(&'static str, String)>| form;
+    let changed = send(form(&[("delivery_time", "07:30"), ("discovery.slots", "4"), ("alerts.to", "Ops@Example.com")]));
+    let changed: Vec<(&str, &str)> = changed.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    assert_eq!(admin.post(&site, "/settings", &changed).await.location, "/settings?saved=1");
+    let stored: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value FROM settings ORDER BY key").fetch_all(&site.pool).await.unwrap();
+    let stored: Vec<(&str, &str)> = stored.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
+    // The unticked box (alerts.on_empty) is stored as off; everything left at its default is not stored.
+    assert_eq!(
+        stored,
+        [
+            ("alerts.on_empty", "0"),
+            ("alerts.to", "ops@example.com"),
+            ("delivery_time", "07:30"),
+            ("discovery.slots", "4")
+        ]
+    );
+    let text = admin.get(&site, "/settings?saved=1").await.text;
+    assert!(
+        text.contains("Saved.") && text.contains(r#"value="07:30""#) && text.matches("changed</span>").count() == 4
+    );
+
+    // Back to the defaults: the rows go away.
+    let back = form(&[("delivery_time", "06:00"), ("discovery.slots", "2"), ("alerts.on_empty", "1")]);
+    let back: Vec<(&str, &str)> = back.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    admin.post(&site, "/settings", &back).await;
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
+    assert_eq!(left, 0);
+
+    // One wrong value saves nothing and keeps what was typed.
+    let wrong = form(&[("delivery_time", "25:00"), ("discovery.slots", "9")]);
+    let wrong: Vec<(&str, &str)> = wrong.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    let reply = admin.post(&site, "/settings", &wrong).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Deliver at: give a time such as 06:00."));
+    assert!(reply.text.contains(r#"name="discovery.slots" type="number" step="1" min="0" max="50" value="9""#));
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
+    assert_eq!(left, 0);
+
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    assert_eq!(mary.get(&site, "/settings").await.status, StatusCode::FORBIDDEN);
+    let token = mary.get(&site, "/account").await.csrf();
+    let form = [("csrf", token.as_str()), ("delivery_time", "01:00")];
+    assert_eq!(mary.post(&site, "/settings", &form).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(admin.post(&site, "/settings", &[("csrf", "wrong")]).await.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -826,7 +1054,7 @@ async fn a_thumbnail_is_served_only_to_a_reader_the_article_was_delivered_to() {
     article(pool, "a1", "https://blog.example/1", "Blog", "With a thumbnail", "john", sent).await;
     article(pool, "a2", "https://blog.example/2", "Blog", "Without one", "john", sent).await;
     sqlx::query("UPDATE articles SET image_url = 'https://blog.example/lead.jpg'").execute(pool).await.unwrap();
-    let thumbs = site._folder.path().join("thumbs");
+    let thumbs = site.folder.path().join("thumbs");
     std::fs::create_dir_all(&thumbs).unwrap();
     std::fs::write(thumbs.join("a1.jpg"), b"\xff\xd8\xff jpeg bytes").unwrap();
 

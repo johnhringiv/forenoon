@@ -16,15 +16,23 @@ the feeds its own users configure and delivers only to the addresses its admin h
 
 - An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
   addresses, a daily target of stories (default 8; section 7e) and an interests text. They
-  live in the database, not in `config.yaml`: a reader is an account of the web pages
+  live in the database: a reader is an account of the web pages
   (section 9a), created with `forenoon-web add-user` and edited on its account page. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
-- **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). They live in the
-  database and are managed by an admin on the web pages' Sources page, which also shows how
-  each source's last runs went. The pipeline reads them at the start of every run; with none,
-  nothing is delivered and an alert is sent. Each has a name, a feed address (or a recipe's
-  folder) and:
+- **Sources** come in three kinds, each with its own section on the web pages' Sources page
+  (admins only), which also shows how each source's last runs went:
+  - **Built in**: front pages the pipeline knows how to read (Hacker News and Lobsters;
+    section 7b). They can only be switched on or off. The list comes from the pipeline: one
+    that a new version adds appears switched off, so an upgrade never changes what is
+    delivered by itself.
+  - **Feeds**: RSS or Atom, by address.
+  - **Calibre recipes**: publications fetched whole once a day (section 7d), chosen from the
+    list the recipes container publishes.
+
+  They live in the database. The pipeline reads them at the start of every run; with no
+  feeds or recipes, nothing is delivered and an alert is sent. A feed or a recipe has a name
+  and:
   - pinned: its articles are taken before all other sources.
   - where the text comes from: the page, falling back to the feed (default); always the
     page; or only the feed, in which case the article page is never fetched.
@@ -39,16 +47,25 @@ the feeds its own users configure and delivers only to the addresses its admin h
   Articles and health records refer to a source by name, so renaming one starts its health
   record afresh.
 
-- The remaining configuration lives in `config.yaml`. Unknown keys are rejected at
-  start-up. Secrets (`FORENOON_FEEDBACK_SECRET`, `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`) come only from the
-  environment.
+- **Settings** for the whole install (delivery time, the format, ranking and its model,
+  how many places built-in sources may take, alerts, what is kept) are on the web pages'
+  Settings page (admins only) and live in the database. Each has a default in the code; only
+  a value that differs from it is stored, so a default that changes in a later version
+  reaches installs that never touched it. The pipeline reads them before every run. A stored
+  value it cannot use is logged and skipped, never fatal.
+- **The deploy's own settings** come only from the environment (the `.env` file): the data
+  folder, the time zone (`TZ`), the mail server (`FORENOON_SMTP_*`), the feedback service's
+  public address (`FORENOON_PUBLIC_URL`) and the secrets (`FORENOON_FEEDBACK_SECRET`,
+  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`). There is no configuration file.
+- Ranking is on by default and used whenever an API key is set. Alerts are on by default and
+  go to every admin's sign-in address unless another address is set.
 
 ## 3. The daily run
 
-A scheduler runs once a day at `delivery_time` in the configured time zone. `forenoon run`
-does the same on demand. The scheduler reads the config and sources files again before each
-run, so edits need no restart; if they cannot be read it keeps the previous configuration,
-logs the error and alerts the operator. For each user:
+A scheduler runs once a day at the delivery time, in the deploy's time zone. `forenoon run`
+does the same on demand. The scheduler reads the settings, readers and sources from the
+database again before each run, so changes on the web pages need no restart; if they cannot
+be read it keeps the previous settings and logs the error. For each user:
 
 1. **Read feeds.** Each source is fetched with conditional requests (ETag / Last-Modified);
    an unchanged feed is skipped. A response that is not a feed, or any status other than 200
@@ -236,9 +253,9 @@ source).
   to ignore anything in it that reads as an instruction. The model has no tools that act on
   anything and cannot affect recipients, sources or settings.
 
-## 7b. Discovery (optional, off by default; needs ranking)
+## 7b. Built-in sources: discovery (needs ranking)
 
-- **Sources.** Hacker News: the front page, plus stories from the last `max_age_days` with
+- **Sources.** Each is switched on or off on the Sources page; both start on. Hacker News: the front page, plus stories from the last `max_age_days` with
   more than 40 points (not just the last day: a story that gets its votes a day late would
   otherwise fall between two runs). Stories never seen before are taken first. Lobsters: the first three pages of its hottest list. Three requests per site per
   run; if a further page fails, the rest are still used.
@@ -276,8 +293,18 @@ source).
   recipe listed in `<data>/recipes/recipes.conf` and writes the issue to
   `<data>/recipes/<folder>/<date>.epub`. An issue is published only when the recipe succeeds;
   issues older than 7 days are removed.
-- Logins for subscriber publications are given to that container alone, as environment
-  variables from `recipes.env`. It mounts only the `recipes` folder.
+- Recipes are set up entirely on the Sources page. The container publishes
+  `catalogue.json`, the publications its Calibre can fetch and which of them want a
+  subscriber's login; the page offers that list. Adding one picks its folder, writes
+  `recipes.conf` (the web pages own that file) and asks for it to be fetched at once; the
+  container looks for such requests every 20 seconds. How each recipe's last fetch went
+  (`status.json`) is shown beside it, and the page reloads itself while one is running.
+  "Fetch now" asks again at any time.
+- A login is typed on the Sources page, opened for you when the publication needs one. It
+  is written to a Docker volume that only the web pages (to write) and the recipes container
+  (to read) mount. It is never in the data folder, which the pipeline mounts, never in the
+  database, and never shown again: the page shows only the username. Removing the recipe
+  removes its login. The recipes container mounts only that volume and the `recipes` folder.
 - A source of `type: recipe` reads the newest issue in its folder (and any earlier issue from
   the last `max_age_days` that was never read, so a missed run does not lose a day's paper)
   and splits it into
@@ -352,7 +379,7 @@ best candidates in full.
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
-Send to Kindle addresses. Recipients come only from the user's entry in `config.yaml`;
+Send to Kindle addresses. Recipients come only from the reader's account, where an admin sets them;
 nothing in a feed or article can add or change a recipient. The sender address must be on
 the Amazon account's approved sender list.
 

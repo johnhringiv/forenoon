@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "DELETE FROM sources WHERE id = ?",
+  "query": "DELETE FROM settings WHERE key = ?",
   "describe": {
     "columns": [],
     "parameters": {
@@ -8,5 +8,5 @@
     },
     "nullable": []
   },
-  "hash": "8c8f1479c14584ba477f79f6a600bf17f12030eadb577546223f3d2b0157d56c"
+  "hash": "f4a125ef83692706a0b2292ad18d44bb14d299f85cab0f149566e133211c3aa8"
 }

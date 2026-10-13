@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM sources WHERE id = ? AND kind != 'builtin'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "59889a74cf2377d6ef069b2b50d80446344041e5d8e18093c9714d4f6653c602"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT recipe, recipe_title FROM sources\n         WHERE kind = 'recipe' AND enabled = 1 AND recipe_title != '' ORDER BY recipe",
+  "describe": {
+    "columns": [
+      {
+        "name": "recipe",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "recipe_title",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f6d25089c04f6534e9b6e1f7b64d174e6752bf7d68008a4eb6688b86cb318b39"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET name = ?, url = ?, extract = ?, pinned = ?, enabled = ?,\n                 check_state = 'pending', check_note = '' WHERE id = ? AND kind = 'rss'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "15f18249a9a9ccaa03e10ce88610bd5df260f076e8a7df0aae02f95f392863d7"
+}

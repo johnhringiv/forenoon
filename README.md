@@ -13,8 +13,8 @@ articles round-robin across sources.
 
 - **Stories, not links.** A short post that only points at an article is replaced by the
   article. Several reports of one event share a slot.
-- **Subscriptions.** Publications you pay for come in through Calibre news recipes, with
-  your login kept in one isolated container.
+- **Subscriptions.** Publications you pay for come in through Calibre news recipes, picked
+  from a list on the web pages, with your login kept where only the recipes container reads it.
 - **Yours.** One SQLite file and a folder on your own machine. The only public endpoint
   accepts signed rating links and nothing else.
 
@@ -24,27 +24,30 @@ What it does today is described in [docs/PRD.md](docs/PRD.md).
 
 ```sh
 uv sync
-mkdir run && cp deploy/config.example.yaml run/config.yaml
-export FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
+mkdir -p run/data
+export FORENOON_DATA_DIR=run/data FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
 
 # a reader to deliver to; asks for a password for the web pages
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)
 # the web pages: sign in at http://127.0.0.1:8081/ and add feeds on Sources; stop with Ctrl-C
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 serve --listen 127.0.0.1:8081)
 
-uv run forenoon --config run/config.yaml report               # per-source extraction report
-uv run forenoon --config run/config.yaml run --dry-run --out run/out   # build EPUBs, send nothing
+uv run forenoon report                          # per-source extraction report
+uv run forenoon run --dry-run --out run/out     # build EPUBs, send nothing
 uv run forenoon golden --out run/out                           # rendering test file for the device
 ```
 
-Then fill in `smtp` and `public_base_url` in `run/config.yaml`, set
-`FORENOON_SMTP_PASSWORD`, and run `forenoon run` to deliver for real.
+To deliver for real, set the mail server in the environment (`FORENOON_SMTP_HOST`,
+`FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`) and run
+`forenoon run`. There is no configuration file: what belongs to the deploy is in the
+environment (`deploy/.env.example` lists it all), and everything else is set on the web
+pages and kept in the database.
 
 | Command                                            | What it does                                                                                                               |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `forenoon report`                                  | Extracts the latest items of every source and prints clean / degraded / failed with reasons. Delivers and records nothing. |
 | `forenoon run [--dry-run] [--out DIR] [--user ID]` | One delivery now. Safe to rerun: nothing is sent twice and the daily cap holds.                                            |
-| `forenoon schedule`                                | Runs `forenoon run` every day at `delivery_time`. This is the container's default command.                                 |
+| `forenoon schedule`                                | Runs `forenoon run` every day at the delivery time. This is the container's default command.                               |
 | `forenoon feedback`                                | Serves the public feedback endpoint (`/f/<token>`, `/healthz`).                                                            |
 | `forenoon feedback-log`                            | Prints the logged feedback.                                                                                                |
 | `forenoon golden`                                  | Writes a test EPUB with code, tables, lists and an image.                                                                  |
@@ -65,7 +68,8 @@ Setup guides:
 - All fetched content is untrusted. Article HTML is reduced to an allowlist of elements and
   attributes; scripts, iframes, forms, styles and remote resources never reach the EPUB.
   Images are re-encoded and embedded.
-- Recipients come only from `config.yaml`. Nothing in a feed or article can choose one.
+- Recipients come only from readers' accounts, where an admin sets them. Nothing in a feed or
+  article can choose one.
 - The fetcher refuses non-public addresses, on redirects too. This check does not stop DNS
   rebinding, so do not give the container network access to anything sensitive.
 - Feedback links carry an HMAC-signed, expiring token. The endpoint needs no login, is

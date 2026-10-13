@@ -72,7 +72,7 @@ def check_sources(cfg: Config, store: Store, fetcher: Fetcher) -> int:
                 written = datetime.fromtimestamp(issues[-1].stat().st_mtime, tz=UTC)
                 store.finish_source_check(row["id"], "ok", f"Newest issue: {written:%-d %B %Y}.")
             else:
-                note = f"No issue in recipes/{row['recipe']} yet. Is it listed in recipes.conf?"
+                note = f"No issue in recipes/{row['recipe']} yet."
                 store.finish_source_check(row["id"], "failed", note)
             continue
         try:

@@ -85,6 +85,9 @@ jobs:
           mkdir -m 777 out && : > out/recipes.conf
           docker run --rm --read-only --tmpfs /tmp --cap-drop ALL -v "$PWD/out:/recipes" \
             forenoon-recipes:ci once
+          # The list the Sources page offers, with which publications want a login.
+          grep -q '"title": "Financial Times"' out/catalogue.json
+          grep -q '"login": "yes"' out/catalogue.json
 
   web:
     name: Web app checks, image build and smoke test
