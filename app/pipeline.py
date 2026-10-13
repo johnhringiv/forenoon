@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from . import archive
@@ -49,6 +50,15 @@ MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 # Never followed as an article's subject: project and package pages, and reference works.
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
+# Documentation is never what an article is about, whatever a model says: the address gives it away.
+DOCS_HOST_LABELS = {"docs", "doc", "manual", "man", "developer", "developers", "api", "wiki"}
+DOCS_PATH_PARTS = {"docs", "doc", "manual", "manuals", "documentation", "reference", "api", "man", "wiki"}
+
+
+def _is_documentation(url: str) -> bool:
+    parts = urlsplit(url)
+    labels = (parts.hostname or "").lower().split(".")[:-2]
+    return bool(DOCS_HOST_LABELS & set(labels) or DOCS_PATH_PARTS & set(parts.path.lower().strip("/").split("/")))
 
 
 @dataclass
@@ -238,7 +248,7 @@ def _linked_items(item: Item, body, store: Store, user: User, taken: set[str]) -
         host = site_host(url)
         if host == home or host.endswith("." + home) or home.endswith("." + host):
             continue
-        if any(host == skip or host.endswith("." + skip) for skip in NOT_A_SUBJECT):
+        if any(host == skip or host.endswith("." + skip) for skip in NOT_A_SUBJECT) or _is_documentation(url):
             continue
         linked = article_id(url)
         if linked in out or linked in taken or store.is_delivered(user.id, linked):
@@ -547,6 +557,10 @@ def run(
         if verdict and verdict.complete == "bad":
             # What the model read is what would be sent: not worth a slot today.
             entry.reason = "; ".join(filter(None, [entry.reason, "held back: the model judged it not the article"]))
+            return None
+        if cfg.max_article_words and result.word_count > cfg.max_article_words:
+            limit = f"held back: {result.word_count} words is over the limit of {cfg.max_article_words}"
+            entry.reason = "; ".join(filter(None, [entry.reason, limit]))
             return None
         if article is None:
             if result.status == "error":

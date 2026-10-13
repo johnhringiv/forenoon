@@ -124,6 +124,10 @@ class Config:
     # learning from later. A number of days prunes older ones; 0 keeps none; -1 keeps all.
     keep_pages_days: int = -1
     keep_issues_days: int = -1
+    # A failsafe, not the main control (the model choosing articles is): anything longer is a
+    # manual or a book and is not delivered. A 77,000-word chapter was in the issue an older
+    # Kindle rebooted on. 0 = no limit.
+    max_article_words: int = 45_000
     # The most articles one story may bring. The daily cap counts stories, not articles.
     max_story_entries: int = 3
     # "issue": one book a day with a contents page. "articles": one book per article.

@@ -15,8 +15,11 @@
 {% for issue in issues %}
 <section><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
 <div class="grid">
-{% for card in issue.cards %}
-<article id="a-{{ card.id }}">
+{% for story in issue.stories %}
+<article{% if story.cards.len() > 1 %} class="story"{% endif %}>
+{% for card in story.cards %}
+{% if loop.first %}
+<div class="lead" id="a-{{ card.id }}">
 {% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
 <div class="body">
 <p class="kicker">{{ card.kicker }}</p>
@@ -29,14 +32,24 @@
 {% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
 {% if card.unrated %}<span>Not rated</span>{% endif %}
 </div>
-<form class="rate" method="post" action="/rate">
-<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
-{% for star in card.stars %}<button name="rating" value="{{ star.n }}"{% if star.on %} class="on"{% endif %}>{{ star.n }}</button>{% endfor %}
-<button class="gap{% if card.finished %} on{% endif %}" name="finished" value="{% if card.finished %}0{% else %}1{% endif %}">Finished</button>
-{% if !card.reasons.is_empty() %}<select class="gap" name="reason"><option value="">Why? (optional)</option>{% for reason in card.reasons %}<option value="{{ reason.key }}"{% if reason.selected %} selected{% endif %}>{{ reason.label }}</option>{% endfor %}</select><button name="set" value="reason">Save</button>{% endif %}
-{% if !card.unrated %}<button class="gap" name="clear" value="1">Clear</button>{% endif %}
-</form>
+{% include "_rate.html" %}
 </div>
+</div>
+{% else %}
+{% if loop.index == 2 %}<div class="more"><p class="more-title">{{ story.more }}</p>{% endif %}
+<div class="member" id="a-{{ card.id }}">
+<p class="kicker">{{ card.kicker }}</p>
+<h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4>
+<div class="meta">
+{% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
+{% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
+{% if card.unrated %}<span>Not rated</span>{% endif %}
+</div>
+{% include "_rate.html" %}
+</div>
+{% if loop.last %}</div>{% endif %}
+{% endif %}
+{% endfor %}
 </article>
 {% endfor %}
 </div></section>

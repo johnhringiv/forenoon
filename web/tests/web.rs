@@ -314,9 +314,9 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     let done = browser.post(&site, "/rate", &with(&[("rating", "2")])).await;
     assert!(done.status == StatusCode::SEE_OTHER && done.location == "/?show=rated#a-a1", "{}", done.location);
     browser.post(&site, "/rate", &with(&[("finished", "1")])).await;
-    browser.post(&site, "/rate", &with(&[("set", "reason"), ("reason", "thin")])).await;
+    browser.post(&site, "/rate", &with(&[("reason", "thin")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, "thin"));
-    browser.post(&site, "/rate", &with(&[("set", "reason"), ("reason", "more-topic")])).await; // not for a low rating
+    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await; // not for a low rating
     assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, "thin"));
     let log: Vec<(String, String)> =
         sqlx::query_as("SELECT signal, source FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
@@ -333,7 +333,12 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
             && unrated.contains("Post 2")
             && !unrated.contains("Post 1")
     );
-    assert!(rated.contains("Too thin, nothing in it") && rated.contains(r#"<option value="thin" selected>"#));
+    assert!(
+        rated.contains("Too thin, nothing in it")
+            && rated.contains(
+                r#"<button name="reason" value="thin" title="Too thin, nothing in it" class="on">Thin</button>"#
+            )
+    );
 
     // Re-rating high drops the reason that no longer fits.
     browser.post(&site, "/rate", &with(&[("rating", "5")])).await;
@@ -566,4 +571,44 @@ async fn email_is_confirmed_softly_and_restores_a_forgotten_password() {
     assert_eq!(old.status, StatusCode::UNAUTHORIZED);
     let now = fresh.post(&site, "/login", &[("email", "new@example.com"), ("password", new)]).await;
     assert_eq!(now.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn a_storys_articles_share_one_card_with_the_lead_first() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    // Delivered order is by title, which puts a follow-up before its lead.
+    article(pool, "follow", "https://deno.example/blog", "deno.example via Blog", "An announcement", "john", sent)
+        .await;
+    article(pool, "lead", "https://blog.example/deno", "Blog", "Deno is joining Cloudflare", "john", sent).await;
+    article(pool, "alone", "https://blog.example/other", "Blog", "Something else", "john", sent).await;
+    sqlx::query("UPDATE deliveries SET story = 'lead' WHERE article_id IN ('lead', 'follow')")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let text = browser.get(&site, "/").await.text;
+    assert!(text.contains("3 articles in 2 stories, sent 06:00"), "{text}");
+    assert_eq!(text.matches("<article").count(), 2);
+    let story = text.split("<article").find(|part| part.contains(r#"class="story""#)).expect("a story card");
+    let (lead, more) = story.split_once(r#"<div class="more">"#).expect("the story's other articles");
+    assert!(
+        lead.contains(r#"id="a-lead""#)
+            && lead.contains("Deno is joining Cloudflare")
+            && !lead.contains("An announcement")
+    );
+    assert!(
+        more.contains("1 more on this story") && more.contains(r#"id="a-follow""#) && more.contains("An announcement")
+    );
+    assert!(!story.contains("Something else"));
+
+    // Each article in the story is still rated on its own.
+    let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();
+    let done = browser.post(&site, "/rate", &[("csrf", &csrf), ("article", "follow"), ("rating", "4")]).await;
+    assert_eq!(done.location, "/#a-follow");
+    assert_eq!(db::get_rating(pool, "john", "follow").await.unwrap().unwrap().rating, Some(4));
+    assert!(db::get_rating(pool, "john", "lead").await.unwrap().is_none());
 }

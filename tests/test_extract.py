@@ -177,3 +177,63 @@ def test_article_split_across_sibling_containers_is_recovered_whole():
     # An ordinary page is untouched: the first choice already covers it.
     plain = f"<html><body><article><h2>Only part</h2>{para(1)}{para(2)}</article></body></html>"
     assert extract("https://x.example/plain", plain, "", "page").method == "page"
+
+
+def test_footnotes_inline_code_and_callouts_survive_as_structure():
+    filler = "<p>" + "Plain words about compilers and borrow checking. " * 30 + "</p>"
+    page = f"""<html><body><article>
+    <h2 id="intro">Intro</h2>
+    <p>A claim.<a class="ref" href="#note0">0</a> Another.<sup id="fnref:1"><a href="#fn:1">[1]</a></sup>
+    See <a href="#later">the later part</a> or <a href="#missing">elsewhere</a>.
+    A marginal thought<label class="margin-toggle sidenote-number"></label><input class="margin-toggle">
+    <span class="sidenote">Said in the margin.</span> continues here.</p>
+    <div class="callout">Take care with <span class="inline-code">x[0]</span> here.</div>
+    <pre><code><span class="keyword">let</span> x = 1; <span class="comment">// one</span></code></pre>
+    {filler}
+    <h3 id="later">Later</h3>{filler}
+    <div class="notes"><label>Notes [+]</label><b>Side Notes</b>
+      <div id="note0" class="note" onclick="x()"><span class="starter">0</span><p>The first note.</p></div></div>
+    <ol class="footnotes"><li id="fn:1"><p>The second note. <a href="#fnref:1">↩</a></p></li></ol>
+    </article></body></html>"""
+    result = extract("https://blog.example/post", page, "")
+    out = lxml.html.tostring(result.body, encoding="unicode")
+
+    # References point at notes gathered at the end, by ids of our own making.
+    assert out.count('class="noteref"') == 3 and out.count('<aside id="fn-') == 3
+    assert '<a href="#fn-1" class="noteref" id="fnref-1">0</a>' in out
+    notes = out[out.index("<h3>Notes</h3>") :]
+    assert out.index("<h3>Notes</h3>") > out.index("Later")
+    for text in ("The first note.", "The second note.", "Said in the margin."):
+        assert text in notes and text not in out[: out.index("<h3>Notes</h3>")]
+    assert '<a href="#fnref-1">0</a> The first note.' in notes and "↩" not in out
+    assert "A marginal thought" in out and "continues here." in out
+    # The notes' own chrome and every id, class and handler from the page are gone.
+    assert "Side Notes" not in out and "Notes [+]" not in out
+    assert "note0" not in out and "onclick" not in out and 'class="note"' not in out
+    # A link to a heading stays inside the book; one with no target still goes to the site.
+    assert '<a href="#sec-1">the later part</a>' in out and '<h3 id="sec-1">' in out
+    assert 'href="https://blog.example/post#missing"' in out
+    assert "<blockquote>" in out and "<code>x[0]</code>" in out
+    assert "<b>let</b>" in out and "<i>// one</i>" in out
+
+
+def test_a_page_cannot_forge_structure_markers():
+    filler = "<p>" + "Plain words about compilers and borrow checking. " * 30 + "</p>"
+    page = f"""<html><body><article><p data-fn="note" data-fn-n="7" id="fn-9">Body text.
+    <a data-fn="jump" data-fn-n="3" href="javascript:alert(1)">x</a></p>{filler}</article></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
+    assert "fn-" not in out and "sec-" not in out and "javascript" not in out and "data-fn" not in out
+
+
+def test_a_notes_link_back_is_not_taken_for_a_reference():
+    """Substack's shape: the reference and the note's number link to each other."""
+    filler = "<p>" + "Plain words about forecasting and base rates. " * 30 + "</p>"
+    feed = f"""<p>A claim in the text.<a class="footnote-anchor" href="#footnote-1" id="footnote-anchor-1">1</a>
+    It goes on for a while after the reference.</p>{filler}
+    <div class="footnote"><a class="footnote-number" href="#footnote-anchor-1" id="footnote-1">1</a>
+    <div class="footnote-content"><p>The note itself.</p></div></div>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", None, feed, "feed").body, encoding="unicode")
+    text, notes = out.split("<h3>Notes</h3>")
+    assert "A claim in the text." in text and "It goes on for a while" in text and "The note itself." not in text
+    assert text.count('class="noteref"') == 1 and notes.count("<aside") == 1
+    assert '<a href="#fnref-1">1</a> The note itself.' in notes

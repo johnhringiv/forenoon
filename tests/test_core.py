@@ -272,3 +272,14 @@ def test_readers_come_from_the_web_apps_accounts_table(tmp_path):
     (reader,) = store.readers()
     assert reader.id == "john" and reader.kindle_addresses == ("a@kindle.com", "b@kindle.com")
     assert (reader.daily_cap, reader.interests, reader.name) == (16, "Compilers.", "John")
+
+
+def test_web_app_offers_the_same_reasons():
+    from pathlib import Path
+
+    from app.tokens import REASONS
+
+    rust = (Path(__file__).parent.parent / "web" / "src" / "ratings.rs").read_text()
+    for key, label in REASONS.items():
+        assert f'("{key}", "{label}")' in rust, f"web/src/ratings.rs is missing the reason {key!r}"
+    assert rust.count('", "') >= len(REASONS)

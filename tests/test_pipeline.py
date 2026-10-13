@@ -795,3 +795,35 @@ def test_saved_pages_and_books_are_kept_for_good_by_default(env):
     pruning = dataclasses.replace(cfg, keep_pages_days=30, keep_issues_days=30)
     run(pruning, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
     assert not (cfg.pages_dir / "ancient.json.gz").exists() and not (cfg.issues_dir / "ancient.epub").exists()
+
+
+def test_an_article_over_the_word_limit_is_held_back(env):
+    cfg, store, fetcher = env
+    words = len(BODY.split())
+    cfg = dataclasses.replace(cfg, max_article_words=words // 2)
+    sent = []
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
+    assert not sent and not report.delivered
+    reasons = [item.reason for source in report.sources for item in source.items]
+    held = [reason for reason in reasons if "words is over the limit of 175" in reason]
+    assert len(held) == 3  # every full-length article; the teaser fails for its own reason
+
+
+def test_documentation_is_never_followed_as_an_articles_subject():
+    from app.pipeline import _is_documentation
+
+    for url in (
+        "https://nixos.org/manual/nixos/stable/#sec-nixos-tests",
+        "https://docs.python.org/3/library/sqlite3.html",
+        "https://example.com/docs/getting-started",
+        "https://developer.example.com/guides/x",
+        "https://example.com/api/v2/widgets",
+    ):
+        assert _is_documentation(url), url
+    for url in (
+        "https://deno.com/blog/deno-joins-cloudflare",
+        "https://www.nytimes.com/2026/10/11/technology/ai-security.html",
+        "https://buttondown.com/ghuntley/archive/unikernels",
+        "https://manual-coffee.example/posts/grinding",
+    ):
+        assert not _is_documentation(url), url
