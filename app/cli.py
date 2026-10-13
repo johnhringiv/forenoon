@@ -85,6 +85,26 @@ def _reload(cfg: Config, args: argparse.Namespace, alert: bool = False) -> Confi
         return cfg
 
 
+def _send_queue(cfg: Config) -> int:
+    """Send what readers asked for on the web pages. Checked every minute by the scheduler."""
+    from .resend import send_requested
+
+    try:
+        store = Store(cfg.db_path)
+        if not store.send_requests():
+            store.close()
+            return 0
+        fetcher = Fetcher(cfg.user_agent, store)
+        try:
+            return send_requested(cfg, store, fetcher)
+        finally:
+            fetcher.close()
+            store.close()
+    except Exception:
+        log.exception("send queue failed")
+        return 0
+
+
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
     while True:
         cfg = _reload(cfg, args)
@@ -92,7 +112,9 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
         target = _next_run(cfg, datetime.now(zone))
         log.info("next delivery at %s", target.isoformat())
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
-            time.sleep(min(wait, 300))
+            time.sleep(min(wait, 60))
+            if not args.dry_run:
+                _send_queue(cfg)
         cfg = _reload(cfg, args, alert=True)
         try:
             _run_all(cfg, args)
@@ -226,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("feedback", help="serve the feedback endpoint")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)
+    sub.add_parser("send-queue", help="send the articles readers asked for on the web pages, now")
     sub.add_parser("feedback-log", help="print logged feedback")
     sub.add_parser("usage", help="print recent model calls and today's token use")
     p = sub.add_parser("checks", help="print articles the model thought were badly extracted")
@@ -253,6 +276,9 @@ def main(argv: list[str] | None = None) -> int:
             return _run_all(cfg, args)
         if args.command == "schedule":
             return _schedule(cfg, args)
+        if args.command == "send-queue":
+            print(f"{_send_queue(cfg)} sent.")
+            return 0
         if args.command == "report":
             return _report(cfg, args)
         if args.command == "checks":

@@ -485,6 +485,9 @@ struct Card {
     finished: bool,
     stars: Vec<Star>,
     reasons: Vec<ReasonOption>,
+    /// Whether a "Send to Kindle" button is offered, and what became of the last request.
+    sendable: bool,
+    sent: Option<String>,
 }
 
 struct Issue {
@@ -614,6 +617,8 @@ fn card(row: Delivered) -> Card {
         finished,
         stars: (1..=5).map(|n| Star { n, on: row.rating == Some(n) }).collect(),
         reasons,
+        sendable: false,
+        sent: None,
         id: row.id,
     }
 }
@@ -702,6 +707,22 @@ pub async fn newsstand(
             None => issue.stories.push(Story { key, more: String::new(), cards: vec![card(row)] }),
         }
     }
+    // What each article's "Send to Kindle" shows: offered to a reader with a Kindle address,
+    // unless a request is already waiting.
+    let can_send = !user.kindle_addresses.trim().is_empty();
+    let requests = db::send_states(&state.pool, &user.id).await?;
+    for card in page.issues.iter_mut().flat_map(|issue| &mut issue.stories).flat_map(|story| &mut story.cards) {
+        let last = requests.iter().rev().find(|request| request.article_id == card.id);
+        card.sendable = can_send && last.is_none_or(|request| request.status != "queued");
+        card.sent = last.map(|request| match request.status.as_str() {
+            "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
+            "sent" => {
+                let day = local(&request.requested_at, zone).map(|at| at.format("%-d %B").to_string());
+                format!("Sent to your Kindle{}.", day.map(|day| format!(" on {day}")).unwrap_or_default())
+            }
+            _ => format!("Could not be sent: {}", request.error),
+        });
+    }
     for issue in &mut page.issues {
         let articles: usize = issue.stories.iter().map(|story| story.cards.len()).sum();
         issue.count = count(articles, "article");
@@ -732,6 +753,40 @@ pub struct RateForm {
     finished: Option<String>,
     clear: Option<String>,
     reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SendForm {
+    csrf: String,
+    article: String,
+    back: Option<String>,
+}
+
+/// Ask for one delivered article to be sent to the reader's own Kindle again. This only queues
+/// it; the pipeline builds and sends the book.
+pub async fn send(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<SendForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    if user.kindle_addresses.trim().is_empty() {
+        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; an admin sets it.");
+    }
+    if !db::pipeline_ready(&state.pool).await? || !db::is_delivered(&state.pool, &user.id, &form.article).await? {
+        return refused(StatusCode::NOT_FOUND, "No such delivered article.");
+    }
+    match db::queue_send(&state.pool, &user.id, &form.article).await? {
+        db::Queued::TooMany => {
+            refused(StatusCode::TOO_MANY_REQUESTS, "That is the most articles that can be sent in a day.")
+        }
+        db::Queued::Added | db::Queued::Waiting => back_to(&form.back, &form.article),
+    }
 }
 
 /// Where to go after a change: a path on this site and nothing else.

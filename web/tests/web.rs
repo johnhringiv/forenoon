@@ -720,3 +720,68 @@ async fn sources_are_managed_by_admins_only() {
     );
     assert!(admin.get(&site, "/sources").await.text.contains("1 source, 1 paused, 0 failing."));
 }
+
+#[tokio::test]
+async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Post 1", "john", sent).await;
+    article(pool, "m1", "https://blog.example/m", "Blog", "Mary's", "mary", sent).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    // Without a Kindle address there is no button and a request is refused.
+    let page = browser.get(&site, "/").await;
+    let csrf = page.csrf();
+    assert!(!page.text.contains("Send to Kindle"));
+    let ask =
+        |article: &'static str| [("csrf", csrf.clone()), ("article", article.to_owned()), ("back", "/".to_owned())];
+    let form = ask("a1");
+    let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::BAD_REQUEST);
+
+    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    assert!(browser.get(&site, "/").await.text.contains("<button>Send to Kindle</button>"));
+    assert_eq!(browser.post(&site, "/send", &form).await.location, "/#a-a1");
+    browser.post(&site, "/send", &form).await; // pressed twice: still one request
+    let page = browser.get(&site, "/").await.text;
+    assert!(page.contains("On its way to your Kindle") && !page.contains("<button>Send to Kindle</button>"));
+
+    // Not someone else's article, not an unknown one, not without the page's token.
+    for other in ["m1", "nope"] {
+        let form = ask(other);
+        let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(
+        browser.post(&site, "/send", &[("csrf", "wrong"), ("article", "a1")]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT user_id, article_id, status FROM send_requests").fetch_all(pool).await.unwrap();
+    assert_eq!(rows, [("john".to_owned(), "a1".to_owned(), "queued".to_owned())]);
+
+    // The pipeline records the outcome; the card shows it and offers the button again.
+    sqlx::query("UPDATE send_requests SET status = 'failed', error = 'smtp said no'").execute(pool).await.unwrap();
+    let page = browser.get(&site, "/").await.text;
+    assert!(page.contains("Could not be sent: smtp said no") && page.contains("<button>Send to Kindle</button>"));
+    sqlx::query("UPDATE send_requests SET status = 'sent', requested_at = '2026-10-11T12:00:00+00:00'")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(browser.get(&site, "/").await.text.contains("Sent to your Kindle on 11 October."));
+
+    // A day's worth and no more.
+    sqlx::query("UPDATE send_requests SET requested_at = ?").bind(db::now_iso()).execute(pool).await.unwrap();
+    for _ in 1..db::SENDS_PER_DAY {
+        sqlx::query(
+            "INSERT INTO send_requests (user_id, article_id, requested_at, status) VALUES ('john', 'a1', ?, 'sent')",
+        )
+        .bind(db::now_iso())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::TOO_MANY_REQUESTS);
+}

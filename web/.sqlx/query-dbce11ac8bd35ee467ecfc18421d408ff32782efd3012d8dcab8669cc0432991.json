@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO send_requests (user_id, article_id, requested_at) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "dbce11ac8bd35ee467ecfc18421d408ff32782efd3012d8dcab8669cc0432991"
+}

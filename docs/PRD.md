@@ -393,6 +393,12 @@ database with the pipeline.
 - **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
   choose the reason with one click, or clear the rating. Changes are logged like taps, with `web` as their
   source.
+- **Send to Kindle.** Each delivered article has a button that sends it to the reader's own
+  Kindle address again, as a book of its own with fresh rating links. The web program only
+  queues the request; the scheduler checks the queue every minute, builds the book from the
+  page saved when the article was first delivered (fetching it again only if there is none)
+  and records the outcome, which the card shows. At most 10 a day per reader; it is not
+  counted against the daily target. `forenoon send-queue` works the queue at once.
 - **Account page.** Display name, time zone, password, and the reading settings the
   pipeline uses: interests, stories a day, and Kindle addresses. Only an admin can change
   Kindle addresses, because they decide where content is emailed.
@@ -422,6 +428,7 @@ database with the pipeline.
 | `forenoon schedule`                             | Run every day at `delivery_time`                             |
 | `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X          |
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
+| `forenoon send-queue`                           | Send the articles readers asked for on the web pages, now    |
 | `forenoon feedback-log`                         | Print taps and current ratings                               |
 | `forenoon usage`                                | Print recent model calls and today's token use               |
 | `forenoon checks [--all]`                       | Print articles the model thought were badly extracted        |

@@ -201,6 +201,25 @@ class Store:
             for row in rows
         )
 
+    # send requests (queued by the web app's "Send to Kindle" button)
+
+    def send_requests(self) -> list[sqlite3.Row]:
+        """Requests not yet handled, oldest first; none until the web app has made its table."""
+        if not self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'send_requests'"
+        ).fetchone():
+            return []
+        return self.db.execute(
+            "SELECT id, user_id, article_id FROM send_requests WHERE status = 'queued' ORDER BY id"
+        ).fetchall()
+
+    def finish_send(self, request_id: int, status: str, error: str = "") -> None:
+        with self.db:
+            self.db.execute(
+                "UPDATE send_requests SET status = ?, error = ?, done_at = ? WHERE id = ?",
+                (status, error, now_iso(), request_id),
+            )
+
     # articles
 
     def upsert_article(self, id: str, url: str, source: str, title: str, author: str, published: str | None) -> None:

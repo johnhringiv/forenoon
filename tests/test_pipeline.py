@@ -826,3 +826,37 @@ def test_documentation_is_never_followed_as_an_articles_subject():
         "https://manual-coffee.example/posts/grinding",
     ):
         assert not _is_documentation(url), url
+
+
+def test_an_article_is_sent_again_on_request_from_its_saved_page(env):
+    from app.resend import send_requested
+
+    cfg, store, fetcher = env
+    user = cfg.users[0]
+    first = []
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: first.extend(m))
+    delivered = report.delivered[0]
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    assert store.send_requests() == [] and send_requested(cfg, store, fetcher) == 0
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses) VALUES ('john', 'John', 'x', 'x', 'john@kindle.com')"
+    )
+    ask = "INSERT INTO send_requests (user_id, article_id, requested_at) VALUES (?, ?, 'x')"
+    store.db.execute(ask, ("john", delivered))
+    store.db.execute(ask, ("john", "never-delivered"))
+    store.db.execute(ask, ("stranger", delivered))
+    store.db.commit()
+
+    offline = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    sent = []
+    assert send_requested(cfg, store, offline, now=NOW, sender=lambda m, s: sent.extend(m)) == 1
+    # Built from the saved page (the site is down here), and only to the reader's own address.
+    assert len(sent) == 1 and sent[0]["To"] == "john@kindle.com"
+    book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    chapter = next(book.read(n).decode() for n in book.namelist() if n.endswith(".xhtml") and "nav" not in n)
+    assert "/f/" in chapter  # with fresh rating links
+    rows = store.db.execute("SELECT user_id, article_id, status, error FROM send_requests ORDER BY id").fetchall()
+    assert [(r["status"]) for r in rows] == ["sent", "failed", "failed"]
+    assert "not an article delivered" in rows[1]["error"] and "no Kindle address" in rows[2]["error"]
+    assert store.send_requests() == []  # nothing is tried twice

@@ -334,6 +334,63 @@ pub async fn is_delivered(pool: &SqlitePool, user: &str, article: &str) -> Resul
     Ok(found > 0)
 }
 
+// send requests ("Send to Kindle"); the pipeline's scheduler sends them and records the outcome
+
+pub const SENDS_PER_DAY: i64 = 10;
+
+pub struct SendState {
+    pub article_id: String,
+    pub status: String,
+    pub error: String,
+    pub requested_at: String,
+}
+
+/// The reader's requests, oldest first, so a later one for the same article replaces an earlier.
+pub async fn send_states(pool: &SqlitePool, user: &str) -> Result<Vec<SendState>, sqlx::Error> {
+    sqlx::query_as!(
+        SendState,
+        "SELECT article_id, status, error, requested_at FROM send_requests WHERE user_id = ? ORDER BY id",
+        user
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub enum Queued {
+    Added,
+    /// Already waiting to be sent.
+    Waiting,
+    /// The reader has asked for as many as one day allows.
+    TooMany,
+}
+
+pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str) -> Result<Queued, sqlx::Error> {
+    let (now, day_ago) = (now_iso(), iso_in(-24 * 3600));
+    let mut tx = pool.begin().await?;
+    let waiting = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM send_requests WHERE user_id = ? AND article_id = ? AND status = 'queued'",
+        user,
+        article
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if waiting > 0 {
+        return Ok(Queued::Waiting);
+    }
+    let recent =
+        sqlx::query_scalar!("SELECT COUNT(*) FROM send_requests WHERE user_id = ? AND requested_at > ?", user, day_ago)
+            .fetch_one(&mut *tx)
+            .await?;
+    if recent >= SENDS_PER_DAY {
+        return Ok(Queued::TooMany);
+    }
+    sqlx::query!("INSERT INTO send_requests (user_id, article_id, requested_at) VALUES (?, ?, ?)", user, article, now)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Queued::Added)
+}
+
 // ratings
 
 #[derive(Debug, Clone, PartialEq, Eq)]
