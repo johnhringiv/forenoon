@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET session_domain = '' WHERE id = ? AND kind = 'rss'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4c5929ed5ea1210fd4ba554efc8829a7138ac5219fd70831870a57cfcf7cdf19"
+}

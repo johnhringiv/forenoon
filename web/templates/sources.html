@@ -39,7 +39,8 @@
 </form>
 {% if feeds.is_empty() %}<p class="empty">No feeds yet.</p>{% endif %}
 {% for row in feeds %}
-<form class="source{% if !row.enabled %} paused{% endif %}" method="post" action="/sources/{{ row.id }}" id="s-{{ row.id }}">
+<div class="source{% if !row.enabled %} paused{% endif %}" id="s-{{ row.id }}">
+<form method="post" action="/sources/{{ row.id }}">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
 <label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
@@ -53,6 +54,25 @@
 {% if let Some(check) = row.check %}<p class="hint{% if row.check_failed %} failing{% endif %}">{{ check }}</p>{% endif %}
 <p class="hint{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %}</p>
 </form>
+<details{% if row.session_failed %} open{% endif %}>
+<summary class="hint{% if row.session_failed %} failing{% endif %}">{% if row.has_session %}Subscriber session saved for {{ row.session_site }}.{% else %}Behind a paywall you subscribe to? Add your session.{% endif %}</summary>
+{% if let Some(note) = row.session_note %}<p class="hint{% if row.session_failed %} failing{% endif %}">{{ note }}</p>{% endif %}
+{% if logins %}
+<form method="post" action="/sources/{{ row.id }}/session">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="fields">
+<label>Site <input name="site" value="{{ row.session_site }}" maxlength="253" autocomplete="off" required></label>
+<label class="wide">Cookie <input name="cookie" type="password" maxlength="16384" autocomplete="off" required></label>
+<button>Save session</button>
+{% if row.has_session %}<button class="link" formaction="/sources/{{ row.id }}/session/delete" formnovalidate>Remove session</button>{% endif %}
+</div>
+<p class="hint">The feed is read as usual; only the articles the ranking wants read are then fetched from the site, signed in as you, a few a day. To get the cookie: sign in to the site in your browser, open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. It is kept where only the recipes container can read it, never shown again, and sent to this site and its subdomains only. It works until the site signs that session out; a failure shows here. Use it only for what your subscription lets you read; the fetch says it is Forenoon, and a site that refuses it is not worked around.</p>
+</form>
+{% else %}
+<p class="hint">This install has no logins folder (<code>FORENOON_LOGINS_DIR</code>), so a session cannot be saved.</p>
+{% endif %}
+</details>
+</div>
 {% endfor %}
 
 <h2>Calibre recipes <span>newspapers and magazines, fetched whole once a day</span></h2>

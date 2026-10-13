@@ -4,6 +4,8 @@ import importlib.util
 import io
 import json
 import os
+import sys
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -161,23 +163,40 @@ def test_runner_reads_its_list_builds_commands_and_keeps_logins_out_of_the_file(
 def test_runner_publishes_an_issue_only_when_the_recipe_succeeds(tmp_path, monkeypatch):
     runner = _runner()
     script = tmp_path / "ebook-convert"
-    script.write_text('#!/bin/sh\ncase "$1" in Good*) echo issue > "$2";; *) echo "boom" >&2; exit 3;; esac\n')
+    # Stands in for Calibre: a paper with one article, one with section pages only, or a crash.
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import sys, zipfile\n"
+        "recipe, target = sys.argv[1], sys.argv[2]\n"
+        "if recipe.startswith('Bad'):\n"
+        "    sys.exit('boom')\n"
+        "with zipfile.ZipFile(target, 'w') as book:\n"
+        "    book.writestr('feed_0/index.html', '<p>section</p>')\n"
+        "    if recipe.startswith('Good'):\n"
+        "        book.writestr('feed_0/article_0/index.html', '<p>article</p>')\n"
+    )
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     out = tmp_path / "out"
     out.mkdir()
-    (out / "recipes.conf").write_text("good = Good Paper\nbad = Bad Paper\n")
+    (out / "recipes.conf").write_text("good = Good Paper\nbad = Bad Paper\nempty = Empty Paper\n")
+    kept = out / "empty" / "2020-01-01.epub"
+    kept.parent.mkdir()
+    kept.write_text("an earlier, good issue")
     stale = out / "good" / "2020-01-01.epub"
     stale.parent.mkdir()
     stale.write_text("old")
     os.utime(stale, (0, 0))
 
-    assert runner.run_all(out) == 1
+    assert runner.run_all(out) == 2
+    # A paper of section pages and no articles is a failure, and replaces nothing.
+    assert [p.name for p in (out / "empty").iterdir()] == ["2020-01-01.epub"]
     assert [p.name for p in (out / "good").iterdir()] == [f"{datetime.now():%Y-%m-%d}.epub"]  # old issue pruned
     assert list((out / "bad").iterdir()) == []  # nothing half-written is left behind
     status = json.loads((out / "status.json").read_text())
     assert status["good"]["ok"] and status["good"]["note"].startswith("wrote ")
     assert not status["bad"]["ok"] and "boom" in status["bad"]["note"]
+    assert not status["empty"]["ok"] and "no articles" in status["empty"]["note"]
 
     # A request from the web pages runs just that recipe, once.
     (out / ".requests").mkdir()
@@ -244,3 +263,100 @@ def test_an_earlier_issue_is_read_when_its_run_was_missed(tmp_path):
     assert titles(lambda item_id: False) == ["Second", "Tenth", "Other section", "Missed"]  # not the stale one
     assert titles(lambda item_id: True) == ["Second", "Tenth", "Other section"]  # yesterday's was read then
     assert [i.title for i in read_recipe(source, tmp_path, 3, NOW)] == ["Second", "Tenth", "Other section"]
+
+
+def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_folder(tmp_path):
+    runner = _runner()
+    out, logins = tmp_path / "recipes", tmp_path / "logins"
+    (out / ".fetch").mkdir(parents=True)
+    logins.mkdir()
+    (logins / "feed-7.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example", "x": 1}')
+    assert runner.read_session("feed-7", logins) == {"cookie": "session=s3cret", "domain": "paper.example"}
+    assert runner.on_site("https://www.paper.example/a", "paper.example")
+    for elsewhere in ("http://paper.example/a", "https://paper.example.evil.test/a", "https://notpaper.example/a"):
+        assert not runner.on_site(elsewhere, "paper.example"), elsewhere
+    for url, why in (
+        ("https://evil.test/a", "not a page on paper.example"),
+        ("http://paper.example/a", "not a page on paper.example"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            runner.fetch_page(url, runner.read_session("feed-7", logins))
+    with pytest.raises(ValueError, match="no session is saved"):
+        runner.fetch_page("https://paper.example/a", {})
+    with pytest.raises(ValueError, match="redirected to accounts.evil.test"):
+        runner._StayOnSite("paper.example").redirect_request(
+            None, None, 302, "", {}, "https://accounts.evil.test/login"
+        )
+
+    # The queue: each request is answered with the page or with why not.
+    seen = []
+
+    def fetcher(url, session):
+        seen.append((url, session.get("cookie")))
+        if "missing" in url:
+            raise ValueError("HTTP 404")
+        return b"<html>the article</html>"
+
+    ids = ["a" * 32, "b" * 32, "c" * 32]
+    for name, session, url in zip(
+        ids, ("feed-7", "feed-7", "../feed-7"), ("https://paper.example/1", "https://paper.example/missing", "x")
+    ):
+        (out / ".fetch" / f"{name}.json").write_text(json.dumps({"session": session, "url": url}))
+    (out / ".fetch" / "notes.txt").write_text("not a request")
+    assert runner.answer_fetches(out, logins, fetcher, gap=0) == 3
+    assert (out / ".fetch" / f"{ids[0]}.html").read_bytes() == b"<html>the article</html>"
+    assert (out / ".fetch" / f"{ids[1]}.err").read_text() == "HTTP 404"
+    assert (out / ".fetch" / f"{ids[2]}.err").read_text() == "not a session"
+    assert seen == [("https://paper.example/1", "session=s3cret"), ("https://paper.example/missing", "session=s3cret")]
+    assert not list((out / ".fetch").glob("*.json"))
+    status = json.loads((out / "status.json").read_text())
+    assert not status["feed-7"]["ok"] and status["feed-7"]["note"] == "HTTP 404"
+    assert "s3cret" not in "".join(p.read_text(errors="replace") for p in out.rglob("*") if p.is_file())
+
+
+def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_path):
+    import threading
+
+    from app import sessions
+    from app.fetch import FetchError
+
+    paper = Source("Paper", "https://paper.example/rss", session="feed-7", session_domain="paper.example")
+    assert sessions.covers(paper, "https://www.paper.example/a")
+    assert not sessions.covers(paper, "https://other.example/a"), "a linked page elsewhere is fetched as usual"
+    assert not sessions.covers(Source("Blog", "https://blog.example/feed"), "https://blog.example/a")
+
+    def answer(text: str | None, error: str | None = None):
+        def work():
+            for _ in range(200):
+                waiting = list((tmp_path / ".fetch").glob("*.json")) if (tmp_path / ".fetch").is_dir() else []
+                if waiting:
+                    wanted = json.loads(waiting[0].read_text())
+                    assert wanted == {"session": "feed-7", "url": "https://paper.example/a"}
+                    waiting[0].unlink()
+                    partial = waiting[0].with_name(".answer.tmp")
+                    partial.write_text(text or error)
+                    partial.replace(waiting[0].with_suffix(".html" if text else ".err"))
+                    return
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=work)
+        thread.start()
+        return thread
+
+    worker = answer("<html>full text</html>")
+    assert sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=5, poll=0.01) == "<html>full text</html>"
+    worker.join()
+    worker = answer(None, "HTTP 403")
+    with pytest.raises(FetchError, match="HTTP 403"):
+        sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=5, poll=0.01)
+    worker.join()
+    assert list((tmp_path / ".fetch").iterdir()) == [], "nothing is left behind"
+
+    # Nobody answering: said once, then not waited for again in the same run.
+    with pytest.raises(FetchError, match="is the recipes container running"):
+        sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=0.05, poll=0.01)
+    started = time.monotonic()
+    with pytest.raises(FetchError, match="not answering"):
+        sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=30)
+    assert time.monotonic() - started < 1
+    sessions._silent_until = 0.0
