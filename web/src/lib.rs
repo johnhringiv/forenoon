@@ -6,6 +6,7 @@ pub mod limit;
 pub mod mail;
 pub mod pages;
 pub mod ratings;
+pub mod sources;
 
 use std::{sync::Arc, time::Duration};
 
@@ -67,6 +68,9 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/account/email", post(pages::set_email))
         .route("/account/email/cancel", post(pages::cancel_email))
         .route("/account/verify", post(pages::resend_verification))
+        .route("/sources", get(sources::page).post(sources::add))
+        .route("/sources/{id}", post(sources::update))
+        .route("/sources/{id}/delete", post(sources::delete))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.
         .route_layer(middleware::from_fn(pages::require_login))

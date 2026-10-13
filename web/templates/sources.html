@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Sources · Forenoon{% endblock %}
+{% block header %}
+<p>{{ summary }}</p>
+<div class="bar"><a href="/">Back to the newsstand</a>
+<div class="who">{{ name }} <a href="/account">Account</a>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+{% endblock %}
+{% block main %}
+{% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+{% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
+<form class="source add" method="post" action="/sources">
+<h2>Add a source</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="fields">
+<label>Name <input name="name" maxlength="80" required></label>
+<label class="wide">Feed address <input name="address" maxlength="2000" placeholder="https://example.com/feed.xml" required></label>
+<label>Take the text from <select name="extract"><option value="auto">Page, else feed</option><option value="page">Always the page</option><option value="feed">Only the feed</option></select></label>
+<label class="tick"><input type="checkbox" name="pinned" value="1"> Pinned</label>
+<label class="tick"><input type="checkbox" name="kind" value="recipe"> Calibre recipe</label>
+<button>Add</button>
+</div>
+<p class="hint">Changes apply from the next run. For a Calibre recipe, tick the box and give its folder name in place of an address; the recipe itself is listed in <code>recipes.conf</code>. A pinned source's articles are taken before all others.</p>
+</form>
+{% if rows.is_empty() %}<p class="empty">No sources yet, so there is nothing to deliver.</p>{% endif %}
+{% for row in rows %}
+<form class="source{% if !row.enabled %} paused{% endif %}" method="post" action="/sources/{{ row.id }}" id="s-{{ row.id }}">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+{% if row.recipe %}<input type="hidden" name="kind" value="recipe">{% endif %}
+<div class="fields">
+<label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
+<label class="wide">{% if row.recipe %}Recipe folder{% else %}Feed address{% endif %} <input name="address" value="{{ row.address }}" maxlength="2000" required></label>
+{% if !row.recipe %}<label>Take the text from <select name="extract">{% for choice in row.extract %}<option value="{{ choice.key }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>{% endif %}
+<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>
+<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>
+<button>Save</button>
+<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>
+</div>
+<p class="hint{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %}</p>
+</form>
+{% endfor %}
+{% endblock %}

@@ -25,12 +25,15 @@ What it does today is described in [docs/PRD.md](docs/PRD.md).
 ```sh
 uv sync
 mkdir run && cp deploy/config.example.yaml run/config.yaml
-cp deploy/sources.example.yaml run/sources.yaml
 export FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
 
-uv run forenoon --config run/config.yaml report               # per-source extraction report
 # a reader to deliver to; asks for a password for the web pages
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)
+# the web pages: sign in at http://127.0.0.1:8081/ and add feeds on Sources
+# (deploy/sources.example.yaml lists some); stop it with Ctrl-C
+(cd web && cargo run -- --db ../run/data/forenoon.sqlite3 serve --listen 127.0.0.1:8081)
+
+uv run forenoon --config run/config.yaml report               # per-source extraction report
 uv run forenoon --config run/config.yaml run --dry-run --out run/out   # build EPUBs, send nothing
 uv run forenoon golden --out run/out                           # rendering test file for the device
 ```

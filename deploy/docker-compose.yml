@@ -1,5 +1,5 @@
 # Forenoon, Phase 0. Copy .env.example to .env and fill it in first.
-# The data folder (FORENOON_HOST_DATA) must contain config.yaml and sources.yaml and be
+# The data folder (FORENOON_HOST_DATA) must contain config.yaml and be
 # writable by UID 1000 (or by PUID:PGID if you set them).
 name: forenoon
 

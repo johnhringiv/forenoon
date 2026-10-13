@@ -29,7 +29,12 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     failed = 0
     try:
         # Read at every run, so a change made on the account page applies to the next one.
-        cfg = dataclasses.replace(cfg, users=store.readers())
+        cfg = dataclasses.replace(cfg, users=store.readers(), sources=store.sources())
+        if not cfg.sources:
+            log.error("no sources: add some on the web pages' Sources page")
+            if not args.dry_run:
+                notify(cfg, "nothing delivered", ["There are no sources. Add some on the Sources page."])
+            return 1
         users = [cfg.user(args.user)] if args.user else cfg.users
         if not users:
             log.error("no readers: create an account with `forenoon-web add-user <id>`")
@@ -72,7 +77,7 @@ def _next_run(cfg: Config, now: datetime) -> datetime:
 def _reload(cfg: Config, args: argparse.Namespace, alert: bool = False) -> Config:
     """The config files as they are now, so an edit needs no restart; the old one if they are broken."""
     try:
-        return load_config(args.config, args.sources)
+        return load_config(args.config)
     except (ConfigError, OSError) as exc:
         log.error("config not reloaded, keeping the previous one: %s", exc)
         if alert:
@@ -96,6 +101,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _report(cfg: Config, args: argparse.Namespace) -> int:
+    cfg = dataclasses.replace(cfg, sources=Store(cfg.db_path).sources())
     fetcher = Fetcher(cfg.user_agent)
     try:
         report = triage(cfg, fetcher, args.per_source, args.source)
@@ -192,7 +198,7 @@ def _golden(args: argparse.Namespace) -> int:
     if args.config.exists():
         from .pipeline import _feedback_links
 
-        cfg = load_config(args.config, args.sources)
+        cfg = load_config(args.config)
         readers = Store(cfg.db_path).readers()
         if cfg.public_base_url and readers:
             links = _feedback_links(cfg, readers[0], "golden", datetime.now(ZoneInfo("UTC")))
@@ -206,7 +212,6 @@ def _golden(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="forenoon", description="Forenoon")
     parser.add_argument("--config", type=Path, default=Path(os.environ.get("FORENOON_CONFIG", "config.yaml")))
-    parser.add_argument("--sources", type=Path, default=None, help="override the sources file")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -243,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             return _feedback(args)
         if args.command == "golden":
             return _golden(args)
-        cfg = load_config(args.config, args.sources)
+        cfg = load_config(args.config)
         if args.command == "run":
             return _run_all(cfg, args)
         if args.command == "schedule":

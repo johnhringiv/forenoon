@@ -35,12 +35,8 @@ may take several minutes.
    The left side is a folder name you choose. The right side is the name of a built-in
    recipe, or the file name of your own `.recipe` file placed in the same folder.
 
-2. Add a matching source to `sources.yaml` for each:
-
-   ```yaml
-   - { name: Wired, type: recipe, recipe: wired }
-   - { name: Financial Times, type: recipe, recipe: ft }
-   ```
+2. Add a matching source for each on the web pages' **Sources** page: tick "Calibre recipe"
+   and give the folder name (`wired`, `ft`) in place of a feed address.
 
 3. For recipes that need a login, create `recipes.env` beside your `.env` (start from
    `deploy/recipes.example.env`). For the folder `ft`:

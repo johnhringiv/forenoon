@@ -20,13 +20,20 @@ the feeds its own users configure and delivers only to the addresses its admin h
   (section 9a), created with `forenoon-web add-user` and edited on its account page. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
-- **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). Each has a name, a URL
-  (feeds) and optional settings:
-  - `pinned`: its articles are taken before all other sources.
-  - `extract`: `auto` (default), `page` (always use the web page) or `feed` (use only the
-    feed's own text; the article page is never fetched).
-  - `users`: restrict the source to some users; otherwise every user gets it.
-- Configuration lives in `config.yaml` and `sources.yaml`. Unknown keys are rejected at
+- **Sources** are RSS or Atom feeds, or Calibre recipes (section 7d). They live in the
+  database and are managed by an admin on the web pages' Sources page, which also shows how
+  each source's last runs went. The pipeline reads them at the start of every run; with none,
+  nothing is delivered and an alert is sent. Each has a name, a feed address (or a recipe's
+  folder) and:
+  - pinned: its articles are taken before all other sources.
+  - where the text comes from: the page, falling back to the feed (default); always the
+    page; or only the feed, in which case the article page is never fetched.
+  - paused: kept, but not read.
+
+  Articles and health records refer to a source by name, so renaming one starts its health
+  record afresh.
+
+- The remaining configuration lives in `config.yaml`. Unknown keys are rejected at
   start-up. Secrets (`FORENOON_FEEDBACK_SECRET`, `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`) come only from the
   environment.
 

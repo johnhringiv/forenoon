@@ -590,8 +590,7 @@ def test_scheduler_rereads_config_and_keeps_the_old_one_when_broken(tmp_path):
 
     path = tmp_path / "config.yaml"
     path.write_text("delivery_time: '06:00'\nusers: []\nsmtp: {host: smtp.example, sender: a@example.com}\n")
-    (tmp_path / "sources.yaml").write_text("sources: []\n")
-    args = argparse.Namespace(config=path, sources=None)
+    args = argparse.Namespace(config=path)
     cfg = load_config(path)
 
     path.write_text(path.read_text().replace("06:00", "07:30"))

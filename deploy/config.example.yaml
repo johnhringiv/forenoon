@@ -2,7 +2,6 @@
 timezone: America/New_York
 delivery_time: "06:00"          # local time of the daily run (`forenoon schedule`)
 data_dir: data                   # relative to this file; overridden by FORENOON_DATA_DIR
-sources_file: sources.yaml
 
 # Public URL of the feedback service (Cloudflare Tunnel hostname). Leave empty to
 # deliver without feedback links.

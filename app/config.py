@@ -198,30 +198,7 @@ def _build(cls: type, raw: dict[str, Any], where: str) -> Any:
         raise ConfigError(f"{where}: {exc}") from exc
 
 
-def load_sources(path: Path) -> tuple[Source, ...]:
-    raw = _load_yaml(path).get("sources") or []
-    # A recipe's issue is the only copy we may have (subscriber content), so it is not re-fetched.
-    recipe_defaults = {"extract": "feed"}
-    sources = tuple(
-        _build(Source, {**(recipe_defaults if item.get("type") == "recipe" else {}), **item}, f"{path}: source #{i}")
-        for i, item in enumerate(raw)
-    )
-    names = [s.name for s in sources]
-    if len(names) != len(set(names)):
-        raise ConfigError(f"{path}: source names must be unique")
-    for source in sources:
-        if source.type not in ("rss", "recipe"):
-            raise ConfigError(f"{path}: {source.name}: type must be rss or recipe")
-        if source.type == "rss" and not source.url:
-            raise ConfigError(f"{path}: {source.name}: url is required")
-        if source.type == "recipe" and not RECIPE_SLUG.fullmatch(source.recipe):
-            raise ConfigError(f"{path}: {source.name}: recipe must be a folder name (a-z, 0-9, -)")
-        if source.extract not in ("auto", "page", "feed"):
-            raise ConfigError(f"{path}: {source.name}: extract must be auto, page or feed")
-    return sources
-
-
-def load_config(path: Path, sources_path: Path | None = None) -> Config:
+def load_config(path: Path) -> Config:
     raw = _load_yaml(path)
     base = path.parent
     # Readers live in the database now (see Store.readers); a `users` list left in an old
@@ -239,7 +216,7 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
     raw.pop("data_dir", None)
     if not data_dir.is_absolute():
         data_dir = base / data_dir
-    sources_file = sources_path or base / raw.pop("sources_file", "sources.yaml")
+    # Sources live in the database now (see Store.sources); the old key is ignored.
     raw.pop("sources_file", None)
     return _build(
         Config,
@@ -251,7 +228,6 @@ def load_config(path: Path, sources_path: Path | None = None) -> Config:
             "alerts": alerts,
             "llm": llm,
             "discovery": discovery,
-            "sources": load_sources(Path(sources_file)),
         },
         str(path),
     )

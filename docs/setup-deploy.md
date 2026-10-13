@@ -16,8 +16,8 @@ sudo chown -R 1000:1000 /volume1/docker/forenoon
 
 To run as a different host user instead, set `PUID` and `PGID` in `.env`.
 
-Copy `deploy/config.example.yaml` to `<folder>/config.yaml` and
-`deploy/sources.example.yaml` to `<folder>/sources.yaml`, then edit them. Leave `data_dir`
+Copy `deploy/config.example.yaml` to `<folder>/config.yaml` and edit it. Sources are added
+later, on the web pages (`deploy/sources.example.yaml` is a list to pick from). Leave `data_dir`
 alone: inside the container the folder is mounted at `/data` and `FORENOON_DATA_DIR` points there.
 
 ## 2. Environment
@@ -92,8 +92,8 @@ sudo sh deploy.sh .env                       # pulls IMAGE
 sudo sh deploy.sh .env forenoon.tar.gz  # or loads a saved image
 ```
 
-If `config.yaml` and `sources.yaml` sit next to the script, it copies them into a new data
-folder; it never overwrites existing files.
+If `config.yaml` sits next to the script, it copies it into a new data folder; it never
+overwrites an existing file.
 
 Continuous deploy is pull-based, so the host needs no inbound access:
 
@@ -153,6 +153,7 @@ internet.
    forgotten password can only be reset through a confirmed address.
 6. On **Account**, write your interests and set the stories a day. Changes apply from the
    next run.
+7. On **Sources** (admins only), add the feeds to read. Without any, nothing is delivered.
 
 Other account commands, run the same way: `set-password <id>` (also signs the account out
 everywhere) and `users`, which lists each account's email. `set-password` is the way back in
@@ -163,5 +164,5 @@ forward the port from the internet.
 
 ## Backups
 
-Everything is in the data folder: `config.yaml`, `sources.yaml`, `forenoon.sqlite3`
+Everything is in the data folder: `config.yaml`, `forenoon.sqlite3`
 (plus its `-wal` file) and `reports/`. Back up the folder; keep `.env` somewhere safe too.
