@@ -123,9 +123,10 @@ class Config:
     keep_pages_days: int = 90
     # Keep a copy of each book sent for this many days, in `issues/`. 0 = keep none.
     keep_issues_days: int = 30
-    # An article longer than this is not delivered: it is a manual or a book, usually reached
-    # through a link, and a chapter that size has crashed an older Kindle. 0 = no limit.
-    max_article_words: int = 15_000
+    # A failsafe, not the main control (the model choosing articles is): anything longer is a
+    # manual or a book and is not delivered. A 77,000-word chapter was in the issue an older
+    # Kindle rebooted on. 0 = no limit.
+    max_article_words: int = 45_000
     # The most articles one story may bring. The daily cap counts stories, not articles.
     max_story_entries: int = 3
     # "issue": one book a day with a contents page. "articles": one book per article.
