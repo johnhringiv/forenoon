@@ -856,6 +856,15 @@ def test_an_article_is_sent_again_on_request_from_its_saved_page(env):
     book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     chapter = next(book.read(n).decode() for n in book.namelist() if n.endswith(".xhtml") and "nav" not in n)
     assert "/f/" in chapter  # with fresh rating links
+    # It stands alone in the library: the article's own title, and a cover.
+    title = store.get_article(delivered).title
+    opf = book.read("OEBPS/content.opf").decode()
+    assert f"<dc:title>{title}</dc:title>" in opf and "FN 2026" not in opf
+    assert 'properties="cover-image"' in opf and '<meta name="cover" content="cover"/>' in opf
+    assert not next(sent[0].iter_attachments()).get_filename().startswith("FN ")
+    with Image.open(io.BytesIO(book.read("OEBPS/cover.jpg"))) as img:
+        assert img.size == (1200, 1600) and img.mode == "L"
+    assert "cover" not in zipfile.ZipFile(io.BytesIO(next(first[0].iter_attachments()).get_content())).namelist()
     rows = store.db.execute("SELECT user_id, article_id, status, error FROM send_requests ORDER BY id").fetchall()
     assert [(r["status"]) for r in rows] == ["sent", "failed", "failed"]
     assert "not an article delivered" in rows[1]["error"] and "no Kindle address" in rows[2]["error"]

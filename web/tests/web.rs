@@ -602,6 +602,10 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
         .await
         .unwrap();
 
+    // The follow-up has a thumbnail of its own.
+    std::fs::create_dir_all(site._folder.path().join("thumbs")).unwrap();
+    std::fs::write(site._folder.path().join("thumbs/follow.jpg"), b"jpeg").unwrap();
+
     let mut browser = Browser::default();
     browser.sign_in(&site, "john").await;
     let text = browser.get(&site, "/").await.text;
@@ -618,6 +622,7 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
         more.contains("1 more on this story") && more.contains(r#"id="a-follow""#) && more.contains("An announcement")
     );
     assert!(!story.contains("Something else"));
+    assert!(more.contains(r#"<img src="/thumb/follow""#), "a story's other articles keep their picture");
 
     // Each article in the story is still rated on its own.
     let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();

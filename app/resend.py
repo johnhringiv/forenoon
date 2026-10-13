@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from . import archive
+from . import archive, thumbs
 from .config import Config, Source
+from .cover import article_cover
 from .deliver import Attachment, build_messages, safe_filename, send
 from .extract import extract
 from .fetch import Fetcher
-from .pipeline import _assemble, _extract, _feedback_links
-from .render import book_title, render_epub
+from .pipeline import _assemble, _extract, _feedback_links, _pictures
+from .render import render_epub
 from .sources import Item
 from .store import Store
 
@@ -54,8 +55,17 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
             article, _ = _assemble(item, result, fetcher, cfg)
             if article is None:
                 raise ValueError(f"nothing could be extracted: {result.reason or result.status}")
-            book = render_epub(article, now, _feedback_links(cfg, user, row.id, now))
-            attachment = Attachment(safe_filename(book_title(article, now)), book, (row.id,))
+            # A book asked for by name stands alone in the library: its own title, with no date
+            # in front, and a cover made from the article's picture.
+            picture = cfg.thumbs_dir / f"{row.id}.jpg"
+            if not picture.exists():
+                thumbs.save(cfg.thumbs_dir, row.id, _pictures(result), fetcher)
+            cover = article_cover(
+                article.title, article.source, picture.read_bytes() if picture.exists() else None, cfg.images.grayscale
+            )
+            links = _feedback_links(cfg, user, row.id, now)
+            book = render_epub(article, now, links, title=article.title, cover=cover)
+            attachment = Attachment(safe_filename(article.title), book, (row.id,))
             sender([message for message, _ in build_messages(user, [attachment], cfg.smtp)], cfg.smtp)
         except Exception as exc:  # noqa: BLE001 - one bad request must not block the rest
             log.warning("send request %s failed: %s", request["id"], exc)

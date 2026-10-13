@@ -169,7 +169,7 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
 """
 
 
-def _opf(article: Article, title: str, modified: datetime) -> str:
+def _opf(article: Article, title: str, modified: datetime, cover: bool = False) -> str:
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, article.url).urn
     images = "\n".join(
         f'    <item id="img{i}" href={quoteattr(a.name)} media-type="{a.media_type}"/>'
@@ -177,6 +177,10 @@ def _opf(article: Article, title: str, modified: datetime) -> str:
     )
     creator = f"<dc:creator>{escape(article.author)}</dc:creator>" if article.author else ""
     date = f"<dc:date>{article.published:%Y-%m-%d}</dc:date>" if article.published else ""
+    cover_meta = '\n    <meta name="cover" content="cover"/>' if cover else ""
+    cover_item = (
+        '\n    <item id="cover" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>' if cover else ""
+    )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -186,13 +190,13 @@ def _opf(article: Article, title: str, modified: datetime) -> str:
     <dc:publisher>{escape(article.source)}</dc:publisher>
     <dc:source>{escape(article.url)}</dc:source>
     {creator}{date}
-    <meta property="dcterms:modified">{modified:%Y-%m-%dT%H:%M:%SZ}</meta>
+    <meta property="dcterms:modified">{modified:%Y-%m-%dT%H:%M:%SZ}</meta>{cover_meta}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     <item id="css" href="style.css" media-type="text/css"/>
-    <item id="article" href="article.xhtml" media-type="application/xhtml+xml"/>
+    <item id="article" href="article.xhtml" media-type="application/xhtml+xml"/>{cover_item}
 {images}
   </manifest>
   <spine toc="ncx">
@@ -230,8 +234,13 @@ def render_epub(
     day: datetime,
     feedback_links: dict[str, str] | None = None,
     rating_style: str = "numbers",
+    title: str | None = None,
+    cover: bytes | None = None,
 ) -> bytes:
-    """Deterministic for a given article, day and set of feedback links."""
+    """Deterministic for a given article, day and set of feedback links.
+
+    `title` is the book's name in the library (the dated one by default); `cover` is a JPEG.
+    """
     stamp = (day.year, day.month, day.day, 0, 0, 0)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -244,7 +253,9 @@ def render_epub(
 
         add("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
         add("META-INF/container.xml", CONTAINER)
-        add("OEBPS/content.opf", _opf(article, book_title(article, day), day))
+        add("OEBPS/content.opf", _opf(article, title or book_title(article, day), day, cover is not None))
+        if cover is not None:
+            add("OEBPS/cover.jpg", cover, zipfile.ZIP_STORED)
         add("OEBPS/nav.xhtml", _nav(article))
         add("OEBPS/toc.ncx", _ncx(article))
         add("OEBPS/style.css", CSS + article.extra_css)

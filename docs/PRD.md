@@ -416,7 +416,11 @@ database with the pipeline.
   queues the request; the scheduler checks the queue every minute, builds the book from the
   page saved when the article was first delivered (fetching it again only if there is none)
   and records the outcome, which the card shows. At most 10 a day per reader; it is not
-  counted against the daily target. `forenoon send-queue` works the queue at once.
+  counted against the daily target. `forenoon send-queue` works the queue at once. The book is
+  named by the article's title alone, with no date in front, and has a cover made from the
+  article's thumbnail with its source and title (words alone when it has no picture).
+- **Stories.** A story's lead article has the large card; its other articles are listed
+  beside it, each with its own small thumbnail when it has one.
 - **Account page.** Display name, time zone, password, and the reading settings the
   pipeline uses: interests, stories a day, and Kindle addresses. Only an admin can change
   Kindle addresses, because they decide where content is emailed.

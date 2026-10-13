@@ -39,8 +39,11 @@
 {% else %}
 {% if loop.index == 2 %}<div class="more"><p class="more-title">{{ story.more }}</p>{% endif %}
 <div class="member" id="a-{{ card.id }}">
-<p class="kicker">{{ card.kicker }}</p>
-<h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4>
+<div class="member-head">
+{% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
+<div><p class="kicker">{{ card.kicker }}</p>
+<h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4></div>
+</div>
 <div class="meta">
 {% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
 {% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}

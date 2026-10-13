@@ -1,4 +1,5 @@
-"""The book's cover: the Forenoon mark, the date and the day's lead headlines.
+"""Covers: the daily issue's (the Forenoon mark, the date and the day's lead headlines), and
+one for a single article sent on request (its picture, source and title).
 
 Drawn with Pillow's built-in font, so it needs no font files. Grayscale and deterministic for
 the same inputs, like the rest of the book.
@@ -9,7 +10,7 @@ from __future__ import annotations
 import io
 from datetime import datetime
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 WIDTH, HEIGHT = 1200, 1600
 MARGIN = 110
@@ -79,6 +80,37 @@ def cover_image(day: datetime, summary: str, headlines: list[str], part: int = 0
     if len(headlines) > shown:
         draw.text((MARGIN, y + 6), f"and {len(headlines) - shown} more", font=small, fill=SOFT)
 
+    out = io.BytesIO()
+    image.save(out, "JPEG", quality=88, optimize=True)
+    return out.getvalue()
+
+
+def article_cover(title: str, source: str, picture: bytes | None = None, grayscale: bool = True) -> bytes:
+    """A JPEG cover for one article: its picture across the top when there is one, then the
+    source and the title, with the mark at the foot."""
+    image = Image.new("RGB", (WIDTH, HEIGHT), (PAPER,) * 3)
+    draw = ImageDraw.Draw(image)
+    y = MARGIN + 40
+    if picture:
+        try:
+            with Image.open(io.BytesIO(picture)) as img:
+                top = ImageOps.fit(img.convert("RGB"), (WIDTH, WIDTH * 9 // 16), Image.LANCZOS)
+            image.paste(top, (0, 0))
+            y = top.height + 90
+        except (OSError, ValueError, Image.DecompressionBombError):
+            pass  # an unreadable picture leaves a cover of words alone
+    kicker = ImageFont.load_default(size=40)
+    head = ImageFont.load_default(size=84)
+    for line in _wrap(draw, source.upper(), kicker, WIDTH - 2 * MARGIN, 1):
+        draw.text((MARGIN, y), line, font=kicker, fill=(SOFT,) * 3)
+    y += 80
+    for line in _wrap(draw, title, head, WIDTH - 2 * MARGIN, 6):
+        draw.text((MARGIN, y), line, font=head, fill=(INK,) * 3)
+        y += 100
+    draw_mark(draw, MARGIN + 60, HEIGHT - MARGIN - 20, 30, ink=(INK,) * 3)
+    draw.text((MARGIN + 150, HEIGHT - MARGIN - 62), "Forenoon", font=ImageFont.load_default(size=48), fill=(INK,) * 3)
+    if grayscale:
+        image = image.convert("L")
     out = io.BytesIO()
     image.save(out, "JPEG", quality=88, optimize=True)
     return out.getvalue()

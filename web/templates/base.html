@@ -47,6 +47,10 @@ article.story .more { flex:1 1 48%; min-width:0; border-left:1px solid var(--lin
 .member { display:flex; flex-direction:column; gap:.35rem; padding-bottom:.8rem; border-bottom:1px solid var(--line) }
 .member:last-child { border-bottom:0; padding-bottom:0 }
 .member .meta { margin-top:0; border-top:0; padding-top:0 }
+/* A story's other articles keep their own picture, small, beside the title. */
+.member-head { display:flex; gap:.7rem; align-items:flex-start }
+.member-head > div { min-width:0; display:flex; flex-direction:column; gap:.3rem }
+article .member-head img { width:96px; flex:none; border-radius:3px }
 h4 { font:700 .98rem/1.25 Georgia,serif; margin:0; overflow-wrap:anywhere }
 h4 a { color:inherit; text-decoration:none }
 h4 a:hover { text-decoration:underline }
