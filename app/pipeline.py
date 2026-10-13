@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from . import archive
+from . import archive, thumbs
 from .config import Config, Source, User
 from .deliver import (
     MESSAGE_OVERHEAD,
@@ -49,6 +49,7 @@ MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links ma
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 # Never followed as an article's subject: project and package pages, and reference works.
+THUMB_TRIES = 4
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
 # Documentation is never what an article is about, whatever a model says: the address gives it away.
 DOCS_HOST_LABELS = {"docs", "doc", "manual", "man", "developer", "developers", "api", "wiki"}
@@ -197,6 +198,15 @@ def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> t
         discussion_url=item.discussion_url,
     )
     return article, dropped
+
+
+def _pictures(result: Extracted) -> tuple[str, ...]:
+    """Where an article's thumbnail can come from: its lead image, else its first few pictures.
+
+    Taken before the article is assembled, which replaces picture addresses with embedded files.
+    """
+    body = [img.get("src", "") for img in result.body.iter("img")] if result.body is not None else []
+    return tuple(dict.fromkeys([result.image_url, *body[:THUMB_TRIES]]))
 
 
 def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> tuple[Extracted, Article | None, int]:
@@ -540,7 +550,10 @@ def run(
     def prepare(item: Item, reason: str = "") -> _Prepared | None:
         """Extract one item and check it fits a message; None when it cannot be delivered."""
         result = extracted.pop(item.id, None) or _extract(item, fetcher, cfg, keep=not dry_run)
+        pictures = _pictures(result)
         article, dropped = _assemble(item, result, fetcher, cfg)
+        if article is not None and not dry_run:
+            thumbs.save(cfg.thumbs_dir, item.id, pictures, fetcher)
         if not item.title:
             item = replace(item, title=article.title if article else item.url)
             store.set_title(item.id, item.title)

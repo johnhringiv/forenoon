@@ -200,6 +200,34 @@ def _checks(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _thumbs(cfg: Config, args: argparse.Namespace) -> int:
+    """Make the web pages' thumbnails for articles delivered before thumbnails existed."""
+    from . import archive, thumbs
+    from .extract import extract
+    from .pipeline import _pictures
+
+    store = Store(cfg.db_path)
+    fetcher = Fetcher(cfg.user_agent, store)
+    made = missing = 0
+    try:
+        for article_id in store.delivered_ids():
+            if (cfg.thumbs_dir / f"{article_id}.jpg").exists():
+                continue
+            row, saved = store.get_article(article_id), archive.load(cfg.pages_dir, article_id)
+            pictures: tuple[str, ...] = (row.image_url,) if row else ()
+            if row and saved:
+                pictures = _pictures(extract(row.url, saved["page_html"], saved["feed_html"], saved["mode"]))
+            if thumbs.save(cfg.thumbs_dir, article_id, pictures, fetcher):
+                made += 1
+            else:
+                missing += 1
+    finally:
+        fetcher.close()
+        store.close()
+    print(f"{made} thumbnails made; {missing} articles have no usable picture.")
+    return 0
+
+
 def _replay(cfg: Config, args: argparse.Namespace) -> int:
     from .archive import replay
 
@@ -253,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("usage", help="print recent model calls and today's token use")
     p = sub.add_parser("checks", help="print articles the model thought were badly extracted")
     p.add_argument("--all", action="store_true", help="include the ones it judged fine")
+    sub.add_parser("thumbs", help="make the web pages' thumbnails for articles delivered earlier")
     p = sub.add_parser("replay", help="re-run extraction over saved pages and show what changed")
     p.add_argument("--all", action="store_true", help="also list the unchanged ones")
     p = sub.add_parser("golden", help="write the golden rendering-test EPUB")
@@ -283,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
             return _report(cfg, args)
         if args.command == "checks":
             return _checks(cfg, args)
+        if args.command == "thumbs":
+            return _thumbs(cfg, args)
         if args.command == "replay":
             return _replay(cfg, args)
         if args.command == "usage":

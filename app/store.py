@@ -267,6 +267,13 @@ class Store:
             is not None
         )
 
+    def delivered_ids(self) -> list[str]:
+        """Every article delivered to anyone, newest delivery first."""
+        rows = self.db.execute(
+            "SELECT article_id, MAX(delivered_at) AS at FROM deliveries GROUP BY article_id ORDER BY at DESC"
+        )
+        return [row["article_id"] for row in rows]
+
     def mark_delivered(
         self, user_id: str, article_ids: list[str], when: datetime, stories: dict[str, str] | None = None
     ) -> None:

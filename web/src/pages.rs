@@ -63,6 +63,8 @@ pub struct AppState {
     pub mailer: Mailer,
     /// Where the pages are reached, for links in emails; no trailing slash.
     pub base_url: String,
+    /// Where the pipeline leaves each article's thumbnail, as `<article id>.jpg`.
+    pub thumbs_dir: std::path::PathBuf,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -97,17 +99,18 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     for (name, value) in [
         (
             header::CONTENT_SECURITY_POLICY,
-            "default-src 'none'; img-src http: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'",
+            "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
         // Links and images to article sites opt out of the referrer one by one.
         (header::REFERRER_POLICY, "same-origin"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
-        (header::CACHE_CONTROL, "no-store"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+    // Pages are never stored; a thumbnail sets its own, so it is not fetched again on every visit.
+    headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     response
 }
@@ -713,6 +716,10 @@ pub async fn newsstand(
     let requests = db::send_states(&state.pool, &user.id).await?;
     for card in page.issues.iter_mut().flat_map(|issue| &mut issue.stories).flat_map(|story| &mut story.cards) {
         let last = requests.iter().rev().find(|request| request.article_id == card.id);
+        // Our own thumbnail when the pipeline made one; otherwise the article's lead image.
+        if state.thumbs_dir.join(format!("{}.jpg", card.id)).is_file() {
+            card.image = Some(format!("/thumb/{}", card.id));
+        }
         card.sendable = can_send && last.is_none_or(|request| request.status != "queued");
         card.sent = last.map(|request| match request.status.as_str() {
             "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
@@ -753,6 +760,22 @@ pub struct RateForm {
     finished: Option<String>,
     clear: Option<String>,
     reason: Option<String>,
+}
+
+/// An article's thumbnail, for a reader it was delivered to.
+pub async fn thumb(State(state): State<AppState>, auth: AuthSession, Path(id): Path<String>) -> Page {
+    let user = reader(&auth)?;
+    let plain = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric());
+    if !plain || !db::pipeline_ready(&state.pool).await? || !db::is_delivered(&state.pool, &user.id, &id).await? {
+        return refused(StatusCode::NOT_FOUND, "No such picture.");
+    }
+    match tokio::fs::read(state.thumbs_dir.join(format!("{id}.jpg"))).await {
+        Ok(bytes) => {
+            let headers = [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "private, max-age=604800")];
+            Ok((headers, bytes).into_response())
+        }
+        Err(_) => refused(StatusCode::NOT_FOUND, "No such picture."),
+    }
 }
 
 #[derive(Deserialize)]

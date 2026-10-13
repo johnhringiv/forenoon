@@ -154,6 +154,10 @@ class Config:
         return self.data_dir / "issues"
 
     @property
+    def thumbs_dir(self) -> Path:
+        return self.data_dir / "thumbs"
+
+    @property
     def db_path(self) -> Path:
         return self.data_dir / "forenoon.sqlite3"
 
