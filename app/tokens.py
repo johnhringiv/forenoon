@@ -21,6 +21,7 @@ LOW_REASONS = {
     "known": "Already knew this",
     "broken": "Broken or incomplete",
     "long": "Too long",
+    "wrong": "Wrong or misleading",
 }
 HIGH_REASONS = {
     "more-topic": "More on this topic",

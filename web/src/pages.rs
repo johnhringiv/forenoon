@@ -465,6 +465,7 @@ struct Star {
 
 struct ReasonOption {
     key: &'static str,
+    short: &'static str,
     label: &'static str,
     selected: bool,
 }
@@ -584,7 +585,7 @@ fn card(row: Delivered) -> Card {
     let reasons = match row.rating {
         Some(_) => ratings::reasons_for(row.rating)
             .iter()
-            .map(|(key, label)| ReasonOption { key, label, selected: *key == row.why })
+            .map(|(key, label)| ReasonOption { key, short: ratings::short(key), label, selected: *key == row.why })
             .collect(),
         None => Vec::new(),
     };
@@ -703,7 +704,6 @@ pub struct RateForm {
     rating: Option<String>,
     finished: Option<String>,
     clear: Option<String>,
-    set: Option<String>,
     reason: Option<String>,
 }
 
@@ -745,7 +745,7 @@ pub async fn rate(
             (None, true) => Some(Signal::Done),
             (None, false) => None, // finished was all there was
         }
-    } else if form.set.as_deref() == Some("reason") && rated.is_some() {
+    } else if rated.is_some() {
         match form.reason {
             Some(reason) if ratings::fits(&reason, rated) => Some(Signal::Why(reason)),
             _ => return back_to(&form.back, &form.article), // not a reason for this rating: ignored
