@@ -1,5 +1,10 @@
+<div class="extra">
 {% if card.sendable || card.sent.is_some() %}<form class="send" method="post" action="/send">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 {% if card.sendable %}<button>Send to Kindle</button>{% endif %}
 {% if let Some(sent) = card.sent %}<span>{{ sent }}</span>{% endif %}
 </form>{% endif %}
+{% if card.reported %}<span>Reported as broken or incomplete.</span>{% else %}<form method="post" action="/report">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
+<button class="link" title="Tell the admin this article came out broken or incomplete">Report a problem</button></form>{% endif %}
+</div>

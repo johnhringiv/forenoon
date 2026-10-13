@@ -912,3 +912,48 @@ def test_a_sites_address_is_turned_into_its_feed(tmp_path):
     assert rows["None"]["url"] == "https://none.example/"  # left as typed
     assert rows["Paper"]["check_state"] == "failed" and "recipes.conf" in rows["Paper"]["check_note"]
     assert [s.name for s in store.sources()] == ["None", "Paper", "Quiet", "Settled"]
+
+
+def test_discovery_looks_back_as_far_as_the_age_limit_and_takes_new_stories_first():
+    from datetime import timedelta
+
+    from app.discover import read_listing
+
+    asked = []
+
+    def listing(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"hits": [{"title": "T", "url": "https://x.example/a", "objectID": "1"}]})
+
+    fetcher = Fetcher("test", None, min_host_interval=0, transport=httpx.MockTransport(listing))
+    read_listing("hackernews", fetcher, NOW - timedelta(days=3))
+    more = next(url for url in asked if "created_at_i" in url)
+    since = int(re.search(r"created_at_i%3E(\d+)", more).group(1))
+    # Three days, not one: a story that gets its votes a day late is still inside the window.
+    assert 0 <= (NOW - timedelta(days=3)).timestamp() - since < 3600
+    assert "hitsPerPage=1000" in more and "attributesToRetrieve=" in more
+
+
+def test_a_post_dated_before_it_appeared_is_not_lost(env):
+    """A feed we already follow lists, for the first time, a post dated five days ago."""
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(cfg, sources=(Source("Blog", "https://blog.example/feed"),))
+    user = dataclasses.replace(cfg.users[0], daily_cap=5)
+    first = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    assert len(first.delivered) == 2  # posts 1 and 2; post 3 is from February: too old, and now known
+
+    late = _entry(7, "Thu, 05 Mar 2026 08:00:00 GMT", BODY)
+    ancient = _entry(8, "Thu, 01 Jan 2026 08:00:00 GMT", BODY)
+    ROUTES["https://late.example/feed"] = _rss(late, ancient, _entry(3, "Sun, 01 Feb 2026 08:00:00 GMT", BODY))
+    try:
+        again = dataclasses.replace(cfg, sources=(Source("Blog", "https://late.example/feed"),))
+        second = run(again, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+        titles = [store.get_article(i).title for i in second.delivered]
+        assert titles == ["Post 7"]  # new to us and recent enough; 8 is months old, 3 was seen before
+
+        # A source added just now gets the plain cutoff: no back catalogue.
+        fresh = dataclasses.replace(cfg, sources=(Source("Brand new", "https://late.example/feed"),))
+        other = Store(cfg.data_dir / "other.sqlite3")
+        assert run(fresh, other, fetcher, user, now=NOW, sender=lambda m, s: None).delivered == []
+    finally:
+        del ROUTES["https://late.example/feed"]

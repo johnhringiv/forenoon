@@ -333,16 +333,29 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
             && unrated.contains("Post 2")
             && !unrated.contains("Post 1")
     );
-    assert!(
-        rated.contains("Too thin, nothing in it")
-            && rated.contains(
-                r#"<button name="reason" value="thin" title="Too thin, nothing in it" class="on">Thin</button>"#
-            )
-    );
+    assert!(rated.contains("Too thin, nothing in it") && rated.contains("What was wrong?"));
+    assert!(rated.contains(
+        r#"<button name="reason" value="thin" title="Too thin, nothing in it" class="on">Too thin</button>"#
+    ));
 
-    // Re-rating high drops the reason that no longer fits.
+    // What was wrong is one thing: another choice replaces it; pressing it again takes it back.
+    browser.post(&site, "/rate", &with(&[("reason", "long")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, "long"));
+    browser.post(&site, "/rate", &with(&[("reason", "long")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, ""));
+    browser.post(&site, "/rate", &with(&[("reason", "thin")])).await;
+
+    // Re-rating high drops the reason that no longer fits. What was liked can be several things.
     browser.post(&site, "/rate", &with(&[("rating", "5")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some(5), true, ""));
+    browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
+    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(5), true, "more-topic,depth"));
+    let page = browser.get(&site, "/?show=rated").await.text;
+    assert!(page.contains("What did you like?") && page.matches(r#"class="on">The "#).count() == 2);
+    browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(5), true, "more-topic"));
+    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await;
 
     // Refused: a wrong token, another site's form, an article never delivered to this reader
     // (including one delivered to someone else), and a redirect off the site.
@@ -802,4 +815,51 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
         .unwrap();
     }
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_broken_article_is_reported_to_the_admin_apart_from_its_rating() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    article(pool, "m1", "https://blog.example/m", "Blog", "Mary's article", "mary", "2026-10-10T10:00:00+00:00").await;
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    let page = mary.get(&site, "/").await;
+    let csrf = page.csrf();
+    assert!(page.text.contains("Report a problem") && !page.text.contains("/problems"));
+    mary.post(&site, "/rate", &[("csrf", &csrf), ("article", "m1"), ("rating", "2")]).await;
+    assert!(!mary.get(&site, "/").await.text.contains("Broken"), "broken is no longer a reason for a rating");
+    mary.post(&site, "/rate", &[("csrf", &csrf), ("article", "m1"), ("reason", "broken")]).await;
+
+    let form = [("csrf", csrf.as_str()), ("article", "m1"), ("back", "/")];
+    assert_eq!(mary.post(&site, "/report", &form).await.location, "/#a-m1");
+    mary.post(&site, "/report", &form).await; // pressed twice: one report
+    assert!(mary.get(&site, "/").await.text.contains("Reported as broken or incomplete."));
+    assert_eq!(
+        mary.post(&site, "/report", &[("csrf", &csrf), ("article", "nope")]).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        mary.post(&site, "/report", &[("csrf", "wrong"), ("article", "m1")]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    // The rating is untouched, and the extraction log has the report.
+    assert_eq!(
+        db::get_rating(pool, "mary", "m1").await.unwrap().unwrap(),
+        db::Rating { rating: Some(2), finished: false, reason: String::new() }
+    );
+    let log: Vec<(String, String)> =
+        sqlx::query_as("SELECT verdict, problem FROM extraction_reviews").fetch_all(pool).await.unwrap();
+    assert_eq!(log, [("bad".to_owned(), "reader: broken or incomplete".to_owned())]);
+    assert_eq!(mary.get(&site, "/problems").await.status, StatusCode::FORBIDDEN);
+
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/problems">Problems (1)</a>"#));
+    let text = admin.get(&site, "/problems").await.text;
+    assert!(
+        text.contains("Mary&#39;s article")
+            && text.contains("by mary, on the web pages")
+            && text.contains("Extractor:")
+    );
 }

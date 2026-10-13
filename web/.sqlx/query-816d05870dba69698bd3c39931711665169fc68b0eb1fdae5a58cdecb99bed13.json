@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT f.created_at AS reported_at, f.user_id, f.source AS via,\n           COALESCE(a.title, f.article_id) AS \"title!: String\", COALESCE(a.url, '') AS \"url!: String\",\n           COALESCE(a.source, '') AS \"source!: String\", COALESCE(a.word_count, 0) AS \"words!: i64\",\n           COALESCE(a.status || CASE WHEN a.reason = '' THEN '' ELSE ': ' || a.reason END, '') AS \"extraction!: String\"\n           FROM feedback_events f LEFT JOIN articles a ON a.id = f.article_id\n           WHERE f.signal = 'problem' ORDER BY f.id DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "reported_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "via",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "url!: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "source!: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "words!: i64",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "extraction!: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "816d05870dba69698bd3c39931711665169fc68b0eb1fdae5a58cdecb99bed13"
+}

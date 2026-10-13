@@ -55,7 +55,11 @@ logs the error and alerts the operator. For each user:
    or 304, counts as a failed source for this run. A feed entry that links to a site's front
    page rather than an article is ignored.
 2. **Select candidates.** Items older than `max_age_days` (default 3) are ignored, as are
-   items already delivered to this user and items whose extraction previously failed. At most
+   items already delivered to this user and items whose extraction previously failed. One
+   exception keeps late arrivals: an item a feed lists for the first time counts as new even
+   when its own date is older (up to 30 days), provided the feed was already being followed.
+   Every window that finds candidates reaches back the same `max_age_days`, so nothing falls
+   between two daily runs and a missed run loses nothing younger than that. At most
    5 items per source are considered per run.
 3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
    (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
@@ -174,10 +178,15 @@ part-way never causes a resend.
   is now stored ("Rated 4 of 5, finished.") with links to change it. It has no login and takes
   no other input. `GET /healthz` returns `ok`.
 - **Why (optional).** After a rating, the page always offers one more tap for the reason.
-  For 1 to 3: not interested in the topic, too thin, already knew this, broken or incomplete,
-  too long. For 4 and 5: more on this topic, more from this source, liked the depth. The
-  rating counts without it. A later rating that no longer fits the reason drops it. "Broken
-  or incomplete" is also written to the extraction log.
+  For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
+  misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
+  rating counts without it. What was liked can be several of these at once; what was wrong is
+  one, so a new choice replaces the old. Tapping a chosen reason again takes it back. A later
+  rating that no longer fits a reason drops it.
+- **Report a problem.** "This article came out broken or incomplete" is a separate link on
+  that page and a button on the web pages. It is a report about the delivery to whoever runs
+  the install, not a rating or a reason: it is logged, written to the extraction log, and
+  listed for admins on the web pages' Problems page. The rating is left as it was.
 - **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
   log.
 - Links in articles delivered before ratings existed still work: "more like this" counts as
@@ -190,7 +199,7 @@ Ratings influence delivery only when model ranking is on. The model is given the
 recent, each with the article's length, whether it was finished, why it was picked and the
 reader's reason when there is one, and is told to work out what a rating is about before
 learning from it (a low rating on a short post is a verdict on thin posts, not on its
-source; "broken" says nothing about topic or source).
+source).
 
 ## 7a. Ranking with Claude (optional, off by default)
 
@@ -229,8 +238,9 @@ source; "broken" says nothing about topic or source).
 
 ## 7b. Discovery (optional, off by default; needs ranking)
 
-- **Sources.** Hacker News: the front page, plus stories from the last day with more than 40
-  points. Lobsters: the first three pages of its hottest list. Three requests per site per
+- **Sources.** Hacker News: the front page, plus stories from the last `max_age_days` with
+  more than 40 points (not just the last day: a story that gets its votes a day late would
+  otherwise fall between two runs). Stories never seen before are taken first. Lobsters: the first three pages of its hottest list. Three requests per site per
   run; if a further page fails, the rest are still used.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
@@ -268,7 +278,9 @@ source; "broken" says nothing about topic or source).
   issues older than 7 days are removed.
 - Logins for subscriber publications are given to that container alone, as environment
   variables from `recipes.env`. It mounts only the `recipes` folder.
-- A source of `type: recipe` reads the newest issue in its folder and splits it into
+- A source of `type: recipe` reads the newest issue in its folder (and any earlier issue from
+  the last `max_age_days` that was never read, so a missed run does not lose a day's paper)
+  and splits it into
   articles, in the issue's order: navigation is removed, the original URL is taken from the
   issue (minus tracking parameters, including the marker Calibre's FT recipe adds), and images
   are taken from the issue itself. Every article in the issue becomes a
