@@ -348,3 +348,26 @@ def test_a_book_has_no_self_closed_empty_elements():
     assert "<code" not in chapter and "<sup" not in chapter and "<h2" not in chapter and "e.example/x" not in chapter
     assert "Text  more." in chapter or "Text more." in chapter
     etree.fromstring(chapter.encode())
+
+
+def test_the_settings_page_offers_the_pipelines_own_settings_with_its_defaults():
+    import json
+    from pathlib import Path
+
+    from app.config import Config, setting_keys, with_settings
+
+    specs = json.loads((Path(__file__).parent.parent / "web" / "settings.json").read_text())
+    known, cfg = setting_keys(), Config(data_dir=Path("."))
+    kinds = {"bool": bool, "int": int, "float": float, "time": str, "choice": str, "text": str, "email": str}
+    assert len({spec["key"] for spec in specs}) == len(specs)
+    for spec in specs:
+        key, default = spec["key"], spec["default"]
+        assert known.get(key) is kinds[spec["kind"]], f"{key}: the pipeline has no such setting of that kind"
+        section, _, name = key.rpartition(".")
+        assert getattr(getattr(cfg, section) if section else cfg, name) == default, f"{key}: default differs"
+        # What the page stores for a value is something the pipeline can read back.
+        stored = ("1" if default else "0") if isinstance(default, bool) else str(default)
+        assert with_settings(cfg, {key: stored}) == (cfg, []), key
+        for bound in ("min", "max"):
+            if bound in spec:
+                assert with_settings(cfg, {key: str(spec[bound])})[1] == [], f"{key}: {bound} is refused"

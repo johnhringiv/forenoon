@@ -1,6 +1,6 @@
 # Forenoon, Phase 0. Copy .env.example to .env and fill it in first.
-# The data folder (FORENOON_HOST_DATA) must contain config.yaml and be
-# writable by UID 1000 (or by PUID:PGID if you set them).
+# The data folder (FORENOON_HOST_DATA) must be writable by UID 1000 (or by PUID:PGID if you
+# set them). Everything else is set on the web pages.
 name: forenoon
 
 x-app: &app
@@ -25,8 +25,16 @@ services:
     environment:
       TZ: ${TZ:-UTC}
       FORENOON_FEEDBACK_SECRET: ${FORENOON_FEEDBACK_SECRET:?set in .env}
-      FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
       FORENOON_ANTHROPIC_API_KEY: ${FORENOON_ANTHROPIC_API_KEY:-}
+      # Where rating links point: the feedback service's public address.
+      FORENOON_PUBLIC_URL: ${FORENOON_PUBLIC_URL:-}
+      # The mail server books and alerts are sent through; see docs/setup-email.md.
+      FORENOON_SMTP_HOST: ${FORENOON_SMTP_HOST:-}
+      FORENOON_SMTP_PORT: ${FORENOON_SMTP_PORT:-587}
+      FORENOON_SMTP_USERNAME: ${FORENOON_SMTP_USERNAME:-}
+      FORENOON_SMTP_SENDER: ${FORENOON_SMTP_SENDER:-}
+      FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
+      FORENOON_SMTP_MAX_MESSAGE_BYTES: ${FORENOON_SMTP_MAX_MESSAGE_BYTES:-}
 
   feedback:
     <<: *app
@@ -54,11 +62,13 @@ services:
     network_mode: bridge
     volumes:
       - ${FORENOON_HOST_DATA}:/data
+      # Recipe logins: written here, read by the recipes container, seen by nothing else.
+      - logins:/logins
     ports: ["${WEB_LISTEN:-127.0.0.1:8081}:8081"]
     environment:
       TZ: ${TZ:-UTC}
-      # For the links in account emails, and the mail server that sends them. Without a
-      # host, the emails are written to this container's log instead.
+      # For the links in account emails. They go through the same mail server as the books;
+      # without a host they are written to this container's log instead.
       FORENOON_WEB_URL: ${FORENOON_WEB_URL:-}
       FORENOON_SMTP_HOST: ${FORENOON_SMTP_HOST:-}
       FORENOON_SMTP_PORT: ${FORENOON_SMTP_PORT:-587}
@@ -67,7 +77,8 @@ services:
       FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
 
   # Enabled by adding "recipes" to COMPOSE_PROFILES in .env. Runs Calibre news recipes into
-  # <data>/recipes; see docs/setup-recipes.md. Logins come from recipes.env only.
+  # <data>/recipes; see docs/setup-recipes.md. Which recipes, and their logins, are set on
+  # the web pages' Sources page.
   recipes:
     build: ../recipes
     image: ${RECIPES_IMAGE:-forenoon-recipes:local}
@@ -81,9 +92,7 @@ services:
     network_mode: bridge
     volumes:
       - ${FORENOON_HOST_DATA}/recipes:/recipes
-    env_file:
-      - path: recipes.env
-        required: false
+      - logins:/logins:ro
     environment:
       TZ: ${TZ:-UTC}
       RECIPES_TIME: ${RECIPES_TIME:-05:00}
@@ -101,3 +110,8 @@ services:
     environment:
       # :- not :? because compose interpolates this file even when the profile is off
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+
+volumes:
+  # Not in the data folder on purpose: the pipeline, which reads untrusted pages, mounts that.
+  logins:
+    name: forenoon-logins

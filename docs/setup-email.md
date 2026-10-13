@@ -40,16 +40,17 @@ them):
 | Resend                   | Free plan: 100 emails a day, 3,000 a month           | 40 MB after encoding        | Up to 3 verified domains on the free plan; the quota is shared across them. `.epub` attachments are allowed.                 |
 | Postmark                 | Free plan: 100 emails a month                        | Not confirmed               | The free plan is a hard stop at 100.                                                                                         |
 
-If the relay's limit is below Amazon's, set `smtp.max_message_bytes` to it. A day's articles
+If the relay's limit is below Amazon's, set `FORENOON_SMTP_MAX_MESSAGE_BYTES` in `.env` to it. A day's articles
 are then split across more emails, and an article that cannot fit in one email even without
 its images is skipped and reported.
 
-The password goes in the environment as `FORENOON_SMTP_PASSWORD` (in `.env` for compose), never in
-`config.yaml`. Set SPF and DKIM for the sender's domain so Amazon does not drop the mail.
+The password goes in the environment as `FORENOON_SMTP_PASSWORD` (in `.env` for compose), beside the
+server's host, port, username and sender (`FORENOON_SMTP_*`). Set SPF and DKIM for the sender's domain so Amazon does not drop the mail.
 
 ## Alerts
 
-Set `alerts.to` in `config.yaml` to your own address to be told by email when a delivery
+Alerts are on by default and go to every admin's sign-in address; the Settings page can
+send them elsewhere or turn them off. You are told by email when a delivery
 fails, a run crashes, a run has nothing new to deliver, or a source fails several runs in a
 row. Alerts go through the same relay, so if the relay itself is down the alert cannot be
 sent either; the failure is still in the container log and the run report.

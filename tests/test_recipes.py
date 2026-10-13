@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+import json
 import os
 import zipfile
 from datetime import UTC, datetime, timedelta
@@ -136,11 +137,19 @@ def test_runner_reads_its_list_builds_commands_and_keeps_logins_out_of_the_file(
         with pytest.raises(ValueError, match="line 1"):
             runner.read_conf(conf)
 
-    env = {"RECIPE_FT_USERNAME": "me@example.com", "RECIPE_FT_PASSWORD": "s3cret", "RECIPE_MY_BLOG_USERNAME": "b"}
-    cmd = runner.command("ft", "Financial Times", tmp_path / "o.epub", tmp_path, env)
+    logins = tmp_path / "logins"
+    logins.mkdir()
+    (logins / "ft.json").write_text('{"username": "me@example.com", "password": "s3cret", "other": "x"}')
+    (logins / "my-blog.json").write_text('{"username": "b", "password": ""}')
+    (logins / "broken.json").write_text("{not json")
+    login = runner.read_login("ft", logins)
+    assert login == {"username": "me@example.com", "password": "s3cret"}
+    assert runner.read_login("broken", logins) == {} and runner.read_login("absent", logins) == {}
+    cmd = runner.command("ft", "Financial Times", tmp_path / "o.epub", tmp_path, login)
     assert cmd[:2] == ["ebook-convert", "Financial Times.recipe"]
     assert cmd[-4:] == ["--username", "me@example.com", "--password", "s3cret"]
-    custom = runner.command("my-blog", "../../evil/custom.recipe", tmp_path / "o.epub", tmp_path, env)
+    blog = runner.read_login("my-blog", logins)
+    custom = runner.command("my-blog", "../../evil/custom.recipe", tmp_path / "o.epub", tmp_path, blog)
     assert custom[1] == str(tmp_path / "custom.recipe") and custom[-2:] == ["--username", "b"]
     assert "--username" not in runner.command("wired", "Wired", tmp_path / "o.epub", tmp_path, {})
 
@@ -166,6 +175,44 @@ def test_runner_publishes_an_issue_only_when_the_recipe_succeeds(tmp_path, monke
     assert runner.run_all(out) == 1
     assert [p.name for p in (out / "good").iterdir()] == [f"{datetime.now():%Y-%m-%d}.epub"]  # old issue pruned
     assert list((out / "bad").iterdir()) == []  # nothing half-written is left behind
+    status = json.loads((out / "status.json").read_text())
+    assert status["good"]["ok"] and status["good"]["note"].startswith("wrote ")
+    assert not status["bad"]["ok"] and "boom" in status["bad"]["note"]
+
+    # A request from the web pages runs just that recipe, once.
+    (out / ".requests").mkdir()
+    (out / ".requests" / "bad").write_text("")
+    (out / ".requests" / "gone").write_text("")
+    before = status["good"]["at"]
+    assert runner.run_requested(out) == 2 and list((out / ".requests").iterdir()) == []
+    status = json.loads((out / "status.json").read_text())
+    assert status["good"]["at"] == before and status["gone"]["note"] == "not listed in recipes.conf"
+    assert runner.run_requested(out) == 0
+
+
+def test_runner_lists_the_recipes_that_can_be_chosen_and_which_want_a_login(tmp_path):
+    runner = _runner()
+    index = tmp_path / "builtin_recipes.xml"
+    index.write_text(
+        """<?xml version='1.0' encoding='utf-8'?>
+<recipe_collection xmlns="http://calibre-ebook.com/recipe_collection" count="4">
+  <recipe id="builtin:a" title="Free Paper" language="en" needs_subscription="no"/>
+  <recipe id="builtin:b" title="Paid Paper" language="en_GB" needs_subscription="yes"/>
+  <recipe id="builtin:c" title="Either" language="de" needs_subscription="optional"/>
+  <recipe id="builtin:d" title=" padded " language="de" needs_subscription="no"/>
+  <recipe id="builtin:e" title="C# Weekly" language="en" needs_subscription="no"/>
+</recipe_collection>"""
+    )
+    (tmp_path / "mine.recipe").write_text("x")
+    assert runner.write_catalogue(tmp_path, index) == 4
+    catalogue = json.loads((tmp_path / "catalogue.json").read_text())
+    assert [(r["title"], r["language"], r["login"]) for r in catalogue["recipes"]] == [
+        ("Free Paper", "en", "no"),
+        ("Paid Paper", "en_GB", "yes"),
+        ("Either", "de", "optional"),
+    ]
+    assert catalogue["custom"] == ["mine.recipe"]
+    assert runner.write_catalogue(tmp_path, tmp_path / "absent.xml") == 1  # still lists the custom file
 
 
 def test_recipe_link_markers_are_dropped():

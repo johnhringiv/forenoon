@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, kind, url, recipe, extract, pinned AS \"pinned: bool\", enabled AS \"enabled: bool\",\n           check_state, check_note\n           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE",
+  "query": "SELECT id AS \"id!\", name, kind, url, recipe, recipe_title, builtin, extract, pinned AS \"pinned: bool\",\n           enabled AS \"enabled: bool\", check_state, check_note\n           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE",
   "describe": {
     "columns": [
       {
@@ -29,28 +29,38 @@
         "type_info": "Text"
       },
       {
-        "name": "extract",
+        "name": "recipe_title",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "pinned: bool",
+        "name": "builtin",
         "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "extract",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "pinned: bool",
+        "ordinal": 8,
         "type_info": "Integer"
       },
       {
         "name": "enabled: bool",
-        "ordinal": 7,
+        "ordinal": 9,
         "type_info": "Integer"
       },
       {
         "name": "check_state",
-        "ordinal": 8,
+        "ordinal": 10,
         "type_info": "Text"
       },
       {
         "name": "check_note",
-        "ordinal": 9,
+        "ordinal": 11,
         "type_info": "Text"
       }
     ],
@@ -67,8 +77,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "82d7ba4e28c2d6076e35c85e31ec5b36d2cbd7e0f54b94fa1ecab62dd4a2da5e"
+  "hash": "378c586fc7d8eff4835561c55bcb74994d90259274b5fe872cb8c0ad66e5af09"
 }

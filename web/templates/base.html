@@ -91,18 +91,26 @@ textarea { font:inherit; color:var(--ink); background:var(--card); border:1px so
   resize:vertical }
 form.sheet button { align-self:flex-start; padding:.4rem 1rem }
 form.sheet h2 { margin:0 }
-form.source { margin:1rem 0; padding:.8rem 1rem; background:var(--card); border:1px solid var(--line); border-radius:6px }
-form.source.paused { opacity:.6 }
+form.source, div.source { margin:1rem 0; padding:.8rem 1rem; background:var(--card); border:1px solid var(--line); border-radius:6px }
+.source.paused { opacity:.6 }
 form.source.add { margin-top:1.4rem }
 form.source h2 { margin:0 0 .6rem }
-form.source .fields { display:flex; flex-wrap:wrap; gap:.6rem 1rem; align-items:flex-end }
-form.source label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; color:var(--soft) }
-form.source label.wide { flex:1 1 22rem }
-form.source label.tick { flex-direction:row; align-items:center; gap:.35rem; padding-bottom:.4rem; color:var(--ink) }
-form.source input:not([type=checkbox]), form.source select { padding:.35rem .5rem; font-size:.9rem }
-form.source label.wide input { width:100% }
-form.source button { padding:.35rem .9rem }
-form.source .hint { margin-top:.5rem }
+.source .fields { display:flex; flex-wrap:wrap; gap:.6rem 1rem; align-items:flex-end }
+.source label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; color:var(--soft) }
+.source .wide { flex:1 1 22rem }
+.source label.tick { flex-direction:row; align-items:center; gap:.35rem; padding-bottom:.4rem; color:var(--ink) }
+.source input:not([type=checkbox]), .source select { padding:.35rem .5rem; font-size:.9rem }
+.source label.wide input { width:100% }
+.source button:not(.link) { padding:.35rem .9rem }
+.source .hint { margin-top:.5rem }
+.source form { margin:0 }
+.source details { margin-top:.5rem }
+.source summary { cursor:pointer }
+.source details form { margin-top:.5rem }
+.source b.wide { font:700 1.02rem Georgia,serif; align-self:center }
+form.settings label.tick { flex-direction:row; align-items:center; gap:.45rem }
+form.settings h2 { margin-top:1.2rem }
+form.settings select { padding:.45rem .55rem }
 .failing { color:#b3261e }
 .problem { margin:1rem 0; padding:.7rem 1rem; background:var(--card); border:1px solid var(--line); border-radius:6px;
   display:flex; flex-direction:column; gap:.3rem }
@@ -110,6 +118,8 @@ form.source .hint { margin-top:.5rem }
 .error { color:#b3261e; margin:1rem 0 0 }
 .notice { color:var(--accent); margin:1rem 0 0 }
 .hint { font-size:.8rem; color:var(--soft); margin:0 }
+/* After .hint, or a failing hint would stay grey. */
+.hint.failing { color:#b3261e }
 form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--accent); border-radius:6px;
   display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:center; font-size:.9rem }
 </style>

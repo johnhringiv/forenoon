@@ -672,6 +672,7 @@ dependencies = [
  "percent-encoding",
  "rpassword",
  "serde",
+ "serde_json",
  "sha2",
  "sqlx",
  "subtle",

@@ -13,7 +13,7 @@ import pytest
 from lxml import etree
 from PIL import Image
 
-from app.config import Config, Smtp, Source, User
+from app.config import Config, Llm, Smtp, Source, User
 from app.fetch import Fetcher
 from app.pipeline import run, triage
 from app.store import Store
@@ -86,6 +86,7 @@ def env(tmp_path: Path, monkeypatch):
         data_dir=tmp_path,
         public_base_url="https://fb.example",
         format="articles",
+        llm=Llm(enabled=False),
         users=(User("john", "John", ("john@kindle.com",), daily_cap=2),),
         smtp=Smtp(host="smtp.example", sender="digest@example.com"),
         sources=(
@@ -435,7 +436,9 @@ def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model
     from app.discover import SITES
 
     cfg, store, fetcher = env
-    cfg = dataclasses.replace(_llm_cfg(cfg, explore_slots=0), discovery=Discovery(enabled=True, slots=1))
+    cfg = dataclasses.replace(
+        _llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews", "lobsters"), slots=1)
+    )
     user = dataclasses.replace(cfg.users[0], daily_cap=4)
     when = "2026-03-10T06:00:00Z"
     _listings(
@@ -582,23 +585,64 @@ def test_front_page_links_are_not_articles():
     assert not is_front_page("https://example.com/blog/post/")
 
 
-def test_scheduler_rereads_config_and_keeps_the_old_one_when_broken(tmp_path):
-    import argparse
-
+def test_settings_come_from_the_environment_and_the_web_pages(tmp_path, monkeypatch):
     from app import cli
-    from app.config import load_config
+    from app.config import setting_keys, with_settings
 
-    path = tmp_path / "config.yaml"
-    path.write_text("delivery_time: '06:00'\nusers: []\nsmtp: {host: smtp.example, sender: a@example.com}\n")
-    args = argparse.Namespace(config=path)
-    cfg = load_config(path)
+    for name, value in {
+        "FORENOON_DATA_DIR": str(tmp_path),
+        "TZ": "America/New_York",
+        "FORENOON_PUBLIC_URL": "https://fb.example",
+        "FORENOON_SMTP_HOST": "smtp.example",
+        "FORENOON_SMTP_SENDER": "digest@example.com",
+        "FORENOON_SMTP_MAX_MESSAGE_BYTES": "38000000",
+        "FORENOON_ANTHROPIC_API_KEY": "",
+    }.items():
+        monkeypatch.setenv(name, value)
+    cfg = cli.load()  # nothing saved, no web app yet: the defaults
+    assert (cfg.timezone, cfg.public_base_url, cfg.delivery_time) == ("America/New_York", "https://fb.example", "06:00")
+    assert (cfg.smtp.host, cfg.smtp.port, cfg.smtp.max_message_bytes) == ("smtp.example", 587, 38_000_000)
+    assert not cfg.llm.enabled and cfg.discovery.sites == () and cfg.alerts.to == ""
 
-    path.write_text(path.read_text().replace("06:00", "07:30"))
-    cfg = cli._reload(cfg, args)
-    assert cfg.delivery_time == "07:30"
+    store = Store(cfg.db_path)
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, role, email, created_at) VALUES ('a', 'A', 'x', 'admin', 'a@example.com', 'x')"
+    )
+    save = "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 'x')"
+    store.db.executemany(save, [("delivery_time", "07:30"), ("llm.read_candidates", "20"), ("images.grayscale", "0")])
+    store.db.executemany(save, [("delivery_time ", "x"), ("smtp.host", "evil.example"), ("max_age_days", "soon")])
+    store.db.execute("UPDATE sources SET enabled = 0 WHERE builtin = 'lobsters'")
+    store.db.commit()
+    monkeypatch.setenv("FORENOON_ANTHROPIC_API_KEY", "k")
+    cfg = cli.load()
+    assert (cfg.delivery_time, cfg.llm.read_candidates, cfg.images.grayscale) == ("07:30", 20, False)
+    assert cfg.smtp.host == "smtp.example" and cfg.max_age_days == 3, "deploy settings and bad values are left alone"
+    assert cfg.llm.enabled and cfg.discovery.sites == ("hackernews",)
+    assert cfg.alerts.to == "a@example.com", "alerts go to the admins unless another address is saved"
+    assert cli._reload(cfg).delivery_time == "07:30"
 
-    path.write_text("delivery_time: [broken")
-    assert cli._reload(cfg, args).delivery_time == "07:30"
+    assert with_settings(cfg, {"alerts.enabled": "0"})[0].alerts.enabled is False
+    for bad in ({"delivery_time": "25:00"}, {"format": "pdf"}, {"max_age_days": "-2"}, {"users": "x"}):
+        assert with_settings(cfg, bad) == (
+            cfg,
+            [next(iter(bad)) + (": not a setting" if "users" in bad else f": cannot use {next(iter(bad.values()))!r}")],
+        )
+    assert with_settings(cfg, {"keep_pages_days": "-1"})[1] == []
+    assert "smtp.host" not in setting_keys() and "discovery.sites" not in setting_keys()
+
+
+def test_a_built_in_source_new_to_this_version_arrives_switched_off(tmp_path):
+    store = Store(tmp_path / "forenoon.sqlite3")
+    known = {"hackernews": "Hacker News", "lobsters": "Lobsters", "tildes": "Tildes"}
+    assert store.builtin_sites(known) == ()  # the web app has not made its tables yet
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    assert store.builtin_sites(known) == ("hackernews", "lobsters")
+    rows = {r["builtin"]: r["enabled"] for r in store.db.execute("SELECT builtin, enabled FROM sources")}
+    assert rows == {"hackernews": 1, "lobsters": 1, "tildes": 0}
+    assert store.sources() == (), "built-ins are not feeds"
 
 
 def test_pointer_post_is_replaced_by_the_articles_it_links_to_as_one_story(env, tmp_path):
@@ -939,7 +983,7 @@ def test_a_sites_address_is_turned_into_its_feed(tmp_path):
     )
     assert rows["None"]["check_state"] == "failed" and "no feed found" in rows["None"]["check_note"]
     assert rows["None"]["url"] == "https://none.example/"  # left as typed
-    assert rows["Paper"]["check_state"] == "failed" and "recipes.conf" in rows["Paper"]["check_note"]
+    assert rows["Paper"]["check_state"] == "failed" and "No issue in recipes/paper" in rows["Paper"]["check_note"]
     assert [s.name for s in store.sources()] == ["None", "Paper", "Quiet", "Settled"]
 
 

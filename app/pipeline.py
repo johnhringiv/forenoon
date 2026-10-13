@@ -467,7 +467,7 @@ def run(
     if cfg.llm.enabled:
         pool = others[: cfg.llm.max_candidates]
         slots = max(0, remaining - len(pinned))
-        if cfg.discovery.enabled and backend is not None and slots:
+        if cfg.discovery.sites and backend is not None and slots:
             found = _discover(cfg, store, fetcher, user, report, reports, seen, cutoff, dry_run)
         ranking = rank_candidates(
             cfg.llm,

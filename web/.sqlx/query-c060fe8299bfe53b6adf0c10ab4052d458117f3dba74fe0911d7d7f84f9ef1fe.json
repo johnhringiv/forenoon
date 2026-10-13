@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET enabled = ? WHERE id = ? AND kind = 'builtin'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c060fe8299bfe53b6adf0c10ab4052d458117f3dba74fe0911d7d7f84f9ef1fe"
+}

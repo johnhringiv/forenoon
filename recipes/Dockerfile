@@ -1,5 +1,5 @@
 # Calibre for running news recipes. Kept apart from the app image: it is large, it is the
-# only place subscriber logins live, and Calibre must be updated often because recipes break
+# only container that reads subscriber logins, and Calibre must be updated often because recipes break
 # when sites change. Rebuild to pick up the newest Calibre, or pin one with CALIBRE_VERSION.
 FROM debian:bookworm-slim
 ARG CALIBRE_VERSION=
@@ -13,6 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PATH=/opt/calibre:$PATH QT_QPA_PLATFORM=offscreen HOME=/tmp PYTHONUNBUFFERED=1 RECIPES_DIR=/recipes
 COPY runner.py /usr/local/bin/runner.py
 # Same fixed UID/GID as the app, so both can use the one data folder.
-RUN useradd --uid 1000 --create-home forenoon
+RUN useradd --uid 1000 --create-home forenoon && mkdir /logins && chown 1000:1000 /logins
 USER 1000:1000
 ENTRYPOINT ["python3", "/usr/local/bin/runner.py"]

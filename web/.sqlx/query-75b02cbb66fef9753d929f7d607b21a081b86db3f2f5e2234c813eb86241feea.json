@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET name = ?, recipe_title = ?, pinned = ?, enabled = ? WHERE id = ? AND kind = 'recipe'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "75b02cbb66fef9753d929f7d607b21a081b86db3f2f5e2234c813eb86241feea"
+}

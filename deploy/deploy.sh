@@ -16,21 +16,21 @@
 # Roll back with:  sudo IMAGE=ghcr.io/<owner>/<repo>:sha-abc123 sh deploy.sh
 #
 # Recipes (optional): with RECIPES_IMAGE set, a fourth container runs Calibre news recipes
-# into <data>/recipes. Its logins come from recipes.env beside the env file (or
-# RECIPES_ENV_FILE) and reach no other container.
+# into <data>/recipes. Which ones, and their logins, are set on the web pages; the logins
+# are kept in the Docker volume forenoon-logins, which only it and the web pages mount.
 #
 # Web pages (optional): with WEB_IMAGE and WEB_LISTEN (a port, or address:port) set, a
 # container serves the newsstand there (what was delivered; ratings can be changed), behind
 # a login. Create the first account once it is up:
 #   sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <address>
 # Publish it only on a trusted network for now, and never route the tunnel to it. With
-# FORENOON_WEB_URL and FORENOON_SMTP_* set it emails links to confirm an address and reset a
-# password; the mail password is the only secret it is given.
+# FORENOON_WEB_URL set it emails links to confirm an address and reset a password; the mail
+# password is the only secret it is given.
 #
-# The env file is .env.example filled in. FORENOON_HOST_DATA is the data folder; if
-# config.yaml (and optionally forenoon.sqlite3) sits next
-# to this script and the data folder does not have them yet, they are copied
-# in. Existing files are never overwritten.
+# The env file is .env.example filled in: the data folder, the mail server, the public
+# address and the keys. Everything else is set on the web pages. FORENOON_HOST_DATA is the
+# data folder; if forenoon.sqlite3 sits next to this script and the data folder does not
+# have one yet, it is copied in. An existing file is never overwritten.
 #
 # Network layout: both app containers run on Docker's default bridge;
 # cloudflared joins the feedback container's network namespace and reaches it
@@ -56,17 +56,19 @@ IMAGE="${IMAGE:-forenoon:local}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
-RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(env_get RECIPES_ENV_FILE)}"
-RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(dirname "$ENV_FILE")/recipes.env}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
 WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
-# For the web pages' account emails (confirm an address, reset a password).
+# Where the web pages are opened, for the links in their account emails.
 FORENOON_WEB_URL=$(env_get FORENOON_WEB_URL)
+# Where rating links point, and the mail server books, alerts and account emails go through.
+FORENOON_PUBLIC_URL=$(env_get FORENOON_PUBLIC_URL)
+FORENOON_SMTP_MAX_MESSAGE_BYTES=$(env_get FORENOON_SMTP_MAX_MESSAGE_BYTES)
 FORENOON_SMTP_HOST=$(env_get FORENOON_SMTP_HOST)
 FORENOON_SMTP_PORT=$(env_get FORENOON_SMTP_PORT)
 FORENOON_SMTP_USERNAME=$(env_get FORENOON_SMTP_USERNAME)
 FORENOON_SMTP_SENDER=$(env_get FORENOON_SMTP_SENDER)
 export FORENOON_WEB_URL FORENOON_SMTP_HOST FORENOON_SMTP_USERNAME FORENOON_SMTP_SENDER
+export FORENOON_PUBLIC_URL FORENOON_SMTP_MAX_MESSAGE_BYTES
 export FORENOON_SMTP_PORT="${FORENOON_SMTP_PORT:-587}"
 RECIPES_TIME=$(env_get RECIPES_TIME)
 export RECIPES_TIME="${RECIPES_TIME:-05:00}"
@@ -107,21 +109,15 @@ start_recipes() {
         mkdir -p "$DATA_DIR/recipes"
         chown 1000:1000 "$DATA_DIR/recipes"
     fi
-    if [ -f "$DIR/recipes.conf" ] && [ ! -e "$DATA_DIR/recipes/recipes.conf" ]; then
-        cp "$DIR/recipes.conf" "$DATA_DIR/recipes/recipes.conf"
-        chown 1000:1000 "$DATA_DIR/recipes/recipes.conf"
-        echo "seeded $DATA_DIR/recipes/recipes.conf"
-    fi
-    logins=""
-    [ ! -f "$RECIPES_ENV_FILE" ] || logins="--env-file $RECIPES_ENV_FILE"
-    # Only the recipes folder is mounted: this container never sees the database or config.
-    # shellcheck disable=SC2086
+    # Only the recipes folder and the logins volume are mounted: this container never sees
+    # the database. The web pages write the list of recipes and the logins.
     docker run -d --name forenoon-recipes --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true \
         -v "$DATA_DIR/recipes:/recipes" \
-        -e TZ -e RECIPES_TIME $logins \
+        -v forenoon-logins:/logins:ro \
+        -e TZ -e RECIPES_TIME \
         "$RECIPES_IMAGE" >/dev/null ||
         echo "recipes container did not start; the rest of the deploy is unaffected"
 }
@@ -137,13 +133,15 @@ start_web() {
     docker pull -q "$WEB_IMAGE" >/dev/null ||
         echo "pull failed; will use local image $WEB_IMAGE if present"
     # It shares the data folder for the database: it reads what was delivered, and writes
-    # accounts, sessions and rating changes. Its one secret is the mail password, for the
-    # account emails; without FORENOON_SMTP_HOST those are written to its log instead.
+    # accounts, sessions, sources, settings and rating changes. Its one secret from here is
+    # the mail password, for the account emails; without FORENOON_SMTP_HOST those are
+    # written to its log instead. Recipe logins typed into it go to the logins volume.
     docker run -d --name forenoon-web --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true \
         -v "$DATA_DIR:/data" \
+        -v forenoon-logins:/logins \
         -p "$WEB_LISTEN:8081" \
         -e TZ -e FORENOON_WEB_URL \
         -e FORENOON_SMTP_HOST -e FORENOON_SMTP_PORT -e FORENOON_SMTP_USERNAME -e FORENOON_SMTP_SENDER \
@@ -195,14 +193,12 @@ if [ ! -d "$DATA_DIR" ]; then
     mkdir -p "$DATA_DIR"
     chown 1000:1000 "$DATA_DIR"
 fi
-for f in config.yaml forenoon.sqlite3; do
-    if [ -f "$DIR/$f" ] && [ ! -e "$DATA_DIR/$f" ]; then
-        cp "$DIR/$f" "$DATA_DIR/$f"
-        chown 1000:1000 "$DATA_DIR/$f"
-        echo "seeded $DATA_DIR/$f"
-    fi
-done
-[ -f "$DATA_DIR/config.yaml" ] || { echo "missing $DATA_DIR/config.yaml"; exit 1; }
+if [ -f "$DIR/forenoon.sqlite3" ] && [ ! -e "$DATA_DIR/forenoon.sqlite3" ]; then
+    cp "$DIR/forenoon.sqlite3" "$DATA_DIR/forenoon.sqlite3"
+    chown 1000:1000 "$DATA_DIR/forenoon.sqlite3"
+    echo "seeded $DATA_DIR/forenoon.sqlite3"
+fi
+[ -n "$FORENOON_SMTP_HOST" ] || echo "FORENOON_SMTP_HOST is not set in $ENV_FILE: nothing can be delivered"
 
 echo "$(date -u +%FT%TZ) recreating forenoon containers from $IMAGE"
 # cloudflared first: it lives in the feedback container's network namespace.
@@ -223,7 +219,10 @@ run_app() {
         -e TZ -e FORENOON_FEEDBACK_SECRET "$@" >/dev/null
 }
 
-run_app forenoon -e FORENOON_SMTP_PASSWORD -e FORENOON_ANTHROPIC_API_KEY "$IMAGE" schedule
+run_app forenoon -e FORENOON_SMTP_PASSWORD -e FORENOON_ANTHROPIC_API_KEY -e FORENOON_PUBLIC_URL \
+    -e FORENOON_SMTP_HOST -e FORENOON_SMTP_PORT -e FORENOON_SMTP_USERNAME -e FORENOON_SMTP_SENDER \
+    -e FORENOON_SMTP_MAX_MESSAGE_BYTES \
+    "$IMAGE" schedule
 run_app forenoon-feedback "$IMAGE" feedback --port 8080
 
 # Health-gate the feedback service from inside its own container (no host port).
@@ -247,5 +246,4 @@ start_web
 sleep 5
 docker ps --filter name=forenoon --format '{{.Names}}: {{.Status}}'
 docker logs forenoon 2>&1 | tail -3
-PUBLIC_URL=$(grep -E '^public_base_url:' "$DATA_DIR/config.yaml" | head -1 | sed -E 's/^public_base_url:[[:space:]]*//; s/[[:space:]]*(#.*)?$//; s/^"//; s/"$//')
-echo "verify: curl ${PUBLIC_URL:-https://your-feedback-hostname}/healthz"
+echo "verify: curl ${FORENOON_PUBLIC_URL:-https://your-feedback-hostname}/healthz"

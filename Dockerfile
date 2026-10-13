@@ -10,7 +10,7 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.12-slim-bookworm
 COPY --from=build /opt/venv /opt/venv
-ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 FORENOON_DATA_DIR=/data FORENOON_CONFIG=/data/config.yaml
+ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 FORENOON_DATA_DIR=/data
 WORKDIR /data
 # Fixed UID/GID 1000; a bind-mounted data folder must be writable by it
 # (compose can override with `user:`). Nothing needs root.
