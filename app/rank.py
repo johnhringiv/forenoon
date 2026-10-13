@@ -42,8 +42,7 @@ how much this reader will want to read it today, and give a reason of at most 15
 Each rating comes with the article's length, whether it was finished, why it was picked, and
 sometimes the reader's own reason. Work out what the rating is about before learning from it:
 a short post rated low may be a verdict on thin posts, not on its source or topic. When
-"reader_said" is present, trust it. "Broken or incomplete" is about the delivery and says
-nothing about the topic or the source. "Too thin" and "Too long" are about the form, not the
+"reader_said" is present, trust it. "Too thin" and "Too long" are about the form, not the
 subject. "Wrong or misleading" means that article's claims did not hold up: the topic is still
 of interest, but be warier of unverified alarms, rumours and single-source claims like it.
 

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT article_id FROM feedback_events WHERE user_id = ? AND signal = 'problem'",
+  "describe": {
+    "columns": [
+      {
+        "name": "article_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "802e701ede6eeb8c98da5001630156e66257913acd967b495dbec5640498a534"
+}

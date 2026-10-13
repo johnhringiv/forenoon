@@ -488,6 +488,8 @@ struct Card {
     /// Whether a "Send to Kindle" button is offered, and what became of the last request.
     sendable: bool,
     sent: Option<String>,
+    /// Whether the reader has reported this article as broken or incomplete.
+    reported: bool,
 }
 
 struct Issue {
@@ -513,6 +515,8 @@ struct NewsstandPage {
     name: String,
     /// Whether to show the links only an admin can use.
     admin: bool,
+    /// How many problem reports there are, for the admin's link.
+    problems: i64,
     csrf: String,
     /// The address still to be confirmed, for the banner.
     unconfirmed: Option<String>,
@@ -619,6 +623,7 @@ fn card(row: Delivered) -> Card {
         reasons,
         sendable: false,
         sent: None,
+        reported: false,
         id: row.id,
     }
 }
@@ -660,6 +665,7 @@ pub async fn newsstand(
     let mut page = NewsstandPage {
         name: user.name.clone(),
         admin: user.is_admin(),
+        problems: 0,
         csrf: csrf_token(&session).await?,
         unconfirmed: user.unconfirmed_email().map(str::to_owned),
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),
@@ -672,6 +678,9 @@ pub async fn newsstand(
     };
     if !db::pipeline_ready(&state.pool).await? {
         return html(StatusCode::OK, page);
+    }
+    if user.is_admin() {
+        page.problems = db::problem_count(&state.pool).await?;
     }
     let totals = db::totals(&state.pool, &user.id).await?;
     page.summary = format!(
@@ -711,8 +720,10 @@ pub async fn newsstand(
     // unless a request is already waiting.
     let can_send = !user.kindle_addresses.trim().is_empty();
     let requests = db::send_states(&state.pool, &user.id).await?;
+    let reported = db::reported(&state.pool, &user.id).await?;
     for card in page.issues.iter_mut().flat_map(|issue| &mut issue.stories).flat_map(|story| &mut story.cards) {
         let last = requests.iter().rev().find(|request| request.article_id == card.id);
+        card.reported = reported.contains(&card.id);
         card.sendable = can_send && last.is_none_or(|request| request.status != "queued");
         card.sent = last.map(|request| match request.status.as_str() {
             "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
@@ -753,6 +764,76 @@ pub struct RateForm {
     finished: Option<String>,
     clear: Option<String>,
     reason: Option<String>,
+}
+
+/// Tell whoever runs the install that an article came out broken or incomplete. This is about
+/// the delivery, so it is kept apart from the rating and leaves it as it was.
+pub async fn report(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<SendForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    if !db::pipeline_ready(&state.pool).await? || !db::is_delivered(&state.pool, &user.id, &form.article).await? {
+        return refused(StatusCode::NOT_FOUND, "No such delivered article.");
+    }
+    if !db::reported(&state.pool, &user.id).await?.contains(&form.article) {
+        db::report_problem(&state.pool, &user.id, &form.article).await?;
+    }
+    back_to(&form.back, &form.article)
+}
+
+struct ProblemRow {
+    when: String,
+    who: String,
+    title: String,
+    link: Option<String>,
+    source: String,
+    detail: String,
+}
+
+#[derive(Template)]
+#[template(path = "problems.html")]
+struct ProblemsPage {
+    name: String,
+    csrf: String,
+    rows: Vec<ProblemRow>,
+}
+
+/// For admins: the articles readers reported as broken or incomplete.
+pub async fn problems(State(state): State<AppState>, auth: AuthSession, session: Session) -> Page {
+    let user = reader(&auth)?;
+    if !user.is_admin() {
+        return refused(StatusCode::FORBIDDEN, "Problem reports are for an admin.");
+    }
+    let zone = Tz::from_str(&user.timezone).unwrap_or(Tz::UTC);
+    let found = if db::pipeline_ready(&state.pool).await? { db::problems(&state.pool, 200).await? } else { Vec::new() };
+    let rows = found
+        .into_iter()
+        .map(|problem| ProblemRow {
+            when: local(&problem.reported_at, zone)
+                .map_or(problem.reported_at.clone(), |at| at.format("%-d %B %Y, %H:%M").to_string()),
+            who: format!(
+                "{}, {}",
+                problem.user_id,
+                if problem.via == "web" { "on the web pages" } else { "from the Kindle" }
+            ),
+            link: web_url(&problem.url),
+            title: problem.title,
+            source: problem.source,
+            detail: format!(
+                "{} words. Extractor: {}",
+                thousands(problem.words),
+                if problem.extraction.is_empty() { "no record" } else { &problem.extraction }
+            ),
+        })
+        .collect();
+    html(StatusCode::OK, ProblemsPage { name: user.name, csrf: csrf_token(&session).await?, rows })
 }
 
 #[derive(Deserialize)]

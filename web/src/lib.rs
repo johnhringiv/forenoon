@@ -62,6 +62,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/", get(pages::newsstand))
         .route("/rate", post(pages::rate))
         .route("/send", post(pages::send))
+        .route("/report", post(pages::report))
+        .route("/problems", get(pages::problems))
         .route("/account", get(pages::account))
         .route("/account/profile", post(pages::set_profile))
         .route("/account/reading", post(pages::set_reading))

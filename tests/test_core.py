@@ -235,8 +235,13 @@ def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
 
     assert "Rated 2 of 5, not finished. Too thin, nothing in it." in tap("why-thin").text
     assert store.get_rating("john", "abc") == Rating(2, False, "thin")
-    tap("why-broken")
+    # A fault in the delivery is reported apart from the rating, which it leaves as it was.
+    assert "came out broken or incomplete" in page and "Broken" not in tap("r2").text.split("Change it")[0]
+    assert "Reported. Thank you." in tap("problem").text
     assert [(r["verdict"], r["problem"]) for r in store.review_rows()] == [("bad", "reader: broken or incomplete")]
+    assert store.get_rating("john", "abc") == Rating(2, False, "thin")
+    with pytest.raises(TokenError):  # no longer a reason
+        make_token(SECRET, "john", "abc", "why-broken", expires)
 
     # Re-rating high drops a reason that no longer fits and offers the other list.
     page = tap("f5").text

@@ -19,7 +19,6 @@ LOW_REASONS = {
     "topic": "Not interested in the topic",
     "thin": "Too thin, nothing in it",
     "known": "Already knew this",
-    "broken": "Broken or incomplete",
     "long": "Too long",
     "wrong": "Wrong or misleading",
 }
@@ -30,7 +29,10 @@ HIGH_REASONS = {
 }
 REASONS = LOW_REASONS | HIGH_REASONS
 REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
-SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS
+# "This article came out broken or incomplete": a report to whoever runs the install, about the
+# delivery. It is not a rating and not a reason for one.
+PROBLEM = "problem"
+SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS + (PROBLEM,)
 
 
 def reasons_for(rating: int | None) -> dict[str, str]:
@@ -45,8 +47,8 @@ def meaning(signal: str) -> tuple[int | None, bool | None]:
     """(rating, finished) a signal sets; None leaves that fact as it was."""
     if signal in LINK_SIGNALS:
         return int(signal[1]), signal[0] == "f"
-    if signal in REASON_SIGNALS:
-        return None, None  # a reason changes neither
+    if signal in REASON_SIGNALS or signal == PROBLEM:
+        return None, None  # a reason or a problem report changes neither
     return {"up": (5, None), "down": (1, None), "done": (None, True)}[signal]
 
 

@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Source, User
-from .tokens import REASON_SIGNALS, meaning, reasons_for
+from .tokens import PROBLEM, REASON_SIGNALS, meaning, reasons_for
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -290,12 +290,22 @@ class Store:
 
     def record_feedback(
         self, user_id: str, article_id: str, signal: str, source: str, when: str | None = None
-    ) -> Rating:
+    ) -> Rating | None:
         """Log the tap and apply it: the latest tap decides the stored rating and finished flag.
 
         A reason tap sets only the reason. A rating tap drops a stored reason that no longer
-        fits it (a "too thin" on an article now rated 5).
+        fits it (a "too thin" on an article now rated 5). A problem report is logged, and noted
+        in the extraction log for whoever runs the install; it leaves the rating as it was.
         """
+        if signal == PROBLEM:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (user_id, article_id, signal, source, when or now_iso()),
+                )
+            self.record_review(article_id, "bad", "reader: broken or incomplete", "reader")
+            return self.get_rating(user_id, article_id)
         rating, finished = meaning(signal)
         reason = signal.removeprefix("why-") if signal in REASON_SIGNALS else None
         when = when or now_iso()
