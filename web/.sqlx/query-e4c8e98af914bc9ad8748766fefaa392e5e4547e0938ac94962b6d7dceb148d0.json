@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET email = ?1, pending_email = NULL, email_verified_at = ?2\n         WHERE id = ?3 AND (pending_email = ?1 OR (pending_email IS NULL AND email = ?1))\n         AND NOT EXISTS (SELECT 1 FROM users other WHERE other.email = ?1 AND other.id <> ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e4c8e98af914bc9ad8748766fefaa392e5e4547e0938ac94962b6d7dceb148d0"
+}

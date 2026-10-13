@@ -11,7 +11,7 @@ use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use askama::Template;
 use axum::{
     Form,
-    extract::{ConnectInfo, FromRequestParts, Query, Request, State},
+    extract::{ConnectInfo, FromRequestParts, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
@@ -28,6 +28,7 @@ use crate::{
     auth::{self, AuthSession, Credentials, User},
     db::{self, Delivered},
     limit::Limiter,
+    mail::{Mailer, Message},
     ratings::{self, Signal},
 };
 
@@ -45,12 +46,23 @@ const SEEN_KEY: &str = "seen";
 const ATTEMPTS_PER_CLIENT: usize = 30;
 const ATTEMPTS_PER_CLIENT_AND_NAME: usize = 10;
 const ATTEMPTS_PER_NAME: usize = 100;
+// Per hour: emails to one account or address, reset requests and reset attempts from one address.
+const EMAILS_PER_ACCOUNT: usize = 5;
+const RESET_REQUESTS_PER_CLIENT: usize = 5;
+const RESET_ATTEMPTS_PER_CLIENT: usize = 10;
+const VERIFY_LINK_SECONDS: i64 = 24 * 3600;
+const RESET_LINK_SECONDS: i64 = 3600;
 const SHOW: [(&str, &str); 3] = [("", "All"), ("rated", "Rated"), ("unrated", "Not rated")];
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub sign_ins: Arc<Limiter>,
+    /// Counts emails sent and reset attempts, per hour.
+    pub mail_limits: Arc<Limiter>,
+    pub mailer: Mailer,
+    /// Where the pages are reached, for links in emails; no trailing slash.
+    pub base_url: String,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -183,15 +195,22 @@ pub async fn require_login(auth: AuthSession, session: Session, request: Request
 #[derive(Template)]
 #[template(path = "login.html")]
 struct LoginPage {
-    id: String,
+    email: String,
     error: Option<&'static str>,
+    notice: Option<&'static str>,
 }
 
-pub async fn login_page(auth: AuthSession) -> Page {
+#[derive(Deserialize)]
+pub struct LoginQuery {
+    reset: Option<String>,
+}
+
+pub async fn login_page(auth: AuthSession, Query(query): Query<LoginQuery>) -> Page {
     if auth.user.is_some() {
         return Ok(Redirect::to("/").into_response());
     }
-    html(StatusCode::OK, LoginPage { id: String::new(), error: None })
+    let notice = query.reset.map(|_| "Password changed. Sign in with the new one.");
+    html(StatusCode::OK, LoginPage { email: String::new(), error: None, notice })
 }
 
 pub async fn login(
@@ -205,15 +224,13 @@ pub async fn login(
     if !same_origin(&headers) {
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from the sign-in page.");
     }
-    let id = creds.id.trim().to_owned();
-    let failed =
-        |status, error| html(status, LoginPage { id: id.chars().take(auth::MAX_ID).collect(), error: Some(error) });
+    let email: String = creds.email.trim().to_lowercase().chars().take(254).collect();
+    let failed = |status, error| html(status, LoginPage { email: email.clone(), error: Some(error), notice: None });
     // Checked in this order and stopping at the first refusal, so a blocked address cannot
     // fill the table with names.
-    let name = id.to_lowercase();
     let allowed = state.sign_ins.allow(&format!("client {client}"), ATTEMPTS_PER_CLIENT)
-        && state.sign_ins.allow(&format!("client {client} name {name}"), ATTEMPTS_PER_CLIENT_AND_NAME)
-        && state.sign_ins.allow(&format!("name {name}"), ATTEMPTS_PER_NAME);
+        && state.sign_ins.allow(&format!("client {client} name {email}"), ATTEMPTS_PER_CLIENT_AND_NAME)
+        && state.sign_ins.allow(&format!("name {email}"), ATTEMPTS_PER_NAME);
     if !allowed {
         return failed(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Try again in a few minutes.");
     }
@@ -223,11 +240,201 @@ pub async fn login(
         auth.logout().await?;
         session.cycle_id().await?;
     }
-    let Some(user) = auth.authenticate(Credentials { id: id.clone(), password: creds.password }).await? else {
-        return failed(StatusCode::UNAUTHORIZED, "Wrong name or password.");
+    let Some(user) = auth.authenticate(Credentials { email: email.clone(), password: creds.password }).await? else {
+        return failed(StatusCode::UNAUTHORIZED, "Wrong email or password.");
     };
     auth.login(&user).await?;
     Ok(Redirect::to("/").into_response())
+}
+
+// emailed links: confirming an address, resetting a password
+
+#[derive(Template)]
+#[template(path = "message.html")]
+struct MessagePage {
+    heading: &'static str,
+    text: String,
+}
+
+fn message(status: StatusCode, heading: &'static str, text: impl Into<String>) -> Page {
+    html(status, MessagePage { heading, text: text.into() })
+}
+
+/// Email a link that confirms `email` for this account. Refused past a few an hour.
+async fn send_verification(state: &AppState, user: &User, email: &str) -> Result<bool, AppError> {
+    if !state.mail_limits.allow(&format!("verify {}", user.id), EMAILS_PER_ACCOUNT) {
+        return Ok(false);
+    }
+    let token = random_token()?;
+    db::new_token(&state.pool, &token, &user.id, db::VERIFY, email, VERIFY_LINK_SECONDS).await?;
+    let body = format!(
+        "Open this link to confirm {email} for your Forenoon account:\n\n{}/verify/{token}\n\n\
+         It works for 24 hours. Once confirmed, this address can be used to reset a forgotten password.\n\
+         If you did not ask for this, ignore this message.\n",
+        state.base_url
+    );
+    state
+        .mailer
+        .send(Message { to: email.to_owned(), subject: "Confirm your email for Forenoon".to_owned(), body })
+        .await?;
+    Ok(true)
+}
+
+/// The link in a confirmation email. It needs no session: it may be opened on another device.
+pub async fn verify(State(state): State<AppState>, Path(token): Path<String>) -> Page {
+    let invalid = || {
+        message(
+            StatusCode::BAD_REQUEST,
+            "Link not valid",
+            "This link has expired or was already replaced by a newer one. Sign in and send a new one from your account page.",
+        )
+    };
+    let Some(found) = db::read_token(&state.pool, &token, db::VERIFY).await? else {
+        return invalid();
+    };
+    db::drop_tokens(&state.pool, &found.user_id, db::VERIFY).await?;
+    if !db::confirm_email(&state.pool, &found.user_id, &found.email).await? {
+        return invalid();
+    }
+    // A reset link sent to the previous address must not outlive the change.
+    db::drop_tokens(&state.pool, &found.user_id, db::RESET).await?;
+    message(
+        StatusCode::OK,
+        "Email confirmed",
+        format!("{} is confirmed. You sign in with it, and it can be used to reset a forgotten password.", found.email),
+    )
+}
+
+/// Send the confirmation email again, from the banner.
+pub async fn resend_verification(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let Some(email) = user.unconfirmed_email().map(str::to_owned) else {
+        return Ok(Redirect::to("/account").into_response());
+    };
+    let sent = send_verification(&state, &user, &email).await?;
+    Ok(Redirect::to(if sent { "/account?saved=sent" } else { "/account?saved=wait" }).into_response())
+}
+
+#[derive(Template)]
+#[template(path = "forgot.html")]
+struct ForgotPage {
+    error: Option<&'static str>,
+}
+
+pub async fn forgot_page() -> Page {
+    html(StatusCode::OK, ForgotPage { error: None })
+}
+
+#[derive(Deserialize)]
+pub struct ForgotForm {
+    email: String,
+}
+
+/// Email a reset link, when the address is a confirmed one. The answer is the same either
+/// way, so this page cannot be used to find out who has an account.
+pub async fn forgot(
+    State(state): State<AppState>,
+    Client(client): Client,
+    headers: HeaderMap,
+    Form(form): Form<ForgotForm>,
+) -> Page {
+    if !same_origin(&headers) {
+        return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
+    }
+    if !state.mail_limits.allow(&format!("forgot client {client}"), RESET_REQUESTS_PER_CLIENT) {
+        return html(
+            StatusCode::TOO_MANY_REQUESTS,
+            ForgotPage { error: Some("Too many requests. Try again in an hour.") },
+        );
+    }
+    let user = match auth::normal_email(&form.email) {
+        Some(email) => auth::find_user_by_email(&state.pool, &email).await?,
+        None => None,
+    };
+    if let Some(user) = user.filter(|user| user.email_verified_at.is_some())
+        && let Some(email) = user.email.clone()
+        && state.mail_limits.allow(&format!("reset {}", user.id), EMAILS_PER_ACCOUNT)
+    {
+        let token = random_token()?;
+        db::new_token(&state.pool, &token, &user.id, db::RESET, &email, RESET_LINK_SECONDS).await?;
+        let body = format!(
+            "Open this link to choose a new password for your Forenoon account:\n\n{}/reset/{token}\n\n\
+             It works for 60 minutes. If you did not ask for this, ignore this message; your password is unchanged.\n",
+            state.base_url
+        );
+        let mail = Message { to: email, subject: "Reset your Forenoon password".to_owned(), body };
+        // A failure is logged, not shown: the page must not reveal whether the address has an account.
+        if let Err(error) = state.mailer.send(mail).await {
+            eprintln!("error: could not send a reset email: {error}");
+        }
+    }
+    message(
+        StatusCode::OK,
+        "Check your email",
+        "If that address belongs to an account and has been confirmed, a link to reset the password is on its way. It works for 60 minutes.",
+    )
+}
+
+#[derive(Template)]
+#[template(path = "reset.html")]
+struct ResetPage {
+    token: String,
+    error: Option<String>,
+}
+
+const RESET_INVALID: &str = "This link has expired or was already used. Ask for a new one from the sign-in page.";
+
+pub async fn reset_page(State(state): State<AppState>, Path(token): Path<String>) -> Page {
+    if db::read_token(&state.pool, &token, db::RESET).await?.is_none() {
+        return message(StatusCode::BAD_REQUEST, "Link not valid", RESET_INVALID);
+    }
+    html(StatusCode::OK, ResetPage { token, error: None })
+}
+
+#[derive(Deserialize)]
+pub struct ResetForm {
+    password: String,
+    again: String,
+}
+
+pub async fn reset(
+    State(state): State<AppState>,
+    Client(client): Client,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+    Form(form): Form<ResetForm>,
+) -> Page {
+    if !same_origin(&headers) {
+        return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
+    }
+    if !state.mail_limits.allow(&format!("reset client {client}"), RESET_ATTEMPTS_PER_CLIENT) {
+        return message(StatusCode::TOO_MANY_REQUESTS, "Too many attempts", "Try again in an hour.");
+    }
+    let Some(found) = db::read_token(&state.pool, &token, db::RESET).await? else {
+        return message(StatusCode::BAD_REQUEST, "Link not valid", RESET_INVALID);
+    };
+    let problem = if form.password != form.again {
+        Some("The two passwords are not the same.".to_owned())
+    } else {
+        auth::password_problem(&form.password)
+    };
+    if problem.is_some() {
+        return html(StatusCode::BAD_REQUEST, ResetPage { token, error: problem });
+    }
+    let hash = auth::hash_password(form.password).await?;
+    // Used once. Changing the hash also signs the account out everywhere.
+    db::drop_tokens(&state.pool, &found.user_id, db::RESET).await?;
+    db::set_password(&state.pool, &found.user_id, &hash).await?;
+    Ok(Redirect::to("/login?reset=1").into_response())
 }
 
 #[derive(Deserialize)]
@@ -292,6 +499,8 @@ struct Issue {
 struct NewsstandPage {
     name: String,
     csrf: String,
+    /// The address still to be confirmed, for the banner.
+    unconfirmed: Option<String>,
     summary: String,
     filters: Vec<Filter>,
     issues: Vec<Issue>,
@@ -434,6 +643,7 @@ pub async fn newsstand(
     let mut page = NewsstandPage {
         name: user.name.clone(),
         csrf: csrf_token(&session).await?,
+        unconfirmed: user.unconfirmed_email().map(str::to_owned),
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),
         filters,
         issues: Vec::new(),
@@ -574,6 +784,9 @@ pub struct AccountQuery {
 pub async fn account(auth: AuthSession, session: Session, Query(query): Query<AccountQuery>) -> Page {
     let notice = match query.saved.as_deref() {
         Some("profile") | Some("reading") => Some("Saved."),
+        Some("sent") => Some("Confirmation email sent. Open the link in it within 24 hours."),
+        Some("wait") => Some("Too many confirmation emails for now. Try again in an hour."),
+        Some("email") => Some("Email change cancelled."),
         Some("password") => Some("Password changed."),
         _ => None,
     };
@@ -614,6 +827,75 @@ pub async fn set_profile(
     db::set_profile(&state.pool, &user.id, name, timezone).await?;
     // A redirect, so reloading the result does not post the form again.
     Ok(Redirect::to("/account?saved=profile").into_response())
+}
+
+#[derive(Deserialize)]
+pub struct EmailForm {
+    csrf: String,
+    email: String,
+    current: String,
+}
+
+/// Change the address the reader signs in with. It needs the password, because whoever
+/// controls the address can reset the password. The change waits for the new address to be
+/// confirmed; until then the old one keeps working.
+pub async fn set_email(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<EmailForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let email = auth::normal_email(&form.email);
+    let problem = if !state.sign_ins.allow(&format!("change {}", user.id), ATTEMPTS_PER_CLIENT_AND_NAME) {
+        Some("Too many attempts. Try again in a few minutes.")
+    } else if form.current.chars().count() > auth::MAX_PASSWORD
+        || !auth::verify_password(form.current, user.password_hash.clone()).await?
+    {
+        Some("The current password is wrong.")
+    } else {
+        match &email {
+            None => Some("That is not an email address."),
+            Some(email) if user.email.as_deref() == Some(email) && user.pending_email.is_none() => {
+                Some("That is already your email address.")
+            }
+            Some(email) if db::email_taken(&state.pool, email, &user.id).await? => {
+                Some("Another account already uses that address.")
+            }
+            Some(_) => None,
+        }
+    };
+    if let (None, Some(email)) = (problem, email) {
+        if user.email.as_deref() == Some(email.as_str()) {
+            // Back to the current address: drop the pending change.
+            db::cancel_email_change(&state.pool, &user.id).await?;
+            return Ok(Redirect::to("/account?saved=email").into_response());
+        }
+        db::request_email(&state.pool, &user.id, &email).await?;
+        let sent = send_verification(&state, &user, &email).await?;
+        return Ok(Redirect::to(if sent { "/account?saved=sent" } else { "/account?saved=wait" }).into_response());
+    }
+    let page = AccountPage { user, csrf: form.csrf, error: problem.map(str::to_owned), notice: None };
+    html(StatusCode::BAD_REQUEST, page)
+}
+
+pub async fn cancel_email(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    db::cancel_email_change(&state.pool, &user.id).await?;
+    Ok(Redirect::to("/account?saved=email").into_response())
 }
 
 #[derive(Deserialize)]

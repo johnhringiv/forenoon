@@ -1,0 +1,5 @@
+{% if let Some(address) = unconfirmed %}
+<form class="banner" method="post" action="/account/verify"><input type="hidden" name="csrf" value="{{ csrf }}">
+<span>Confirm <b>{{ address }}</b> so a forgotten password can be reset: open the link we emailed you.</span>
+<button>Send it again</button></form>
+{% endif %}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM email_tokens WHERE (user_id = ? AND purpose = ?) OR expires_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ea6ffe6442a3c9ce11d9fbea18bbd127cec70d6f7e3f61cb5edd5fa9dc44ee02"
+}

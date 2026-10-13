@@ -5,7 +5,12 @@ use axum::{
     body::Body,
     http::{Request, Response, StatusCode, header},
 };
-use forenoon_web::{Options, app, auth, db};
+use std::sync::{Arc, Mutex};
+
+use forenoon_web::{
+    Options, app, auth, db,
+    mail::{Mailer, Message},
+};
 use http_body_util::BodyExt;
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -15,7 +20,23 @@ const PASSWORD: &str = "correct horse battery";
 struct Site {
     router: Router,
     pool: SqlitePool,
+    /// Every email the app sent.
+    mail: Arc<Mutex<Vec<Message>>>,
     _folder: tempfile::TempDir,
+}
+
+impl Site {
+    /// The link in the most recent email.
+    fn emailed_link(&self) -> String {
+        let mail = self.mail.lock().unwrap();
+        let body = &mail.last().expect("an email").body;
+        let (_, rest) = body.split_once("http://nas:8787").expect("a link to the site");
+        rest.split_whitespace().next().unwrap().to_owned()
+    }
+
+    fn emails(&self) -> usize {
+        self.mail.lock().unwrap().len()
+    }
 }
 
 /// A browser: remembers the session cookie between requests.
@@ -48,10 +69,16 @@ async fn site(with_pipeline: bool) -> Site {
     }
     for (id, name, role) in [("john", "John", "admin"), ("mary", "Mary", "reader")] {
         let hash = auth::hash_password(PASSWORD.to_owned()).await.unwrap();
-        db::add_user(&pool, id, name, &hash, role, "America/New_York").await.unwrap();
+        db::add_user(&pool, id, &format!("{id}@example.com"), name, &hash, role, "America/New_York").await.unwrap();
     }
-    let router = app(pool.clone(), Options { secure_cookies: false }).await.unwrap();
-    Site { router, pool, _folder: folder }
+    let mail = Arc::new(Mutex::new(Vec::new()));
+    let options = Options {
+        secure_cookies: false,
+        mailer: Mailer::Memory(mail.clone()),
+        base_url: "http://nas:8787/".to_owned(),
+    };
+    let router = app(pool.clone(), options).await.unwrap();
+    Site { router, pool, mail, _folder: folder }
 }
 
 async fn article(pool: &SqlitePool, id: &str, url: &str, source: &str, title: &str, user: &str, sent: &str) {
@@ -117,7 +144,7 @@ impl Browser {
     }
 
     async fn sign_in(&mut self, site: &Site, id: &str) -> Reply {
-        self.post(site, "/login", &[("id", id), ("password", PASSWORD)]).await
+        self.post(site, "/login", &[("email", &format!("{id}@example.com")), ("password", PASSWORD)]).await
     }
 }
 
@@ -142,11 +169,11 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
     assert!(browser.cookie.is_none(), "the sign-in page must not start a session");
 
     // Wrong password, unknown account, and a form posted from another site.
-    let wrong = browser.post(&site, "/login", &[("id", "john"), ("password", "not the password")]).await;
-    assert!(wrong.status == StatusCode::UNAUTHORIZED && wrong.text.contains("Wrong name or password."));
-    let unknown = browser.post(&site, "/login", &[("id", "nobody"), ("password", PASSWORD)]).await;
-    assert!(unknown.status == StatusCode::UNAUTHORIZED && unknown.text.contains("Wrong name or password."));
-    let form = [("id", "john"), ("password", PASSWORD)];
+    let wrong = browser.post(&site, "/login", &[("email", "john@example.com"), ("password", "not the password")]).await;
+    assert!(wrong.status == StatusCode::UNAUTHORIZED && wrong.text.contains("Wrong email or password."));
+    let unknown = browser.post(&site, "/login", &[("email", "nobody@example.com"), ("password", PASSWORD)]).await;
+    assert!(unknown.status == StatusCode::UNAUTHORIZED && unknown.text.contains("Wrong email or password."));
+    let form = [("email", "john@example.com"), ("password", PASSWORD)];
     let foreign = browser.post_from(&site, "/login", &form, Some("https://evil.example")).await;
     assert_eq!(foreign.status, StatusCode::FORBIDDEN);
     assert!(browser.cookie.is_none());
@@ -165,9 +192,9 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
 
     // Guessing is cut off, for the name even when the right password finally arrives.
     for _ in 0..10 {
-        browser.post(&site, "/login", &[("id", "mary"), ("password", "a wrong guess")]).await;
+        browser.post(&site, "/login", &[("email", "mary@example.com"), ("password", "a wrong guess")]).await;
     }
-    let late = browser.post(&site, "/login", &[("id", "Mary"), ("password", PASSWORD)]).await;
+    let late = browser.post(&site, "/login", &[("email", " Mary@Example.com "), ("password", PASSWORD)]).await;
     assert!(late.status == StatusCode::TOO_MANY_REQUESTS && late.text.contains("Too many attempts"));
 }
 
@@ -439,6 +466,104 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(second.get(&site, "/").await.status.is_redirection()); // the other does not
     let mut fresh = Browser::default();
     assert_eq!(fresh.sign_in(&site, "john").await.status, StatusCode::UNAUTHORIZED); // the old password is dead
-    let reply = fresh.post(&site, "/login", &[("id", "john"), ("password", new)]).await;
+    let reply = fresh.post(&site, "/login", &[("email", "john@example.com"), ("password", new)]).await;
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn email_is_confirmed_softly_and_restores_a_forgotten_password() {
+    let site = site(false).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    // Unconfirmed, the account works fully; a banner offers to send the link again.
+    let page = browser.get(&site, "/").await;
+    assert!(page.status == StatusCode::OK && page.text.contains("Confirm <b>john@example.com</b>"));
+    let csrf = page.csrf();
+
+    // A reset is not sent to an unconfirmed address, and the answer does not say so.
+    let asked = browser.post(&site, "/forgot", &[("email", "john@example.com")]).await;
+    assert!(asked.status == StatusCode::OK && asked.text.contains("If that address belongs to an account"));
+    assert_eq!(site.emails(), 0);
+
+    let sent = browser.post(&site, "/account/verify", &[("csrf", &csrf)]).await;
+    assert_eq!(sent.location, "/account?saved=sent");
+    assert_eq!(site.mail.lock().unwrap()[0].to, "john@example.com");
+    let link = site.emailed_link();
+    assert!(link.starts_with("/verify/"), "{link}");
+    // Only the token's hash is stored.
+    let stored: Vec<(String,)> =
+        sqlx::query_as("SELECT token_hash FROM email_tokens").fetch_all(&site.pool).await.unwrap();
+    assert!(stored.len() == 1 && !link.contains(&stored[0].0));
+
+    // The link works without a session, once.
+    let mut elsewhere = Browser::default();
+    assert_eq!(elsewhere.get(&site, "/verify/not-a-token").await.status, StatusCode::BAD_REQUEST);
+    assert!(elsewhere.get(&site, &link).await.text.contains("john@example.com is confirmed"));
+    assert_eq!(elsewhere.get(&site, &link).await.status, StatusCode::BAD_REQUEST);
+    assert!(!browser.get(&site, "/").await.text.contains("Confirm <b>"));
+
+    // Forgotten password: the same answer for a stranger's address, a link only for ours.
+    let unknown = elsewhere.post(&site, "/forgot", &[("email", "nobody@example.com")]).await;
+    assert!(unknown.text.contains("If that address belongs to an account") && site.emails() == 1);
+    let foreign =
+        elsewhere.post_from(&site, "/forgot", &[("email", "john@example.com")], Some("https://evil.example")).await;
+    assert!(foreign.status == StatusCode::FORBIDDEN && site.emails() == 1);
+    elsewhere.post(&site, "/forgot", &[("email", " John@Example.com ")]).await;
+    assert_eq!(site.emails(), 2);
+    let reset = site.emailed_link();
+    assert!(reset.starts_with("/reset/") && elsewhere.get(&site, &reset).await.text.contains("New password"));
+    assert_eq!(elsewhere.get(&site, "/reset/not-a-token").await.status, StatusCode::BAD_REQUEST);
+
+    let new = "restored by email link";
+    let short = elsewhere.post(&site, &reset, &[("password", "short"), ("again", "short")]).await;
+    assert!(short.status == StatusCode::BAD_REQUEST && short.text.contains("at least 10 characters"));
+    let done = elsewhere.post(&site, &reset, &[("password", new), ("again", new)]).await;
+    assert_eq!(done.location, "/login?reset=1");
+    assert!(elsewhere.get(&site, &done.location).await.text.contains("Password changed."));
+    // The link is used up, the old password is dead, and the signed-in browser is signed out.
+    assert_eq!(
+        elsewhere.post(&site, &reset, &[("password", new), ("again", new)]).await.status,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(browser.get(&site, "/").await.status.is_redirection());
+    assert_eq!(elsewhere.sign_in(&site, "john").await.status, StatusCode::UNAUTHORIZED);
+    let back = elsewhere.post(&site, "/login", &[("email", "john@example.com"), ("password", new)]).await;
+    assert_eq!(back.status, StatusCode::SEE_OTHER);
+
+    // Changing the address needs the password, and waits for the new address to be confirmed.
+    let csrf = elsewhere.get(&site, "/account").await.csrf();
+    let change = |email: &'static str, current: &'static str| {
+        [("csrf", csrf.clone()), ("email", email.to_owned()), ("current", current.to_owned())]
+    };
+    for (form, message) in [
+        (change("new@example.com", "not the password"), "The current password is wrong."),
+        (change("mary@example.com", new), "Another account already uses that address."),
+        (change("not an address", new), "That is not an email address."),
+    ] {
+        let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let reply = elsewhere.post(&site, "/account/email", &form).await;
+        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
+    }
+    let form = change("New@Example.com", new);
+    let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    assert_eq!(elsewhere.post(&site, "/account/email", &form).await.location, "/account?saved=sent");
+    assert_eq!(site.mail.lock().unwrap().last().unwrap().to, "new@example.com");
+    let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
+    assert_eq!(
+        (user.email.as_deref(), user.pending_email.as_deref()),
+        (Some("john@example.com"), Some("new@example.com"))
+    );
+    assert!(elsewhere.get(&site, "/account").await.text.contains("A change to <b>new@example.com</b> is waiting"));
+
+    elsewhere.get(&site, &site.emailed_link()).await;
+    let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
+    assert_eq!((user.email.as_deref(), user.pending_email.as_deref()), (Some("new@example.com"), None));
+    assert!(user.email_verified_at.is_some());
+    // Sign-in follows the address.
+    let mut fresh = Browser::default();
+    let old = fresh.post(&site, "/login", &[("email", "john@example.com"), ("password", new)]).await;
+    assert_eq!(old.status, StatusCode::UNAUTHORIZED);
+    let now = fresh.post(&site, "/login", &[("email", "new@example.com"), ("password", new)]).await;
+    assert_eq!(now.status, StatusCode::SEE_OTHER);
 }

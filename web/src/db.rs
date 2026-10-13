@@ -47,6 +47,7 @@ pub async fn user_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 pub async fn add_user(
     pool: &SqlitePool,
     id: &str,
+    email: &str,
     name: &str,
     password_hash: &str,
     role: &str,
@@ -54,8 +55,9 @@ pub async fn add_user(
 ) -> Result<(), sqlx::Error> {
     let now = now_iso();
     sqlx::query!(
-        "INSERT INTO users (id, name, password_hash, role, timezone, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, email, name, password_hash, role, timezone, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         id,
+        email,
         name,
         password_hash,
         role,
@@ -99,15 +101,130 @@ pub struct UserLine {
     pub timezone: String,
     pub created_at: String,
     pub kindle_addresses: String,
+    pub email: Option<String>,
+    pub email_verified_at: Option<String>,
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserLine>, sqlx::Error> {
     sqlx::query_as!(
         UserLine,
-        r#"SELECT id AS "id!", name, role, timezone, created_at, kindle_addresses FROM users ORDER BY created_at"#
+        r#"SELECT id AS "id!", name, role, timezone, created_at, kindle_addresses, email, email_verified_at
+           FROM users ORDER BY created_at"#
     )
     .fetch_all(pool)
     .await
+}
+
+// email addresses and the links sent to them
+
+pub const VERIFY: &str = "verify";
+pub const RESET: &str = "reset";
+
+fn token_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn iso_in(seconds: i64) -> String {
+    (Utc::now() + chrono::Duration::seconds(seconds)).format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+}
+
+/// Whether another account already signs in with this address.
+pub async fn email_taken(pool: &SqlitePool, email: &str, except: &str) -> Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar!("SELECT COUNT(*) FROM users WHERE email = ? AND id <> ?", email, except)
+        .fetch_one(pool)
+        .await?;
+    Ok(found > 0)
+}
+
+/// Ask for a change of address; it takes effect when the link sent to it is opened. An
+/// account with no address yet gets it at once, unconfirmed.
+pub async fn request_email(pool: &SqlitePool, id: &str, email: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE users SET pending_email = CASE WHEN email IS NULL THEN NULL ELSE ?1 END,
+         email = COALESCE(email, ?1) WHERE id = ?2",
+        email,
+        id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn cancel_email_change(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE users SET pending_email = NULL WHERE id = ?", id).execute(pool).await?;
+    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ? AND purpose = 'verify'", id).execute(pool).await?;
+    Ok(())
+}
+
+/// A new link token for this account; any earlier one for the same purpose stops working.
+pub async fn new_token(
+    pool: &SqlitePool,
+    token: &str,
+    user: &str,
+    purpose: &str,
+    email: &str,
+    valid_seconds: i64,
+) -> Result<(), sqlx::Error> {
+    let (hash, now, expires) = (token_hash(token), now_iso(), iso_in(valid_seconds));
+    let mut tx = pool.begin().await?;
+    sqlx::query!("DELETE FROM email_tokens WHERE (user_id = ? AND purpose = ?) OR expires_at < ?", user, purpose, now)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query!(
+        "INSERT INTO email_tokens (token_hash, user_id, purpose, email, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        hash,
+        user,
+        purpose,
+        email,
+        expires,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+pub struct TokenFor {
+    pub user_id: String,
+    pub email: String,
+}
+
+/// Who a link token belongs to, when it exists for this purpose and has not expired.
+pub async fn read_token(pool: &SqlitePool, token: &str, purpose: &str) -> Result<Option<TokenFor>, sqlx::Error> {
+    let (hash, now) = (token_hash(token), now_iso());
+    sqlx::query_as!(
+        TokenFor,
+        "SELECT user_id, email FROM email_tokens WHERE token_hash = ? AND purpose = ? AND expires_at >= ?",
+        hash,
+        purpose,
+        now
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn drop_tokens(pool: &SqlitePool, user: &str, purpose: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?", user, purpose).execute(pool).await?;
+    Ok(())
+}
+
+/// The link sent to `email` was opened: it becomes (or stays) the account's confirmed
+/// address. False when the account no longer wants that address or another account has
+/// taken it since.
+pub async fn confirm_email(pool: &SqlitePool, id: &str, email: &str) -> Result<bool, sqlx::Error> {
+    let now = now_iso();
+    let done = sqlx::query!(
+        "UPDATE users SET email = ?1, pending_email = NULL, email_verified_at = ?2
+         WHERE id = ?3 AND (pending_email = ?1 OR (pending_email IS NULL AND email = ?1))
+         AND NOT EXISTS (SELECT 1 FROM users other WHERE other.email = ?1 AND other.id <> ?3)",
+        email,
+        now,
+        id
+    )
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() > 0)
 }
 
 // the newsstand

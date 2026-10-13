@@ -334,11 +334,29 @@ database with the pipeline.
 - **Accounts.** Every page except sign-in and the health check needs a session. An account
   is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
   reader sees and changes only their own deliveries, ratings and settings. Accounts are created from the command line
-  (`forenoon-web add-user <id>`); there is no sign-up page. The first account is an admin,
+  (`forenoon-web add-user <id> --email <address>`); there is no sign-up page. The first account is an admin,
   later ones readers; the role is stored but grants nothing yet.
+- **Sign-in is by email address**, stored lowercase so casing and stray spaces cannot make
+  two accounts of one address. The account id is separate and never changes: it names the
+  reader in the pipeline's records.
+- **Soft confirmation.** A new address works at once, unconfirmed. A banner offers to email
+  a confirmation link (valid 24 hours, at most 5 emails an hour per account); the link needs
+  no session. Nothing is locked until then except password reset.
+- **Forgotten password.** The sign-in page links to a form that emails a reset link (valid
+  60 minutes, single use) when the address belongs to an account and is confirmed. The
+  answer is the same whether or not it does. Choosing the new password signs the account
+  out everywhere.
+- **Changing the address** needs the current password, and uses a pending address: the link
+  goes to the new address and the old one keeps working until that link is opened. It can
+  be cancelled.
+- **Emails** are sent through the mail server named in the environment
+  (`FORENOON_SMTP_*`), with links built from `FORENOON_WEB_URL`, never from the request.
+  With no server set they are written to the log. Only the SHA-256 of a link's token is
+  stored.
 - **Passwords and sessions.** Passwords are stored as Argon2id hashes, at least 10 characters.
   Sign-in is limited, in any 5 minutes, to 30 attempts from one client address, 10 from one
-  address for one account name, and 100 for one name from anywhere.
+  address for one email, and 100 for one email from anywhere. Reset requests and reset
+  attempts are limited per client address per hour.
   A session lasts 30 days from its last use, in an `HttpOnly`, `SameSite=Lax` cookie.
   Changing a password signs out every other browser.
 - **Newsstand.** Delivered articles grouped by issue, newest first, 14 issues to a page, in
@@ -386,13 +404,13 @@ database with the pipeline.
 
 The web pages have their own program:
 
-| Command                                                   | Purpose                                    |
-| --------------------------------------------------------- | ------------------------------------------ |
-| `forenoon-web serve [--listen ADDR] [--secure-cookies]`   | Serve the pages                            |
-| `forenoon-web add-user ID [--name] [--role] [--timezone]` | Create an account; asks for the password   |
-| `forenoon-web set-password ID`                            | Change a password, signing the account out |
-| `forenoon-web users`                                      | List the accounts                          |
-| `forenoon-web health`                                     | Exit 0 when the local server answers       |
+| Command                                                                                | Purpose                                    |
+| -------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `forenoon-web serve [--listen ADDR] [--secure-cookies]`                                | Serve the pages                            |
+| `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone]` | Create an account; asks for the password   |
+| `forenoon-web set-password ID`                                                         | Change a password, signing the account out |
+| `forenoon-web users`                                                                   | List the accounts                          |
+| `forenoon-web health`                                                                  | Exit 0 when the local server answers       |
 
 ## 11. Storage
 

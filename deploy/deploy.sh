@@ -22,9 +22,10 @@
 # Web pages (optional): with WEB_IMAGE and WEB_LISTEN (a port, or address:port) set, a
 # container serves the newsstand there (what was delivered; ratings can be changed), behind
 # a login. Create the first account once it is up:
-#   sudo docker exec -it forenoon-web forenoon-web add-user <id>
-# Publish it only on a trusted network for now, and never route the tunnel to it. The
-# container is given no secrets.
+#   sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <address>
+# Publish it only on a trusted network for now, and never route the tunnel to it. With
+# FORENOON_WEB_URL and FORENOON_SMTP_* set it emails links to confirm an address and reset a
+# password; the mail password is the only secret it is given.
 #
 # The env file is .env.example filled in. FORENOON_HOST_DATA is the data folder; if
 # config.yaml / sources.yaml (and optionally forenoon.sqlite3) sit next
@@ -59,6 +60,14 @@ RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(env_get RECIPES_ENV_FILE)}"
 RECIPES_ENV_FILE="${RECIPES_ENV_FILE:-$(dirname "$ENV_FILE")/recipes.env}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
 WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
+# For the web pages' account emails (confirm an address, reset a password).
+FORENOON_WEB_URL=$(env_get FORENOON_WEB_URL)
+FORENOON_SMTP_HOST=$(env_get FORENOON_SMTP_HOST)
+FORENOON_SMTP_PORT=$(env_get FORENOON_SMTP_PORT)
+FORENOON_SMTP_USERNAME=$(env_get FORENOON_SMTP_USERNAME)
+FORENOON_SMTP_SENDER=$(env_get FORENOON_SMTP_SENDER)
+export FORENOON_WEB_URL FORENOON_SMTP_HOST FORENOON_SMTP_USERNAME FORENOON_SMTP_SENDER
+export FORENOON_SMTP_PORT="${FORENOON_SMTP_PORT:-587}"
 RECIPES_TIME=$(env_get RECIPES_TIME)
 export RECIPES_TIME="${RECIPES_TIME:-05:00}"
 DATA_DIR=$(env_get FORENOON_HOST_DATA)
@@ -127,15 +136,18 @@ start_web() {
     fi
     docker pull -q "$WEB_IMAGE" >/dev/null ||
         echo "pull failed; will use local image $WEB_IMAGE if present"
-    # No secrets are passed. It shares the data folder for the database: it reads what was
-    # delivered, and writes accounts, sessions and rating changes.
+    # It shares the data folder for the database: it reads what was delivered, and writes
+    # accounts, sessions and rating changes. Its one secret is the mail password, for the
+    # account emails; without FORENOON_SMTP_HOST those are written to its log instead.
     docker run -d --name forenoon-web --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true \
         -v "$DATA_DIR:/data" \
         -p "$WEB_LISTEN:8081" \
-        -e TZ \
+        -e TZ -e FORENOON_WEB_URL \
+        -e FORENOON_SMTP_HOST -e FORENOON_SMTP_PORT -e FORENOON_SMTP_USERNAME -e FORENOON_SMTP_SENDER \
+        -e FORENOON_SMTP_PASSWORD \
         "$WEB_IMAGE" serve >/dev/null ||
         echo "web container did not start; the rest of the deploy is unaffected"
 }

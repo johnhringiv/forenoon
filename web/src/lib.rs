@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod db;
 pub mod limit;
+pub mod mail;
 pub mod pages;
 pub mod ratings;
 
@@ -32,6 +33,9 @@ pub struct Options {
     /// Send the session cookie only over https. Needed once the pages are served that way;
     /// with it on, signing in over plain http does not work.
     pub secure_cookies: bool,
+    pub mailer: mail::Mailer,
+    /// Where the pages are reached, for links in emails.
+    pub base_url: String,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -46,7 +50,13 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .with_same_site(SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(SESSION_DAYS)));
     let auth = AuthManagerLayerBuilder::new(Backend::new(pool.clone())?, sessions).build();
-    let state = AppState { pool, sign_ins: Arc::new(Limiter::new(SIGN_IN_WINDOW)) };
+    let state = AppState {
+        pool,
+        sign_ins: Arc::new(Limiter::new(SIGN_IN_WINDOW)),
+        mail_limits: Arc::new(Limiter::new(Duration::from_secs(3600))),
+        mailer: options.mailer,
+        base_url: options.base_url.trim_end_matches('/').to_owned(),
+    };
     Ok(Router::new()
         .route("/", get(pages::newsstand))
         .route("/rate", post(pages::rate))
@@ -54,10 +64,16 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/account/profile", post(pages::set_profile))
         .route("/account/reading", post(pages::set_reading))
         .route("/account/password", post(pages::set_password))
+        .route("/account/email", post(pages::set_email))
+        .route("/account/email/cancel", post(pages::cancel_email))
+        .route("/account/verify", post(pages::resend_verification))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.
         .route_layer(middleware::from_fn(pages::require_login))
         .route("/login", get(pages::login_page).post(pages::login))
+        .route("/forgot", get(pages::forgot_page).post(pages::forgot))
+        .route("/reset/{token}", get(pages::reset_page).post(pages::reset))
+        .route("/verify/{token}", get(pages::verify))
         .route("/healthz", get(pages::health))
         .layer(auth)
         .layer(DefaultBodyLimit::max(MAX_FORM_BYTES))

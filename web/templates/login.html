@@ -3,9 +3,11 @@
 {% block header %}<p>Sign in to see your newsstand.</p>{% endblock %}
 {% block main %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+{% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 <form class="sheet" method="post" action="/login">
-<label>Name <input name="id" value="{{ id }}" maxlength="64" autocomplete="username" autocapitalize="none" required autofocus></label>
+<label>Email <input name="email" type="email" value="{{ email }}" maxlength="254" autocomplete="username" autocapitalize="none" required autofocus></label>
 <label>Password <input name="password" type="password" maxlength="256" autocomplete="current-password" required></label>
 <button>Sign in</button>
+<p class="hint"><a href="/forgot">Forgot your password?</a></p>
 </form>
 {% endblock %}

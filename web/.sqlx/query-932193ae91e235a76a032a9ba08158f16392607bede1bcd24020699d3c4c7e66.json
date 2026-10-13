@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "932193ae91e235a76a032a9ba08158f16392607bede1bcd24020699d3c4c7e66"
+}
