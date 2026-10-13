@@ -40,6 +40,16 @@ def save(directory: Path, item: Item, page_html: str | None) -> None:
         log.warning("could not keep the page for %s: %s", item.url, exc)
 
 
+def load(directory: Path, article_id: str) -> dict | None:
+    """What was saved for an article, or None when nothing was or it cannot be read."""
+    try:
+        with gzip.open(directory / f"{article_id}.json.gz", "rt", encoding="utf-8") as src:
+            record = json.load(src)
+        return {"page_html": record["page_html"], "feed_html": record["feed_html"] or "", "mode": record["mode"]}
+    except (OSError, ValueError, KeyError, EOFError):
+        return None
+
+
 def prune(directory: Path, keep_days: int, pattern: str = "*.json.gz") -> int:
     """Delete saved files older than `keep_days`. Returns how many were removed."""
     cutoff = time.time() - keep_days * 86400
