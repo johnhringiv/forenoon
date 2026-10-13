@@ -275,6 +275,8 @@ pub async fn issue_times(
 
 pub struct Delivered {
     pub delivered_at: String,
+    /// The lead article's id when this article was delivered as part of a story, else "".
+    pub story: String,
     pub id: String,
     pub url: String,
     pub source: String,
@@ -304,7 +306,7 @@ pub async fn delivered(
 ) -> Result<Vec<Delivered>, sqlx::Error> {
     sqlx::query_as!(
         Delivered,
-        r#"SELECT d.delivered_at, a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count,
+        r#"SELECT d.delivered_at, d.story, a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count,
            a.image_url, a.description, s.policy AS "policy?", s.score AS "score?: f64",
            s.reason AS "picked?", s.rank AS "rank?: i64", s.explore AS "explore?: bool",
            r.rating AS "rating?: i64", r.finished AS "finished?: bool",

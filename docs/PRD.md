@@ -380,9 +380,10 @@ database with the pipeline.
   the reader's time zone. Each card shows source, author, title linked to the original, lead
   image and description when the page had them, word count and reading time, how it was
   chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
-  `?show=rated` or `?show=unrated` filters it.
+  `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
+  article, with the others delivered with it listed beside it, each still rated on its own.
 - **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
-  choose the reason, or clear the rating. Changes are logged like taps, with `web` as their
+  choose the reason with one click, or clear the rating. Changes are logged like taps, with `web` as their
   source.
 - **Account page.** Display name, time zone, password, and the reading settings the
   pipeline uses: interests, stories a day, and Kindle addresses. Only an admin can change

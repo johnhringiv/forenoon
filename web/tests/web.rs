@@ -572,3 +572,43 @@ async fn email_is_confirmed_softly_and_restores_a_forgotten_password() {
     let now = fresh.post(&site, "/login", &[("email", "new@example.com"), ("password", new)]).await;
     assert_eq!(now.status, StatusCode::SEE_OTHER);
 }
+
+#[tokio::test]
+async fn a_storys_articles_share_one_card_with_the_lead_first() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    // Delivered order is by title, which puts a follow-up before its lead.
+    article(pool, "follow", "https://deno.example/blog", "deno.example via Blog", "An announcement", "john", sent)
+        .await;
+    article(pool, "lead", "https://blog.example/deno", "Blog", "Deno is joining Cloudflare", "john", sent).await;
+    article(pool, "alone", "https://blog.example/other", "Blog", "Something else", "john", sent).await;
+    sqlx::query("UPDATE deliveries SET story = 'lead' WHERE article_id IN ('lead', 'follow')")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let text = browser.get(&site, "/").await.text;
+    assert!(text.contains("3 articles in 2 stories, sent 06:00"), "{text}");
+    assert_eq!(text.matches("<article").count(), 2);
+    let story = text.split("<article").find(|part| part.contains(r#"class="story""#)).expect("a story card");
+    let (lead, more) = story.split_once(r#"<div class="more">"#).expect("the story's other articles");
+    assert!(
+        lead.contains(r#"id="a-lead""#)
+            && lead.contains("Deno is joining Cloudflare")
+            && !lead.contains("An announcement")
+    );
+    assert!(
+        more.contains("1 more on this story") && more.contains(r#"id="a-follow""#) && more.contains("An announcement")
+    );
+    assert!(!story.contains("Something else"));
+
+    // Each article in the story is still rated on its own.
+    let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();
+    let done = browser.post(&site, "/rate", &[("csrf", &csrf), ("article", "follow"), ("rating", "4")]).await;
+    assert_eq!(done.location, "/#a-follow");
+    assert_eq!(db::get_rating(pool, "john", "follow").await.unwrap().unwrap().rating, Some(4));
+    assert!(db::get_rating(pool, "john", "lead").await.unwrap().is_none());
+}
