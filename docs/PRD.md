@@ -71,6 +71,21 @@ All fetched content is treated as untrusted.
   words or more), the smallest page element holding at least 90% of it is tried instead, and
   used if it recovers more without exceeding 1.3 times the page's text. This recovers
   articles laid out as several sibling blocks.
+- **Structure.** Before the article is picked out of the page, structure that the page
+  expresses only through class names and in-page links is rebuilt, by shape and by widely
+  used class names, not per site:
+  - Footnotes and side notes. A short link (a number or symbol) to a small in-page target,
+    or an element classed as a sidenote, becomes a numbered reference; the notes are taken
+    out of the page and put back at the end of the article under "Notes", each with a link
+    back. They are marked as footnotes so a reader that supports it shows them as pop-ups.
+    Where a reference and its note link to each other, the later of the two is the note.
+  - Links to a heading on the same page stay links inside the book. Other in-page links
+    still point at the site.
+  - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
+    (bold) in highlighted code blocks keep their meaning as elements.
+
+  No id or class from the page reaches the book: the ids and link targets are generated.
+
 - **Sanitising.** The body is reduced to an allowlist of elements (paragraphs, headings,
   lists, quotes, code, tables, figures, images, links and inline emphasis). Scripts, styles,
   forms, embeds, video, navigation and footers are removed. All attributes are dropped except
