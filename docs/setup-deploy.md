@@ -16,9 +16,8 @@ sudo chown -R 1000:1000 /volume1/docker/forenoon
 
 To run as a different host user instead, set `PUID` and `PGID` in `.env`.
 
-Copy `deploy/config.example.yaml` to `<folder>/config.yaml` and edit it. Sources are added
-later, on the web pages. Leave `data_dir`
-alone: inside the container the folder is mounted at `/data` and `FORENOON_DATA_DIR` points there.
+There is no configuration file to write. What belongs to the deploy goes in `.env` (next
+step); readers, sources and every other setting are set on the web pages afterwards.
 
 ## 2. Environment
 
@@ -28,22 +27,32 @@ cp .env.example .env
 openssl rand -hex 32    # paste as FORENOON_FEEDBACK_SECRET
 ```
 
-Fill in `FORENOON_SMTP_PASSWORD`, `FORENOON_HOST_DATA` and `TZ`. Never commit `.env`.
+Fill in `FORENOON_HOST_DATA`, `TZ`, the mail server (`FORENOON_SMTP_HOST`,
+`FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`; see
+[setup-email.md](setup-email.md)) and, for ranking, `FORENOON_ANTHROPIC_API_KEY`. Never
+commit `.env`.
 Changing `FORENOON_FEEDBACK_SECRET` invalidates every feedback link already delivered.
 
 ## 3. First run
 
 ```sh
 docker compose build
+docker compose up -d
+```
+
+Then set up the web pages (below): create your reader and add sources. After that you can
+try a run without sending anything:
+
+```sh
 docker compose run --rm forenoon report            # triage your sources
 docker compose run --rm forenoon run --dry-run --out /data/out
-docker compose up -d
 ```
 
 In Synology Container Manager, create a Project from the `deploy/` folder instead; the
 commands above still work over SSH.
 
-`forenoon` then delivers every day at `delivery_time`. Each run writes a report to
+`forenoon` then delivers every day at the time on the Settings page (06:00 unless changed).
+Each run writes a report to
 `<folder>/reports/`.
 
 ## 4. Public feedback endpoint (Cloudflare Tunnel)
@@ -56,7 +65,7 @@ exposed, and no inbound port is opened.
    hostname to one that serves something else.
 2. Add a public hostname (for example `feedback.your-domain.example`) with service
    `http://localhost:8080`.
-3. Set `public_base_url: https://feedback.your-domain.example` in `config.yaml`.
+3. Set `FORENOON_PUBLIC_URL=https://feedback.your-domain.example` in `.env`.
 4. Keep `COMPOSE_PROFILES=cloudflared` in `.env` and run `docker compose up -d`.
 5. Check: `curl https://feedback.your-domain.example/healthz` prints `ok`. A 530 / error 1033
    means the tunnel has no connector: check `docker logs` for the cloudflared container.
@@ -76,7 +85,7 @@ After a host reboot `cloudflared` can start before `feedback` and fail to join i
 namespace. If the health check above fails after a reboot, run `docker compose up -d` again.
 
 Tailscale Funnel or your own reverse proxy is an alternative: publish the `feedback` port on
-loopback (see the comment in `docker-compose.yml`) and use that URL as `public_base_url`.
+loopback (see the comment in `docker-compose.yml`) and use that URL as `FORENOON_PUBLIC_URL`.
 
 The endpoint rate limits by the `CF-Connecting-IP` header, which is only trustworthy behind
 Cloudflare. Do not publish port 8080 beyond loopback.
@@ -92,9 +101,6 @@ sudo sh deploy.sh .env                       # pulls IMAGE
 sudo sh deploy.sh .env forenoon.tar.gz  # or loads a saved image
 ```
 
-If `config.yaml` sits next to the script, it copies it into a new data folder; it never
-overwrites an existing file.
-
 Continuous deploy is pull-based, so the host needs no inbound access:
 
 ```
@@ -105,7 +111,8 @@ push to main ──► CI (lint, tests, docker smoke test) ──► GHCR :lates
                                              └─► deploy.sh: replace containers, health check
 ```
 
-1. Set `IMAGE=ghcr.io/<owner>/<repo>:latest` and `PUBLIC_URL` in `.env`. The host pulls
+1. Set `IMAGE=ghcr.io/<owner>/<repo>:latest` in `.env`; the poller health-checks
+   `FORENOON_PUBLIC_URL`. The host pulls
    anonymously, so the GHCR package must be public.
 2. Schedule `poll-deploy.sh` every 5 minutes as root (DSM: Control Panel → Task Scheduler →
    user-defined script; enable the email on abnormal termination):
@@ -121,8 +128,9 @@ recorded and not resent, and the rest go out with the next run.
 
 ## Web pages and readers
 
-The web pages are where readers are set up: who gets a book, at which Kindle address, how
-many stories a day and what they are interested in. They also show a newsstand of what was
+The web pages are where everything is set up: readers (who gets a book, at which Kindle
+address, how many stories a day and what they are interested in), sources, and the install's
+settings. They also show a newsstand of what was
 delivered, why each article was picked and how you rated it, where ratings can be changed.
 Everything is behind a login, and each account sees only its own reader's articles. They run
 from their own image. Without at least one reader the daily run delivers nothing.
@@ -138,10 +146,8 @@ internet.
 2. Start it: `sudo ONLY=web sh deploy.sh .env` (a full deploy starts it too), or
    `docker compose up -d web`.
 3. So the pages can email you (to confirm your address and to reset a forgotten password),
-   also set in `.env`: `FORENOON_WEB_URL` to the address you open the pages at, and
-   `FORENOON_SMTP_HOST`, `FORENOON_SMTP_PORT`, `FORENOON_SMTP_USERNAME` and
-   `FORENOON_SMTP_SENDER` to the same mail server as `smtp` in `config.yaml`. Without a
-   host these emails are written to the container's log (`docker logs forenoon-web`), which
+   also set `FORENOON_WEB_URL` in `.env` to the address you open the pages at. They go
+   through the mail server already set there. Without one these emails are written to the container's log (`docker logs forenoon-web`), which
    is enough on a one-person install.
 4. Create your reader. You sign in with the email address; the id names you in the
    pipeline's records. You are asked for a password of at least 10 characters:
@@ -153,16 +159,23 @@ internet.
    forgotten password can only be reset through a confirmed address.
 6. On **Account**, write your interests and set the stories a day. Changes apply from the
    next run.
-7. On **Sources** (admins only), add the feeds to read. Without any, nothing is delivered.
+7. On **Sources** (admins only), add the feeds to read; without any, nothing is delivered.
+   Hacker News and Lobsters are built in and can be switched off there. Calibre recipes are
+   added there too once the recipes container runs ([setup-recipes.md](setup-recipes.md)).
+8. On **Settings** (admins only), change the delivery time and anything else from its
+   default. Nothing needs changing for a first run.
 
 Other account commands, run the same way: `set-password <id>` (also signs the account out
 everywhere) and `users`, which lists each account's email. `set-password` is the way back in
 if the email route fails.
 
-The mail password is the only secret the container gets. Check that your router does not
+The mail password is the only secret the container is given by the deploy. Recipe logins
+typed into the Sources page are written to the `forenoon-logins` Docker volume. Check that your router does not
 forward the port from the internet.
 
 ## Backups
 
-Everything is in the data folder: `config.yaml`, `forenoon.sqlite3`
-(plus its `-wal` file) and `reports/`. Back up the folder; keep `.env` somewhere safe too.
+Everything is in the data folder: `forenoon.sqlite3` (plus its `-wal` file), which holds
+readers, sources, settings and ratings, and what was fetched and sent. Back up the folder;
+keep `.env` somewhere safe too. Recipe logins are in the `forenoon-logins` Docker volume and
+are not part of that backup; they can be typed in again.

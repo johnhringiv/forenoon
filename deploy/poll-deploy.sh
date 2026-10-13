@@ -30,7 +30,8 @@ env_get() {
 
 IMAGE="${IMAGE:-$(env_get IMAGE)}"
 [ -n "$IMAGE" ] || { echo "IMAGE not set in $ENV_FILE"; exit 1; }
-PUBLIC_URL="${PUBLIC_URL:-$(env_get PUBLIC_URL)}"
+# The feedback service's public address, health-checked through the tunnel.
+PUBLIC_URL="${PUBLIC_URL:-$(env_get FORENOON_PUBLIC_URL)}"
 TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"

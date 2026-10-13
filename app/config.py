@@ -1,14 +1,15 @@
-"""Configuration loading. Recipients and secrets come only from here and the environment."""
+"""Configuration: defaults here, deploy settings and secrets from the environment, and the
+rest from the settings an admin saves on the web pages (the `settings` table).
+
+Recipients come only from the database, where an admin sets them.
+"""
 
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import Any
-
-import yaml
 
 RECIPE_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
 DISCOVERY_SITES = ("hackernews", "lobsters")
@@ -55,9 +56,9 @@ class Images:
 
 @dataclass(frozen=True)
 class Llm:
-    """Ranking with Claude. Off by default; the key comes from FORENOON_ANTHROPIC_API_KEY."""
+    """Ranking with Claude. Only used when FORENOON_ANTHROPIC_API_KEY is set."""
 
-    enabled: bool = False
+    enabled: bool = True
     model: str = "claude-haiku-5-5"
     daily_token_cap: int = 600_000  # input + output tokens per local day, all users
     max_candidates: int = 600  # ceiling on abstracts sent to the model per user per run
@@ -82,8 +83,8 @@ class Llm:
 class Discovery:
     """Front pages of link aggregators as extra candidates. Only used when ranking is on."""
 
-    enabled: bool = False
-    sites: tuple[str, ...] = ("hackernews", "lobsters")
+    # The built-in sources switched on on the Sources page; filled in from the database.
+    sites: tuple[str, ...] = ()
     slots: int = 2  # at most this many of the day's articles, and never more than half
     min_score: float = 6.0  # a found article needs at least this score to take a slot
     per_site: int = 100  # candidates sent to the model per site
@@ -91,9 +92,10 @@ class Discovery:
 
 @dataclass(frozen=True)
 class Alerts:
-    """Operator notices, sent through the same SMTP relay. Off while `to` is empty."""
+    """Operator notices, sent through the same SMTP relay."""
 
-    to: str = ""
+    enabled: bool = True
+    to: str = ""  # empty: the admins' own sign-in addresses
     source_failures: int = 3  # consecutive failed runs before a source is reported; 0 = never
     on_empty: bool = True  # also report a run that had nothing new to deliver
 
@@ -178,60 +180,98 @@ class Config:
         return [s for s in self.sources if not s.users or user.id in s.users]
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
+# Set by the deploy, not on the web pages.
+ENVIRONMENT_ONLY = ("data_dir", "timezone", "public_base_url", "users", "sources", "smtp", "discovery.sites")
+SECTIONS = ("images", "alerts", "llm", "discovery")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ConfigError(f"missing config file: {path}") from exc
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"{path}: not valid YAML: {' '.join(str(exc).split())[:300]}") from exc
-    if not isinstance(data, dict):
-        raise ConfigError(f"{path}: expected a mapping at the top level")
-    return data
+        return int(raw) if raw else default
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a whole number") from exc
 
 
-def _build(cls: type, raw: dict[str, Any], where: str) -> Any:
-    known = cls.__dataclass_fields__
-    unknown = set(raw) - set(known)
-    if unknown:
-        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
-    values = {k: tuple(v) if isinstance(v, list) else v for k, v in raw.items()}
-    try:
-        return cls(**values)
-    except TypeError as exc:
-        raise ConfigError(f"{where}: {exc}") from exc
-
-
-def load_config(path: Path) -> Config:
-    raw = _load_yaml(path)
-    base = path.parent
-    # Readers live in the database now (see Store.readers); a `users` list left in an old
-    # file is ignored.
-    raw.pop("users", None)
-    smtp = _build(Smtp, raw.pop("smtp", None) or {}, f"{path}: smtp")
-    images = _build(Images, raw.pop("images", None) or {}, f"{path}: images")
-    alerts = _build(Alerts, raw.pop("alerts", None) or {}, f"{path}: alerts")
-    llm = _build(Llm, raw.pop("llm", None) or {}, f"{path}: llm")
-    discovery = _build(Discovery, raw.pop("discovery", None) or {}, f"{path}: discovery")
-    unknown = set(discovery.sites) - set(DISCOVERY_SITES)
-    if unknown:
-        raise ConfigError(f"{path}: discovery: unknown sites {sorted(unknown)}")
-    data_dir = Path(os.environ.get("FORENOON_DATA_DIR") or raw.pop("data_dir", "data"))
-    raw.pop("data_dir", None)
-    if not data_dir.is_absolute():
-        data_dir = base / data_dir
-    # Sources live in the database now (see Store.sources); the old key is ignored.
-    raw.pop("sources_file", None)
-    return _build(
-        Config,
-        {
-            **raw,
-            "data_dir": data_dir,
-            "smtp": smtp,
-            "images": images,
-            "alerts": alerts,
-            "llm": llm,
-            "discovery": discovery,
-        },
-        str(path),
+def from_env() -> Config:
+    """The defaults, with the deploy's own settings read from the environment."""
+    defaults = Smtp()
+    smtp = Smtp(
+        host=os.environ.get("FORENOON_SMTP_HOST", ""),
+        port=_env_int("FORENOON_SMTP_PORT", defaults.port),
+        starttls=os.environ.get("FORENOON_SMTP_STARTTLS", "true").strip().lower() not in ("0", "false", "no"),
+        username=os.environ.get("FORENOON_SMTP_USERNAME", ""),
+        sender=os.environ.get("FORENOON_SMTP_SENDER", ""),
+        max_message_bytes=_env_int("FORENOON_SMTP_MAX_MESSAGE_BYTES", defaults.max_message_bytes),
     )
+    return Config(
+        data_dir=Path(os.environ.get("FORENOON_DATA_DIR") or "data").resolve(),
+        timezone=os.environ.get("TZ") or "UTC",
+        public_base_url=os.environ.get("FORENOON_PUBLIC_URL", "").strip(),
+        smtp=smtp,
+    )
+
+
+def _parse(kind: type, raw: str) -> bool | int | float | str:
+    if kind is bool:
+        if raw.strip().lower() in ("1", "true", "yes", "on"):
+            return True
+        if raw.strip().lower() in ("0", "false", "no", "off", ""):
+            return False
+        raise ValueError("not yes or no")
+    if kind is int:
+        return int(raw.strip())
+    if kind is float:
+        return float(raw.strip())
+    return raw.strip()
+
+
+def _sensible(key: str, value: object) -> bool:
+    if key == "delivery_time":
+        return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(value)))
+    if key == "format":
+        return value in ("issue", "articles")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value >= (-1 if key in ("keep_pages_days", "keep_issues_days") else 0)
+    return True
+
+
+def setting_keys() -> dict[str, type]:
+    """Every setting an admin may save, by its key (`delivery_time`, `llm.model`), with its type."""
+    keys: dict[str, type] = {}
+    for section, cls in (
+        ("", Config),
+        *((name, Config.__dataclass_fields__[name].default_factory) for name in SECTIONS),
+    ):
+        for spec in fields(cls):
+            key = f"{section}.{spec.name}" if section else spec.name
+            if key not in ENVIRONMENT_ONLY and key not in SECTIONS and type(spec.default) in (bool, int, float, str):
+                keys[key] = type(spec.default)
+    return keys
+
+
+def with_settings(cfg: Config, saved: dict[str, str]) -> tuple[Config, list[str]]:
+    """`cfg` with the saved settings applied, and what was wrong with any that were left out.
+
+    A setting that is unknown or does not parse is skipped, never fatal: the web pages check
+    what they save, and one bad row must not stop the morning's delivery.
+    """
+    known = setting_keys()
+    problems: list[str] = []
+    changes: dict[str, dict[str, object]] = {}
+    for key, raw in saved.items():
+        if key not in known:
+            problems.append(f"{key}: not a setting")
+            continue
+        try:
+            value = _parse(known[key], raw)
+            if not _sensible(key, value):
+                raise ValueError(raw)
+        except ValueError:
+            problems.append(f"{key}: cannot use {raw[:40]!r}")
+            continue
+        section, _, name = key.rpartition(".")
+        changes.setdefault(section, {})[name] = value
+    for section, values in changes.items():
+        cfg = replace(cfg, **{section: replace(getattr(cfg, section), **values)}) if section else replace(cfg, **values)
+    return cfg, problems

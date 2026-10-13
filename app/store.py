@@ -186,7 +186,7 @@ class Store:
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
             return ()
         rows = self.db.execute(
-            "SELECT name, kind, url, recipe, extract, pinned FROM sources WHERE enabled = 1"
+            "SELECT name, kind, url, recipe, extract, pinned FROM sources WHERE enabled = 1 AND kind != 'builtin'"
             " ORDER BY pinned DESC, name COLLATE NOCASE"
         ).fetchall()
         return tuple(
@@ -200,6 +200,47 @@ class Store:
             )
             for row in rows
         )
+
+    def _has_table(self, name: str) -> bool:
+        return bool(
+            self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone()
+        )
+
+    def builtin_sites(self, known: dict[str, str]) -> tuple[str, ...]:
+        """The built-in sources switched on on the Sources page, by key.
+
+        `known` is every built-in this version has, key to name. One the page has not listed
+        yet is added switched off, so an upgrade never changes what is delivered by itself.
+        """
+        if not self._has_table("sources"):
+            return ()
+        if not any(column["name"] == "builtin" for column in self.db.execute("PRAGMA table_info(sources)")):
+            return ()  # the web app has not been upgraded yet
+        rows = {
+            row["builtin"]: row["enabled"]
+            for row in self.db.execute("SELECT builtin, enabled FROM sources WHERE kind = 'builtin'")
+        }
+        missing = [(name, key, now_iso()) for key, name in known.items() if key not in rows]
+        if missing:
+            with self.db:
+                self.db.executemany(
+                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at)"
+                    " VALUES (?, 'builtin', ?, 0, ?)",
+                    missing,
+                )
+        return tuple(key for key in known if rows.get(key))
+
+    def settings(self) -> dict[str, str]:
+        """What an admin saved on the Settings page; empty until then."""
+        if not self._has_table("settings"):
+            return {}
+        return {row["key"]: row["value"] for row in self.db.execute("SELECT key, value FROM settings")}
+
+    def admin_emails(self) -> tuple[str, ...]:
+        if not self._has_table("users"):
+            return ()
+        rows = self.db.execute("SELECT email FROM users WHERE role = 'admin' AND email != '' ORDER BY created_at, id")
+        return tuple(row["email"] for row in rows)
 
     def pending_source_checks(self) -> list[sqlite3.Row]:
         """Sources added or saved on the web pages whose address has not been checked yet."""

@@ -13,13 +13,37 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .alerts import notify, notify_run
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, from_env, with_settings
+from .discover import SITES
 from .fetch import Fetcher
-from .llm import backend_from_env
+from .llm import API_KEY_ENV, backend_from_env
 from .pipeline import run, triage
 from .store import Store
 
 log = logging.getLogger("forenoon")
+
+
+def load(store: Store | None = None) -> Config:
+    """The configuration as it is now: the environment, then what the web pages saved."""
+    cfg = from_env()
+    own = store is None
+    store = store or Store(cfg.db_path)
+    try:
+        cfg, problems = with_settings(cfg, store.settings())
+        for problem in problems:
+            log.error("setting ignored: %s", problem)
+        sites = store.builtin_sites({key: site.name for key, site in SITES.items()})
+        to = cfg.alerts.to or ", ".join(store.admin_emails())
+        return dataclasses.replace(
+            cfg,
+            # Without a key there is nothing to rank with; that is a choice, not a failure.
+            llm=dataclasses.replace(cfg.llm, enabled=cfg.llm.enabled and bool(os.environ.get(API_KEY_ENV))),
+            discovery=dataclasses.replace(cfg.discovery, sites=sites),
+            alerts=dataclasses.replace(cfg.alerts, to=to if cfg.alerts.enabled else ""),
+        )
+    finally:
+        if own:
+            store.close()
 
 
 def _run_all(cfg: Config, args: argparse.Namespace) -> int:
@@ -74,14 +98,12 @@ def _next_run(cfg: Config, now: datetime) -> datetime:
     return target if target > now else target + timedelta(days=1)
 
 
-def _reload(cfg: Config, args: argparse.Namespace, alert: bool = False) -> Config:
-    """The config files as they are now, so an edit needs no restart; the old one if they are broken."""
+def _reload(cfg: Config) -> Config:
+    """The settings as they are now, so a change on the web pages needs no restart."""
     try:
-        return load_config(args.config)
-    except (ConfigError, OSError) as exc:
-        log.error("config not reloaded, keeping the previous one: %s", exc)
-        if alert:
-            notify(cfg, "config not reloaded", [str(exc), "The run used the previous configuration."])
+        return load()
+    except Exception as exc:  # noqa: BLE001 - a locked or broken database must not stop the scheduler
+        log.error("settings not reloaded, keeping the previous ones: %s", exc)
         return cfg
 
 
@@ -127,7 +149,7 @@ def _check_sources(cfg: Config) -> int:
 
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
     while True:
-        cfg = _reload(cfg, args)
+        cfg = _reload(cfg)
         zone = ZoneInfo(cfg.timezone)
         target = _next_run(cfg, datetime.now(zone))
         log.info("next delivery at %s", target.isoformat())
@@ -136,7 +158,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
             if not args.dry_run:
                 _send_queue(cfg)
                 _check_sources(cfg)
-        cfg = _reload(cfg, args, alert=True)
+        cfg = _reload(cfg)
         try:
             _run_all(cfg, args)
         except Exception:
@@ -264,14 +286,14 @@ def _replay(cfg: Config, args: argparse.Namespace) -> int:
 def _golden(args: argparse.Namespace) -> int:
     from .golden import golden_epub
 
-    # With a configured feedback URL the footer links are real, so taps can be tested.
+    # With a feedback URL and a reader the footer links are real, so taps can be tested.
     links = None
-    if args.config.exists():
+    cfg = from_env()
+    if cfg.public_base_url and cfg.db_path.exists():
         from .pipeline import _feedback_links
 
-        cfg = load_config(args.config)
         readers = Store(cfg.db_path).readers()
-        if cfg.public_base_url and readers:
+        if readers:
             links = _feedback_links(cfg, readers[0], "golden", datetime.now(ZoneInfo("UTC")))
     args.out.mkdir(parents=True, exist_ok=True)
     path = args.out / "FN golden rendering test.epub"
@@ -282,7 +304,6 @@ def _golden(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="forenoon", description="Forenoon")
-    parser.add_argument("--config", type=Path, default=Path(os.environ.get("FORENOON_CONFIG", "config.yaml")))
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -321,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             return _feedback(args)
         if args.command == "golden":
             return _golden(args)
-        cfg = load_config(args.config)
+        cfg = load()
         if args.command == "run":
             return _run_all(cfg, args)
         if args.command == "schedule":

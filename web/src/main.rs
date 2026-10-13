@@ -52,6 +52,10 @@ enum Command {
         /// The From address.
         #[arg(long, env = "FORENOON_SMTP_SENDER", default_value = "")]
         smtp_sender: String,
+        /// Where recipe logins are kept: a folder only this program and the recipes container
+        /// can read, never one inside the data folder. Without it, logins cannot be saved.
+        #[arg(long, env = "FORENOON_LOGINS_DIR")]
+        logins_dir: Option<PathBuf>,
     },
     /// Create an account. The id names the reader in the pipeline's records and never changes.
     AddUser {
@@ -130,6 +134,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             smtp_implicit_tls,
             smtp_username,
             smtp_sender,
+            logins_dir,
         } => {
             if db::user_count(&pool).await? == 0 {
                 eprintln!("No accounts yet. Create one with: forenoon-web add-user <id> --email <address>");
@@ -154,7 +159,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 format!("http://{listen}")
             });
             let data_dir = cli.db.parent().map(PathBuf::from).unwrap_or_default();
-            let router = app(pool, Options { secure_cookies, mailer, base_url, data_dir }).await?;
+            let router = app(pool, Options { secure_cookies, mailer, base_url, data_dir, logins_dir }).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");
             axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
