@@ -347,12 +347,20 @@ ISSUE_CSS = """\
 """
 
 
-def render_issue(entries: list[IssueEntry], day: datetime, part: int = 0, rating_style: str = "numbers") -> bytes:
+def render_issue(
+    entries: list[IssueEntry],
+    day: datetime,
+    part: int = 0,
+    rating_style: str = "numbers",
+    title: str | None = None,
+    cover: bytes | None = None,
+) -> bytes:
     """One book: a contents page, then a chapter per article with its own rating links.
 
-    Deterministic for the same entries, day and part.
+    Deterministic for the same entries, day and part. `title` and `cover` replace the daily
+    issue's own, for a book that is one story sent on request.
     """
-    title = issue_title(day, part)
+    title = title or issue_title(day, part)
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, "forenoon:" + ",".join(e.article.id for e in entries)).urn
     chapters, assets = [], []
     for index, entry in enumerate(entries, 1):
@@ -432,7 +440,7 @@ def render_issue(entries: list[IssueEntry], day: datetime, part: int = 0, rating
         add("OEBPS/style.css", CSS + ISSUE_CSS + extra_css)
         # The library thumbnail: the mark, the date and the day's lead headlines.
         leads = [e.article.title for e in entries if not e.article.continues]
-        add("OEBPS/cover.jpg", cover_image(day, _issue_summary(entries), leads, part), zipfile.ZIP_STORED)
+        add("OEBPS/cover.jpg", cover or cover_image(day, _issue_summary(entries), leads, part), zipfile.ZIP_STORED)
         add("OEBPS/contents.xhtml", _issue_contents(entries, title, day))
         for name, _, page in chapters:
             add(f"OEBPS/{name}.xhtml", page)

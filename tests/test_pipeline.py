@@ -914,6 +914,37 @@ def test_an_article_is_sent_again_on_request_from_its_saved_page(env):
     assert "not an article delivered" in rows[1]["error"] and "no Kindle address" in rows[2]["error"]
     assert store.send_requests() == []  # nothing is tried twice
 
+    # A whole story on request: its articles as one book, named and covered by the lead.
+    lead, follow = report.delivered[0], report.delivered[1]
+    store.db.execute("UPDATE deliveries SET story = ? WHERE article_id IN (?, ?)", (lead, lead, follow))
+    store.db.execute("UPDATE articles SET word_count = 900 WHERE id = ?", (lead,))
+    whole = "INSERT INTO send_requests (user_id, article_id, story, requested_at) VALUES ('john', ?, 1, 'x')"
+    store.db.execute(whole, (follow,))  # asked for from any of its articles
+    store.db.commit()
+    assert store.story_of("john", follow) == [lead, follow] and store.story_of("stranger", lead) == []
+    sent.clear()
+    assert send_requested(cfg, store, offline, now=NOW, sender=lambda m, s: sent.extend(m)) == 1
+    book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    opf = book.read("OEBPS/content.opf").decode()
+    titles = [store.get_article(i).title for i in (lead, follow)]
+    assert f"<dc:title>{titles[0]}</dc:title>" in opf and "Forenoon · 2026" not in opf
+    chapters = [book.read(f"OEBPS/a0{n}.xhtml").decode() for n in (1, 2)]
+    assert titles[0] in chapters[0] and titles[1] in chapters[1] and "OEBPS/a03.xhtml" not in book.namelist()
+    assert all("/f/" in chapter for chapter in chapters), "each article keeps its own rating links"
+    assert titles[1] in book.read("OEBPS/contents.xhtml").decode()
+    with Image.open(io.BytesIO(book.read("OEBPS/cover.jpg"))) as img:
+        assert img.size == (1200, 1600)
+
+    # A lead that was only a short pointer was never in the delivered book, so not in this one.
+    store.db.execute("UPDATE articles SET word_count = 40 WHERE id = ?", (lead,))
+    store.db.execute(whole, (lead,))
+    store.db.commit()
+    sent.clear()
+    assert send_requested(cfg, store, offline, now=NOW, sender=lambda m, s: sent.extend(m)) == 1
+    book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    assert f"<dc:title>{titles[1]}</dc:title>" in book.read("OEBPS/content.opf").decode()
+    assert "OEBPS/article.xhtml" in book.namelist()
+
 
 def test_delivered_articles_get_a_thumbnail_for_the_web_pages(env):
     from app import thumbs

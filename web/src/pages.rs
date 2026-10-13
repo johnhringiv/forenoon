@@ -519,6 +519,9 @@ struct Story {
     /// The heading over the articles after the lead.
     more: String,
     cards: Vec<Card>,
+    /// Whether "Send story to Kindle" is offered, and how the last such request went.
+    sendable: bool,
+    sent: Option<String>,
 }
 
 #[derive(Template)]
@@ -730,7 +733,13 @@ pub async fn newsstand(
         match issue.stories.iter_mut().find(|story| !key.is_empty() && story.key == key) {
             Some(story) if leads => story.cards.insert(0, card(row)),
             Some(story) => story.cards.push(card(row)),
-            None => issue.stories.push(Story { key, more: String::new(), cards: vec![card(row)] }),
+            None => issue.stories.push(Story {
+                key,
+                more: String::new(),
+                cards: vec![card(row)],
+                sendable: false,
+                sent: None,
+            }),
         }
     }
     // What each article's "Send to Kindle" shows: offered to a reader with a Kindle address,
@@ -738,22 +747,28 @@ pub async fn newsstand(
     let can_send = !user.kindle_addresses.trim().is_empty();
     let requests = db::send_states(&state.pool, &user.id).await?;
     let reported = db::reported(&state.pool, &user.id).await?;
+    let outcome = |request: &db::SendState| match request.status.as_str() {
+        "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
+        "sent" => {
+            let day = local(&request.requested_at, zone).map(|at| at.format("%-d %B").to_string());
+            format!("Sent to your Kindle{}.", day.map(|day| format!(" on {day}")).unwrap_or_default())
+        }
+        _ => format!("Could not be sent: {}", request.error),
+    };
+    for story in page.issues.iter_mut().flat_map(|issue| &mut issue.stories).filter(|story| story.cards.len() > 1) {
+        let last = requests.iter().rev().find(|request| request.story && request.article_id == story.cards[0].id);
+        story.sendable = can_send && last.is_none_or(|request| request.status != "queued");
+        story.sent = last.map(&outcome);
+    }
     for card in page.issues.iter_mut().flat_map(|issue| &mut issue.stories).flat_map(|story| &mut story.cards) {
-        let last = requests.iter().rev().find(|request| request.article_id == card.id);
+        let last = requests.iter().rev().find(|request| !request.story && request.article_id == card.id);
         // Our own thumbnail when the pipeline made one; otherwise the article's lead image.
         if state.thumbs_dir.join(format!("{}.jpg", card.id)).is_file() {
             card.image = Some(format!("/thumb/{}", card.id));
         }
         card.reported = reported.contains(&card.id);
         card.sendable = can_send && last.is_none_or(|request| request.status != "queued");
-        card.sent = last.map(|request| match request.status.as_str() {
-            "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
-            "sent" => {
-                let day = local(&request.requested_at, zone).map(|at| at.format("%-d %B").to_string());
-                format!("Sent to your Kindle{}.", day.map(|day| format!(" on {day}")).unwrap_or_default())
-            }
-            _ => format!("Could not be sent: {}", request.error),
-        });
+        card.sent = last.map(&outcome);
     }
     for issue in &mut page.issues {
         let articles: usize = issue.stories.iter().map(|story| story.cards.len()).sum();
@@ -877,6 +892,8 @@ pub async fn problems(State(state): State<AppState>, auth: AuthSession, session:
 pub struct SendForm {
     csrf: String,
     article: String,
+    /// Present: send every article of this one's story, as one book.
+    story: Option<String>,
     back: Option<String>,
 }
 
@@ -899,7 +916,7 @@ pub async fn send(
     if !db::pipeline_ready(&state.pool).await? || !db::is_delivered(&state.pool, &user.id, &form.article).await? {
         return refused(StatusCode::NOT_FOUND, "No such delivered article.");
     }
-    match db::queue_send(&state.pool, &user.id, &form.article).await? {
+    match db::queue_send(&state.pool, &user.id, &form.article, form.story.is_some()).await? {
         db::Queued::TooMany => {
             refused(StatusCode::TOO_MANY_REQUESTS, "That is the most articles that can be sent in a day.")
         }

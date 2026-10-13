@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT article_id, status, error, requested_at FROM send_requests WHERE user_id = ? ORDER BY id",
+  "query": "SELECT article_id, story AS \"story: bool\", status, error, requested_at\n           FROM send_requests WHERE user_id = ? ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -9,18 +9,23 @@
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "story: bool",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Integer"
       },
       {
-        "name": "error",
+        "name": "status",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "requested_at",
+        "name": "error",
         "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "requested_at",
+        "ordinal": 4,
         "type_info": "Text"
       }
     ],
@@ -31,8 +36,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "b79e755d1a9d3f6ea670b7526b0f23800b656ee468ccf913ac9a0313f96f4a96"
+  "hash": "07d91f3ca46002a7754ce795807b08b74029fbd27adb57409e0b1524174cdb6c"
 }

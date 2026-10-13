@@ -85,9 +85,12 @@ def cover_image(day: datetime, summary: str, headlines: list[str], part: int = 0
     return out.getvalue()
 
 
-def article_cover(title: str, source: str, picture: bytes | None = None, grayscale: bool = True) -> bytes:
+def article_cover(
+    title: str, source: str, picture: bytes | None = None, grayscale: bool = True, more: int = 0
+) -> bytes:
     """A JPEG cover for one article: its picture across the top when there is one, then the
-    source and the title, with the mark at the foot."""
+    source and the title, with the mark at the foot. `more` is how many further articles the
+    book holds, for a story."""
     image = Image.new("RGB", (WIDTH, HEIGHT), (PAPER,) * 3)
     draw = ImageDraw.Draw(image)
     y = MARGIN + 40
@@ -107,6 +110,8 @@ def article_cover(title: str, source: str, picture: bytes | None = None, graysca
     for line in _wrap(draw, title, head, WIDTH - 2 * MARGIN, 6):
         draw.text((MARGIN, y), line, font=head, fill=(INK,) * 3)
         y += 100
+    if more:
+        draw.text((MARGIN, y + 30), f"and {more} more on this story", font=kicker, fill=(SOFT,) * 3)
     draw_mark(draw, MARGIN + 60, HEIGHT - MARGIN - 20, 30, ink=(INK,) * 3)
     draw.text((MARGIN + 150, HEIGHT - MARGIN - 62), "Forenoon", font=ImageFont.load_default(size=48), fill=(INK,) * 3)
     if grayscale:

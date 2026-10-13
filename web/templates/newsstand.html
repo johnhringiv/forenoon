@@ -17,7 +17,12 @@
 <div class="grid">
 {% for story in issue.stories %}
 <article{% if story.cards.len() > 1 %} class="story"{% endif %}>
-{% if story.cards.len() > 1 %}<p class="story-head">{{ story.more }}</p>{% endif %}
+{% if story.cards.len() > 1 %}<div class="story-head"><span>{{ story.more }}</span>
+{% if story.sendable || story.sent.is_some() %}<form method="post" action="/send">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ story.cards[0].id }}"><input type="hidden" name="story" value="1"><input type="hidden" name="back" value="{{ back }}">
+{% if let Some(sent) = story.sent %}<span>{{ sent }}</span>{% endif %}
+{% if story.sendable %}<button title="Every article of this story, as one book">Send story to Kindle</button>{% endif %}
+</form>{% endif %}</div>{% endif %}
 {% for card in story.cards %}
 {% if loop.first %}
 <div class="lead" id="a-{{ card.id }}">
