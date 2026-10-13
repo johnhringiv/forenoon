@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Source, User
-from .tokens import PROBLEM, REASON_SIGNALS, meaning, reasons_for
+from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -121,7 +121,7 @@ class ArticleRow:
 class Rating:
     rating: int | None  # 1-5, None when only "finished" was recorded
     finished: bool
-    reason: str = ""  # a key of tokens.REASONS, when the reader said why
+    reason: str = ""  # keys of tokens.REASONS, comma-separated, when the reader said why
 
 
 class Store:
@@ -322,14 +322,13 @@ class Store:
                 " finished = COALESCE(?, finished), updated_at = excluded.updated_at",
                 (user_id, article_id, rating, finished, when, finished),
             )
-            if reason is not None:
-                self.db.execute(
-                    "UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", (reason, user_id, article_id)
-                )
             now = self.get_rating(user_id, article_id)
-            if now.reason and now.reason not in reasons_for(now.rating):
+            # A reason tap adds, replaces or takes back; any tap drops reasons that no longer
+            # fit the rating. An empty key leaves the choice alone and only drops the unfit.
+            kept = with_reason(with_reason(now.reason, "", now.rating), reason or "", now.rating)
+            if kept != now.reason:
                 self.db.execute(
-                    "UPDATE ratings SET reason = '' WHERE user_id = ? AND article_id = ?", (user_id, article_id)
+                    "UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", (kept, user_id, article_id)
                 )
         return self.get_rating(user_id, article_id)
 

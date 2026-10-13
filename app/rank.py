@@ -20,7 +20,7 @@ from .config import Llm, User
 from .llm import Backend, LlmError
 from .sources import Item
 from .store import Store
-from .tokens import REASONS
+from .tokens import reason_labels
 
 log = logging.getLogger("forenoon")
 
@@ -124,8 +124,8 @@ def reader_profile(user: User, store: Store) -> str:
         }
         # What turns a number into a lesson: the reader's own reason when they gave one, and
         # why the article was put in front of them in the first place.
-        if row["reason"] in REASONS:
-            entry["reader_said"] = REASONS[row["reason"]]
+        if said := reason_labels(row["reason"]):
+            entry["reader_said"] = "; ".join(said)
         if row["picked_because"]:
             entry["picked_because"] = row["picked_because"]
         rated.append(entry)

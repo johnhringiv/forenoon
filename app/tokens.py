@@ -35,6 +35,30 @@ PROBLEM = "problem"
 SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS + (PROBLEM,)
 
 
+def chosen(reason: str) -> list[str]:
+    """The reason keys stored for a rating: what was liked can be several things at once."""
+    return [key for key in reason.split(",") if key]
+
+
+def reason_labels(reason: str) -> list[str]:
+    return [REASONS[key] for key in chosen(reason) if key in REASONS]
+
+
+def with_reason(reason: str, key: str, rating: int | None) -> str:
+    """The stored reasons after one more tap on `key`.
+
+    Tapping a chosen reason again takes it back. What was liked adds up (the topic and the
+    depth); what was wrong is one thing, so a new choice replaces the old.
+    """
+    fitting = reasons_for(rating)
+    now = [k for k in chosen(reason) if k in fitting]
+    if key in now:
+        now.remove(key)
+    elif key in fitting:
+        now = [*now, key] if fitting is HIGH_REASONS else [key]
+    return ",".join(k for k in fitting if k in now)
+
+
 def reasons_for(rating: int | None) -> dict[str, str]:
     """The reasons that fit a rating: one list for 4 and 5, the other for the rest."""
     return HIGH_REASONS if rating and rating >= 4 else LOW_REASONS

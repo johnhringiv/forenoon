@@ -18,7 +18,7 @@ from starlette.responses import HTMLResponse, PlainTextResponse
 from starlette.routing import Route
 
 from app.store import Store
-from app.tokens import PROBLEM, RATINGS, REASONS, TokenError, make_token, reasons_for, verify_token
+from app.tokens import PROBLEM, RATINGS, TokenError, make_token, reason_labels, reasons_for, verify_token
 
 RATE_LIMIT = 30  # requests
 RATE_WINDOW = 60.0  # seconds, per client address
@@ -79,8 +79,8 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
             return _page("Reported. Thank you.", article.title if article else "")
         rated = f"Rated {now.rating} of 5" if now.rating else "Not rated"
         message = f"{rated}, {'finished' if now.finished else 'not finished'}."
-        if now.reason in REASONS:
-            message += f" {REASONS[now.reason]}."
+        for label in reason_labels(now.reason):
+            message += f" {label}."
         # One more tap says why. Always offered, never required: the rating already counts.
         why = ""
         if now.rating:
@@ -91,7 +91,8 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
                 )
                 for key, label in reasons_for(now.rating).items()
             )
-            why = f'<div class="why"><p>Why? (optional)</p><p class="why">{options}</p></div>'
+            several = " Tap all that apply." if now.rating >= 4 else ""
+            why = f'<div class="why"><p>Why? (optional){several}</p><p class="why">{options}</p></div>'
         # Same user, article and expiry as the link that was tapped: a mis-tap is fixed here
         # without going back to the book.
         rows = ""

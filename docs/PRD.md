@@ -170,7 +170,9 @@ part-way never causes a resend.
 - **Why (optional).** After a rating, the page always offers one more tap for the reason.
   For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
   misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
-  rating counts without it. A later rating that no longer fits the reason drops it.
+  rating counts without it. What was liked can be several of these at once; what was wrong is
+  one, so a new choice replaces the old. Tapping a chosen reason again takes it back. A later
+  rating that no longer fits a reason drops it.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
   the install, not a rating or a reason: it is logged, written to the extraction log, and

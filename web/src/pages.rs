@@ -599,13 +599,16 @@ fn card(row: Delivered) -> Card {
     if finished {
         marks.push("Finished".to_owned());
     }
-    if let Some(label) = ratings::label(&row.why) {
-        facts.push(label.to_owned());
-    }
+    facts.extend(ratings::chosen(&row.why).filter_map(ratings::label).map(str::to_owned));
     let reasons = match row.rating {
         Some(_) => ratings::reasons_for(row.rating)
             .iter()
-            .map(|(key, label)| ReasonOption { key, short: ratings::short(key), label, selected: *key == row.why })
+            .map(|(key, label)| ReasonOption {
+                key,
+                short: ratings::short(key),
+                label,
+                selected: ratings::chosen(&row.why).any(|chosen| chosen == *key),
+            })
             .collect(),
         None => Vec::new(),
     };

@@ -464,7 +464,7 @@ pub struct Rating {
     /// 1 to 5; `None` when only "finished" was recorded.
     pub rating: Option<i64>,
     pub finished: bool,
-    /// A key of `ratings::REASONS`, or "" when the reader gave none.
+    /// Keys of the reasons the reader gave, comma-separated; "" when none.
     pub reason: String,
 }
 
@@ -512,11 +512,6 @@ pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signa
     )
     .execute(&mut *tx)
     .await?;
-    if let Signal::Why(reason) = signal {
-        sqlx::query!("UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", reason, user, article)
-            .execute(&mut *tx)
-            .await?;
-    }
     let stored = sqlx::query!(
         r#"SELECT rating AS "rating?: i64", reason FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
@@ -524,8 +519,12 @@ pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signa
     )
     .fetch_one(&mut *tx)
     .await?;
-    if !stored.reason.is_empty() && !ratings::fits(&stored.reason, stored.rating) {
-        sqlx::query!("UPDATE ratings SET reason = '' WHERE user_id = ? AND article_id = ?", user, article)
+    // A reason adds, replaces or takes back; any signal drops reasons that no longer fit.
+    let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
+    let fitting = ratings::with_reason(&stored.reason, "", stored.rating);
+    let kept = ratings::with_reason(&fitting, pressed, stored.rating);
+    if kept != stored.reason {
+        sqlx::query!("UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", kept, user, article)
             .execute(&mut *tx)
             .await?;
     }

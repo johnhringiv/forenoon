@@ -235,6 +235,12 @@ def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
 
     assert "Rated 2 of 5, not finished. Too thin, nothing in it." in tap("why-thin").text
     assert store.get_rating("john", "abc") == Rating(2, False, "thin")
+    # What was wrong is one thing: another choice replaces it, and tapping it again takes it back.
+    tap("why-long")
+    assert store.get_rating("john", "abc").reason == "long"
+    tap("why-long")
+    assert store.get_rating("john", "abc").reason == ""
+    tap("why-thin")
     # A fault in the delivery is reported apart from the rating, which it leaves as it was.
     assert "came out broken or incomplete" in page and "Broken" not in tap("r2").text.split("Change it")[0]
     assert "Reported. Thank you." in tap("problem").text
@@ -248,6 +254,12 @@ def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
     assert "More from this source" in page and "Too thin" not in page
     assert store.get_rating("john", "abc") == Rating(5, True, "")
     tap("why-depth")
+    # What was liked can be several things; tapping one again takes it back.
+    assert "Tap all that apply" in tap("why-more-topic").text
+    assert store.get_rating("john", "abc").reason == "more-topic,depth"
+    assert "More on this topic. Liked the depth." in tap("f5").text
+    tap("why-more-topic")
+    assert store.get_rating("john", "abc").reason == "depth"
     row = store.rating_rows("john")[-1]
     assert (row["rating"], row["reason"], row["word_count"]) == (5, "depth", 0)
 

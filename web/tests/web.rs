@@ -333,16 +333,29 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
             && unrated.contains("Post 2")
             && !unrated.contains("Post 1")
     );
-    assert!(
-        rated.contains("Too thin, nothing in it")
-            && rated.contains(
-                r#"<button name="reason" value="thin" title="Too thin, nothing in it" class="on">Thin</button>"#
-            )
-    );
+    assert!(rated.contains("Too thin, nothing in it") && rated.contains("What was wrong?"));
+    assert!(rated.contains(
+        r#"<button name="reason" value="thin" title="Too thin, nothing in it" class="on">Too thin</button>"#
+    ));
 
-    // Re-rating high drops the reason that no longer fits.
+    // What was wrong is one thing: another choice replaces it; pressing it again takes it back.
+    browser.post(&site, "/rate", &with(&[("reason", "long")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, "long"));
+    browser.post(&site, "/rate", &with(&[("reason", "long")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, ""));
+    browser.post(&site, "/rate", &with(&[("reason", "thin")])).await;
+
+    // Re-rating high drops the reason that no longer fits. What was liked can be several things.
     browser.post(&site, "/rate", &with(&[("rating", "5")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some(5), true, ""));
+    browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
+    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(5), true, "more-topic,depth"));
+    let page = browser.get(&site, "/?show=rated").await.text;
+    assert!(page.contains("What did you like?") && page.matches(r#"class="on">The "#).count() == 2);
+    browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some(5), true, "more-topic"));
+    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await;
 
     // Refused: a wrong token, another site's form, an article never delivered to this reader
     // (including one delivered to someone else), and a redirect off the site.
