@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Problems · Forenoon{% endblock %}
+{% block header %}
+<p>Articles readers reported as broken or incomplete. Newest first.</p>
+<div class="bar"><a href="/">Back to the newsstand</a>
+<div class="who">{{ name }} <a href="/sources">Sources</a> <a href="/account">Account</a>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+{% endblock %}
+{% block main %}
+{% if rows.is_empty() %}<p class="empty">No problems reported.</p>{% endif %}
+{% for row in rows %}
+<div class="problem">
+<p class="kicker">{{ row.source }}</p>
+<h4>{% if let Some(link) = row.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ row.title }}</a>{% else %}{{ row.title }}{% endif %}</h4>
+<p class="hint">Reported {{ row.when }} by {{ row.who }}. {{ row.detail }}</p>
+</div>
+{% endfor %}
+{% endblock %}

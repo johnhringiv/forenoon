@@ -172,10 +172,15 @@ part-way never causes a resend.
   is now stored ("Rated 4 of 5, finished.") with links to change it. It has no login and takes
   no other input. `GET /healthz` returns `ok`.
 - **Why (optional).** After a rating, the page always offers one more tap for the reason.
-  For 1 to 3: not interested in the topic, too thin, already knew this, broken or incomplete,
-  too long. For 4 and 5: more on this topic, more from this source, liked the depth. The
-  rating counts without it. A later rating that no longer fits the reason drops it. "Broken
-  or incomplete" is also written to the extraction log.
+  For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
+  misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
+  rating counts without it. What was liked can be several of these at once; what was wrong is
+  one, so a new choice replaces the old. Tapping a chosen reason again takes it back. A later
+  rating that no longer fits a reason drops it.
+- **Report a problem.** "This article came out broken or incomplete" is a separate link on
+  that page and a button on the web pages. It is a report about the delivery to whoever runs
+  the install, not a rating or a reason: it is logged, written to the extraction log, and
+  listed for admins on the web pages' Problems page. The rating is left as it was.
 - **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
   log.
 - Links in articles delivered before ratings existed still work: "more like this" counts as
@@ -188,7 +193,7 @@ Ratings influence delivery only when model ranking is on. The model is given the
 recent, each with the article's length, whether it was finished, why it was picked and the
 reader's reason when there is one, and is told to work out what a rating is about before
 learning from it (a low rating on a short post is a verdict on thin posts, not on its
-source; "broken" says nothing about topic or source).
+source).
 
 ## 7a. Ranking with Claude (optional, off by default)
 

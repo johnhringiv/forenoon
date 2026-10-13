@@ -29,8 +29,7 @@ export FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
 
 # a reader to deliver to; asks for a password for the web pages
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)
-# the web pages: sign in at http://127.0.0.1:8081/ and add feeds on Sources
-# (deploy/sources.example.yaml lists some); stop it with Ctrl-C
+# the web pages: sign in at http://127.0.0.1:8081/ and add feeds on Sources; stop with Ctrl-C
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 serve --listen 127.0.0.1:8081)
 
 uv run forenoon --config run/config.yaml report               # per-source extraction report

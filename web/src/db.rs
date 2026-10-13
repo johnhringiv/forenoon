@@ -391,6 +391,72 @@ pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str) -> Result<
     Ok(Queued::Added)
 }
 
+// problem reports ("this article came out broken"): for the admin, apart from any rating
+
+/// Log the report and note it in the pipeline's extraction log, as the Kindle link does.
+pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, 'problem', 'web', ?)",
+        user,
+        article,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "INSERT INTO extraction_reviews (article_id, checked_at, verdict, problem, model)
+         VALUES (?, ?, 'bad', 'reader: broken or incomplete', 'reader')",
+        article,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+/// The articles this reader has reported.
+pub async fn reported(pool: &SqlitePool, user: &str) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "SELECT DISTINCT article_id FROM feedback_events WHERE user_id = ? AND signal = 'problem'",
+        user
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub struct Problem {
+    pub reported_at: String,
+    pub user_id: String,
+    pub via: String,
+    pub title: String,
+    pub url: String,
+    pub source: String,
+    pub words: i64,
+    pub extraction: String,
+}
+
+/// Every report, newest first, with what the extractor itself made of the article.
+pub async fn problems(pool: &SqlitePool, limit: i64) -> Result<Vec<Problem>, sqlx::Error> {
+    sqlx::query_as!(
+        Problem,
+        r#"SELECT f.created_at AS reported_at, f.user_id, f.source AS via,
+           COALESCE(a.title, f.article_id) AS "title!: String", COALESCE(a.url, '') AS "url!: String",
+           COALESCE(a.source, '') AS "source!: String", COALESCE(a.word_count, 0) AS "words!: i64",
+           COALESCE(a.status || CASE WHEN a.reason = '' THEN '' ELSE ': ' || a.reason END, '') AS "extraction!: String"
+           FROM feedback_events f LEFT JOIN articles a ON a.id = f.article_id
+           WHERE f.signal = 'problem' ORDER BY f.id DESC LIMIT ?"#,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn problem_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar!("SELECT COUNT(*) FROM feedback_events WHERE signal = 'problem'").fetch_one(pool).await
+}
+
 // ratings
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,7 +464,7 @@ pub struct Rating {
     /// 1 to 5; `None` when only "finished" was recorded.
     pub rating: Option<i64>,
     pub finished: bool,
-    /// A key of `ratings::REASONS`, or "" when the reader gave none.
+    /// Keys of the reasons the reader gave, comma-separated; "" when none.
     pub reason: String,
 }
 
@@ -446,11 +512,6 @@ pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signa
     )
     .execute(&mut *tx)
     .await?;
-    if let Signal::Why(reason) = signal {
-        sqlx::query!("UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", reason, user, article)
-            .execute(&mut *tx)
-            .await?;
-    }
     let stored = sqlx::query!(
         r#"SELECT rating AS "rating?: i64", reason FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
@@ -458,8 +519,12 @@ pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signa
     )
     .fetch_one(&mut *tx)
     .await?;
-    if !stored.reason.is_empty() && !ratings::fits(&stored.reason, stored.rating) {
-        sqlx::query!("UPDATE ratings SET reason = '' WHERE user_id = ? AND article_id = ?", user, article)
+    // A reason adds, replaces or takes back; any signal drops reasons that no longer fit.
+    let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
+    let fitting = ratings::with_reason(&stored.reason, "", stored.rating);
+    let kept = ratings::with_reason(&fitting, pressed, stored.rating);
+    if kept != stored.reason {
+        sqlx::query!("UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", kept, user, article)
             .execute(&mut *tx)
             .await?;
     }

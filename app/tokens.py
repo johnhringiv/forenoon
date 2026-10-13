@@ -19,7 +19,6 @@ LOW_REASONS = {
     "topic": "Not interested in the topic",
     "thin": "Too thin, nothing in it",
     "known": "Already knew this",
-    "broken": "Broken or incomplete",
     "long": "Too long",
     "wrong": "Wrong or misleading",
 }
@@ -30,7 +29,34 @@ HIGH_REASONS = {
 }
 REASONS = LOW_REASONS | HIGH_REASONS
 REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
-SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS
+# "This article came out broken or incomplete": a report to whoever runs the install, about the
+# delivery. It is not a rating and not a reason for one.
+PROBLEM = "problem"
+SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS + (PROBLEM,)
+
+
+def chosen(reason: str) -> list[str]:
+    """The reason keys stored for a rating: what was liked can be several things at once."""
+    return [key for key in reason.split(",") if key]
+
+
+def reason_labels(reason: str) -> list[str]:
+    return [REASONS[key] for key in chosen(reason) if key in REASONS]
+
+
+def with_reason(reason: str, key: str, rating: int | None) -> str:
+    """The stored reasons after one more tap on `key`.
+
+    Tapping a chosen reason again takes it back. What was liked adds up (the topic and the
+    depth); what was wrong is one thing, so a new choice replaces the old.
+    """
+    fitting = reasons_for(rating)
+    now = [k for k in chosen(reason) if k in fitting]
+    if key in now:
+        now.remove(key)
+    elif key in fitting:
+        now = [*now, key] if fitting is HIGH_REASONS else [key]
+    return ",".join(k for k in fitting if k in now)
 
 
 def reasons_for(rating: int | None) -> dict[str, str]:
@@ -45,8 +71,8 @@ def meaning(signal: str) -> tuple[int | None, bool | None]:
     """(rating, finished) a signal sets; None leaves that fact as it was."""
     if signal in LINK_SIGNALS:
         return int(signal[1]), signal[0] == "f"
-    if signal in REASON_SIGNALS:
-        return None, None  # a reason changes neither
+    if signal in REASON_SIGNALS or signal == PROBLEM:
+        return None, None  # a reason or a problem report changes neither
     return {"up": (5, None), "down": (1, None), "done": (None, True)}[signal]
 
 

@@ -17,7 +17,7 @@ sudo chown -R 1000:1000 /volume1/docker/forenoon
 To run as a different host user instead, set `PUID` and `PGID` in `.env`.
 
 Copy `deploy/config.example.yaml` to `<folder>/config.yaml` and edit it. Sources are added
-later, on the web pages (`deploy/sources.example.yaml` is a list to pick from). Leave `data_dir`
+later, on the web pages. Leave `data_dir`
 alone: inside the container the folder is mounted at `/data` and `FORENOON_DATA_DIR` points there.
 
 ## 2. Environment

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO extraction_reviews (article_id, checked_at, verdict, problem, model)\n         VALUES (?, ?, 'bad', 'reader: broken or incomplete', 'reader')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0112ad0786d717f98c0674df5b55dbad29bc05022a23caf90cd02287989a8a86"
+}
