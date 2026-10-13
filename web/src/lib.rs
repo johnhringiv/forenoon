@@ -37,6 +37,8 @@ pub struct Options {
     pub mailer: mail::Mailer,
     /// Where the pages are reached, for links in emails.
     pub base_url: String,
+    /// The data folder, where the pipeline leaves each article's thumbnail.
+    pub data_dir: std::path::PathBuf,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -57,10 +59,12 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         mail_limits: Arc::new(Limiter::new(Duration::from_secs(3600))),
         mailer: options.mailer,
         base_url: options.base_url.trim_end_matches('/').to_owned(),
+        thumbs_dir: options.data_dir.join("thumbs"),
     };
     Ok(Router::new()
         .route("/", get(pages::newsstand))
         .route("/rate", post(pages::rate))
+        .route("/thumb/{id}", get(pages::thumb))
         .route("/send", post(pages::send))
         .route("/report", post(pages::report))
         .route("/problems", get(pages::problems))

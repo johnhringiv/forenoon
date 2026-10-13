@@ -426,7 +426,12 @@ database with the pipeline.
 - Article text is untrusted here as elsewhere: everything is escaped, links and images must
   be plain `http(s)`, and the content security policy allows no scripts. Lead images are
   loaded by the browser from the article's own site, without a referrer.
-- Articles from recipe sources have no lead image (theirs live inside the issue file).
+- **Pictures.** The pipeline makes a small thumbnail for each article it prepares, from the
+  page's lead image or else the article's first few pictures (including a recipe article's,
+  which live inside the issue), and keeps it in `thumbs/` in the data folder. The web pages
+  serve it, only to a reader the article was delivered to. A card falls back to the
+  article's own lead image address when there is no thumbnail, and has no picture when the
+  article has none. `forenoon thumbs` makes thumbnails for articles delivered earlier.
 - Who owns what in the database: the web program owns accounts (with the readers' settings)
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
@@ -440,18 +445,19 @@ database with the pipeline.
 
 ## 10. Commands
 
-| Command                                         | Purpose                                                      |
-| ----------------------------------------------- | ------------------------------------------------------------ |
-| `forenoon run [--dry-run] [--out DIR] [--user]` | One delivery now; `--dry-run` builds files and sends nothing |
-| `forenoon schedule`                             | Run every day at `delivery_time`                             |
-| `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X          |
-| `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                  |
-| `forenoon send-queue`                           | Send the articles readers asked for on the web pages, now    |
-| `forenoon feedback-log`                         | Print taps and current ratings                               |
-| `forenoon usage`                                | Print recent model calls and today's token use               |
-| `forenoon checks [--all]`                       | Print articles the model thought were badly extracted        |
-| `forenoon replay [--all]`                       | Re-run extraction over saved pages and show what changed     |
-| `forenoon golden [--out DIR]`                   | Write the rendering-test book                                |
+| Command                                         | Purpose                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------- |
+| `forenoon run [--dry-run] [--out DIR] [--user]` | One delivery now; `--dry-run` builds files and sends nothing  |
+| `forenoon schedule`                             | Run every day at `delivery_time`                              |
+| `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X           |
+| `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                   |
+| `forenoon thumbs`                               | Make the web pages' thumbnails for articles delivered earlier |
+| `forenoon send-queue`                           | Send the articles readers asked for on the web pages, now     |
+| `forenoon feedback-log`                         | Print taps and current ratings                                |
+| `forenoon usage`                                | Print recent model calls and today's token use                |
+| `forenoon checks [--all]`                       | Print articles the model thought were badly extracted         |
+| `forenoon replay [--all]`                       | Re-run extraction over saved pages and show what changed      |
+| `forenoon golden [--out DIR]`                   | Write the rendering-test book                                 |
 
 The web pages have their own program:
 

@@ -24,6 +24,9 @@ h2 span { font:400 .85rem system-ui,sans-serif; color:var(--soft) }
 article { background:var(--card); border:1px solid var(--line); border-radius:6px; overflow:hidden;
   display:flex; flex-direction:column }
 article .lead { display:flex; flex-direction:column; flex:1; min-width:0 }
+/* An article with no picture of its own: its source, set large, so the cards line up. */
+.nopic { aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; padding:0 1rem; text-align:center;
+  background:var(--line); color:var(--soft); font:700 1.3rem/1.2 Georgia,serif; overflow:hidden }
 article img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:var(--line) }
 .body { padding:12px 14px 14px; display:flex; flex-direction:column; gap:.45rem; flex:1 }
 .kicker { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--accent);

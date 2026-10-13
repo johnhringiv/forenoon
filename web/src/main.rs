@@ -153,7 +153,8 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 eprintln!("FORENOON_WEB_URL is not set: links in emails will point at http://{listen}");
                 format!("http://{listen}")
             });
-            let router = app(pool, Options { secure_cookies, mailer, base_url }).await?;
+            let data_dir = cli.db.parent().map(PathBuf::from).unwrap_or_default();
+            let router = app(pool, Options { secure_cookies, mailer, base_url, data_dir }).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");
             axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())

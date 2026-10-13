@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: "41 4 5 * *" # monthly rebuild so the image picks up base-image CVE fixes
 
+# One run per branch at a time; a newer push cancels the older run. Without this, two merges
+# close together publish concurrently and the older can finish last, leaving :latest behind.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest

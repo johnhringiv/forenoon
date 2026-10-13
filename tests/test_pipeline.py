@@ -862,6 +862,26 @@ def test_an_article_is_sent_again_on_request_from_its_saved_page(env):
     assert store.send_requests() == []  # nothing is tried twice
 
 
+def test_delivered_articles_get_a_thumbnail_for_the_web_pages(env):
+    from app import thumbs
+
+    cfg, store, fetcher = env
+    # The feed's own text carries the picture; the test site's pages have none.
+    cfg = dataclasses.replace(cfg, sources=(Source("Blog", "https://blog.example/feed", extract="feed"),))
+    run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
+    made = sorted(cfg.thumbs_dir.glob("*.jpg"))
+    assert made, "the article with a picture has a thumbnail"
+    with Image.open(made[0]) as img:
+        assert img.size == thumbs.SIZE and img.mode == "RGB"  # 16:9, in colour
+    # Too small to be a picture, unreachable, or absent: no thumbnail, and no error.
+    for sources in (("https://blog.example/pixel.gif",), ("https://blog.example/missing.png",), ("",), ()):
+        assert not thumbs.save(cfg.thumbs_dir, "none", sources, fetcher)
+    # An inline picture, as recipe articles have, works; a later source is used when the first fails.
+    inline = "data:image/png;base64," + __import__("base64").b64encode(_png((640, 480))).decode()
+    assert thumbs.save(cfg.thumbs_dir, "inline", ("https://blog.example/missing.png", inline), fetcher)
+    assert (cfg.thumbs_dir / "inline.jpg").exists() and not list(cfg.thumbs_dir.glob("*.part"))
+
+
 def test_a_sites_address_is_turned_into_its_feed(tmp_path):
     from app.checks import check_sources, find_feed
     from app.fetch import FetchError

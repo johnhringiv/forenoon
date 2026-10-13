@@ -76,6 +76,7 @@ async fn site(with_pipeline: bool) -> Site {
         secure_cookies: false,
         mailer: Mailer::Memory(mail.clone()),
         base_url: "http://nas:8787/".to_owned(),
+        data_dir: folder.path().to_owned(),
     };
     let router = app(pool.clone(), options).await.unwrap();
     Site { router, pool, mail, _folder: folder }
@@ -119,7 +120,7 @@ impl Browser {
         let (status, location, csp) =
             (response.status(), text(header::LOCATION), text(header::CONTENT_SECURITY_POLICY));
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        Reply { status, location, csp, set_cookie: set, text: String::from_utf8(body.to_vec()).unwrap() }
+        Reply { status, location, csp, set_cookie: set, text: String::from_utf8_lossy(&body).into_owned() }
     }
 
     async fn get(&mut self, site: &Site, path: &str) -> Reply {
@@ -815,6 +816,39 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
         .unwrap();
     }
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_thumbnail_is_served_only_to_a_reader_the_article_was_delivered_to() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "With a thumbnail", "john", sent).await;
+    article(pool, "a2", "https://blog.example/2", "Blog", "Without one", "john", sent).await;
+    sqlx::query("UPDATE articles SET image_url = 'https://blog.example/lead.jpg'").execute(pool).await.unwrap();
+    let thumbs = site._folder.path().join("thumbs");
+    std::fs::create_dir_all(&thumbs).unwrap();
+    std::fs::write(thumbs.join("a1.jpg"), b"\xff\xd8\xff jpeg bytes").unwrap();
+
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let page = browser.get(&site, "/").await;
+    // Our own picture where there is one; the article's lead image otherwise.
+    assert!(
+        page.text.contains(r#"<img src="/thumb/a1""#)
+            && page.text.contains(r#"<img src="https://blog.example/lead.jpg""#)
+    );
+    assert!(page.csp.contains("img-src 'self'"));
+    let picture = browser.send(&site, Request::get("/thumb/a1").body(Body::empty()).unwrap()).await;
+    assert!(picture.status == StatusCode::OK && picture.text.contains("jpeg bytes"));
+    for missing in ["/thumb/a2", "/thumb/nope", "/thumb/..%2Fforenoon.sqlite3", "/thumb/a1.jpg"] {
+        assert_eq!(browser.get(&site, missing).await.status, StatusCode::NOT_FOUND, "{missing}");
+    }
+    // Not to another reader, and not without signing in.
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    assert_eq!(mary.get(&site, "/thumb/a1").await.status, StatusCode::NOT_FOUND);
+    assert!(Browser::default().get(&site, "/thumb/a1").await.status.is_redirection());
 }
 
 #[tokio::test]
