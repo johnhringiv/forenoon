@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Sources · Forenoon{% endblock %}
+{% block head %}{% if checking %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
 {% block header %}
 <p>{{ summary }}</p>
 <div class="bar"><a href="/">Back to the newsstand</a>
@@ -14,13 +15,13 @@
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
 <label>Name <input name="name" maxlength="80" required></label>
-<label class="wide">Feed address <input name="address" maxlength="2000" placeholder="https://example.com/feed.xml" required></label>
-<label>Take the text from <select name="extract"><option value="auto">Page, else feed</option><option value="page">Always the page</option><option value="feed">Only the feed</option></select></label>
+<label class="wide">Feed or site address <input name="address" maxlength="2000" placeholder="https://example.com/" required></label>
+<label>Take the text from <select name="extract"><option value="auto">Best of page and feed</option><option value="page">Web page only</option><option value="feed">Feed only</option></select></label>
 <label class="tick"><input type="checkbox" name="pinned" value="1"> Pinned</label>
 <label class="tick"><input type="checkbox" name="kind" value="recipe"> Calibre recipe</label>
 <button>Add</button>
 </div>
-<p class="hint">Changes apply from the next run. For a Calibre recipe, tick the box and give its folder name in place of an address; the recipe itself is listed in <code>recipes.conf</code>. A pinned source's articles are taken before all others.</p>
+<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. Changes apply from the next run. For a Calibre recipe, tick the box and give its folder name in place of an address; the recipe itself is listed in <code>recipes.conf</code>. A pinned source's articles are taken before all others.</p>
 </form>
 {% if rows.is_empty() %}<p class="empty">No sources yet, so there is nothing to deliver.</p>{% endif %}
 {% for row in rows %}
@@ -36,6 +37,7 @@
 <button>Save</button>
 <button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>
 </div>
+{% if let Some(check) = row.check %}<p class="hint{% if row.check_failed %} failing{% endif %}">{{ check }}</p>{% endif %}
 <p class="hint{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %}</p>
 </form>
 {% endfor %}

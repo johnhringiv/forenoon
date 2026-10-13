@@ -666,7 +666,25 @@ async fn sources_are_managed_by_admins_only() {
         StatusCode::FORBIDDEN
     );
 
+    // A new source waits for the pipeline to check its address, and the page reloads meanwhile.
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Checking this address") && text.contains(r#"<meta http-equiv="refresh""#));
     let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    assert!(stored.iter().all(|source| source.check_state == "pending"));
+    sqlx::query("UPDATE sources SET check_state = 'ok', check_note = 'Feed found at https://blog.example/rss.xml: 3 articles.' WHERE kind = 'rss'")
+        .execute(&site.pool).await.unwrap();
+    sqlx::query(
+        "UPDATE sources SET check_state = 'failed', check_note = 'No issue in recipes/ft yet.' WHERE kind = 'recipe'",
+    )
+    .execute(&site.pool)
+    .await
+    .unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(
+        text.contains("Feed found at https://blog.example/rss.xml")
+            && text.contains(r#"<p class="hint failing">No issue in recipes/ft yet.</p>"#)
+    );
+    assert!(!text.contains("http-equiv"));
     let rows: Vec<_> = stored
         .iter()
         .map(|s| {

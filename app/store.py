@@ -201,6 +201,22 @@ class Store:
             for row in rows
         )
 
+    def pending_source_checks(self) -> list[sqlite3.Row]:
+        """Sources added or saved on the web pages whose address has not been checked yet."""
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
+            return []
+        return self.db.execute(
+            "SELECT id, name, kind, url, recipe FROM sources WHERE check_state = 'pending' ORDER BY id"
+        ).fetchall()
+
+    def finish_source_check(self, source_id: int, state: str, note: str, url: str | None = None) -> None:
+        """Record a check's outcome; `url` replaces the address when the feed was found elsewhere."""
+        with self.db:
+            self.db.execute(
+                "UPDATE sources SET check_state = ?, check_note = ?, url = COALESCE(?, url) WHERE id = ?",
+                (state, note, url, source_id),
+            )
+
     # send requests (queued by the web app's "Send to Kindle" button)
 
     def send_requests(self) -> list[sqlite3.Row]:

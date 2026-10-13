@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, kind, url, recipe, extract, pinned AS \"pinned: bool\", enabled AS \"enabled: bool\"\n           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE",
+  "query": "SELECT id AS \"id!\", name, kind, url, recipe, extract, pinned AS \"pinned: bool\", enabled AS \"enabled: bool\",\n           check_state, check_note\n           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE",
   "describe": {
     "columns": [
       {
@@ -42,6 +42,16 @@
         "name": "enabled: bool",
         "ordinal": 7,
         "type_info": "Integer"
+      },
+      {
+        "name": "check_state",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "check_note",
+        "ordinal": 9,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -55,8 +65,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "62fb6f55b8f9dfdb345fa9727693ec31a4f65d11c02366e057c7f87d442c7c55"
+  "hash": "82d7ba4e28c2d6076e35c85e31ec5b36d2cbd7e0f54b94fa1ecab62dd4a2da5e"
 }
