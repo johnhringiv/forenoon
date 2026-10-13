@@ -230,6 +230,10 @@ class Store:
                 (id, url, source, title, author, published, now_iso()),
             )
 
+    def has_articles_from(self, source: str) -> bool:
+        """Whether this source has been read before."""
+        return self.db.execute("SELECT 1 FROM articles WHERE source = ? LIMIT 1", (source,)).fetchone() is not None
+
     def set_extraction(self, id: str, status: str, reason: str, word_count: int) -> None:
         with self.db:
             self.db.execute(

@@ -17,7 +17,7 @@ from .fetch import Fetcher, FetchError
 from .sources import Item
 from .urls import article_id
 
-MAX_LISTING_BYTES = 2 * 1024 * 1024
+MAX_LISTING_BYTES = 8 * 1024 * 1024
 MAX_TITLE_CHARS = 300
 DESCRIPTION_WORDS = 60
 # Not articles: nothing useful to extract.
@@ -33,7 +33,7 @@ class Site:
     name: str
     url: str  # the front page
     parse: Callable[[object], list[dict]]
-    more: Callable[[datetime], list[str]]  # further listings; one that fails is skipped
+    more: Callable[[datetime], list[str]]  # further listings since a time; one that fails is skipped
 
 
 def _hackernews(data: object) -> list[dict]:
@@ -70,16 +70,26 @@ def _lobsters(data: object) -> list[dict]:
 
 
 HN_MIN_POINTS = 40
+HN_MAX_HITS = 1000  # the most the search API returns in one page
+HN_FIELDS = "title,url,points,num_comments,created_at"  # objectID always comes back
 HN_API = "https://hn.algolia.com/api/v1/search"
 
 
-def _hackernews_more(now: datetime) -> list[str]:
-    """Stories of the last day that drew some votes, most of which have left the front page."""
-    since = int((now - timedelta(days=1)).timestamp()) // 3600 * 3600
-    return [f"{HN_API}?tags=story&numericFilters=created_at_i%3E{since},points%3E{HN_MIN_POINTS}&hitsPerPage=100"]
+def _hackernews_more(since: datetime) -> list[str]:
+    """Stories since then that drew some votes, most of which have left the front page.
+
+    The window is the pipeline's own age limit, not one day. A story that reaches the votes a
+    day after it was posted would fall between two daily runs if each looked back only as far
+    as the previous one; and a missed run would lose its whole day.
+    """
+    start = int(since.timestamp()) // 3600 * 3600
+    # Only the fields read below, and no highlighting: a thousand full hits is megabytes.
+    filters = f"created_at_i%3E{start},points%3E{HN_MIN_POINTS}"
+    fields = f"hitsPerPage={HN_MAX_HITS}&attributesToRetrieve={HN_FIELDS}&attributesToHighlight="
+    return [f"{HN_API}?tags=story&numericFilters={filters}&{fields}"]
 
 
-def _lobsters_more(now: datetime) -> list[str]:
+def _lobsters_more(since: datetime) -> list[str]:
     return [f"https://lobste.rs/page/{page}.json" for page in (2, 3)]
 
 
@@ -134,11 +144,11 @@ def _summary(site: Site, story: dict, host: str) -> str:
     return text
 
 
-def read_listing(key: str, fetcher: Fetcher, now: datetime | None = None) -> list[Item]:
+def read_listing(key: str, fetcher: Fetcher, since: datetime | None = None) -> list[Item]:
     """One site's front page and its further listings as candidate items, front page first.
 
-    Raises FetchError when the front page cannot be read; a further listing that fails is
-    skipped.
+    `since` is how far back the further listings look; by default one day. Raises FetchError
+    when the front page cannot be read; a further listing that fails is skipped.
     """
     site, source = SITES[key], site_source(key)
     resp = fetcher.get(site.url, max_bytes=MAX_LISTING_BYTES)
@@ -148,7 +158,7 @@ def read_listing(key: str, fetcher: Fetcher, now: datetime | None = None) -> lis
         raise FetchError("response is not a listing") from exc
     if not stories:
         raise FetchError("listing is empty")
-    for url in site.more(now or datetime.now(UTC)):
+    for url in site.more(since or datetime.now(UTC) - timedelta(days=1)):
         try:
             stories += site.parse(json.loads(fetcher.get(url, max_bytes=MAX_LISTING_BYTES).content))
         except (FetchError, ValueError, RecursionError):
