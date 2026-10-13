@@ -475,6 +475,8 @@ struct ReasonOption {
 
 struct Card {
     id: String,
+    /// Shown in place of a picture when the article has none.
+    source: String,
     link: Option<String>,
     image: Option<String>,
     title: String,
@@ -622,6 +624,7 @@ fn card(row: Delivered) -> Card {
         reasons,
         sendable: false,
         sent: None,
+        source: row.source.split(" via ").next().unwrap_or_default().to_owned(),
         id: row.id,
     }
 }

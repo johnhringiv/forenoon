@@ -20,7 +20,7 @@
 {% for card in story.cards %}
 {% if loop.first %}
 <div class="lead" id="a-{{ card.id }}">
-{% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
+{% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<div class="nopic" aria-hidden="true">{{ card.source }}</div>{% endif %}
 <div class="body">
 <p class="kicker">{{ card.kicker }}</p>
 <h3>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h3>
