@@ -17,6 +17,7 @@
 <div class="grid">
 {% for story in issue.stories %}
 <article{% if story.cards.len() > 1 %} class="story"{% endif %}>
+{% if story.cards.len() > 1 %}<p class="story-head">{{ story.more }}</p>{% endif %}
 {% for card in story.cards %}
 {% if loop.first %}
 <div class="lead" id="a-{{ card.id }}">
@@ -37,12 +38,12 @@
 </div>
 </div>
 {% else %}
-{% if loop.index == 2 %}<div class="more"><p class="more-title">{{ story.more }}</p>{% endif %}
+{% if loop.index == 2 %}<div class="more"><p class="more-title">Also in this story</p>{% endif %}
 <div class="member" id="a-{{ card.id }}">
+<p class="kicker">{{ card.kicker }}</p>
 <div class="member-head">
 {% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
-<div><p class="kicker">{{ card.kicker }}</p>
-<h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4></div>
+<h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4>
 </div>
 <div class="meta">
 {% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}

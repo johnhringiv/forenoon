@@ -619,7 +619,10 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
             && !lead.contains("An announcement")
     );
     assert!(
-        more.contains("1 more on this story") && more.contains(r#"id="a-follow""#) && more.contains("An announcement")
+        story.contains("One story · 2 articles, delivered together")
+            && more.contains("Also in this story")
+            && more.contains(r#"id="a-follow""#)
+            && more.contains("An announcement")
     );
     assert!(!story.contains("Something else"));
     assert!(more.contains(r#"<img src="/thumb/follow""#), "a story's other articles keep their picture");

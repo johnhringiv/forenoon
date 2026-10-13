@@ -758,7 +758,7 @@ pub async fn newsstand(
             issue.count = format!("{} in {stories} {}", issue.count, if stories == 1 { "story" } else { "stories" });
         }
         for story in &mut issue.stories {
-            story.more = format!("{} more on this story", story.cards.len().saturating_sub(1));
+            story.more = format!("One story · {} articles, delivered together", story.cards.len());
         }
         match local(&issue.stamp, zone) {
             Some(when) => {
