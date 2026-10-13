@@ -78,7 +78,8 @@ services:
 
   # Enabled by adding "recipes" to COMPOSE_PROFILES in .env. Runs Calibre news recipes into
   # <data>/recipes; see docs/setup-recipes.md. Which recipes, and their logins, are set on
-  # the web pages' Sources page.
+  # the web pages' Sources page. It also fetches article pages for feeds that carry a
+  # subscriber's session, being the only container that can read one.
   recipes:
     build: ../recipes
     image: ${RECIPES_IMAGE:-forenoon-recipes:local}

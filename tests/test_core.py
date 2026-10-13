@@ -317,8 +317,16 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
     store.db.execute(add, ("Paused", "rss", "https://paused.example/feed", "", "auto", 0, 0))
     store.db.execute(add, ("FT", "recipe", "", "ft", "feed", 0, 1))
     store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "", "page", 1, 1))
+    store.db.execute("UPDATE sources SET session_domain = 'zed.example' WHERE name IN ('Zed', 'FT')")
     assert store.sources() == (
-        Source("Zed", "https://zed.example/feed", pinned=True, extract="page"),  # pinned first
+        Source(
+            "Zed",
+            "https://zed.example/feed",
+            pinned=True,
+            extract="page",
+            session="feed-6",
+            session_domain="zed.example",
+        ),
         Source("blog", "https://blog.example/feed"),
         Source("FT", type="recipe", recipe="ft", extract="feed"),
     )

@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from . import archive, thumbs
+from . import archive, sessions, thumbs
 from .config import Config, Source, User
 from .deliver import (
     MESSAGE_OVERHEAD,
@@ -170,7 +170,10 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> E
     page_html, fetch_error = None, ""
     if item.source.extract != "feed":
         try:
-            page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
+            if sessions.covers(item.source, item.url):
+                page_html = sessions.fetch(cfg.recipes_dir, item.source.session, item.url)
+            else:
+                page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
         except FetchError as exc:
             fetch_error = str(exc)
     if keep and cfg.keep_pages_days != 0 and (page_html or item.feed_html):

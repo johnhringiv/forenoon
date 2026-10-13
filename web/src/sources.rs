@@ -31,6 +31,7 @@ const MAX_NAME: usize = 80;
 const MAX_URL: usize = 2000;
 const MAX_TITLE: usize = 200;
 const MAX_LOGIN: usize = 500;
+const MAX_COOKIE: usize = 16 * 1024;
 const MAX_FILE: u64 = 4 * 1024 * 1024;
 /// A run the recipes container started this long ago and never finished was interrupted.
 const RUN_MINUTES: i64 = 45;
@@ -54,13 +55,15 @@ pub struct Source {
     /// "" (never checked), "pending", "ok" or "failed": the pipeline's check of the address.
     pub check_state: String,
     pub check_note: String,
+    /// For a feed with a subscriber's session: the only site its cookie is sent to. "" for none.
+    pub session_domain: String,
 }
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
     sqlx::query_as!(
         Source,
         r#"SELECT id AS "id!", name, kind, url, recipe, recipe_title, builtin, extract, pinned AS "pinned: bool",
-           enabled AS "enabled: bool", check_state, check_note
+           enabled AS "enabled: bool", check_state, check_note, session_domain
            FROM sources ORDER BY pinned DESC, name COLLATE NOCASE"#
     )
     .fetch_all(pool)
@@ -255,6 +258,12 @@ struct FeedRow {
     /// What the check of its address found; `None` when it was never checked.
     check: Option<String>,
     check_failed: bool,
+    /// The site a saved session is for, or a guess at it for the form.
+    session_site: String,
+    has_session: bool,
+    /// How the last page fetched with the session went.
+    session_note: Option<String>,
+    session_failed: bool,
 }
 
 struct RecipeRow {
@@ -396,6 +405,20 @@ async fn render(
             }
             _ => feeds.push(FeedRow {
                 id: source.id,
+                has_session: !source.session_domain.is_empty(),
+                session_site: match source.session_domain.as_str() {
+                    "" => guess_site(&source.url),
+                    domain => domain.to_owned(),
+                },
+                session_note: runs
+                    .get(&format!("feed-{}", source.id))
+                    .filter(|_| !source.session_domain.is_empty())
+                    .map(|run| match run.ok {
+                        true => format!("Last page fetched with it: {}.", when(&run.at)),
+                        false => format!("Last page with it failed {}: {}", when(&run.at), run.note),
+                    }),
+                session_failed: !source.session_domain.is_empty()
+                    && runs.get(&format!("feed-{}", source.id)).is_some_and(|run| !run.ok),
                 address: source.url,
                 extract: choices(&source.extract),
                 pinned: source.pinned,
@@ -472,6 +495,8 @@ pub async fn page(
         Some("fetching") => Some("Asked the recipes container to fetch it now."),
         Some("login") => Some("Login saved. The recipe is being fetched with it now."),
         Some("nologin") => Some("Login removed."),
+        Some("session") => Some("Session saved. Article pages from that site are fetched with it from the next run."),
+        Some("nosession") => Some("Session removed."),
         Some("saved") => Some("Saved."),
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
         _ => None,
@@ -739,6 +764,9 @@ pub async fn delete(
     }
     let folder = recipe_folder(&state, id).await?;
     sqlx::query!("DELETE FROM sources WHERE id = ? AND kind != 'builtin'", id).execute(&state.pool).await?;
+    if let Some(path) = login_file(&state, &format!("feed-{id}")) {
+        let _ = std::fs::remove_file(path); // a feed's session goes with it
+    }
     if let Some(folder) = folder {
         // Its login goes with it; the issues already fetched stay where they are.
         if let Some(path) = login_file(&state, &folder) {
@@ -829,6 +857,109 @@ pub async fn remove_login(
     saved("nologin")
 }
 
+/// The site a feed's articles are probably on: its host without a leading "www." or "feeds.".
+fn guess_site(url: &str) -> String {
+    let host = url.split("://").nth(1).unwrap_or("").split(['/', ':', '?']).next().unwrap_or("").to_ascii_lowercase();
+    let host = host
+        .strip_prefix("www.")
+        .or_else(|| host.strip_prefix("feeds."))
+        .or_else(|| host.strip_prefix("rss."))
+        .unwrap_or(&host);
+    host.to_owned()
+}
+
+/// A site's name as the session fetcher will match it: a plain host name, not an address.
+fn check_site(site: &str) -> Option<String> {
+    let site = site.trim().trim_start_matches("https://").trim_end_matches('/').to_ascii_lowercase();
+    let labels: Vec<&str> = site.split('.').collect();
+    let named = labels.len() >= 2
+        && site.len() <= 253
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+        && labels.last().is_some_and(|last| last.chars().any(|c| c.is_ascii_alphabetic()));
+    named.then_some(site)
+}
+
+#[derive(Deserialize)]
+pub struct SessionForm {
+    csrf: String,
+    site: String,
+    cookie: String,
+}
+
+/// Save a feed's subscriber session where only the recipes container reads it. The cookie is
+/// never shown again, never stored in the database, and sent to that one site only.
+pub async fn set_session(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Form(form): Form<SessionForm>,
+) -> Page {
+    if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
+        return Ok(response);
+    }
+    let feed = sqlx::query_scalar!("SELECT id FROM sources WHERE id = ? AND kind = 'rss'", id)
+        .fetch_optional(&state.pool)
+        .await?;
+    if feed.is_none() {
+        return saved("saved");
+    }
+    let Some(path) = login_file(&state, &format!("feed-{id}")) else {
+        let problem = "Sessions cannot be saved: this install has no logins folder (FORENOON_LOGINS_DIR).".to_owned();
+        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+    };
+    let Some(site) = check_site(&form.site) else {
+        let problem = "Give the site the session is for, such as ft.com.".to_owned();
+        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+    };
+    // Pasted with or without the header's name. A line break would let it carry other headers.
+    let cookie = form.cookie.trim();
+    let cookie = cookie.strip_prefix("Cookie:").or_else(|| cookie.strip_prefix("cookie:")).unwrap_or(cookie).trim();
+    if !plain(cookie, MAX_COOKIE) || !cookie.contains('=') || !cookie.is_ascii() {
+        let problem =
+            "Paste the Cookie header your browser sends to the site: one line of name=value pairs.".to_owned();
+        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+    }
+    let content = serde_json::json!({ "cookie": cookie, "domain": site }).to_string();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    write_whole(&path, content.as_bytes(), 0o600)?;
+    sqlx::query!("UPDATE sources SET session_domain = ? WHERE id = ? AND kind = 'rss'", site, id)
+        .execute(&state.pool)
+        .await?;
+    saved("session")
+}
+
+pub async fn remove_session(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Form(form): Form<CsrfForm>,
+) -> Page {
+    if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
+        return Ok(response);
+    }
+    sqlx::query!("UPDATE sources SET session_domain = '' WHERE id = ? AND kind = 'rss'", id)
+        .execute(&state.pool)
+        .await?;
+    if let Some(path) = login_file(&state, &format!("feed-{id}")) {
+        match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+    }
+    saved("nosession")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -842,6 +973,17 @@ mod tests {
         assert_eq!(folder_for("日本", &[]), "recipe");
         assert_eq!(folder_for("Wired", &["wired".to_owned(), "wired-2".to_owned()]), "wired-3");
         assert!(folder_for(&"long name ".repeat(20), &[]).len() <= 32);
+    }
+
+    #[test]
+    fn a_sessions_site_is_a_plain_host_name() {
+        assert_eq!(guess_site("https://www.ft.com/world?format=rss"), "ft.com");
+        assert_eq!(guess_site("https://feeds.paper.example:8443/rss"), "paper.example");
+        assert_eq!(check_site(" https://FT.com/ ").as_deref(), Some("ft.com"));
+        assert_eq!(check_site("www.nytimes.com").as_deref(), Some("www.nytimes.com"));
+        for bad in ["", "com", "localhost", "192.168.1.1", "ft.com/path", "ft.com:443", "a b.com", "-x.com", "x..com"] {
+            assert_eq!(check_site(bad), None, "{bad}");
+        }
     }
 
     #[test]

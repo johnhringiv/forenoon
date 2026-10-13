@@ -778,6 +778,74 @@ async fn sources_are_managed_by_admins_only() {
 }
 
 #[tokio::test]
+async fn a_feeds_subscriber_session_is_kept_apart_and_never_shown() {
+    let site = site(true).await;
+    let logins = site.folder.path().join("logins");
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    let csrf = admin.get(&site, "/sources").await.csrf();
+    let add = [("csrf", csrf.as_str()), ("name", "Paper"), ("address", "https://www.paper.example/rss")];
+    admin.post(&site, "/sources", &add).await;
+    let feed = forenoon_web::sources::list(&site.pool).await.unwrap().into_iter().find(|s| s.name == "Paper").unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Add your session") && text.contains(r#"name="site" value="paper.example""#));
+
+    let path = format!("/sources/{}/session", feed.id);
+    for (site_name, cookie, message) in [
+        ("localhost", "id=1", "Give the site the session is for"),
+        ("paper.example", "no pairs here", "Paste the Cookie header"),
+        ("paper.example", "id=1\r\nX-Evil: 1", "Paste the Cookie header"),
+    ] {
+        let reply = admin.post(&site, &path, &[("csrf", &csrf), ("site", site_name), ("cookie", cookie)]).await;
+        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
+    }
+    let form = [("csrf", csrf.as_str()), ("site", "Paper.Example"), ("cookie", "Cookie: id=s3cret; theme=dark")];
+    assert_eq!(admin.post(&site, &path, &form).await.location, "/sources?saved=session");
+    let file = logins.join(format!("feed-{}.json", feed.id));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        r#"{"cookie":"id=s3cret; theme=dark","domain":"paper.example"}"#
+    );
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    assert_eq!(stored.iter().find(|s| s.id == feed.id).unwrap().session_domain, "paper.example");
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Subscriber session saved for paper.example.") && !text.contains("s3cret"));
+
+    // How the last page fetched with it went is shown, and a failure opens the form.
+    std::fs::create_dir_all(site.folder.path().join("recipes")).unwrap();
+    std::fs::write(
+        site.folder.path().join("recipes/status.json"),
+        format!(r#"{{"feed-{}": {{"at": "2026-10-13T06:01:00-04:00", "ok": false, "note": "HTTP 403"}}}}"#, feed.id),
+    )
+    .unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(text.contains("Last page with it failed 2026-10-13 06:01: HTTP 403") && text.contains("<details open>"));
+
+    // Not for a reader; not for a recipe or a built-in source; and it goes when removed.
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    let token = mary.get(&site, "/account").await.csrf();
+    let form = [("csrf", token.as_str()), ("site", "paper.example"), ("cookie", "id=mine")];
+    assert_eq!(mary.post(&site, &path, &form).await.status, StatusCode::FORBIDDEN);
+    let builtin = stored.iter().find(|s| s.kind == "builtin").unwrap().id;
+    let form = [("csrf", csrf.as_str()), ("site", "paper.example"), ("cookie", "id=1")];
+    admin.post(&site, &format!("/sources/{builtin}/session"), &form).await;
+    assert!(!logins.join(format!("feed-{builtin}.json")).exists());
+    assert_eq!(
+        admin.post(&site, &format!("{path}/delete"), &[("csrf", &csrf)]).await.location,
+        "/sources?saved=nosession"
+    );
+    assert!(!file.exists());
+    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    assert_eq!(stored.iter().find(|s| s.id == feed.id).unwrap().session_domain, "");
+    admin.post(&site, &path, &[("csrf", &csrf), ("site", "paper.example"), ("cookie", "id=2")]).await;
+    admin.post(&site, &format!("/sources/{}/delete", feed.id), &[("csrf", &csrf)]).await;
+    assert!(!file.exists(), "removing the feed removes its session");
+}
+
+#[tokio::test]
 async fn built_in_sources_are_only_switched_on_or_off() {
     let site = site(true).await;
     let mut admin = Browser::default();

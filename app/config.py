@@ -111,6 +111,10 @@ class Source:
     extract: str = "auto"
     users: tuple[str, ...] = ()
     recipe: str = ""  # for type "recipe": the folder under <data>/recipes holding its issues
+    # For a feed of a site the reader subscribes to: the name of the session its article pages
+    # are fetched with (see app/sessions.py). Empty: fetched like any other page.
+    session: str = ""
+    session_domain: str = ""  # the session is used for this site and its subdomains only
 
 
 @dataclass(frozen=True)

@@ -47,6 +47,19 @@ the feeds its own users configure and delivers only to the addresses its admin h
   Articles and health records refer to a source by name, so renaming one starts its health
   record afresh.
 
+  **Subscriber sessions.** A feed of a site the reader subscribes to can carry a session:
+  the site's cookie, pasted once on the feed's row. The feed is read as usual, without it.
+  Only the article pages the ranking wants read (the reading pass and the day's choices) are
+  then fetched with the session, a few a day, instead of a whole paper. The cookie is kept in
+  the logins volume beside recipe logins: never in the database or the data folder, never
+  shown again, and sent only over https to the one site named with it and its subdomains (a
+  redirect elsewhere ends the fetch). The pipeline never holds it. It leaves a request in
+  `<data>/recipes/.fetch/`, and the recipes container fetches the page and leaves the answer
+  there, so sessions need that container running. The fetch identifies itself as Forenoon. A
+  site that refuses or challenges it is reported on the feed's row, not worked around, and
+  the article falls back to the feed's own text like any page that cannot be fetched. Pages
+  the source links to on other sites are fetched as usual, without the session.
+
 - **Settings** for the whole install (delivery time, the format, ranking and its model,
   how many places built-in sources may take, alerts, what is kept) are on the web pages'
   Settings page (admins only) and live in the database. Each has a default in the code; only
@@ -291,8 +304,10 @@ source).
 
 - A separate **recipes container** holds Calibre. Once a day at `RECIPES_TIME` it runs each
   recipe listed in `<data>/recipes/recipes.conf` and writes the issue to
-  `<data>/recipes/<folder>/<date>.epub`. An issue is published only when the recipe succeeds;
-  issues older than 7 days are removed.
+  `<data>/recipes/<folder>/<date>.epub`. An issue is published only when the recipe succeeds
+  and the issue has at least one article: Calibre reports a paper of empty sections as a
+  success, which is what a site refusing the recipe looks like. Issues older than 7 days are
+  removed.
 - Recipes are set up entirely on the Sources page. The container publishes
   `catalogue.json`, the publications its Calibre can fetch and which of them want a
   subscriber's login; the page offers that list. Adding one picks its folder, writes
