@@ -94,7 +94,8 @@ All fetched content is treated as untrusted.
 ### Saved pages
 
 Each article's fetched page and feed entry are kept as received in `pages/` in the data
-folder for `keep_pages_days` (default 90; 0 keeps none). `forenoon replay` runs the current
+folder, for good by default (`keep_pages_days`: a number of days prunes older ones, 0 keeps
+none). They are the only copy of what was read: for re-sending, and for learning from later. `forenoon replay` runs the current
 extractor over every saved page and lists those whose verdict or word count differs from what
 was recorded, so a change to extraction can be checked against real pages. Dry runs and
 `forenoon report` save nothing.
@@ -414,8 +415,8 @@ The web pages have their own program:
 
 ## 11. Storage
 
-A copy of each book sent is kept in `issues/` for `keep_issues_days` (default 30; 0 keeps
-none).
+A copy of each book sent is kept in `issues/`, for good by default (`keep_issues_days`, as
+for saved pages).
 
 One SQLite database in the data folder, shared by the pipeline, the feedback service and the
 web pages: articles (with extraction verdict and preview data), deliveries, the tap event

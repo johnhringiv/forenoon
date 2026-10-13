@@ -779,3 +779,19 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
     assert post2["reason"] == "after reading"
     assert sorted(r["verdict"] for r in store.review_rows())[:1] == ["bad"]
     assert ("read", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+
+
+def test_saved_pages_and_books_are_kept_for_good_by_default(env):
+    cfg, store, fetcher = env
+    assert cfg.keep_pages_days == -1 and cfg.keep_issues_days == -1
+    for folder, name in ((cfg.pages_dir, "ancient.json.gz"), (cfg.issues_dir, "ancient.epub")):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(b"x")
+        os.utime(folder / name, (0, 0))
+    run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
+    assert (cfg.pages_dir / "ancient.json.gz").exists() and (cfg.issues_dir / "ancient.epub").exists()
+    assert len(list(cfg.pages_dir.glob("*.json.gz"))) > 1  # and this run's pages were saved
+
+    pruning = dataclasses.replace(cfg, keep_pages_days=30, keep_issues_days=30)
+    run(pruning, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
+    assert not (cfg.pages_dir / "ancient.json.gz").exists() and not (cfg.issues_dir / "ancient.epub").exists()

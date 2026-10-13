@@ -119,10 +119,11 @@ class Config:
     public_base_url: str = ""
     max_age_days: int = 3
     token_ttl_days: int = 60
-    # Keep each article's fetched page for this many days, for `forenoon replay`. 0 = keep none.
-    keep_pages_days: int = 90
-    # Keep a copy of each book sent for this many days, in `issues/`. 0 = keep none.
-    keep_issues_days: int = 30
+    # Each article's fetched page and a copy of each book sent are kept for good by default:
+    # they are the only copies of what was read, for re-sending, for `forenoon replay`, and for
+    # learning from later. A number of days prunes older ones; 0 keeps none; -1 keeps all.
+    keep_pages_days: int = -1
+    keep_issues_days: int = -1
     # The most articles one story may bring. The daily cap counts stories, not articles.
     max_story_entries: int = 3
     # "issue": one book a day with a contents page. "articles": one book per article.
