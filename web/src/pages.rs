@@ -485,6 +485,8 @@ struct Card {
     finished: bool,
     stars: Vec<Star>,
     reasons: Vec<ReasonOption>,
+    /// The question the reason buttons answer.
+    question: &'static str,
     /// Whether a "Send to Kindle" button is offered, and what became of the last request.
     sendable: bool,
     sent: Option<String>,
@@ -621,6 +623,7 @@ fn card(row: Delivered) -> Card {
         finished,
         stars: (1..=5).map(|n| Star { n, on: row.rating == Some(n) }).collect(),
         reasons,
+        question: ratings::question(row.rating),
         sendable: false,
         sent: None,
         reported: false,

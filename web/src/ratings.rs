@@ -23,17 +23,22 @@ pub fn fits(reason: &str, rating: Option<i64>) -> bool {
     reasons_for(rating).iter().any(|(key, _)| *key == reason)
 }
 
-/// A one or two word form of a reason, for a button.
+/// What the reason buttons are asked under: they read as answers to it.
+pub fn question(rating: Option<i64>) -> &'static str {
+    if rating.is_some_and(|n| n >= 4) { "What did you like?" } else { "What was wrong?" }
+}
+
+/// A reason as a short answer to `question`, for a button.
 pub fn short(reason: &str) -> &'static str {
     match reason {
-        "topic" => "Not my topic",
-        "thin" => "Thin",
-        "known" => "Knew it",
+        "topic" => "The topic",
+        "thin" => "Too thin",
+        "known" => "Nothing new",
         "long" => "Too long",
-        "wrong" => "Wrong",
-        "more-topic" => "More like this",
-        "more-source" => "More from source",
-        "depth" => "Depth",
+        "wrong" => "Inaccurate",
+        "more-topic" => "The topic",
+        "more-source" => "This source",
+        "depth" => "The depth",
         _ => "",
     }
 }
