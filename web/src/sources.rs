@@ -21,7 +21,7 @@ use crate::{
 const MAX_NAME: usize = 80;
 const MAX_URL: usize = 2000;
 const EXTRACT: [(&str, &str); 3] =
-    [("auto", "Page, else feed"), ("page", "Always the page"), ("feed", "Only the feed")];
+    [("auto", "Best of page and feed"), ("page", "Web page only"), ("feed", "Feed only")];
 
 pub struct Source {
     pub id: i64,
@@ -32,12 +32,16 @@ pub struct Source {
     pub extract: String,
     pub pinned: bool,
     pub enabled: bool,
+    /// "" (never checked), "pending", "ok" or "failed": the pipeline's check of the address.
+    pub check_state: String,
+    pub check_note: String,
 }
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
     sqlx::query_as!(
         Source,
-        r#"SELECT id AS "id!", name, kind, url, recipe, extract, pinned AS "pinned: bool", enabled AS "enabled: bool"
+        r#"SELECT id AS "id!", name, kind, url, recipe, extract, pinned AS "pinned: bool", enabled AS "enabled: bool",
+           check_state, check_note
            FROM sources ORDER BY pinned DESC, name COLLATE NOCASE"#
     )
     .fetch_all(pool)
@@ -132,6 +136,9 @@ struct Row {
     /// How its last run went, in words; `None` before it has been read.
     status: Option<String>,
     failing: bool,
+    /// What the check of its address found; `None` when it was never checked.
+    check: Option<String>,
+    check_failed: bool,
 }
 
 #[derive(Template)]
@@ -143,6 +150,8 @@ struct SourcesPage {
     summary: String,
     error: Option<String>,
     notice: Option<&'static str>,
+    /// An address is still being checked: the page reloads itself until it is done.
+    checking: bool,
 }
 
 fn choices(current: &str) -> Vec<Choice> {
@@ -178,13 +187,21 @@ async fn render(
                 enabled: source.enabled,
                 failing: seen.is_some_and(|entry| entry.failures > 0),
                 status,
+                check: match source.check_state.as_str() {
+                    "pending" => Some("Checking this address; it takes up to a minute.".to_owned()),
+                    "ok" | "failed" => Some(source.check_note),
+                    _ => None,
+                },
+                check_failed: source.check_state == "failed",
                 name: source.name,
             }
         })
         .collect();
     let failing = rows.iter().filter(|row| row.failing && row.enabled).count();
     let summary = format!("{total} source{}, {paused} paused, {failing} failing.", if total == 1 { "" } else { "s" });
-    let page = SourcesPage { name: user.name, csrf: csrf_token(session).await?, rows, summary, error, notice };
+    let checking = rows.iter().any(|row| row.check.as_deref().is_some_and(|note| note.starts_with("Checking")));
+    let page =
+        SourcesPage { name: user.name, csrf: csrf_token(session).await?, rows, summary, error, notice, checking };
     html(status, page)
 }
 
@@ -210,7 +227,7 @@ pub async fn page(
         return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
     }
     let notice = match query.saved.as_deref() {
-        Some("added") => Some("Source added. It is read from the next run."),
+        Some("added") => Some("Source added. Its address is being checked; it is read from the next run."),
         Some("saved") => Some("Saved."),
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
         _ => None,
@@ -255,7 +272,8 @@ pub async fn add(
     };
     let now = now_iso();
     let done = sqlx::query!(
-        "INSERT INTO sources (name, kind, url, recipe, extract, pinned, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+        "INSERT INTO sources (name, kind, url, recipe, extract, pinned, enabled, created_at, check_state)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, 'pending')",
         entry.name,
         entry.kind,
         entry.url,
@@ -289,7 +307,8 @@ pub async fn update(
         Err(response) => return Ok(response),
     };
     let done = sqlx::query!(
-        "UPDATE sources SET name = ?, kind = ?, url = ?, recipe = ?, extract = ?, pinned = ?, enabled = ? WHERE id = ?",
+        "UPDATE sources SET name = ?, kind = ?, url = ?, recipe = ?, extract = ?, pinned = ?, enabled = ?,
+         check_state = 'pending', check_note = '' WHERE id = ?",
         entry.name,
         entry.kind,
         entry.url,

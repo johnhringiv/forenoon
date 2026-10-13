@@ -105,6 +105,26 @@ def _send_queue(cfg: Config) -> int:
         return 0
 
 
+def _check_sources(cfg: Config) -> int:
+    """Check the addresses of sources just added or saved. Run every minute by the scheduler."""
+    from .checks import check_sources
+
+    try:
+        store = Store(cfg.db_path)
+        if not store.pending_source_checks():
+            store.close()
+            return 0
+        fetcher = Fetcher(cfg.user_agent, store)
+        try:
+            return check_sources(cfg, store, fetcher)
+        finally:
+            fetcher.close()
+            store.close()
+    except Exception:
+        log.exception("source checks failed")
+        return 0
+
+
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
     while True:
         cfg = _reload(cfg, args)
@@ -115,6 +135,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
             time.sleep(min(wait, 60))
             if not args.dry_run:
                 _send_queue(cfg)
+                _check_sources(cfg)
         cfg = _reload(cfg, args, alert=True)
         try:
             _run_all(cfg, args)

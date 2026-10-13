@@ -30,6 +30,12 @@ the feeds its own users configure and delivers only to the addresses its admin h
     page; or only the feed, in which case the article page is never fetched.
   - paused: kept, but not read.
 
+  A source's address is checked within a minute of being added or saved: the scheduler
+  reads the feed, or, when a site's own address was given, finds the feed (the page's own
+  feed link, then a few common paths) and stores that address instead. The Sources page shows
+  what it found, and reloads itself while a check is waiting. The web program never fetches
+  an address itself; the pipeline does, with the fetcher that refuses private addresses.
+
   Articles and health records refer to a source by name, so renaming one starts its health
   record afresh.
 
