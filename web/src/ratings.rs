@@ -3,12 +3,13 @@
 use std::fmt;
 
 /// Offered after a rating of 1 to 3.
-pub const LOW_REASONS: [(&str, &str); 5] = [
+pub const LOW_REASONS: [(&str, &str); 6] = [
     ("topic", "Not interested in the topic"),
     ("thin", "Too thin, nothing in it"),
     ("known", "Already knew this"),
     ("broken", "Broken or incomplete"),
     ("long", "Too long"),
+    ("wrong", "Wrong or misleading"),
 ];
 /// Offered after a rating of 4 or 5.
 pub const HIGH_REASONS: [(&str, &str); 3] =
@@ -31,6 +32,7 @@ pub fn short(reason: &str) -> &'static str {
         "known" => "Knew it",
         "broken" => "Broken",
         "long" => "Too long",
+        "wrong" => "Wrong",
         "more-topic" => "More like this",
         "more-source" => "More from source",
         "depth" => "Depth",
