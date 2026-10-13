@@ -630,6 +630,13 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
     assert_eq!(done.location, "/#a-follow");
     assert_eq!(db::get_rating(pool, "john", "follow").await.unwrap().unwrap().rating, Some(4));
     assert!(db::get_rating(pool, "john", "lead").await.unwrap().is_none());
+
+    // With one of its articles rated, the story still shows whole under either filter.
+    for show in ["rated", "unrated"] {
+        let text = browser.get(&site, &format!("/?show={show}")).await.text;
+        assert!(text.contains(r#"id="a-lead""#) && text.contains(r#"id="a-follow""#), "{show}");
+        assert_eq!(text.contains("Something else"), show == "unrated", "{show}");
+    }
 }
 
 #[tokio::test]

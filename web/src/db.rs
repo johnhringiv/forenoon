@@ -315,7 +315,13 @@ pub async fn delivered(
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
            WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3
-           AND (?4 = '' OR (?4 = 'rated') = (r.rating IS NOT NULL))
+           AND (?4 = '' OR EXISTS (
+               -- A story is shown whole when any of its articles matches, never in pieces.
+               SELECT 1 FROM deliveries d2
+               LEFT JOIN ratings r2 ON r2.user_id = d2.user_id AND r2.article_id = d2.article_id
+               WHERE d2.user_id = d.user_id AND d2.delivered_at = d.delivered_at
+               AND (d2.article_id = d.article_id OR (d.story != '' AND d2.story = d.story))
+               AND (?4 = 'rated') = (r2.rating IS NOT NULL)))
            ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title"#,
         user,
         oldest,
