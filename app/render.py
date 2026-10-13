@@ -88,7 +88,33 @@ def book_title(article: Article, day: datetime) -> str:
     return f"FN {day:%Y-%m-%d} · {article.source} · {article.title}"
 
 
+VOID = {"br", "hr", "img"}
+TABLE_PARTS = {"table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption"}
+
+
+def _no_self_closed(body: lxml.html.HtmlElement) -> None:
+    """Leave no empty element that XML would write self-closed, such as <code/> or <td/>.
+
+    That is valid XHTML, but e-readers parse books more like HTML, where `<code/>` opens a
+    code element that never closes. Empty elements are removed; a table's own parts and
+    anything carrying an id stay, written with a closing tag.
+    """
+    changed = True
+    while changed:  # removing an empty element can leave its parent empty
+        changed = False
+        for el in list(body.iterdescendants()):
+            if not isinstance(el.tag, str) or el.tag in VOID or len(el) or el.text:
+                continue
+            if el.tag in TABLE_PARTS or el.get("id"):
+                if el.text is None:
+                    el.text = ""  # serialised as <td></td>
+            elif el.getparent() is not None:
+                el.drop_tree()
+                changed = True
+
+
 def _body_xhtml(body: lxml.html.HtmlElement) -> str:
+    _no_self_closed(body)
     text = etree.tostring(body, method="xml", encoding="unicode", with_tail=False)
     # Marks footnotes for readers that show them as pop-ups. The classes are ours, set by the
     # sanitiser; text from the article is escaped and cannot contain these strings.
