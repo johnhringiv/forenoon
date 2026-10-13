@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT COUNT(*) FROM send_requests WHERE user_id = ? AND article_id = ? AND status = 'queued'",
+  "query": "SELECT COUNT(*) FROM send_requests WHERE user_id = ? AND article_id = ? AND story = ? AND status = 'queued'",
   "describe": {
     "columns": [
       {
@@ -10,11 +10,11 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 3
     },
     "nullable": [
       false
     ]
   },
-  "hash": "bc814e3a3ee996682219a79756bdf8f51ec70ef16459ce88b6bdf5476b885341"
+  "hash": "402a5687f7f894ca9fb96a6810eb0f39d40030e6b9a7b5e63c54ceb9344f73ff"
 }

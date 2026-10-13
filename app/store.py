@@ -267,8 +267,28 @@ class Store:
         ).fetchone():
             return []
         return self.db.execute(
-            "SELECT id, user_id, article_id FROM send_requests WHERE status = 'queued' ORDER BY id"
+            "SELECT id, user_id, article_id, story FROM send_requests WHERE status = 'queued' ORDER BY id"
         ).fetchall()
+
+    def story_of(self, user_id: str, article_id: str) -> list[str]:
+        """The articles delivered to this reader in the same story as this one, lead first.
+
+        Just the article itself when it was delivered on its own, and nothing when it was not
+        delivered to them at all.
+        """
+        row = self.db.execute(
+            "SELECT story, delivered_at FROM deliveries WHERE user_id = ? AND article_id = ?", (user_id, article_id)
+        ).fetchone()
+        if row is None:
+            return []
+        if not row["story"]:
+            return [article_id]
+        rows = self.db.execute(
+            "SELECT article_id FROM deliveries WHERE user_id = ? AND story = ? AND delivered_at = ?"
+            " ORDER BY article_id != story, rowid",
+            (user_id, row["story"], row["delivered_at"]),
+        ).fetchall()
+        return [r["article_id"] for r in rows]
 
     def finish_send(self, request_id: int, status: str, error: str = "") -> None:
         with self.db:

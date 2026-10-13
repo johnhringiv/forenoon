@@ -603,6 +603,10 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
         .await
         .unwrap();
 
+    // The follow-up has a thumbnail of its own.
+    std::fs::create_dir_all(site.folder.path().join("thumbs")).unwrap();
+    std::fs::write(site.folder.path().join("thumbs/follow.jpg"), b"jpeg").unwrap();
+
     let mut browser = Browser::default();
     browser.sign_in(&site, "john").await;
     let text = browser.get(&site, "/").await.text;
@@ -616,9 +620,36 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
             && !lead.contains("An announcement")
     );
     assert!(
-        more.contains("1 more on this story") && more.contains(r#"id="a-follow""#) && more.contains("An announcement")
+        story.contains("One story · 2 articles, delivered together")
+            && more.contains("Also in this story")
+            && more.contains(r#"id="a-follow""#)
+            && more.contains("An announcement")
     );
     assert!(!story.contains("Something else"));
+    assert!(more.contains(r#"<img src="/thumb/follow""#), "a story's other articles keep their picture");
+
+    // The story can be sent as one book: one request, apart from any for a single article.
+    assert!(!text.contains("Send story to Kindle"), "no Kindle address yet");
+    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    let text = browser.get(&site, "/").await.text;
+    assert_eq!(text.matches("Send story to Kindle").count(), 1, "offered on the story, not on a lone article");
+    let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();
+    let whole = [("csrf", csrf.as_str()), ("article", "lead"), ("story", "1"), ("back", "/")];
+    assert_eq!(browser.post(&site, "/send", &whole).await.location, "/#a-lead");
+    browser.post(&site, "/send", &whole).await; // pressed twice: still one request
+    browser.post(&site, "/send", &[("csrf", &csrf), ("article", "lead"), ("back", "/")]).await;
+    let rows: Vec<(String, bool)> =
+        sqlx::query_as("SELECT article_id, story FROM send_requests ORDER BY id").fetch_all(pool).await.unwrap();
+    assert_eq!(rows, [("lead".to_owned(), true), ("lead".to_owned(), false)]);
+    let text = browser.get(&site, "/").await.text;
+    assert!(!text.contains("Send story to Kindle") && text.matches("On its way to your Kindle").count() == 2);
+    sqlx::query("UPDATE send_requests SET status = 'failed', error = 'too large' WHERE story = 1")
+        .execute(pool)
+        .await
+        .unwrap();
+    let text = browser.get(&site, "/").await.text;
+    let head = text.split(r#"<div class="story-head">"#).nth(1).unwrap().split("</div>").next().unwrap();
+    assert!(head.contains("Could not be sent: too large") && head.contains("Send story to Kindle"));
 
     // Each article in the story is still rated on its own.
     let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();
@@ -626,6 +657,13 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
     assert_eq!(done.location, "/#a-follow");
     assert_eq!(db::get_rating(pool, "john", "follow").await.unwrap().unwrap().rating, Some(4));
     assert!(db::get_rating(pool, "john", "lead").await.unwrap().is_none());
+
+    // With one of its articles rated, the story still shows whole under either filter.
+    for show in ["rated", "unrated"] {
+        let text = browser.get(&site, &format!("/?show={show}")).await.text;
+        assert!(text.contains(r#"id="a-lead""#) && text.contains(r#"id="a-follow""#), "{show}");
+        assert_eq!(text.contains("Something else"), show == "unrated", "{show}");
+    }
 }
 
 #[tokio::test]

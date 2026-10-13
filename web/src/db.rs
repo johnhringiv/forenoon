@@ -315,7 +315,13 @@ pub async fn delivered(
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
            WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3
-           AND (?4 = '' OR (?4 = 'rated') = (r.rating IS NOT NULL))
+           AND (?4 = '' OR EXISTS (
+               -- A story is shown whole when any of its articles matches, never in pieces.
+               SELECT 1 FROM deliveries d2
+               LEFT JOIN ratings r2 ON r2.user_id = d2.user_id AND r2.article_id = d2.article_id
+               WHERE d2.user_id = d.user_id AND d2.delivered_at = d.delivered_at
+               AND (d2.article_id = d.article_id OR (d.story != '' AND d2.story = d.story))
+               AND (?4 = 'rated') = (r2.rating IS NOT NULL)))
            ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title"#,
         user,
         oldest,
@@ -340,6 +346,8 @@ pub const SENDS_PER_DAY: i64 = 10;
 
 pub struct SendState {
     pub article_id: String,
+    /// The whole story the article belongs to was asked for, as one book.
+    pub story: bool,
     pub status: String,
     pub error: String,
     pub requested_at: String,
@@ -349,7 +357,8 @@ pub struct SendState {
 pub async fn send_states(pool: &SqlitePool, user: &str) -> Result<Vec<SendState>, sqlx::Error> {
     sqlx::query_as!(
         SendState,
-        "SELECT article_id, status, error, requested_at FROM send_requests WHERE user_id = ? ORDER BY id",
+        r#"SELECT article_id, story AS "story: bool", status, error, requested_at
+           FROM send_requests WHERE user_id = ? ORDER BY id"#,
         user
     )
     .fetch_all(pool)
@@ -364,13 +373,15 @@ pub enum Queued {
     TooMany,
 }
 
-pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str) -> Result<Queued, sqlx::Error> {
+/// `story` asks for every article delivered with this one, as one book; it counts once.
+pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str, story: bool) -> Result<Queued, sqlx::Error> {
     let (now, day_ago) = (now_iso(), iso_in(-24 * 3600));
     let mut tx = pool.begin().await?;
     let waiting = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM send_requests WHERE user_id = ? AND article_id = ? AND status = 'queued'",
+        "SELECT COUNT(*) FROM send_requests WHERE user_id = ? AND article_id = ? AND story = ? AND status = 'queued'",
         user,
-        article
+        article,
+        story
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -384,9 +395,15 @@ pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str) -> Result<
     if recent >= SENDS_PER_DAY {
         return Ok(Queued::TooMany);
     }
-    sqlx::query!("INSERT INTO send_requests (user_id, article_id, requested_at) VALUES (?, ?, ?)", user, article, now)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "INSERT INTO send_requests (user_id, article_id, story, requested_at) VALUES (?, ?, ?, ?)",
+        user,
+        article,
+        story,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Queued::Added)
 }

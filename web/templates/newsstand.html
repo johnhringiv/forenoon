@@ -17,6 +17,12 @@
 <div class="grid">
 {% for story in issue.stories %}
 <article{% if story.cards.len() > 1 %} class="story"{% endif %}>
+{% if story.cards.len() > 1 %}<div class="story-head"><span>{{ story.more }}</span>
+{% if story.sendable || story.sent.is_some() %}<form method="post" action="/send">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ story.cards[0].id }}"><input type="hidden" name="story" value="1"><input type="hidden" name="back" value="{{ back }}">
+{% if let Some(sent) = story.sent %}<span>{{ sent }}</span>{% endif %}
+{% if story.sendable %}<button title="Every article of this story, as one book">Send story to Kindle</button>{% endif %}
+</form>{% endif %}</div>{% endif %}
 {% for card in story.cards %}
 {% if loop.first %}
 <div class="lead" id="a-{{ card.id }}">
@@ -37,10 +43,13 @@
 </div>
 </div>
 {% else %}
-{% if loop.index == 2 %}<div class="more"><p class="more-title">{{ story.more }}</p>{% endif %}
+{% if loop.index == 2 %}<div class="more"><p class="more-title">Also in this story</p>{% endif %}
 <div class="member" id="a-{{ card.id }}">
 <p class="kicker">{{ card.kicker }}</p>
+<div class="member-head">
+{% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}
 <h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4>
+</div>
 <div class="meta">
 {% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
 {% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
