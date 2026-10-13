@@ -791,3 +791,23 @@ def test_an_article_over_the_word_limit_is_held_back(env):
     reasons = [item.reason for source in report.sources for item in source.items]
     held = [reason for reason in reasons if "words is over the limit of 175" in reason]
     assert len(held) == 3  # every full-length article; the teaser fails for its own reason
+
+
+def test_documentation_is_never_followed_as_an_articles_subject():
+    from app.pipeline import _is_documentation
+
+    for url in (
+        "https://nixos.org/manual/nixos/stable/#sec-nixos-tests",
+        "https://docs.python.org/3/library/sqlite3.html",
+        "https://example.com/docs/getting-started",
+        "https://developer.example.com/guides/x",
+        "https://example.com/api/v2/widgets",
+    ):
+        assert _is_documentation(url), url
+    for url in (
+        "https://deno.com/blog/deno-joins-cloudflare",
+        "https://www.nytimes.com/2026/10/11/technology/ai-security.html",
+        "https://buttondown.com/ghuntley/archive/unikernels",
+        "https://manual-coffee.example/posts/grinding",
+    ):
+        assert not _is_documentation(url), url
