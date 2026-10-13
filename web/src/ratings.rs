@@ -23,6 +23,21 @@ pub fn fits(reason: &str, rating: Option<i64>) -> bool {
     reasons_for(rating).iter().any(|(key, _)| *key == reason)
 }
 
+/// A one or two word form of a reason, for a button.
+pub fn short(reason: &str) -> &'static str {
+    match reason {
+        "topic" => "Not my topic",
+        "thin" => "Thin",
+        "known" => "Knew it",
+        "broken" => "Broken",
+        "long" => "Too long",
+        "more-topic" => "More like this",
+        "more-source" => "More from source",
+        "depth" => "Depth",
+        _ => "",
+    }
+}
+
 pub fn label(reason: &str) -> Option<&'static str> {
     LOW_REASONS.iter().chain(&HIGH_REASONS).find(|(key, _)| *key == reason).map(|(_, label)| *label)
 }

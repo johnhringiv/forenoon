@@ -33,8 +33,8 @@
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 {% for star in card.stars %}<button name="rating" value="{{ star.n }}"{% if star.on %} class="on"{% endif %}>{{ star.n }}</button>{% endfor %}
 <button class="gap{% if card.finished %} on{% endif %}" name="finished" value="{% if card.finished %}0{% else %}1{% endif %}">Finished</button>
-{% if !card.reasons.is_empty() %}<select class="gap" name="reason"><option value="">Why? (optional)</option>{% for reason in card.reasons %}<option value="{{ reason.key }}"{% if reason.selected %} selected{% endif %}>{{ reason.label }}</option>{% endfor %}</select><button name="set" value="reason">Save</button>{% endif %}
 {% if !card.unrated %}<button class="gap" name="clear" value="1">Clear</button>{% endif %}
+{% if !card.reasons.is_empty() %}<span class="why-row">Why? {% for reason in card.reasons %}<button name="reason" value="{{ reason.key }}" title="{{ reason.label }}"{% if reason.selected %} class="on"{% endif %}>{{ reason.short }}</button>{% endfor %}</span>{% endif %}
 </form>
 </div>
 </article>

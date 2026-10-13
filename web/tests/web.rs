@@ -314,9 +314,9 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     let done = browser.post(&site, "/rate", &with(&[("rating", "2")])).await;
     assert!(done.status == StatusCode::SEE_OTHER && done.location == "/?show=rated#a-a1", "{}", done.location);
     browser.post(&site, "/rate", &with(&[("finished", "1")])).await;
-    browser.post(&site, "/rate", &with(&[("set", "reason"), ("reason", "thin")])).await;
+    browser.post(&site, "/rate", &with(&[("reason", "thin")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, "thin"));
-    browser.post(&site, "/rate", &with(&[("set", "reason"), ("reason", "more-topic")])).await; // not for a low rating
+    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await; // not for a low rating
     assert_eq!(rating("a1").await.unwrap(), stored(Some(2), true, "thin"));
     let log: Vec<(String, String)> =
         sqlx::query_as("SELECT signal, source FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
@@ -333,7 +333,12 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
             && unrated.contains("Post 2")
             && !unrated.contains("Post 1")
     );
-    assert!(rated.contains("Too thin, nothing in it") && rated.contains(r#"<option value="thin" selected>"#));
+    assert!(
+        rated.contains("Too thin, nothing in it")
+            && rated.contains(
+                r#"<button name="reason" value="thin" title="Too thin, nothing in it" class="on">Thin</button>"#
+            )
+    );
 
     // Re-rating high drops the reason that no longer fits.
     browser.post(&site, "/rate", &with(&[("rating", "5")])).await;
