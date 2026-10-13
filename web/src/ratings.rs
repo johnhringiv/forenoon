@@ -3,11 +3,10 @@
 use std::fmt;
 
 /// Offered after a rating of 1 to 3.
-pub const LOW_REASONS: [(&str, &str); 6] = [
+pub const LOW_REASONS: [(&str, &str); 5] = [
     ("topic", "Not interested in the topic"),
     ("thin", "Too thin, nothing in it"),
     ("known", "Already knew this"),
-    ("broken", "Broken or incomplete"),
     ("long", "Too long"),
     ("wrong", "Wrong or misleading"),
 ];
@@ -20,22 +19,51 @@ pub fn reasons_for(rating: Option<i64>) -> &'static [(&'static str, &'static str
     if rating.is_some_and(|n| n >= 4) { &HIGH_REASONS } else { &LOW_REASONS }
 }
 
+/// The reason keys stored for a rating: what was liked can be several things at once.
+pub fn chosen(reason: &str) -> impl Iterator<Item = &str> {
+    reason.split(',').filter(|key| !key.is_empty())
+}
+
+/// The stored reasons after one more press of `key`, by the same rules as `app/tokens.py`.
+///
+/// Pressing a chosen reason again takes it back. What was liked adds up (the topic and the
+/// depth); what was wrong is one thing, so a new choice replaces the old. Reasons that do not
+/// fit the rating are dropped; an empty `key` only does that.
+pub fn with_reason(reason: &str, key: &str, rating: Option<i64>) -> String {
+    let fitting = reasons_for(rating);
+    let several = rating.is_some_and(|n| n >= 4);
+    let mut now: Vec<&str> = chosen(reason).filter(|k| fits(k, rating)).collect();
+    if now.contains(&key) {
+        now.retain(|k| *k != key);
+    } else if fits(key, rating) {
+        if !several {
+            now.clear();
+        }
+        now.push(key);
+    }
+    fitting.iter().map(|(k, _)| *k).filter(|k| now.contains(k)).collect::<Vec<_>>().join(",")
+}
+
 pub fn fits(reason: &str, rating: Option<i64>) -> bool {
     reasons_for(rating).iter().any(|(key, _)| *key == reason)
 }
 
-/// A one or two word form of a reason, for a button.
+/// What the reason buttons are asked under: they read as answers to it.
+pub fn question(rating: Option<i64>) -> &'static str {
+    if rating.is_some_and(|n| n >= 4) { "What did you like?" } else { "What was wrong?" }
+}
+
+/// A reason as a short answer to `question`, for a button.
 pub fn short(reason: &str) -> &'static str {
     match reason {
-        "topic" => "Not my topic",
-        "thin" => "Thin",
-        "known" => "Knew it",
-        "broken" => "Broken",
+        "topic" => "The topic",
+        "thin" => "Too thin",
+        "known" => "Nothing new",
         "long" => "Too long",
-        "wrong" => "Wrong",
-        "more-topic" => "More like this",
-        "more-source" => "More from source",
-        "depth" => "Depth",
+        "wrong" => "Inaccurate",
+        "more-topic" => "The topic",
+        "more-source" => "This source",
+        "depth" => "The depth",
         _ => "",
     }
 }

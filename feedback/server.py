@@ -18,7 +18,7 @@ from starlette.responses import HTMLResponse, PlainTextResponse
 from starlette.routing import Route
 
 from app.store import Store
-from app.tokens import RATINGS, REASONS, TokenError, make_token, reasons_for, verify_token
+from app.tokens import PROBLEM, RATINGS, TokenError, make_token, reason_labels, reasons_for, verify_token
 
 RATE_LIMIT = 30  # requests
 RATE_WINDOW = 60.0  # seconds, per client address
@@ -74,14 +74,13 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
             detail = "This link has expired." if str(exc) == "expired" else ""
             return _page("Link not valid.", detail, 400)
         now = store.record_feedback(claim.user_id, claim.article_id, claim.signal, "kindle-footer")
+        article = store.get_article(claim.article_id)
+        if claim.signal == PROBLEM:
+            return _page("Reported. Thank you.", article.title if article else "")
         rated = f"Rated {now.rating} of 5" if now.rating else "Not rated"
         message = f"{rated}, {'finished' if now.finished else 'not finished'}."
-        if now.reason in REASONS:
-            message += f" {REASONS[now.reason]}."
-        if claim.signal == "why-broken":
-            # A delivery problem, not a verdict on the article: it also goes to the extraction log.
-            store.record_review(claim.article_id, "bad", "reader: broken or incomplete", "reader")
-        article = store.get_article(claim.article_id)
+        for label in reason_labels(now.reason):
+            message += f" {label}."
         # One more tap says why. Always offered, never required: the rating already counts.
         why = ""
         if now.rating:
@@ -92,7 +91,8 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
                 )
                 for key, label in reasons_for(now.rating).items()
             )
-            why = f'<div class="why"><p>Why? (optional)</p><p class="why">{options}</p></div>'
+            several = " Tap all that apply." if now.rating >= 4 else ""
+            why = f'<div class="why"><p>Why? (optional){several}</p><p class="why">{options}</p></div>'
         # Same user, article and expiry as the link that was tapped: a mis-tap is fixed here
         # without going back to the book.
         rows = ""
@@ -105,6 +105,9 @@ def create_app(db_path: Path | str, secret: bytes, trust_proxy: bool = True) -> 
                 for n in RATINGS
             )
             rows += f'<p>{label}</p><p class="rate">{links}</p>'
+        # A delivery fault is reported to whoever runs the install; it is not part of the rating.
+        report = make_token(secret, claim.user_id, claim.article_id, PROBLEM, claim.expires)
+        rows += f'<p class="small"><a href="/f/{report}">This article came out broken or incomplete</a></p>'
         extra = f'{why}<div class="change"><p>Change it:</p>{rows}</div>'
         return _page(message, article.title if article else "", extra=extra)
 

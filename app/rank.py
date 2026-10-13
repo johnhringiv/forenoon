@@ -20,7 +20,7 @@ from .config import Llm, User
 from .llm import Backend, LlmError
 from .sources import Item
 from .store import Store
-from .tokens import REASONS
+from .tokens import reason_labels
 
 log = logging.getLogger("forenoon")
 
@@ -42,8 +42,7 @@ how much this reader will want to read it today, and give a reason of at most 15
 Each rating comes with the article's length, whether it was finished, why it was picked, and
 sometimes the reader's own reason. Work out what the rating is about before learning from it:
 a short post rated low may be a verdict on thin posts, not on its source or topic. When
-"reader_said" is present, trust it. "Broken or incomplete" is about the delivery and says
-nothing about the topic or the source. "Too thin" and "Too long" are about the form, not the
+"reader_said" is present, trust it. "Too thin" and "Too long" are about the form, not the
 subject. "Wrong or misleading" means that article's claims did not hold up: the topic is still
 of interest, but be warier of unverified alarms, rumours and single-source claims like it.
 
@@ -125,8 +124,8 @@ def reader_profile(user: User, store: Store) -> str:
         }
         # What turns a number into a lesson: the reader's own reason when they gave one, and
         # why the article was put in front of them in the first place.
-        if row["reason"] in REASONS:
-            entry["reader_said"] = REASONS[row["reason"]]
+        if said := reason_labels(row["reason"]):
+            entry["reader_said"] = "; ".join(said)
         if row["picked_because"]:
             entry["picked_because"] = row["picked_because"]
         rated.append(entry)
