@@ -880,3 +880,100 @@ def test_delivered_articles_get_a_thumbnail_for_the_web_pages(env):
     inline = "data:image/png;base64," + __import__("base64").b64encode(_png((640, 480))).decode()
     assert thumbs.save(cfg.thumbs_dir, "inline", ("https://blog.example/missing.png", inline), fetcher)
     assert (cfg.thumbs_dir / "inline.jpg").exists() and not list(cfg.thumbs_dir.glob("*.part"))
+
+
+def test_a_sites_address_is_turned_into_its_feed(tmp_path):
+    from app.checks import check_sources, find_feed
+    from app.fetch import FetchError
+
+    feed = _rss(_entry(1, "Tue, 10 Mar 2026 08:00:00 GMT", BODY), _entry(2, "Mon, 09 Mar 2026 08:00:00 GMT", BODY))
+    pages = {
+        "https://named.example/": b'<html><head><link rel="alternate" type="application/rss+xml" href="/posts.xml"></head></html>',
+        "https://named.example/posts.xml": feed,
+        "https://quiet.example/": b"<html><body>No feed link here.</body></html>",
+        "https://quiet.example/rss.xml": feed,
+        "https://none.example/": b"<html><body>Nothing.</body></html>",
+        "https://direct.example/feed": feed,
+    }
+    asked = []
+
+    def site(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        body = pages.get(str(request.url))
+        return httpx.Response(200, content=body) if body else httpx.Response(404)
+
+    store = Store(tmp_path / "forenoon.sqlite3")
+    fetcher = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(site))
+    assert find_feed("https://direct.example/feed", fetcher)[0] == "https://direct.example/feed"
+    assert find_feed("https://named.example/", fetcher)[0] == "https://named.example/posts.xml"  # the page names it
+    assert find_feed("https://quiet.example/", fetcher)[0] == "https://quiet.example/rss.xml"  # a common path
+    with pytest.raises(FetchError, match="no feed found"):
+        find_feed("https://none.example/", fetcher)
+    assert len([url for url in asked if "none.example" in url]) <= 10  # a bounded number of tries
+    with pytest.raises(FetchError, match="HTTP 404"):
+        find_feed("https://gone.example/feed", fetcher)
+
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    add = "INSERT INTO sources (name, kind, url, recipe, created_at, check_state) VALUES (?, ?, ?, ?, 'x', ?)"
+    store.db.execute(add, ("Quiet", "rss", "https://quiet.example/", "", "pending"))
+    store.db.execute(add, ("None", "rss", "https://none.example/", "", "pending"))
+    store.db.execute(add, ("Paper", "recipe", "", "paper", "pending"))
+    store.db.execute(add, ("Settled", "rss", "https://direct.example/feed", "", "ok"))
+    store.db.commit()
+    cfg = Config(data_dir=tmp_path)
+    assert check_sources(cfg, store, fetcher) == 3 and store.pending_source_checks() == []
+    rows = {r["name"]: r for r in store.db.execute("SELECT name, url, check_state, check_note FROM sources")}
+    assert rows["Quiet"]["url"] == "https://quiet.example/rss.xml" and rows["Quiet"]["check_state"] == "ok"
+    assert (
+        rows["Quiet"]["check_note"] == "Feed found at https://quiet.example/rss.xml: 2 articles, newest 10 March 2026."
+    )
+    assert rows["None"]["check_state"] == "failed" and "no feed found" in rows["None"]["check_note"]
+    assert rows["None"]["url"] == "https://none.example/"  # left as typed
+    assert rows["Paper"]["check_state"] == "failed" and "recipes.conf" in rows["Paper"]["check_note"]
+    assert [s.name for s in store.sources()] == ["None", "Paper", "Quiet", "Settled"]
+
+
+def test_discovery_looks_back_as_far_as_the_age_limit_and_takes_new_stories_first():
+    from datetime import timedelta
+
+    from app.discover import read_listing
+
+    asked = []
+
+    def listing(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"hits": [{"title": "T", "url": "https://x.example/a", "objectID": "1"}]})
+
+    fetcher = Fetcher("test", None, min_host_interval=0, transport=httpx.MockTransport(listing))
+    read_listing("hackernews", fetcher, NOW - timedelta(days=3))
+    more = next(url for url in asked if "created_at_i" in url)
+    since = int(re.search(r"created_at_i%3E(\d+)", more).group(1))
+    # Three days, not one: a story that gets its votes a day late is still inside the window.
+    assert 0 <= (NOW - timedelta(days=3)).timestamp() - since < 3600
+    assert "hitsPerPage=1000" in more and "attributesToRetrieve=" in more
+
+
+def test_a_post_dated_before_it_appeared_is_not_lost(env):
+    """A feed we already follow lists, for the first time, a post dated five days ago."""
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(cfg, sources=(Source("Blog", "https://blog.example/feed"),))
+    user = dataclasses.replace(cfg.users[0], daily_cap=5)
+    first = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    assert len(first.delivered) == 2  # posts 1 and 2; post 3 is from February: too old, and now known
+
+    late = _entry(7, "Thu, 05 Mar 2026 08:00:00 GMT", BODY)
+    ancient = _entry(8, "Thu, 01 Jan 2026 08:00:00 GMT", BODY)
+    ROUTES["https://late.example/feed"] = _rss(late, ancient, _entry(3, "Sun, 01 Feb 2026 08:00:00 GMT", BODY))
+    try:
+        again = dataclasses.replace(cfg, sources=(Source("Blog", "https://late.example/feed"),))
+        second = run(again, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+        titles = [store.get_article(i).title for i in second.delivered]
+        assert titles == ["Post 7"]  # new to us and recent enough; 8 is months old, 3 was seen before
+
+        # A source added just now gets the plain cutoff: no back catalogue.
+        fresh = dataclasses.replace(cfg, sources=(Source("Brand new", "https://late.example/feed"),))
+        other = Store(cfg.data_dir / "other.sqlite3")
+        assert run(fresh, other, fetcher, user, now=NOW, sender=lambda m, s: None).delivered == []
+    finally:
+        del ROUTES["https://late.example/feed"]

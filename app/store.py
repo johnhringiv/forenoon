@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Source, User
-from .tokens import REASON_SIGNALS, meaning, reasons_for
+from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -121,7 +121,7 @@ class ArticleRow:
 class Rating:
     rating: int | None  # 1-5, None when only "finished" was recorded
     finished: bool
-    reason: str = ""  # a key of tokens.REASONS, when the reader said why
+    reason: str = ""  # keys of tokens.REASONS, comma-separated, when the reader said why
 
 
 class Store:
@@ -201,6 +201,22 @@ class Store:
             for row in rows
         )
 
+    def pending_source_checks(self) -> list[sqlite3.Row]:
+        """Sources added or saved on the web pages whose address has not been checked yet."""
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
+            return []
+        return self.db.execute(
+            "SELECT id, name, kind, url, recipe FROM sources WHERE check_state = 'pending' ORDER BY id"
+        ).fetchall()
+
+    def finish_source_check(self, source_id: int, state: str, note: str, url: str | None = None) -> None:
+        """Record a check's outcome; `url` replaces the address when the feed was found elsewhere."""
+        with self.db:
+            self.db.execute(
+                "UPDATE sources SET check_state = ?, check_note = ?, url = COALESCE(?, url) WHERE id = ?",
+                (state, note, url, source_id),
+            )
+
     # send requests (queued by the web app's "Send to Kindle" button)
 
     def send_requests(self) -> list[sqlite3.Row]:
@@ -229,6 +245,10 @@ class Store:
                 " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
                 (id, url, source, title, author, published, now_iso()),
             )
+
+    def has_articles_from(self, source: str) -> bool:
+        """Whether this source has been read before."""
+        return self.db.execute("SELECT 1 FROM articles WHERE source = ? LIMIT 1", (source,)).fetchone() is not None
 
     def set_extraction(self, id: str, status: str, reason: str, word_count: int) -> None:
         with self.db:
@@ -297,12 +317,22 @@ class Store:
 
     def record_feedback(
         self, user_id: str, article_id: str, signal: str, source: str, when: str | None = None
-    ) -> Rating:
+    ) -> Rating | None:
         """Log the tap and apply it: the latest tap decides the stored rating and finished flag.
 
         A reason tap sets only the reason. A rating tap drops a stored reason that no longer
-        fits it (a "too thin" on an article now rated 5).
+        fits it (a "too thin" on an article now rated 5). A problem report is logged, and noted
+        in the extraction log for whoever runs the install; it leaves the rating as it was.
         """
+        if signal == PROBLEM:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (user_id, article_id, signal, source, when or now_iso()),
+                )
+            self.record_review(article_id, "bad", "reader: broken or incomplete", "reader")
+            return self.get_rating(user_id, article_id)
         rating, finished = meaning(signal)
         reason = signal.removeprefix("why-") if signal in REASON_SIGNALS else None
         when = when or now_iso()
@@ -319,14 +349,13 @@ class Store:
                 " finished = COALESCE(?, finished), updated_at = excluded.updated_at",
                 (user_id, article_id, rating, finished, when, finished),
             )
-            if reason is not None:
-                self.db.execute(
-                    "UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", (reason, user_id, article_id)
-                )
             now = self.get_rating(user_id, article_id)
-            if now.reason and now.reason not in reasons_for(now.rating):
+            # A reason tap adds, replaces or takes back; any tap drops reasons that no longer
+            # fit the rating. An empty key leaves the choice alone and only drops the unfit.
+            kept = with_reason(with_reason(now.reason, "", now.rating), reason or "", now.rating)
+            if kept != now.reason:
                 self.db.execute(
-                    "UPDATE ratings SET reason = '' WHERE user_id = ? AND article_id = ?", (user_id, article_id)
+                    "UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", (kept, user_id, article_id)
                 )
         return self.get_rating(user_id, article_id)
 

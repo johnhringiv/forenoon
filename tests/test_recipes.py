@@ -175,3 +175,25 @@ def test_recipe_link_markers_are_dropped():
     assert without_tracking(marked) == "https://www.ft.com/content/7dc561ba"
     assert without_tracking("https://example.com/?p=12&utm_source=x#top") == "https://example.com/?p=12#top"
     assert article_id(marked) == article_id("https://ft.com/content/7dc561ba")
+
+
+def test_an_earlier_issue_is_read_when_its_run_was_missed(tmp_path):
+    from app.recipes import read_recipe
+
+    source = Source("Paper", type="recipe", recipe="paper", extract="feed")
+    folder = tmp_path / "paper"
+    _issue(folder / "2026-03-10.epub")
+    yesterday = folder / "2026-03-09.epub"
+    with zipfile.ZipFile(yesterday, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("feed_0/article_0/index.html", _page("Missed", "https://paper.example/missed"))
+    stamp = (NOW - timedelta(days=1)).timestamp()
+    os.utime(yesterday, (stamp, stamp))
+    stale = folder / "2026-03-01.epub"
+    stale.write_bytes(yesterday.read_bytes().replace(b"Missed", b"Stale ").replace(b"/missed", b"/staler"))
+    os.utime(stale, ((NOW - timedelta(days=9)).timestamp(),) * 2)
+
+    titles = lambda known: [i.title for i in read_recipe(source, tmp_path, 3, NOW, known=known)]
+    assert titles(lambda item_id: False) == ["Second", "Tenth", "Other section", "Missed"]  # not the stale one
+    assert titles(lambda item_id: True) == ["Second", "Tenth", "Other section"]  # yesterday's was read then
+    assert [i.title for i in read_recipe(source, tmp_path, 3, NOW)] == ["Second", "Tenth", "Other section"]

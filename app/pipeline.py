@@ -48,8 +48,9 @@ POINTER_MAX_WORDS = 150
 MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links matter
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
-# Never followed as an article's subject: project and package pages, and reference works.
 THUMB_TRIES = 4
+LATE_MAX_AGE = timedelta(days=30)
+# Never followed as an article's subject: project and package pages, and reference works.
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
 # Documentation is never what an article is about, whatever a model says: the address gives it away.
 DOCS_HOST_LABELS = {"docs", "doc", "manual", "man", "developer", "developers", "api", "wiki"}
@@ -285,9 +286,12 @@ def _item_report(item: Item, result: Extracted, dropped: int) -> ItemReport:
     )  # fmt: skip
 
 
-def _read_source(cfg: Config, source: Source, fetcher: Fetcher, conditional: bool, now: datetime) -> list[Item]:
+def _read_source(
+    cfg: Config, source: Source, fetcher: Fetcher, conditional: bool, now: datetime, store: Store | None = None
+) -> list[Item]:
     if source.type == "recipe":
-        return read_recipe(source, cfg.recipes_dir, cfg.max_age_days, now)
+        known = (lambda item_id: store.get_article(item_id) is not None) if store else None
+        return read_recipe(source, cfg.recipes_dir, cfg.max_age_days, now, known=known)
     return read_feed(source, fetcher, conditional=conditional)
 
 
@@ -350,7 +354,7 @@ def _discover(
         src = reports[source.name] = SourceReport(source.name)
         report.sources.append(src)
         try:
-            items = read_listing(key, fetcher, cutoff + timedelta(days=cfg.max_age_days))
+            items = read_listing(key, fetcher, cutoff)
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: listing failed: %s", source.name, exc)
@@ -359,7 +363,9 @@ def _discover(
             continue
         if not dry_run:
             store.track_source(source.name)
-        fresh = []
+        # Stories never seen before go first, so those still waiting from earlier days (the
+        # listing reaches back as far as the age limit) cannot crowd them out of the cap.
+        fresh: dict[bool, list[Item]] = {False: [], True: []}
         for item in items:
             if item.id in seen or (item.published and item.published < cutoff):
                 continue
@@ -367,8 +373,8 @@ def _discover(
             row = store.get_article(item.id)
             if (row and row.status == "failed") or store.is_delivered(user.id, item.id):
                 continue
-            fresh.append(item)
-        found += fresh[: cfg.discovery.per_site]
+            fresh[row is not None].append(item)
+        found += (fresh[False] + fresh[True])[: cfg.discovery.per_site]
     return found
 
 
@@ -421,7 +427,7 @@ def run(
         by_source[source.name] = source
         report.sources.append(src)
         try:
-            items = _read_source(cfg, source, fetcher, not dry_run, now)
+            items = _read_source(cfg, source, fetcher, not dry_run, now, store)
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: feed failed: %s", source.name, exc)
@@ -432,13 +438,20 @@ def run(
             store.track_source(source.name)
         src.not_modified = not items
         eligible = []
+        established = store.has_articles_from(source.name)
         for item in _newest_first(items):
             seen.add(item.id)
+            known = store.get_article(item.id) is not None
             published = item.published.isoformat() if item.published else None
             store.upsert_article(item.id, item.url, source.name, item.title, item.author, published)
             row = store.get_article(item.id)
             if item.published and item.published < cutoff:
-                continue
+                # Old by its own date. It is still new to us when a feed we already follow lists
+                # it for the first time: posts are often dated before they appear. A feed just
+                # added keeps the plain cutoff, or its whole back catalogue would arrive.
+                appeared_late = established and not known and item.published >= now - LATE_MAX_AGE
+                if not appeared_late:
+                    continue
             if row.status == "failed" or store.is_delivered(user.id, item.id):
                 continue
             eligible.append(item)
