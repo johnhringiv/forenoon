@@ -28,6 +28,9 @@ pre { font-family: monospace; font-size: 0.75em; line-height: 1.25; white-space:
 code, kbd, samp { font-family: monospace; font-size: 0.9em; }
 pre code { font-size: 1em; }
 blockquote { margin: 1em 0 1em 1em; padding-left: 0.6em; border-left: 2px solid #000; }
+a.noteref { font-size: 0.75em; vertical-align: super; line-height: 0; text-decoration: none; }
+aside.footnote { font-size: 0.9em; margin: 0.6em 0; }
+aside.footnote p { margin: 0.3em 0; }
 img { max-width: 100%; height: auto; }
 figure { margin: 1em 0; text-align: center; }
 figcaption { font-size: 0.85em; font-style: italic; }
@@ -86,7 +89,11 @@ def book_title(article: Article, day: datetime) -> str:
 
 
 def _body_xhtml(body: lxml.html.HtmlElement) -> str:
-    return etree.tostring(body, method="xml", encoding="unicode", with_tail=False)
+    text = etree.tostring(body, method="xml", encoding="unicode", with_tail=False)
+    # Marks footnotes for readers that show them as pop-ups. The classes are ours, set by the
+    # sanitiser; text from the article is escaped and cannot contain these strings.
+    text = text.replace('<a href="#fn-', '<a epub:type="noteref" href="#fn-')
+    return text.replace("<aside id=", '<aside epub:type="footnote" id=')
 
 
 def _footer(feedback_links: dict[str, str], style: str) -> str:
@@ -121,7 +128,7 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
         why += f'<p class="meta">{escape(article.story)}</p>\n'
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang={quoteattr(article.language)}>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang={quoteattr(article.language)}>
 <head><meta charset="utf-8"/><title>{escape(article.title)}</title>
 <link rel="stylesheet" type="text/css" href="style.css"/></head>
 <body>
@@ -282,7 +289,7 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
     summary = _issue_summary(entries)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en">
 <head><meta charset="utf-8"/><title>{escape(title)}</title>
 <link rel="stylesheet" type="text/css" href="style.css"/></head>
 <body>
