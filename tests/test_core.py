@@ -283,3 +283,29 @@ def test_web_app_offers_the_same_reasons():
     for key, label in REASONS.items():
         assert f'("{key}", "{label}")' in rust, f"web/src/ratings.rs is missing the reason {key!r}"
     assert rust.count('", "') >= len(REASONS)
+
+
+def test_a_book_has_no_self_closed_empty_elements():
+    """Valid XHTML, but e-readers read `<code/>` as a code element that never closes."""
+    import re
+    from datetime import UTC, datetime
+
+    import lxml.html
+
+    from app.render import Article, render_epub
+
+    body = lxml.html.fragment_fromstring(
+        '<div><p>Text <code></code><a href="https://e.example/x"></a><sup></sup> more.</p>'
+        "<h2></h2><div><p><small></small></p></div><p>Kept<br>line</p><hr>"
+        '<table><tr><td></td><td>a</td></tr></table><div id="fn-1"></div>'
+        '<img src="data:image/png;base64,AAAA" alt=""></div>'
+    )
+    article = Article(id="x", url="https://e.example/a", title="T", source="S", body=body)
+    book = zipfile.ZipFile(io.BytesIO(render_epub(article, datetime(2026, 10, 12, tzinfo=UTC))))
+    chapter = next(book.read(n).decode() for n in book.namelist() if n.endswith(".xhtml") and "nav" not in n)
+    closed = set(re.findall(r"<([a-z0-9]+)(?:\s[^<>]*)?/>", chapter))
+    assert closed <= {"br", "hr", "img", "meta", "link"}, closed
+    assert "<td></td>" in chapter and '<div id="fn-1"></div>' in chapter  # kept, with a closing tag
+    assert "<code" not in chapter and "<sup" not in chapter and "<h2" not in chapter and "e.example/x" not in chapter
+    assert "Text  more." in chapter or "Text more." in chapter
+    etree.fromstring(chapter.encode())
