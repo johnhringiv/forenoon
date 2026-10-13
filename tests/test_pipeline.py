@@ -779,3 +779,15 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
     assert post2["reason"] == "after reading"
     assert sorted(r["verdict"] for r in store.review_rows())[:1] == ["bad"]
     assert ("read", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+
+
+def test_an_article_over_the_word_limit_is_held_back(env):
+    cfg, store, fetcher = env
+    words = len(BODY.split())
+    cfg = dataclasses.replace(cfg, max_article_words=words // 2)
+    sent = []
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
+    assert not sent and not report.delivered
+    reasons = [item.reason for source in report.sources for item in source.items]
+    held = [reason for reason in reasons if "words is over the limit of 175" in reason]
+    assert len(held) == 3  # every full-length article; the teaser fails for its own reason

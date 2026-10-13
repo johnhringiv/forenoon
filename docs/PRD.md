@@ -252,7 +252,9 @@ source; "broken" says nothing about topic or source).
 ## 7e. Stories
 
 The daily cap counts stories, not articles. A story is one article, or up to
-`max_story_entries` (3) articles on one subject delivered together. The number of articles in
+`max_story_entries` (3) articles on one subject delivered together. An article over
+`max_article_words` (15,000) is never delivered, whether picked or reached through a link: it
+is a manual or a book, and a chapter that size has crashed an older Kindle. The number of articles in
 a day's book is therefore a target, not a limit.
 
 - **Articles about another page.** After the day's stories are chosen, one model call

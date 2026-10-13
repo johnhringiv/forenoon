@@ -548,6 +548,10 @@ def run(
             # What the model read is what would be sent: not worth a slot today.
             entry.reason = "; ".join(filter(None, [entry.reason, "held back: the model judged it not the article"]))
             return None
+        if cfg.max_article_words and result.word_count > cfg.max_article_words:
+            limit = f"held back: {result.word_count} words is over the limit of {cfg.max_article_words}"
+            entry.reason = "; ".join(filter(None, [entry.reason, limit]))
+            return None
         if article is None:
             if result.status == "error":
                 leftover.add(item.source.name)
