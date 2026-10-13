@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .config import User
+from .config import Source, User
 from .tokens import REASON_SIGNALS, meaning, reasons_for
 
 SCHEMA = """
@@ -177,6 +177,26 @@ class Store:
                 kindle_addresses=tuple(line.strip() for line in row["kindle_addresses"].splitlines() if line.strip()),
                 daily_cap=row["daily_stories"],
                 interests=row["interests"],
+            )
+            for row in rows
+        )
+
+    def sources(self) -> tuple[Source, ...]:
+        """The sources to read, as set on the web app's sources page; paused ones are left out."""
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
+            return ()
+        rows = self.db.execute(
+            "SELECT name, kind, url, recipe, extract, pinned FROM sources WHERE enabled = 1"
+            " ORDER BY pinned DESC, name COLLATE NOCASE"
+        ).fetchall()
+        return tuple(
+            Source(
+                name=row["name"],
+                url=row["url"],
+                type=row["kind"],
+                recipe=row["recipe"],
+                extract=row["extract"],
+                pinned=bool(row["pinned"]),
             )
             for row in rows
         )

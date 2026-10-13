@@ -11,7 +11,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app.config import Config, ConfigError, Smtp, Source, User, load_sources
+from app.config import Config, Smtp, Source, User
 from app.fetch import Fetcher, FetchError
 from app.pipeline import run
 from app.recipes import newest_issue, read_issue
@@ -117,24 +117,6 @@ def test_recipe_source_is_delivered_without_fetching_any_page(tmp_path, monkeypa
     assert len(images) == 2 and "OEBPS/cover.jpg" in images  # the issue's own image, re-encoded, and the cover
     again = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
     assert not again.delivered  # the same issue read twice delivers nothing twice
-
-
-def test_sources_file_accepts_recipes_and_rejects_bad_ones(tmp_path):
-    path = tmp_path / "sources.yaml"
-    path.write_text(
-        "sources:\n  - {name: FT, type: recipe, recipe: ft}\n  - {name: B, url: 'https://b.example/feed'}\n"
-    )
-    ft, blog = load_sources(path)
-    assert (ft.type, ft.recipe, ft.extract) == ("recipe", "ft", "feed") and blog.extract == "auto"
-    for bad in (
-        "{name: X, type: recipe, recipe: ../etc}",
-        "{name: X, type: recipe}",
-        "{name: X}",
-        "{name: X, type: imap}",
-    ):
-        path.write_text(f"sources:\n  - {bad}\n")
-        with pytest.raises(ConfigError):
-            load_sources(path)
 
 
 def _runner():

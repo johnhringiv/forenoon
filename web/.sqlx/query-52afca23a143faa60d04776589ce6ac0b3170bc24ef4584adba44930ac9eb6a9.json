@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT source AS \"source!\", failures, last_error, updated_at FROM source_health",
+  "describe": {
+    "columns": [
+      {
+        "name": "source!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "failures",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "last_error",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "52afca23a143faa60d04776589ce6ac0b3170bc24ef4584adba44930ac9eb6a9"
+}

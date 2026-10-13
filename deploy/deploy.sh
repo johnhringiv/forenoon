@@ -28,7 +28,7 @@
 # password; the mail password is the only secret it is given.
 #
 # The env file is .env.example filled in. FORENOON_HOST_DATA is the data folder; if
-# config.yaml / sources.yaml (and optionally forenoon.sqlite3) sit next
+# config.yaml (and optionally forenoon.sqlite3) sits next
 # to this script and the data folder does not have them yet, they are copied
 # in. Existing files are never overwritten.
 #
@@ -195,7 +195,7 @@ if [ ! -d "$DATA_DIR" ]; then
     mkdir -p "$DATA_DIR"
     chown 1000:1000 "$DATA_DIR"
 fi
-for f in config.yaml sources.yaml forenoon.sqlite3; do
+for f in config.yaml forenoon.sqlite3; do
     if [ -f "$DIR/$f" ] && [ ! -e "$DATA_DIR/$f" ]; then
         cp "$DIR/$f" "$DATA_DIR/$f"
         chown 1000:1000 "$DATA_DIR/$f"

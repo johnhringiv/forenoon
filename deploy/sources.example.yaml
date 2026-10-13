@@ -1,4 +1,5 @@
-# Feed URLs verified 2026-10-10. tier: clean | email | discovery (only clean is used in Phase 0).
+# A list of feeds to pick from, verified 2026-10-10. It is not read by the app: add the ones
+# you want on the web pages' Sources page.
 # extract: auto (default) picks the fuller of page and feed; page / feed force one.
 sources:
   - {name: Embrace The Red, url: "https://embracethered.com/blog/index.xml"}

@@ -612,3 +612,111 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
     assert_eq!(db::get_rating(pool, "john", "follow").await.unwrap().unwrap().rating, Some(4));
     assert!(db::get_rating(pool, "john", "lead").await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn sources_are_managed_by_admins_only() {
+    let site = site(true).await;
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    let page = admin.get(&site, "/sources").await;
+    assert!(page.status == StatusCode::OK && page.text.contains("No sources yet"));
+    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/sources">Sources</a>"#));
+    let csrf = page.csrf();
+
+    // A reader cannot see or change them, even with a valid token of their own.
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    assert!(!mary.get(&site, "/").await.text.contains("/sources"));
+    assert_eq!(mary.get(&site, "/sources").await.status, StatusCode::FORBIDDEN);
+    let token = mary.get(&site, "/account").await.csrf();
+    let form = [("csrf", token.as_str()), ("name", "Evil"), ("address", "https://evil.example/feed")];
+    assert_eq!(mary.post(&site, "/sources", &form).await.status, StatusCode::FORBIDDEN);
+
+    let add = |name: &'static str, address: &'static str, extra: &[(&'static str, &'static str)]| {
+        [
+            &[("csrf", csrf.clone()), ("name", name.to_owned()), ("address", address.to_owned())][..],
+            &extra.iter().map(|(key, value)| (*key, (*value).to_owned())).collect::<Vec<_>>()[..],
+        ]
+        .concat()
+    };
+    for (form, message) in [
+        (add("", "https://blog.example/feed", &[]), "A source needs a name"),
+        (add("Blog", "javascript:alert(1)", &[]), "A feed needs an http(s) address."),
+        (add("Paper", "../etc", &[("kind", "recipe")]), "A recipe is named by its folder"),
+    ] {
+        let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        let reply = admin.post(&site, "/sources", &form).await;
+        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
+    }
+    for form in [
+        add("Blog <b>", "https://blog.example/feed", &[("extract", "page"), ("pinned", "1")]),
+        add("Paper", "ft", &[("kind", "recipe"), ("extract", "page")]),
+    ] {
+        let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        assert_eq!(admin.post(&site, "/sources", &form).await.location, "/sources?saved=added");
+    }
+    let again = add("Paper", "https://other.example/feed", &[]);
+    let again: Vec<(&str, &str)> = again.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    assert!(admin.post(&site, "/sources", &again).await.text.contains("already a source named Paper"));
+    assert_eq!(
+        admin
+            .post(&site, "/sources", &[("csrf", "wrong"), ("name", "X"), ("address", "https://x.example/f")])
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+
+    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    let rows: Vec<_> = stored
+        .iter()
+        .map(|s| {
+            (
+                s.name.as_str(),
+                s.kind.as_str(),
+                s.url.as_str(),
+                s.recipe.as_str(),
+                s.extract.as_str(),
+                s.pinned,
+                s.enabled,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Blog <b>", "rss", "https://blog.example/feed", "", "page", true, true), // pinned first
+            ("Paper", "recipe", "", "ft", "feed", false, true),                       // a recipe is never re-fetched
+        ]
+    );
+
+    // The pipeline's record of each source's last runs is shown beside it.
+    sqlx::query("INSERT INTO source_health (source, failures, last_error, updated_at) VALUES ('Paper', 2, 'no issue in recipes/ft', '2026-10-12T10:00:00+00:00')")
+        .execute(&site.pool).await.unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(
+        text.contains("2 sources, 0 paused, 1 failing.")
+            && text.contains("Failed 2 runs in a row: no issue in recipes/ft")
+    );
+    assert!(text.contains("Blog &#60;b&#62;") && !text.contains("Blog <b>"));
+
+    // Pause one, rename it, then remove the other.
+    let (blog, paper) = (stored[0].id, stored[1].id);
+    let edit =
+        [("csrf", csrf.as_str()), ("name", "The Blog"), ("address", "https://blog.example/atom"), ("extract", "auto")];
+    assert_eq!(admin.post(&site, &format!("/sources/{blog}"), &edit).await.location, "/sources?saved=saved");
+    assert_eq!(
+        admin.post(&site, &format!("/sources/{paper}/delete"), &[("csrf", &csrf)]).await.location,
+        "/sources?saved=removed"
+    );
+    assert_eq!(
+        mary.post(&site, &format!("/sources/{blog}/delete"), &[("csrf", &token)]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].enabled),
+        ("The Blog", "https://blog.example/atom", false, false)
+    );
+    assert!(admin.get(&site, "/sources").await.text.contains("1 source, 1 paused, 0 failing."));
+}

@@ -81,13 +81,13 @@ impl IntoResponse for AppError {
     }
 }
 
-type Page = Result<Response, AppError>;
+pub(crate) type Page = Result<Response, AppError>;
 
-fn html(status: StatusCode, page: impl Template) -> Page {
+pub(crate) fn html(status: StatusCode, page: impl Template) -> Page {
     Ok((status, Html(page.render()?)).into_response())
 }
 
-fn refused(status: StatusCode, message: &'static str) -> Page {
+pub(crate) fn refused(status: StatusCode, message: &'static str) -> Page {
     Ok((status, message).into_response())
 }
 
@@ -137,7 +137,7 @@ fn random_token() -> Result<String, AppError> {
 }
 
 /// The token every form on this session's pages must send back.
-async fn csrf_token(session: &Session) -> Result<String, AppError> {
+pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
     if let Some(token) = session.get::<String>(CSRF_KEY).await? {
         return Ok(token);
     }
@@ -148,12 +148,12 @@ async fn csrf_token(session: &Session) -> Result<String, AppError> {
 
 /// Only our own pages may ask for a change: a form on another site has neither the token
 /// nor our origin.
-async fn allowed(headers: &HeaderMap, session: &Session, sent: &str) -> Result<bool, AppError> {
+pub(crate) async fn allowed(headers: &HeaderMap, session: &Session, sent: &str) -> Result<bool, AppError> {
     let token = csrf_token(session).await?;
     Ok(same_origin(headers) && bool::from(token.as_bytes().ct_eq(sent.as_bytes())))
 }
 
-const NOT_FROM_HERE: &str = "This page is out of date. Go back, reload it and try again.";
+pub(crate) const NOT_FROM_HERE: &str = "This page is out of date. Go back, reload it and try again.";
 
 /// The client's address, for limiting sign-in attempts.
 pub struct Client(String);
@@ -169,7 +169,7 @@ impl<S: Sync> FromRequestParts<S> for Client {
 
 /// The signed-in reader. The routes using this sit behind `require_login`, so a request
 /// without one is a bug rather than an anonymous visitor.
-fn reader(auth: &AuthSession) -> Result<User, AppError> {
+pub(crate) fn reader(auth: &AuthSession) -> Result<User, AppError> {
     auth.user.clone().ok_or_else(|| AppError("no signed-in user on a protected page".to_owned()))
 }
 
@@ -508,6 +508,8 @@ struct Story {
 #[template(path = "newsstand.html")]
 struct NewsstandPage {
     name: String,
+    /// Whether to show the links only an admin can use.
+    admin: bool,
     csrf: String,
     /// The address still to be confirmed, for the banner.
     unconfirmed: Option<String>,
@@ -522,7 +524,7 @@ struct NewsstandPage {
 }
 
 /// The URL when it is plain http(s) with a host and nothing a browser might read differently.
-fn web_url(url: &str) -> Option<String> {
+pub(crate) fn web_url(url: &str) -> Option<String> {
     let url = url.trim();
     let lower = url.to_ascii_lowercase();
     let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"))?;
@@ -652,6 +654,7 @@ pub async fn newsstand(
         SHOW.iter().map(|(key, label)| Filter { href: page_url(key, None), label, current: *key == show }).collect();
     let mut page = NewsstandPage {
         name: user.name.clone(),
+        admin: user.is_admin(),
         csrf: csrf_token(&session).await?,
         unconfirmed: user.unconfirmed_email().map(str::to_owned),
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),

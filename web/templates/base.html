@@ -74,6 +74,19 @@ textarea { font:inherit; color:var(--ink); background:var(--card); border:1px so
   resize:vertical }
 form.sheet button { align-self:flex-start; padding:.4rem 1rem }
 form.sheet h2 { margin:0 }
+form.source { margin:1rem 0; padding:.8rem 1rem; background:var(--card); border:1px solid var(--line); border-radius:6px }
+form.source.paused { opacity:.6 }
+form.source.add { margin-top:1.4rem }
+form.source h2 { margin:0 0 .6rem }
+form.source .fields { display:flex; flex-wrap:wrap; gap:.6rem 1rem; align-items:flex-end }
+form.source label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; color:var(--soft) }
+form.source label.wide { flex:1 1 22rem }
+form.source label.tick { flex-direction:row; align-items:center; gap:.35rem; padding-bottom:.4rem; color:var(--ink) }
+form.source input:not([type=checkbox]), form.source select { padding:.35rem .5rem; font-size:.9rem }
+form.source label.wide input { width:100% }
+form.source button { padding:.35rem .9rem }
+form.source .hint { margin-top:.5rem }
+.failing { color:#b3261e }
 .error { color:#b3261e; margin:1rem 0 0 }
 .notice { color:var(--accent); margin:1rem 0 0 }
 .hint { font-size:.8rem; color:var(--soft); margin:0 }

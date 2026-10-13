@@ -5,7 +5,7 @@
 <div class="bar">
 {% for filter in filters %}{% if filter.current %}<b>{{ filter.label }}</b>{% else %}<a href="{{ filter.href }}">{{ filter.label }}</a>{% endif %}
 {% endfor %}
-<div class="who">{{ name }} <a href="/account">Account</a>
+<div class="who">{{ name }} {% if admin %}<a href="/sources">Sources</a> {% endif %}<a href="/account">Account</a>
 <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div>
 </div>
 {% endblock %}
