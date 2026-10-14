@@ -89,8 +89,7 @@ CREATE TABLE IF NOT EXISTS source_health (
     source TEXT PRIMARY KEY,
     failures INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL,
-    last_ok TEXT
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS http_cache (
     url TEXT PRIMARY KEY,
@@ -117,6 +116,10 @@ CREATE TABLE IF NOT EXISTS assessments (
 """
 
 
+def _utc(when: datetime) -> str:
+    return when.astimezone(UTC).isoformat(timespec="seconds")
+
+
 def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -134,6 +137,7 @@ class ArticleRow:
     word_count: int
     image_url: str = ""
     description: str = ""
+    first_seen: str = ""
 
 
 @dataclass(frozen=True)
@@ -167,9 +171,6 @@ class Store:
         if "link_only" not in delivered:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN link_only INTEGER NOT NULL DEFAULT 0")
-        if "last_ok" not in {row["name"] for row in self.db.execute("PRAGMA table_info(source_health)")}:
-            with self.db:
-                self.db.execute("ALTER TABLE source_health ADD COLUMN last_ok TEXT")
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -403,28 +404,39 @@ class Store:
     # articles
 
     def upsert_article(
-        self, id: str, url: str, source: str, title: str, author: str, published: str | None, description: str = ""
+        self,
+        id: str,
+        url: str,
+        source: str,
+        title: str,
+        author: str,
+        published: str | None,
+        description: str = "",
+        seen: datetime | None = None,
     ) -> None:
-        """Recorded once, when first seen. `description` is the feed's summary, until a page gives one."""
+        """Recorded once, when first `seen` (default now). `description` is the feed's summary,
+        until a page gives one."""
+        stamp = seen.astimezone(UTC).isoformat(timespec="seconds") if seen else now_iso()
         with self.db:
             self.db.execute(
                 "INSERT INTO articles (id, url, source, title, author, published, first_seen, description)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-                (id, url, source, title, author, published, now_iso(), description),
+                (id, url, source, title, author, published, stamp, description),
             )
 
-    def unoffered(self, user_id: str, source: str, since: str) -> list[ArticleRow]:
-        """A source's articles from the window that this reader has not had and the model has
-        never weighed for them, newest first: what a missed run, or a feed that has since moved
-        on, would otherwise lose."""
+    def unoffered(self, user_id: str, source: str, since: datetime, dated_after: datetime) -> list[ArticleRow]:
+        """A source's articles first seen since `since` (and not dated before `dated_after`) that
+        this reader has not had and the model has never weighed for them, newest first: what a
+        missed run, or a feed that has since moved on, would otherwise lose."""
         rows = self.db.execute(
-            "SELECT id, url, source, title, author, published, status, reason, word_count, image_url, description"
-            " FROM articles a WHERE source = ?1 AND status != 'failed' AND COALESCE(published, first_seen) >= ?3"
+            "SELECT id, url, source, title, author, published, status, reason, word_count, image_url, description,"
+            " first_seen FROM articles a WHERE source = ?1 AND status != 'failed' AND first_seen >= ?3"
+            " AND (published IS NULL OR published >= ?4)"
             " AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = ?2 AND d.article_id = a.id)"
             " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?2 AND r.article_id = a.id)"
             " AND NOT EXISTS (SELECT 1 FROM assessments s WHERE s.user_id = ?2 AND s.article_id = a.id)"
-            " ORDER BY COALESCE(published, first_seen) DESC",
-            (source, user_id, since),
+            " ORDER BY first_seen DESC, COALESCE(published, '') DESC",
+            (source, user_id, _utc(since), _utc(dated_after)),
         ).fetchall()
         return [ArticleRow(**dict(row)) for row in rows]
 
@@ -457,7 +469,7 @@ class Store:
     def get_article(self, id: str) -> ArticleRow | None:
         row = self.db.execute(
             "SELECT id, url, source, title, author, published, status, reason, word_count,"
-            " image_url, description FROM articles WHERE id = ?",
+            " image_url, description, first_seen FROM articles WHERE id = ?",
             (id,),
         ).fetchone()
         return ArticleRow(**dict(row)) if row else None
@@ -558,7 +570,7 @@ class Store:
         each run tries their pages again."""
         rows = self.db.execute(
             "SELECT a.id, a.url, a.source, a.title, a.author, a.published, a.status, a.reason, a.word_count,"
-            " a.image_url, a.description FROM deliveries d JOIN articles a ON a.id = d.article_id"
+            " a.image_url, a.description, a.first_seen FROM deliveries d JOIN articles a ON a.id = d.article_id"
             " WHERE d.user_id = ?1 AND d.link_only = 1 AND d.delivered_at >= ?2"
             " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = a.id)"
             " ORDER BY d.delivered_at, d.rowid",
@@ -738,22 +750,15 @@ class Store:
 
     # source health
 
-    def last_read(self, source: str) -> datetime | None:
-        """When the source was last read without an error."""
-        row = self.db.execute("SELECT last_ok FROM source_health WHERE source = ?", (source,)).fetchone()
-        return datetime.fromisoformat(row["last_ok"]) if row and row["last_ok"] else None
-
-    def track_source(self, source: str, error: str = "", when: datetime | None = None) -> int:
+    def track_source(self, source: str, error: str = "") -> int:
         """Record one run's outcome for a source. Returns its consecutive failures (0 = fine)."""
-        stamp = when.astimezone(UTC).isoformat(timespec="seconds") if when else now_iso()
         with self.db:
             self.db.execute(
-                "INSERT INTO source_health (source, failures, last_error, updated_at, last_ok) VALUES (?, ?, ?, ?, ?)"
+                "INSERT INTO source_health (source, failures, last_error, updated_at) VALUES (?, ?, ?, ?)"
                 " ON CONFLICT(source) DO UPDATE SET"
                 " failures = CASE WHEN excluded.failures = 0 THEN 0 ELSE failures + 1 END,"
-                " last_error = excluded.last_error, updated_at = excluded.updated_at,"
-                " last_ok = COALESCE(excluded.last_ok, last_ok)",
-                (source, 1 if error else 0, error, stamp, None if error else stamp),
+                " last_error = excluded.last_error, updated_at = excluded.updated_at",
+                (source, 1 if error else 0, error, now_iso()),
             )
         row = self.db.execute("SELECT failures FROM source_health WHERE source = ?", (source,)).fetchone()
         return row["failures"]

@@ -73,8 +73,7 @@ CREATE TABLE IF NOT EXISTS source_health (
     source TEXT PRIMARY KEY,
     failures INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL,
-    last_ok TEXT
+    updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS http_cache (
     url TEXT PRIMARY KEY,

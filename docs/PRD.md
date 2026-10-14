@@ -102,18 +102,20 @@ be read it keeps the previous settings and logs the error. For each user:
    an unchanged feed is skipped. A response that is not a feed, or any status other than 200
    or 304, counts as a failed source for this run. A feed entry that links to a site's front
    page rather than an article is ignored.
-2. **Select candidates.** Items older than `max_age_days` (default 3) are ignored, as are
-   items already delivered to this user and items whose extraction previously failed. One
-   exception keeps late arrivals: an item a feed lists for the first time counts as new even
-   when its own date is older (up to 30 days), provided the feed was already being followed.
-   Every window that finds candidates reaches back the same `max_age_days`, so nothing falls
-   between two daily runs and a missed run loses nothing younger than that. A feed's
-   candidates are what it lists now plus what earlier runs read from it within the window
-   and the model never weighed for this user, so an article is not lost because the feed
-   moved on or the run that would have weighed it did not happen; one the model weighed and
-   passed over comes back only while the feed still lists it. At most 5 items per source are
-   considered per run, times the days since the source was last read (up to
-   `max_age_days`), so a missed run widens the next one's share.
+2. **Select candidates.** An item is a candidate for `max_age_days` (default 3) from when
+   it was first seen here, not from the date its feed gives: posts are often dated before
+   they appear, and some carry no date. Items already delivered to this user, and items
+   whose extraction previously failed, are not candidates; nor is an item dated more than 30
+   days ago (an old post a feed has brought back). A feed's first read has nothing to count
+   from, so there its own dates decide and only its newest 20 are taken; the rest of its back
+   catalogue is recorded as seen before the feed was followed and never becomes a candidate.
+   A feed's candidates are what it lists now plus what earlier runs read from it within the
+   window and the model never weighed for this user, so an article is not lost because the
+   feed moved on or the run that would have weighed it did not happen; one the model weighed
+   and passed over comes back only while the feed still lists it. There is no limit per
+   source: the model weighs at most `llm.max_candidates`, taken round-robin across sources,
+   and without the model the daily cap is the limit. Every window that finds candidates
+   reaches back the same `max_age_days`, so nothing falls between two daily runs.
 3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
    (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
    sources with the newest item of each source first.
@@ -357,7 +359,7 @@ source).
   articles, in the issue's order: navigation is removed, the original URL is taken from the
   issue (minus tracking parameters, including the marker Calibre's FT recipe adds), and images
   are taken from the issue itself. Every article in the issue becomes a
-  candidate (the 5 newest when the source is pinned).
+  candidate.
 - Recipe articles are extracted from the issue only; their pages are never fetched. From
   there they are treated like feed articles: sanitised, ranked, capped, rated and
   deduplicated by URL against every other source.

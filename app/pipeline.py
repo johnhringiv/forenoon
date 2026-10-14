@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
@@ -42,7 +41,7 @@ from .urls import article_id, without_tracking
 
 log = logging.getLogger("forenoon")
 
-MAX_ITEMS_PER_SOURCE = 5  # a day's share; more after missed runs
+FIRST_READ_ITEMS = 20  # of a feed just added: the newest, not its whole back catalogue
 MAX_SUMMARY_CHARS = 1000  # of a feed entry's summary, kept for ranking it on a later run
 # A feed post this short that is about a page it links to is a pointer: that page is
 # delivered in its place. A longer one that responds to a page is delivered along with it.
@@ -51,7 +50,7 @@ MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links ma
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 THUMB_TRIES = 4
-LATE_MAX_AGE = timedelta(days=30)
+OLDEST_NEW = timedelta(days=30)  # an article dated earlier than this is never a candidate
 SIGN_IN_WARNING = timedelta(days=14)  # the alert says a session's sign-in is ending this soon
 # Never followed as an article's subject: project and package pages, and reference works.
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
@@ -464,32 +463,30 @@ def run(
             if not dry_run:
                 src.consecutive_failures = store.track_source(source.name, src.feed_error)
             continue
-        # A run or two missed (the host was down) widens the source's share, so what it
-        # published meanwhile is weighed too, up to the age limit.
-        last = store.last_read(source.name)
-        missed = math.ceil((now - last).total_seconds() / 86400) if last else 1
-        share = MAX_ITEMS_PER_SOURCE * min(max(missed, 1), cfg.max_age_days)
         if not dry_run:
-            store.track_source(source.name, when=now)
+            store.track_source(source.name)
         src.not_modified = not items
         eligible = []
-        established = store.has_articles_from(source.name)
-        for item in _newest_first(items):
+        # An article's age is counted from when it was first seen here, not from the date its
+        # feed gives: posts are often dated before they appear, and some have no date. A feed's
+        # first read has nothing to count from, so there its own dates decide and only the
+        # newest few are taken; the rest of its back catalogue is recorded as seen before the
+        # feed was followed, so it never becomes a candidate.
+        first_read = not store.has_articles_from(source.name) and source.type == "rss"
+        for n, item in enumerate(_newest_first(items)):
             seen.add(item.id)
-            known = store.get_article(item.id) is not None
             published = item.published.isoformat() if item.published else None
+            current = not first_read or (n < FIRST_READ_ITEMS and (item.published is None or item.published >= cutoff))
             store.upsert_article(
-                item.id, item.url, source.name, item.title, item.author, published, abstract(item)[:MAX_SUMMARY_CHARS]
-            )
+                item.id, item.url, source.name, item.title, item.author, published,
+                abstract(item)[:MAX_SUMMARY_CHARS], seen=now if current else cutoff - timedelta(seconds=1),
+            )  # fmt: skip
             store.add_route(item.id, "recipe" if source.type == "recipe" else "feed", source.name)
             row = store.get_article(item.id)
-            if item.published and item.published < cutoff:
-                # Old by its own date. It is still new to us when a feed we already follow lists
-                # it for the first time: posts are often dated before they appear. A feed just
-                # added keeps the plain cutoff, or its whole back catalogue would arrive.
-                appeared_late = established and not known and item.published >= now - LATE_MAX_AGE
-                if not appeared_late:
-                    continue
+            if datetime.fromisoformat(row.first_seen) < cutoff:
+                continue
+            if item.published and item.published < now - OLDEST_NEW:
+                continue  # an old post the feed has brought back, not news
             if row.status == "failed" or store.has_had(user.id, item.id):
                 continue
             eligible.append(item)
@@ -497,15 +494,14 @@ def run(
             # Read on an earlier run but never weighed: the feed has moved on since, or the
             # run that would have weighed them did not happen. A recipe's issue has them all;
             # a feed read for its own text cannot give it again once it has moved on.
-            for row in store.unoffered(user.id, source.name, cutoff.astimezone(UTC).isoformat(timespec="seconds")):
+            for row in store.unoffered(user.id, source.name, cutoff, now - OLDEST_NEW):
                 if row.id not in seen:
                     seen.add(row.id)
                     eligible.append(_stored_item(row, source))
             eligible = _newest_first(eligible)
-        # Undated feeds would otherwise flood the first run. A recipe's issue is a whole
-        # publication, so all of it is considered unless it is pinned (pinned items skip ranking).
-        whole = source.type == "recipe" and not source.pinned
-        pools[source.pinned].append(eligible if whole else eligible[:share])
+        # No share per source: the model weighs all of it (up to llm.max_candidates, taken
+        # round-robin across sources); without the model the day's cap is the limit.
+        pools[source.pinned].append(eligible)
 
     def record_found(item: Item) -> None:
         # Feed items are recorded when their feed is read; a find once it has been weighed.

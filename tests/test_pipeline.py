@@ -1313,15 +1313,16 @@ def test_a_link_only_source_is_never_fetched_and_its_picks_are_links(env):
     assert not later.retried and not sent
 
 
-def test_a_missed_run_weighs_what_the_feed_published_meanwhile(env, monkeypatch):
+def test_an_articles_age_counts_from_when_it_was_first_seen(env, monkeypatch):
     cfg, store, fetcher = env
     cfg = _llm_cfg(cfg, explore_slots=0, read_candidates=0, group_stories=False, follow_links=False)
     cfg = dataclasses.replace(cfg, sources=(Source("Blog", "https://blog.example/feed"),))
     user = cfg.users[0]
 
-    def feed(numbers, day):
-        entries = [_entry(n, (day + timedelta(minutes=n)).strftime("%a, %d %b %Y %H:%M:%S GMT"), BODY) for n in numbers]
-        monkeypatch.setitem(ROUTES, "https://blog.example/feed", _rss(*entries))
+    def feed(*entries):
+        stamp = lambda when: when.strftime("%a, %d %b %Y %H:%M:%S GMT") if when else ""  # noqa: E731
+        items = [_entry(n, stamp(when), BODY) for n, when in entries]
+        monkeypatch.setitem(ROUTES, "https://blog.example/feed", _rss(*items).replace(b"<pubDate></pubDate>", b""))
 
     weighed = []
 
@@ -1329,16 +1330,35 @@ def test_a_missed_run_weighs_what_the_feed_published_meanwhile(env, monkeypatch)
         weighed.append({store.get_article(i).title for i in ids})
         return [{"id": i, "score": 5, "reason": "r"} for i in ids]
 
-    first = NOW - timedelta(days=2)
-    feed(range(1, 9), first.replace(hour=6))
-    run(cfg, store, fetcher, user, now=first, sender=lambda m, s: None, backend=FakeBackend(scores))
-    assert weighed[-1] == {f"Post {n}" for n in range(4, 9)}  # the day's share: the newest five
+    def day(when, reader=user):
+        run(cfg, store, fetcher, reader, now=when, sender=lambda m, s: None, backend=FakeBackend(scores))
+        return weighed.pop() if weighed else set()
 
-    # The next run is two days later, and the feed has moved on: the three never weighed are
-    # still candidates, and the share is two days' worth. What was weighed is not weighed again.
-    feed(range(11, 19), NOW.replace(hour=6))
-    run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend(scores))
-    assert weighed[-1] == {f"Post {n}" for n in range(11, 19)} | {"Post 3", "Post 2"}
+    # First read: the feed's own dates decide, and only its newest 20. The rest of its back
+    # catalogue (old posts, and posts beyond the 20) never becomes a candidate.
+    start = NOW - timedelta(days=6)
+    back = [(n, start - timedelta(hours=n)) for n in range(1, 26)] + [(30, start - timedelta(days=10))]
+    feed(*back)
+    assert day(start) == {f"Post {n}" for n in range(1, 21)}
+
+    # Established: a post dated ten days ago but listed for the first time is new to us, as is
+    # one with no date; one dated two months ago is an old post brought back. The day's cap
+    # was already used, so nothing was weighed.
+    later = start + timedelta(days=1)
+    feed(*back, (40, later - timedelta(days=10)), (41, None), (42, later - timedelta(days=60)), (43, later))
+    assert day(later, dataclasses.replace(user, daily_cap=0)) == set()
+
+    # Two days on the feed has moved on: what was never weighed is still a candidate, counted
+    # from when it was first seen, and every one of them, with no share per feed.
+    feed((50, later + timedelta(days=2)))
+    assert day(later + timedelta(days=2)) == {"Post 40", "Post 41", "Post 43", "Post 50"}
+
+    # After the age limit, counted from first sight, an article not delivered is gone even
+    # when it was never weighed.
+    store.db.execute("DELETE FROM assessments")
+    feed((60, later + timedelta(days=4)))
+    offered = day(later + timedelta(days=4))
+    assert "Post 60" in offered and not offered & {"Post 40", "Post 41", "Post 43"}
 
 
 def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
