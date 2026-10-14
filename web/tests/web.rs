@@ -829,6 +829,19 @@ async fn a_feeds_subscriber_session_is_kept_apart_and_never_shown() {
     .unwrap();
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains("Last page with it failed 2026-10-13 06:01: HTTP 403") && text.contains("<details open>"));
+    // A page fetched, and the day the site says its sign-in ends.
+    std::fs::write(
+        site.folder.path().join("recipes/status.json"),
+        format!(
+            r#"{{"feed-{}": {{"at": "2026-10-14T06:01:00-04:00", "ok": true, "note": "fetched", "expires": "2027-10-14"}}}}"#,
+            feed.id
+        ),
+    )
+    .unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(
+        text.contains("Last page fetched with it: 2026-10-14 06:01. The site&#39;s sign-in lasts until 2027-10-14.")
+    );
 
     // Not for a reader; not for a recipe or a built-in source; and it goes when removed.
     let mut mary = Browser::default();

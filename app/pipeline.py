@@ -52,6 +52,7 @@ MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 THUMB_TRIES = 4
 LATE_MAX_AGE = timedelta(days=30)
+SIGN_IN_WARNING = timedelta(days=14)  # the alert says a session's sign-in is ending this soon
 # Never followed as an article's subject: project and package pages, and reference works.
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
 # Documentation is never what an article is about, whatever a model says: the address gives it away.
@@ -111,6 +112,7 @@ class RunReport:
     sign_in_needed: dict[str, str] = field(default_factory=dict)  # source name -> why
     link_only: list[str] = field(default_factory=list)  # picked, but only the link could be had
     retried: list[str] = field(default_factory=list)  # earlier link-only picks delivered now
+    sign_in_ends: dict[str, str] = field(default_factory=dict)  # source name -> day, when soon
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -510,6 +512,11 @@ def run(
         published = item.published.isoformat() if item.published else None
         store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
         store.add_route(item.id, "found", item.source.name)
+
+    for source in by_source.values():
+        ends = sessions.sign_in_ends(cfg.recipes_dir, source.session) if source.session else None
+        if ends is not None and ends - now.date() <= SIGN_IN_WARNING:
+            report.sign_in_ends[source.name] = ends.isoformat()
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     # What the reader added by hand for their next issue leads it, ahead of pinned sources.

@@ -131,6 +131,9 @@ struct Run {
     running: bool,
     #[serde(default)]
     note: String,
+    /// For a session: the day the site's sign-in ends, when the site has said.
+    #[serde(default)]
+    expires: String,
 }
 
 #[derive(Deserialize)]
@@ -418,7 +421,12 @@ async fn render(
                     .get(&format!("feed-{}", source.id))
                     .filter(|_| !source.session_domain.is_empty())
                     .map(|run| match run.ok {
-                        true => format!("Last page fetched with it: {}.", when(&run.at)),
+                        true if run.expires.is_empty() => format!("Last page fetched with it: {}.", when(&run.at)),
+                        true => format!(
+                            "Last page fetched with it: {}. The site's sign-in lasts until {}.",
+                            when(&run.at),
+                            run.expires.get(..10).unwrap_or(&run.expires)
+                        ),
                         false => format!("Last page with it failed {}: {}", when(&run.at), run.note),
                     }),
                 session_failed: !source.session_domain.is_empty()

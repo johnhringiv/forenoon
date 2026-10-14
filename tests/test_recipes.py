@@ -298,6 +298,26 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
     (browser / "feed-70-0000.json").write_text("{}")
     second = runner._state_file("feed-7", {"cookie": "a=2"}, browser)
     assert second != first and not first.exists() and (browser / "feed-70-0000.json").exists()
+    # When the sign-in ends: the expiry the site set on the cookie it keeps the sign-in in.
+    session = {"cookie": "a=2", "domain": "nytimes.com"}
+    assert runner.sign_in_ends("feed-7", session, browser) == ""
+    year = datetime(2027, 10, 14, 12).timestamp()
+    cookies = [
+        {"name": "NYT-S", "domain": ".nytimes.com", "httpOnly": True, "expires": year},
+        {"name": "purr-cache", "domain": ".nytimes.com", "httpOnly": True, "expires": year + 86400 * 31},
+        {"name": "NYT-S", "domain": ".tracker.example", "httpOnly": True, "expires": year + 86400 * 900},
+    ]
+    runner._state_file("feed-7", session, browser).write_text(json.dumps({"cookies": cookies}))
+    assert runner.sign_in_ends("feed-7", session, browser) == "2027-10-14"
+    # A pasted cookie has no expiry until the site sends it again; a site not listed has none.
+    cookies[0]["expires"] = -1
+    runner._state_file("feed-7", session, browser).write_text(json.dumps({"cookies": cookies}))
+    assert runner.sign_in_ends("feed-7", session, browser) == ""
+    other = {"cookie": "a=2", "domain": "paper.example"}
+    runner._state_file("feed-7", other, browser).write_text(
+        json.dumps({"cookies": [{**cookies[1], "domain": ".paper.example"}]})
+    )
+    assert runner.sign_in_ends("feed-7", other, browser) == ""
 
     # The queue: each request is answered with the page or with why not.
     seen = []

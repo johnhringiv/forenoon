@@ -1339,3 +1339,24 @@ def test_a_missed_run_weighs_what_the_feed_published_meanwhile(env, monkeypatch)
     feed(range(11, 19), NOW.replace(hour=6))
     run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend(scores))
     assert weighed[-1] == {f"Post {n}" for n in range(11, 19)} | {"Post 3", "Post 2"}
+
+
+def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
+    import json
+
+    from app import pipeline
+    from app.alerts import problems
+    from app.config import Alerts
+
+    cfg, store, fetcher = env
+    blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
+    paper = Source("Paper", "https://pinned.example/feed", session="feed-2", session_domain="pinned.example")
+    cfg = dataclasses.replace(cfg, sources=(blog, paper), alerts=Alerts(to="me@example.com", source_failures=0))
+    page = f"<html><body><article>{BODY}</article></body></html>"
+    monkeypatch.setattr(pipeline.sessions, "fetch", lambda d, s, url: page)
+    cfg.recipes_dir.mkdir(parents=True, exist_ok=True)
+    status = {"feed-1": {"ok": True, "expires": "2026-03-20"}, "feed-2": {"ok": True, "expires": "2027-03-10"}}
+    (cfg.recipes_dir / "status.json").write_text(json.dumps(status))
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
+    assert report.sign_in_ends == {"Blog": "2026-03-20"}
+    assert "'Blog': the site's sign-in ends on 2026-03-20." in " ".join(problems(report, cfg))

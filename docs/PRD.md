@@ -43,7 +43,9 @@ what its own users configure and delivers only to the addresses its admin has se
   and:
   - pinned: its articles are taken before all other sources.
   - where the text comes from: the page, falling back to the feed (default); always the
-    page; or only the feed, in which case the article page is never fetched.
+    page; only the feed, in which case the article page is never fetched; or nowhere
+    (link-only), in which case its pages are never fetched and what the ranking picks from it
+    is shown on the newsstand as a link, not sent.
   - paused: kept, but not read.
 
   A source's address is checked within a minute of being added or saved: the scheduler
@@ -69,9 +71,11 @@ what its own users configure and delivers only to the addresses its admin has se
   screen (Xvfb), since some sites admit only a browser, and what it keeps of the session is
   in its own volume. Nothing answers a CAPTCHA: a site that asks for one, shows its paywall
   (the cookie has expired) or keeps the browser out is reported on the feed's row. When a
-  session needs a fresh cookie, its
-  articles are held back (not sent as the feed's summary) and the run's alert email names
-  the feed. Pages the source links to on other sites are fetched as usual, without the
+  session needs a fresh cookie, its picks are shown as links (step 4 of section 3), not sent as the
+  feed's summary, and the run's alert email names the feed. Once a page has been fetched with
+  it, the feed's row shows the day the site says its sign-in ends (for the sites whose
+  sign-in cookie is known: the FT and the NYT), and the alert email says so from 14 days
+  before. Pages the source links to on other sites are fetched as usual, without the
   session.
 
 - **Settings** for the whole install (delivery time, the format, ranking and its model,
@@ -103,14 +107,27 @@ be read it keeps the previous settings and logs the error. For each user:
    exception keeps late arrivals: an item a feed lists for the first time counts as new even
    when its own date is older (up to 30 days), provided the feed was already being followed.
    Every window that finds candidates reaches back the same `max_age_days`, so nothing falls
-   between two daily runs and a missed run loses nothing younger than that. At most
-   5 items per source are considered per run.
+   between two daily runs and a missed run loses nothing younger than that. A feed's
+   candidates are what it lists now plus what earlier runs read from it within the window
+   and the model never weighed for this user, so an article is not lost because the feed
+   moved on or the run that would have weighed it did not happen; one the model weighed and
+   passed over comes back only while the feed still lists it. At most 5 items per source are
+   considered per run, times the days since the source was last read (up to
+   `max_age_days`), so a missed run widens the next one's share.
 3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
    (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
    sources with the newest item of each source first.
 4. **Cap.** Candidates are processed in that order until the user's daily cap is reached. The
    cap counts stories delivered during the local calendar day (section 7e), so a second run on
    the same day only sends what is left of the cap. Most stories are a single article.
+   **Link-only picks.** A candidate whose page cannot be had (a lapsed subscriber session, a
+   site that turns the fetch away, a link-only feed) is not sent and does not take a place:
+   the next candidate does. It is recorded as a link-only pick, at most as many a day as the
+   cap, and shown on the newsstand as a grayed card with the feed's title and summary and a
+   link to the site; it can be rated but not sent by hand. Every run tries its page again
+   while it is younger than `max_age_days` and unrated (except for a link-only feed's); once
+   it is had, it is sent with that run's issue after the day's own stories, without taking
+   one of their places, and its card moves to that issue.
 5. **Extract, render, deliver** (sections 4 to 6).
 6. **Report.** A Markdown and JSON report is written to `reports/` in the data folder.
 
