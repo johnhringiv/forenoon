@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT via FROM article_routes WHERE via != '' ORDER BY via COLLATE NOCASE",
+  "describe": {
+    "columns": [
+      {
+        "name": "via",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "31cce698818f7f5eed8877e788fb9b03b56c2597ae4a19357e16fbbc7bda7d81"
+}

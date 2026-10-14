@@ -1,5 +1,6 @@
 //! Forenoon's web pages: sign in, then a newsstand of what was delivered and how it was rated.
 
+pub mod archive;
 pub mod auth;
 pub mod db;
 pub mod limit;
@@ -69,6 +70,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     };
     Ok(Router::new()
         .route("/", get(pages::newsstand))
+        .route("/archive", get(archive::page))
         .route("/rate", post(pages::rate))
         .route("/thumb/{id}", get(pages::thumb))
         .route("/send", post(pages::send))

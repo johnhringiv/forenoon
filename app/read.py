@@ -22,6 +22,7 @@ from .store import Store
 log = logging.getLogger("forenoon")
 
 COMPLETE = ("ok", "suspect", "bad")
+LASTING = ("days", "months", "years")
 MAX_PROBLEM_CHARS = 160
 BATCH_ARTICLES = 10
 BATCH_TOKENS = 30_000
@@ -51,6 +52,10 @@ return:
   clearly not the article: a paywall or login notice, a bot wall, an error page, only a
   teaser. Never report a truncated article as cut off: judge only what you were shown.
 - problem: at most 20 words, or an empty string for "ok".
+- lasting: how long it stays worth reading. "days" for news and anything tied to this week's
+  events (an election result, a release announcement, a market report); "months" for
+  analysis of a current situation that will date; "years" for work that will read as well
+  much later: an essay, an explanation, a history, original research.
 - links: the numbers of the article's links that are its subject: the page it quotes,
   announces, summarises or responds to, such that the reader would want that original as
   well. Prefer the single primary source. Usually this is an empty list: links given as
@@ -79,9 +84,10 @@ SCHEMA = {
                     "reason": {"type": "string"},
                     "complete": {"type": "string", "enum": list(COMPLETE)},
                     "problem": {"type": "string"},
+                    "lasting": {"type": "string", "enum": list(LASTING)},
                     "links": {"type": "array", "items": {"type": "integer"}},
                 },
-                "required": ["id", "score", "reason", "complete", "problem", "links"],
+                "required": ["id", "score", "reason", "complete", "problem", "lasting", "links"],
             },
         }
     },
@@ -108,6 +114,7 @@ class Verdict:
     complete: str  # ok | suspect | bad
     problem: str
     links: list[int]  # numbers (from 1) of the links the article is about
+    lasting: str = ""  # days | months | years; "" when the model did not say
 
 
 def _batches(readings: list[Reading]) -> list[list[Reading]]:
@@ -162,6 +169,7 @@ def _validated(data: dict, batch: list[Reading]) -> dict[str, Verdict]:
             complete,
             "" if complete == "ok" else " ".join(str(entry.get("problem", "")).split())[:MAX_PROBLEM_CHARS],
             list(dict.fromkeys(links))[:MAX_SUBJECT_LINKS],
+            entry.get("lasting") if entry.get("lasting") in LASTING else "",
         )
     return out
 

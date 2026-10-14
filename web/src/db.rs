@@ -340,6 +340,143 @@ pub async fn is_delivered(pool: &SqlitePool, user: &str, article: &str) -> Resul
     Ok(found > 0)
 }
 
+// the archive: the reader's library, which is what was delivered to them and what the model
+// weighed for them and passed over
+
+/// Whether the pipeline keeps its judgements and routes yet; false until it has been upgraded.
+pub async fn library_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('assessments', 'article_routes')"
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(found == 2)
+}
+
+/// Whether this article was delivered to the reader or weighed for them.
+pub async fn in_library(pool: &SqlitePool, user: &str, article: &str) -> Result<bool, sqlx::Error> {
+    if is_delivered(pool, user, article).await? {
+        return Ok(true);
+    }
+    if !library_ready(pool).await? {
+        return Ok(false);
+    }
+    let found =
+        sqlx::query_scalar!("SELECT COUNT(*) FROM assessments WHERE user_id = ? AND article_id = ?", user, article)
+            .fetch_one(pool)
+            .await?;
+    Ok(found > 0)
+}
+
+/// The feeds, recipes and front pages that have brought articles in, by name.
+pub async fn brought_by(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!("SELECT DISTINCT via FROM article_routes WHERE via != '' ORDER BY via COLLATE NOCASE")
+        .fetch_all(pool)
+        .await
+}
+
+/// What to show from a reader's library. An empty string means "any" for every filter.
+pub struct Shelf<'a> {
+    pub user: &'a str,
+    /// "delivered", "near" (read by the model, not delivered), "all", or "" for the first two.
+    pub show: &'a str,
+    /// Words the title must contain.
+    pub title: &'a str,
+    /// The feed, recipe or front page that brought it.
+    pub via: &'a str,
+    /// How it arrived: feed, recipe, found, linked.
+    pub route: &'a str,
+    /// rated, unrated, high (4 or 5), low (1 or 2), finished.
+    pub rating: &'a str,
+    /// years, or months (months or longer).
+    pub lasting: &'a str,
+    /// Dates, as 2026-10-13, compared with the day it was delivered or weighed (UTC).
+    pub from: &'a str,
+    pub to: &'a str,
+    /// score, rating, length, or "" for newest first.
+    pub sort: &'a str,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+pub struct Shelved {
+    pub id: String,
+    pub url: String,
+    pub source: String,
+    pub title: String,
+    pub author: String,
+    pub word_count: i64,
+    pub description: String,
+    pub delivered_at: Option<String>,
+    /// When it was delivered, or else weighed.
+    pub at: String,
+    pub score: Option<f64>,
+    /// The model's reason, from reading it when it did.
+    pub said: String,
+    /// Whether the model read the article, not only its headline.
+    pub read: bool,
+    pub lasting: String,
+    pub policy: Option<String>,
+    pub rating: Option<i64>,
+    pub finished: Option<bool>,
+    pub why: String,
+    /// One "route:via" per line.
+    pub routes: String,
+}
+
+pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved>, sqlx::Error> {
+    sqlx::query_as!(
+        Shelved,
+        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description,
+           d.delivered_at AS "delivered_at?",
+           COALESCE(d.delivered_at, x.assessed_at, a.first_seen) AS "at!: String",
+           COALESCE(s.score, x.score) AS "score?: f64",
+           COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
+           COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
+           s.policy AS "policy?", r.rating AS "rating?: i64", r.finished AS "finished?: bool",
+           COALESCE(r.reason, '') AS "why!: String",
+           COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t
+                     WHERE t.article_id = a.id), '') AS "routes!: String"
+           FROM articles a
+           LEFT JOIN deliveries d ON d.article_id = a.id AND d.user_id = ?1
+           LEFT JOIN assessments x ON x.article_id = a.id AND x.user_id = ?1
+           LEFT JOIN selections s ON s.article_id = a.id AND s.user_id = ?1
+           LEFT JOIN ratings r ON r.article_id = a.id AND r.user_id = ?1
+           WHERE (d.article_id IS NOT NULL OR x.article_id IS NOT NULL)
+           AND CASE ?2 WHEN 'all' THEN 1 WHEN 'delivered' THEN d.article_id IS NOT NULL
+               WHEN 'near' THEN d.article_id IS NULL AND x.read = 1
+               ELSE d.article_id IS NOT NULL OR x.read = 1 END
+           AND (?3 = '' OR instr(lower(a.title), lower(?3)) > 0)
+           AND (?4 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.via = ?4))
+           AND (?5 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.route = ?5))
+           AND CASE ?6 WHEN 'rated' THEN r.rating IS NOT NULL WHEN 'unrated' THEN r.rating IS NULL
+               WHEN 'high' THEN COALESCE(r.rating >= 4, 0) WHEN 'low' THEN COALESCE(r.rating <= 2, 0)
+               WHEN 'finished' THEN COALESCE(r.finished, 0) ELSE 1 END
+           AND CASE ?7 WHEN 'years' THEN COALESCE(x.lasting = 'years', 0)
+               WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END
+           AND (?8 = '' OR substr(COALESCE(d.delivered_at, x.assessed_at, a.first_seen), 1, 10) >= ?8)
+           AND (?9 = '' OR substr(COALESCE(d.delivered_at, x.assessed_at, a.first_seen), 1, 10) <= ?9)
+           ORDER BY CASE ?10 WHEN 'score' THEN -COALESCE(s.score, x.score, -1)
+               WHEN 'rating' THEN -COALESCE(r.rating, 0) WHEN 'length' THEN -a.word_count ELSE 0 END,
+               COALESCE(d.delivered_at, x.assessed_at, a.first_seen) DESC, a.id
+           LIMIT ?11 OFFSET ?12"#,
+        shelf.user,
+        shelf.show,
+        shelf.title,
+        shelf.via,
+        shelf.route,
+        shelf.rating,
+        shelf.lasting,
+        shelf.from,
+        shelf.to,
+        shelf.sort,
+        shelf.limit,
+        shelf.offset
+    )
+    .fetch_all(pool)
+    .await
+}
+
 // send requests ("Send to Kindle"); the pipeline's scheduler sends them and records the outcome
 
 pub const SENDS_PER_DAY: i64 = 10;

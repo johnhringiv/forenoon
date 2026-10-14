@@ -370,10 +370,12 @@ def _discover(
         # listing reaches back as far as the age limit) cannot crowd them out of the cap.
         fresh: dict[bool, list[Item]] = {False: [], True: []}
         for item in items:
+            row = store.get_article(item.id)
+            if row is not None:
+                store.add_route(item.id, "found", source.name)  # a feed's article can be here too
             if item.id in seen or (item.published and item.published < cutoff):
                 continue
             seen.add(item.id)
-            row = store.get_article(item.id)
             if (row and row.status == "failed") or store.is_delivered(user.id, item.id):
                 continue
             fresh[row is not None].append(item)
@@ -447,6 +449,7 @@ def run(
             known = store.get_article(item.id) is not None
             published = item.published.isoformat() if item.published else None
             store.upsert_article(item.id, item.url, source.name, item.title, item.author, published)
+            store.add_route(item.id, "recipe" if source.type == "recipe" else "feed", source.name)
             row = store.get_article(item.id)
             if item.published and item.published < cutoff:
                 # Old by its own date. It is still new to us when a feed we already follow lists
@@ -462,6 +465,12 @@ def run(
         # publication, so all of it is considered unless it is pinned (pinned items skip ranking).
         whole = source.type == "recipe" and not source.pinned
         pools[source.pinned].append(eligible if whole else eligible[:MAX_ITEMS_PER_SOURCE])
+
+    def record_found(item: Item) -> None:
+        # Feed items are recorded when their feed is read; a find once it has been weighed.
+        published = item.published.isoformat() if item.published else None
+        store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
+        store.add_route(item.id, "found", item.source.name)
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     ranking = Ranking(others, {})
@@ -485,6 +494,13 @@ def run(
             found_min_score=cfg.discovery.min_score,
         )
         ranking.order += others[cfg.llm.max_candidates :]
+        if ranking.choices and not dry_run:
+            # Every judgement is kept, not only the winners': the archive shows what was passed
+            # over and why, and a find is on record from the day it was first weighed.
+            for item in found:
+                if item.id in ranking.choices:
+                    record_found(item)
+            store.record_assessments(user.id, [(i, c.score, c.reason, False, "") for i, c in ranking.choices.items()])
         if ranking.choices:
             report.ranking = f"model ({ranking.note})" if ranking.note else "model"
             grouped = group_stories(
@@ -510,11 +526,6 @@ def run(
     found_ready = 0
     taken: set[str] = set()
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
-
-    def record_found(item: Item) -> None:
-        # Feed items are recorded when their feed is read; a find only once it is tried.
-        published = item.published.isoformat() if item.published else None
-        store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
 
     def outbound(item: Item, body) -> list[_Link]:
         if item.source.type != "rss" or item.id in found_ids:
@@ -560,6 +571,16 @@ def run(
             ranking.order = read_first + unread
             for item_id, verdict in verdicts.items():
                 ranking.choices[item_id] = replace(ranking.choices[item_id], score=verdict.score, reason=verdict.reason)
+            if not dry_run:
+                store.record_assessments(
+                    user.id, [(i, v.score, v.reason, True, v.lasting) for i, v in verdicts.items()]
+                )
+                # What was read is kept whether or not it is delivered: its length and summary
+                # go on record here, and its page was saved when it was fetched.
+                for item_id in verdicts:
+                    result = extracted[item_id]
+                    store.set_preview(item_id, result.image_url, result.description)
+                    store.set_word_count(item_id, result.word_count)
             report.ranking += f", {len(verdicts)} read in full"
             queue = pinned + ranking.order
 
@@ -687,6 +708,7 @@ def run(
             taken.add(linked.id)
             source_name = f"{linked.site} via {lead.item.source.name}"
             store.upsert_article(linked.id, linked.url, source_name, linked.url, "", None)
+            store.add_route(linked.id, "linked", lead.item.source.name)
             ready = prepare(linked, story.reason)
             if ready is not None and ready.result.status == "clean":
                 originals.append(ready)
