@@ -145,7 +145,7 @@ Found by scanning the three issues sent so far (12 to 14 October):
 - `forenoon golden` writes the golden rendering-test EPUB: headings, code, tables, lists,
   images (including transparent ones), footnotes and rating links.
 - **Screenshots on the Oasis:** tap two opposite corners of the screen at once (top-left
-  and bottom-right). The screen does not flash, but a PNG is saved in the top-level folder you
-  see over USB, named like `screenshot_2026_10_14T16_46_56-0400.png`.
+  and bottom-right); the screen flashes. A PNG is saved in the top-level folder you see over
+  USB, named like `screenshot_2026_10_14T16_46_56-0400.png`.
 - Copies of every book sent are kept in `<data>/issues/`, so a book that misbehaved can be
   examined afterwards.
