@@ -1389,9 +1389,31 @@ async fn a_link_added_by_hand_is_only_queued_and_then_shown_as_the_readers_own()
     .execute(pool)
     .await
     .unwrap();
-    let text = browser.get(&site, "/archive").await.text;
+    let page = browser.get(&site, "/archive").await;
+    let text = page.text.clone();
     assert!(text.contains("Could not be added: HTTP 404 &#60;b&#62;") && !text.contains("http-equiv"));
     assert!(text.contains(">Read elsewhere<") && text.contains("Added by you 12 October 2026"));
+    // A failure goes once the same link is added again, or when cleared; it stays on record.
+    let failed: i64 =
+        sqlx::query_scalar("SELECT id FROM add_requests WHERE status = 'failed'").fetch_one(pool).await.unwrap();
+    sqlx::query("INSERT INTO add_requests (user_id, url, action, requested_at) VALUES ('john', 'https://blog.example/next', 'next', ?)")
+        .bind(forenoon_web::db::now_iso())
+        .execute(pool)
+        .await
+        .unwrap();
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(!text.contains("Could not be added") && text.contains("https://blog.example/next: Being fetched"));
+    sqlx::query("DELETE FROM add_requests WHERE id > ?").bind(failed).execute(pool).await.unwrap();
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(text.contains("Clear the links that could not be added"));
+    let clear = [("csrf", page.csrf()), ("link", String::new()), ("then", "next".to_owned())];
+    let clear: Vec<(&str, &str)> = clear.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    assert_eq!(browser.post(&site, "/archive/added/clear", &clear).await.location, "/archive?show=added");
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(!text.contains("Could not be added") && !text.contains("Clear the links"));
+    let kept: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM add_requests WHERE status = 'failed'").fetch_one(pool).await.unwrap();
+    assert_eq!(kept, 1);
     for (query, shown) in
         [("show=added", true), ("route=manual", true), ("show=near", false), ("show=delivered", false)]
     {
