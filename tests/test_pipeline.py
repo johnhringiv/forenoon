@@ -433,6 +433,16 @@ def _listings(hn: list[dict], lobsters: list[dict]) -> None:
     ROUTES[SITES["lobsters"].url] = json.dumps(lobsters).encode()
 
 
+def test_a_source_takes_no_more_than_its_places_a_day(env):
+    cfg, store, fetcher = env
+    sources = tuple(dataclasses.replace(s, daily_max=1) if s.name == "Blog" else s for s in cfg.sources)
+    cfg = dataclasses.replace(cfg, sources=sources)
+    user = dataclasses.replace(cfg.users[0], daily_cap=4)
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    delivered = [store.get_article(i).source for i in report.delivered]
+    assert delivered == ["Pinned", "Blog"]  # the Blog's other posts wait, though places were left
+
+
 def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
     from app.config import Discovery
     from app.discover import SITES

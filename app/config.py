@@ -83,6 +83,8 @@ class Discovery:
 
     # The built-in sources switched on on the Sources page; filled in from the database.
     sites: tuple[str, ...] = ()
+    # The most of a day's places each may take, by key, as set there; 0 or missing, no limit.
+    daily_max: dict[str, int] = field(default_factory=dict)
     per_site: int = 100  # candidates sent to the model per site
 
 
@@ -102,6 +104,7 @@ class Source:
     url: str = ""
     tier: str = "clean"
     pinned: bool = False
+    daily_max: int = 0  # at most this many of a day's places; 0 for no limit
     # auto: extract from the page, fall back to feed content. page / feed force one.
     extract: str = "auto"
     users: tuple[str, ...] = ()

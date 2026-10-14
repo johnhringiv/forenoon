@@ -253,7 +253,7 @@ class Store:
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
             return ()
         rows = self.db.execute(
-            "SELECT id, name, url, extract, pinned FROM sources"
+            "SELECT id, name, url, extract, pinned, daily_max FROM sources"
             " WHERE enabled = 1 AND kind = 'rss'"
             " ORDER BY pinned DESC, name COLLATE NOCASE"
         ).fetchall()
@@ -263,6 +263,7 @@ class Store:
                 url=row["url"],
                 extract=row["extract"],
                 pinned=bool(row["pinned"]),
+                daily_max=max(0, row["daily_max"]),
             )
             for row in rows
         )
@@ -301,6 +302,13 @@ class Store:
                     missing,
                 )
         return tuple(key for key in known if rows.get(key))
+
+    def builtin_daily_max(self) -> dict[str, int]:
+        """The most of a day's places each built-in source may take, by key; 0 for no limit."""
+        if not self._has_table("sources"):
+            return {}
+        rows = self.db.execute("SELECT builtin, daily_max FROM sources WHERE kind = 'builtin'")
+        return {row["builtin"]: max(0, row["daily_max"]) for row in rows}
 
     def settings(self) -> dict[str, str]:
         """What an admin saved on the Settings page; empty until then."""

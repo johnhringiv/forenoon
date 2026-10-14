@@ -99,9 +99,9 @@ SITES = {
 }
 
 
-def site_source(key: str) -> Source:
+def site_source(key: str, daily_max: int = 0) -> Source:
     site = SITES[key]
-    return Source(site.name, site.url, extract="page")
+    return Source(site.name, site.url, extract="page", daily_max=daily_max)
 
 
 def site_host(url: str) -> str:

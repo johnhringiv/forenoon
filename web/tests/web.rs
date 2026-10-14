@@ -695,13 +695,15 @@ async fn sources_are_managed_by_admins_only() {
     for (form, message) in [
         (add("", "https://blog.example/feed", &[]), "A source needs a name"),
         (add("Blog", "javascript:alert(1)", &[]), "A feed needs an http(s) address."),
+        (add("Blog", "https://blog.example/feed", &[("daily_max", "51")]), "Places a day: give a whole number"),
+        (add("Blog", "https://blog.example/feed", &[("daily_max", "-1")]), "Places a day: give a whole number"),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
         let reply = admin.post(&site, "/sources", &form).await;
         assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
     }
     for form in [
-        add("Blog <b>", "https://blog.example/feed", &[("extract", "page"), ("pinned", "1")]),
+        add("Blog <b>", "https://blog.example/feed", &[("extract", "page"), ("pinned", "1"), ("daily_max", "0")]),
         add("Other", "https://other.example/", &[]),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
@@ -738,13 +740,15 @@ async fn sources_are_managed_by_admins_only() {
             && text.contains(r#"<p class="hint failing">Not usable: no feed found at this address.</p>"#)
     );
     assert!(!text.contains("http-equiv"));
-    let rows: Vec<_> =
-        stored.iter().map(|s| (s.name.as_str(), s.url.as_str(), s.extract.as_str(), s.pinned, s.enabled)).collect();
+    let rows: Vec<_> = stored
+        .iter()
+        .map(|s| (s.name.as_str(), s.url.as_str(), s.extract.as_str(), s.pinned, s.daily_max, s.enabled))
+        .collect();
     assert_eq!(
         rows,
         [
-            ("Blog <b>", "https://blog.example/feed", "page", true, true), // pinned first
-            ("Other", "https://other.example/", "auto", false, true),
+            ("Blog <b>", "https://blog.example/feed", "page", true, 0, true), // pinned first
+            ("Other", "https://other.example/", "auto", false, 2, true),      // 2 places when not given
         ]
     );
 
@@ -757,8 +761,13 @@ async fn sources_are_managed_by_admins_only() {
 
     // Pause one, rename it, then remove the other.
     let (blog, other) = (stored[0].id, stored[1].id);
-    let edit =
-        [("csrf", csrf.as_str()), ("name", "The Blog"), ("address", "https://blog.example/atom"), ("extract", "auto")];
+    let edit = [
+        ("csrf", csrf.as_str()),
+        ("name", "The Blog"),
+        ("address", "https://blog.example/atom"),
+        ("extract", "auto"),
+        ("daily_max", "3"),
+    ];
     assert_eq!(admin.post(&site, &format!("/sources/{blog}"), &edit).await.location, "/sources?saved=saved");
     assert_eq!(
         admin.post(&site, &format!("/sources/{other}/delete"), &[("csrf", &csrf)]).await.location,
@@ -771,8 +780,8 @@ async fn sources_are_managed_by_admins_only() {
     let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
     assert_eq!(stored.len(), 1);
     assert_eq!(
-        (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].enabled),
-        ("The Blog", "https://blog.example/atom", false, false)
+        (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].daily_max, stored[0].enabled),
+        ("The Blog", "https://blog.example/atom", false, 3, false)
     );
     assert!(admin.get(&site, "/sources").await.text.contains("3 sources, 1 paused, 0 failing."));
 
@@ -875,11 +884,22 @@ async fn built_in_sources_are_only_switched_on_or_off() {
         all.into_iter().find(|source| source.builtin == key).expect("a built-in source")
     };
     let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
-    assert!(hn.kind == "builtin" && hn.enabled);
+    assert!(hn.kind == "builtin" && hn.enabled && hn.daily_max == 2);
 
     let path = format!("/sources/{}/toggle", hn.id);
-    assert_eq!(admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "0")]).await.location, "/sources?saved=saved");
-    assert!(!builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews").enabled);
+    let reply = admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "1"), ("daily_max", "x")]).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Places a day: give a whole number"));
+    let off = [("csrf", csrf.as_str()), ("enabled", "0"), ("daily_max", "4")];
+    assert_eq!(admin.post(&site, &path, &off).await.location, "/sources?saved=saved");
+    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    assert!(!hn.enabled && hn.daily_max == 4);
+    assert!(
+        admin
+            .get(&site, "/sources")
+            .await
+            .text
+            .contains(r#"name="daily_max" type="number" step="1" min="0" max="50" value="4""#)
+    );
     assert!(admin.get(&site, "/sources").await.text.contains(r#"<button name="enabled" value="1">Turn on</button>"#));
 
     // It cannot be renamed, given an address or removed; and a feed cannot be toggled this way.

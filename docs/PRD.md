@@ -327,7 +327,8 @@ source).
   the title, the site, points, comment count and (Lobsters) tags and description, since there
   is no abstract.
 - **Selection.** Found articles are ranked with feed articles on their score alone, with no
-  places kept for them and no limit on how many they take. One that fails extraction gives its
+  places kept for them. Like every source, each built-in one takes at most its "places a day"
+  (2 unless changed on the Sources page; 0 for no limit). One that fails extraction gives its
   place to the next candidate, whichever kind it is.
 - **In the book.** The source reads "site via Hacker News", with a link to the discussion.
 - **Without the model** (off, failing or over its cap) no found article is delivered.

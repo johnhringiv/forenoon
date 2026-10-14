@@ -28,6 +28,8 @@ use crate::{
 
 const MAX_NAME: usize = 80;
 const MAX_URL: usize = 2000;
+const DEFAULT_DAILY_MAX: i64 = 2;
+const MAX_DAILY_MAX: i64 = 50;
 const MAX_COOKIE: usize = 16 * 1024;
 const MAX_FILE: u64 = 4 * 1024 * 1024;
 const EXTRACT: [(&str, &str); 4] = [
@@ -46,6 +48,8 @@ pub struct Source {
     pub builtin: String,
     pub extract: String,
     pub pinned: bool,
+    /// The most of a day's places its articles may take; 0 for no limit.
+    pub daily_max: i64,
     pub enabled: bool,
     /// "" (never checked), "pending", "ok" or "failed": the pipeline's check of the address.
     pub check_state: String,
@@ -56,7 +60,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
     sqlx::query_as!(
         Source,
         r#"SELECT id AS "id!", name, kind, url, builtin, extract, pinned AS "pinned: bool",
-           enabled AS "enabled: bool", check_state, check_note
+           daily_max, enabled AS "enabled: bool", check_state, check_note
            FROM sources ORDER BY pinned DESC, name COLLATE NOCASE"#
     )
     .fetch_all(pool)
@@ -128,6 +132,18 @@ fn check_name(name: &str) -> Result<String, String> {
     }
 }
 
+/// The most of a day's places a source may take: a whole number from 0 (no limit) to 50.
+fn daily_max(sent: Option<&str>) -> Result<i64, String> {
+    match sent.map(str::trim) {
+        None => Ok(DEFAULT_DAILY_MAX),
+        Some(text) => text
+            .parse()
+            .ok()
+            .filter(|n| (0..=MAX_DAILY_MAX).contains(n))
+            .ok_or_else(|| format!("Places a day: give a whole number from 0 (no limit) to {MAX_DAILY_MAX}.")),
+    }
+}
+
 struct Choice {
     key: &'static str,
     label: &'static str,
@@ -138,6 +154,7 @@ struct BuiltinRow {
     id: i64,
     name: String,
     about: &'static str,
+    daily_max: i64,
     enabled: bool,
     status: Option<String>,
     failing: bool,
@@ -149,6 +166,7 @@ struct FeedRow {
     address: String,
     extract: Vec<Choice>,
     pinned: bool,
+    daily_max: i64,
     enabled: bool,
     /// How its last run went, in words; `None` before it has been read.
     status: Option<String>,
@@ -232,6 +250,7 @@ async fn render(
                 id: source.id,
                 about: about(&source.builtin),
                 name: source.name,
+                daily_max: source.daily_max,
                 enabled: source.enabled,
                 status,
                 failing,
@@ -243,6 +262,7 @@ async fn render(
                 address: source.url,
                 extract: choices(&source.extract),
                 pinned: source.pinned,
+                daily_max: source.daily_max,
                 enabled: source.enabled,
                 failing,
                 status,
@@ -361,6 +381,7 @@ pub struct SourceForm {
     address: Option<String>,
     extract: Option<String>,
     pinned: Option<String>,
+    daily_max: Option<String>,
     enabled: Option<String>,
 }
 
@@ -371,6 +392,10 @@ impl SourceForm {
             return Err("A feed needs an http(s) address.".to_owned());
         }
         Ok(address.to_owned())
+    }
+
+    fn daily_max(&self) -> Result<i64, String> {
+        daily_max(self.daily_max.as_deref())
     }
 
     fn extract(&self) -> &'static str {
@@ -406,18 +431,21 @@ pub async fn add(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let (name, url) = match (check_name(&form.name), form.address()) {
-        (Ok(name), Ok(url)) => (name, url),
-        (Err(problem), _) | (_, Err(problem)) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    let (name, url, daily_max) = match (check_name(&form.name), form.address(), form.daily_max()) {
+        (Ok(name), Ok(url), Ok(daily_max)) => (name, url, daily_max),
+        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
+            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+        }
     };
     let (extract, pinned, now) = (form.extract(), form.pinned.is_some(), now_iso());
     let done = sqlx::query!(
-        "INSERT INTO sources (name, kind, url, extract, pinned, enabled, created_at, check_state)
-         VALUES (?, 'rss', ?, ?, ?, 1, ?, 'pending')",
+        "INSERT INTO sources (name, kind, url, extract, pinned, daily_max, enabled, created_at, check_state)
+         VALUES (?, 'rss', ?, ?, ?, ?, 1, ?, 'pending')",
         name,
         url,
         extract,
         pinned,
+        daily_max,
         now
     )
     .execute(&state.pool)
@@ -437,19 +465,22 @@ pub async fn update(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let (name, url) = match (check_name(&form.name), form.address()) {
-        (Ok(name), Ok(url)) => (name, url),
-        (Err(problem), _) | (_, Err(problem)) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    let (name, url, daily_max) = match (check_name(&form.name), form.address(), form.daily_max()) {
+        (Ok(name), Ok(url), Ok(daily_max)) => (name, url, daily_max),
+        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
+            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+        }
     };
     let (extract, pinned, enabled) = (form.extract(), form.pinned.is_some(), form.enabled.is_some());
-    // A built-in source is only switched on or off: this changes feeds alone.
+    // A built-in source is only switched on or off and given its limit: this changes feeds alone.
     let done = sqlx::query!(
-        "UPDATE sources SET name = ?, url = ?, extract = ?, pinned = ?, enabled = ?,
+        "UPDATE sources SET name = ?, url = ?, extract = ?, pinned = ?, daily_max = ?, enabled = ?,
          check_state = 'pending', check_note = '' WHERE id = ? AND kind = 'rss'",
         name,
         url,
         extract,
         pinned,
+        daily_max,
         enabled,
         id
     )
@@ -463,6 +494,7 @@ pub struct ToggleForm {
     csrf: String,
     /// "1" to read it, anything else to stop.
     enabled: String,
+    daily_max: Option<String>,
 }
 
 /// Switch a built-in source on or off.
@@ -477,10 +509,19 @@ pub async fn toggle(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
+    let daily_max = match daily_max(form.daily_max.as_deref()) {
+        Ok(daily_max) => daily_max,
+        Err(problem) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    };
     let enabled = form.enabled == "1";
-    sqlx::query!("UPDATE sources SET enabled = ? WHERE id = ? AND kind = 'builtin'", enabled, id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE sources SET enabled = ?, daily_max = ? WHERE id = ? AND kind = 'builtin'",
+        enabled,
+        daily_max,
+        id
+    )
+    .execute(&state.pool)
+    .await?;
     saved("saved")
 }
 

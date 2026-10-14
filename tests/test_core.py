@@ -318,9 +318,12 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
     store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "page", 1, 1))
     store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('zed.example', 'x'), ('ft.com', 'x')")
     assert store.session_sites() == ("ft.com", "zed.example")
+    store.builtin_sites({"hackernews": "Hacker News"})
+    store.db.execute("UPDATE sources SET daily_max = 0 WHERE builtin = 'hackernews'")
+    assert store.builtin_daily_max() == {"hackernews": 0, "lobsters": 2}
     assert store.sources() == (
-        Source("Zed", "https://zed.example/feed", pinned=True, extract="page"),
-        Source("blog", "https://blog.example/feed"),
+        Source("Zed", "https://zed.example/feed", pinned=True, extract="page", daily_max=2),
+        Source("blog", "https://blog.example/feed", daily_max=2),
     )
 
 

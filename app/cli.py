@@ -38,7 +38,7 @@ def load(store: Store | None = None) -> Config:
             cfg,
             # Without a key there is nothing to rank with; that is a choice, not a failure.
             llm=dataclasses.replace(cfg.llm, enabled=cfg.llm.enabled and bool(os.environ.get(API_KEY_ENV))),
-            discovery=dataclasses.replace(cfg.discovery, sites=sites),
+            discovery=dataclasses.replace(cfg.discovery, sites=sites, daily_max=store.builtin_daily_max()),
             sessions=store.session_sites(),
             alerts=dataclasses.replace(cfg.alerts, to=to if cfg.alerts.enabled else ""),
         )
