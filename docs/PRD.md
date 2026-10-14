@@ -28,19 +28,16 @@ what its own users configure and delivers only to the addresses its admin has se
   (section 9a), created with `forenoon-web add-user` and edited on its account page. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
-- **Sources** come in three kinds, each with its own section on the web pages' Sources page
+- **Sources** come in two kinds, each with its own section on the web pages' Sources page
   (admins only), which also shows how each source's last runs went:
   - **Built in**: front pages the pipeline knows how to read (Hacker News and Lobsters;
     section 7b). They can only be switched on or off. The list comes from the pipeline: one
     that a new version adds appears switched off, so an upgrade never changes what is
     delivered by itself.
   - **Feeds**: RSS or Atom, by address.
-  - **Calibre recipes**: publications fetched whole once a day (section 7d), chosen from the
-    list the recipes container publishes.
 
   They live in the database. The pipeline reads them at the start of every run; with no
-  feeds or recipes, nothing is delivered and an alert is sent. A feed or a recipe has a name
-  and:
+  feeds, nothing is delivered and an alert is sent. A feed has a name and:
   - pinned: its articles are taken before all other sources.
   - where the text comes from: the page, falling back to the feed (default); always the
     page; only the feed, in which case the article page is never fetched; or nowhere
@@ -67,10 +64,10 @@ what its own users configure and delivers only to the addresses its admin has se
   sign-in.) Feeds are read as usual, without it.
   Only the article pages the ranking wants read (the reading pass and the day's choices) are
   then fetched with the session, a few a day and at least 20 seconds apart per site, instead
-  of a whole paper. The cookie is kept in the logins volume beside recipe logins: never in the
+  of a whole paper. The cookie is kept in the logins volume: never in the
   database or the data folder, never shown again, and used only on https pages of the one
   site named with it and its subdomains (`site-<domain>.json`). The pipeline never holds it. It leaves a request in
-  `<data>/recipes/.fetch/`, and the recipes container reads the page and leaves the answer
+  `<data>/sessions/.fetch/`, and the browser container (section 7d) reads the page and leaves the answer
   there, so sessions need that container running. Pages are read by Chrome on a virtual
   screen (Xvfb), since some sites admit only a browser, and what it keeps of the session is
   in its own volume. Nothing answers a CAPTCHA: a site that asks for one, shows its paywall
@@ -341,37 +338,22 @@ source).
 - The call counts against the daily token cap and is skipped when it would cross it.
   `llm.check_extraction: false` turns it off.
 
-## 7d. Recipe sources (optional)
+## 7d. The browser container (optional)
 
-- A separate **recipes container** holds Calibre. Once a day at `RECIPES_TIME` it runs each
-  recipe listed in `<data>/recipes/recipes.conf` and writes the issue to
-  `<data>/recipes/<folder>/<date>.epub`. An issue is published only when the recipe succeeds
-  and the issue has at least one article: Calibre reports a paper of empty sections as a
-  success, which is what a site refusing the recipe looks like. Issues older than 7 days are
-  removed.
-- Recipes are set up entirely on the Sources page. The container publishes
-  `catalogue.json`, the publications its Calibre can fetch and which of them want a
-  subscriber's login; the page offers that list. Adding one picks its folder, writes
-  `recipes.conf` (the web pages own that file) and asks for it to be fetched at once; the
-  container looks for such requests every 20 seconds. How each recipe's last fetch went
-  (`status.json`) is shown beside it, and the page reloads itself while one is running.
-  "Fetch now" asks again at any time.
-- A login is typed on the Sources page, opened for you when the publication needs one. It
-  is written to a Docker volume that only the web pages (to write) and the recipes container
-  (to read) mount. It is never in the data folder, which the pipeline mounts, never in the
-  database, and never shown again: the page shows only the username. Removing the recipe
-  removes its login. The recipes container mounts only that volume and the `recipes` folder.
-- A source of `type: recipe` reads the newest issue in its folder (and any earlier issue from
-  the last `max_age_days` that was never read, so a missed run does not lose a day's paper)
-  and splits it into
-  articles, in the issue's order: navigation is removed, the original URL is taken from the
-  issue (minus tracking parameters, including the marker Calibre's FT recipe adds), and images
-  are taken from the issue itself. Every article in the issue becomes a
-  candidate.
-- Recipe articles are extracted from the issue only; their pages are never fetched. From
-  there they are treated like feed articles: sanitised, ranked, capped, rated and
-  deduplicated by URL against every other source.
-- No issue from the last `max_age_days`, or an unreadable one, counts as a failed source.
+- A separate container holds Chrome, the only thing that reads a subscriber session's cookie.
+  It mounts the logins volume (read only), `<data>/sessions/` and a volume of its own,
+  `forenoon-browser`, for what Chrome keeps of each session; never the database or the rest
+  of the data folder.
+- It looks for page requests in `<data>/sessions/.fetch/` every second and answers them one
+  at a time, at least 20 seconds apart per site. Chrome runs unchanged on a virtual screen
+  (Xvfb), not headless, because some sites admit only a browser. A page showing the site's
+  paywall, a CAPTCHA or a browser check that does not let it through is answered with why,
+  and nothing answers a CAPTCHA.
+- How each session's last page went, with the day the site says its sign-in ends, is kept in
+  `<data>/sessions/status.json` for the Sources page and the run's alerts.
+- There were Calibre news recipes here until October 2026, fetching whole papers once a day.
+  They went once every source had a feed: the subscriber sessions above fetch only what the
+  ranking picks. Articles that came in through a recipe keep the route `recipe`.
 
 ## 7e. Stories
 
@@ -394,7 +376,7 @@ a day's book is therefore a target, not a limit.
   - When no page can be delivered, the article goes out as it was.
   - Without a working model, only pointers are followed, through their first four links.
   - Links to the article's own site, to video, social and chat sites, to files and to front
-    pages are never followed. Recipe articles and discovered articles are not examined.
+    pages are never followed. Discovered articles are not examined.
 - **Same event.** When ranking is on (`llm.group_stories`, on by default), one more model
   call compares the 40 best-scored candidates and returns those that cover the same specific
   event, announcement or release. When one of them is chosen, the others are delivered right
@@ -413,7 +395,7 @@ best candidates in full.
 
 - The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted. Their
   text, up to `llm.read_words` (2,500) words each, goes to the model about ten articles to a
-  call, with the reader's interests and ratings. Recipe articles need no fetch.
+  call, with the reader's interests and ratings.
 - Per article the model returns a score from 0 to 10, a reason, whether the text is a
   complete article (`ok`, `suspect`, `bad`), how long it stays worth reading (`days` for
   news tied to the week's events, `months`, or `years`), and which of its links are its
@@ -460,9 +442,10 @@ The pipeline keeps a record of what it considered, not only of what it sent. Thi
 the web pages' Archive shows (section 9a).
 
 - **How an article reached us.** Every route is recorded, and an article can have several:
-  `feed` (a feed the install follows), `recipe`, `found` (on a built-in front page such as
-  Hacker News), `linked` (followed from another article) and `manual` (added by a reader by
-  hand), each with the name of the feed, recipe or front page. A followed blog's post that also reaches a front page has both.
+  `feed` (a feed the install follows), `found` (on a built-in front page such as Hacker
+  News), `linked` (followed from another article) and `manual` (added by a reader by hand),
+  each with the name of the feed or front page; `recipe` on articles from the Calibre recipes
+  there once were. A followed blog's post that also reaches a front page has both.
 - **What the model made of it, per reader.** Every candidate the ranking scored has its
   score and reason kept; a candidate the reading pass read has the score and reason from
   reading, and how long it stays worth reading. A judgement made from a headline never
@@ -562,7 +545,7 @@ database with the pipeline.
   the model's reason, whether it was delivered, read by the model or only weighed from its
   headline, the score, the length, how long it stays worth reading and every way it reached
   us. Filters are a form sent by GET, so any view is a link: words in the title, delivered
-  or read or everything, the feed, recipe or front page that brought it, how it arrived,
+  or read or everything, the feed or front page that brought it, how it arrived,
   the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
   length). Without a choice it shows what was delivered, added by hand or read by the
   model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
@@ -603,8 +586,8 @@ database with the pipeline.
   be plain `http(s)`, and the content security policy allows no scripts. Lead images are
   loaded by the browser from the article's own site, without a referrer.
 - **Pictures.** The pipeline makes a small thumbnail for each article it prepares, from the
-  page's lead image or else the article's first few pictures (including a recipe article's,
-  which live inside the issue), and keeps it in `thumbs/` in the data folder. The web pages
+  page's lead image or else the article's first few pictures, and keeps it in `thumbs/` in
+  the data folder. The web pages
   serve it, only to a reader the article was delivered to. A card falls back to the
   article's own lead image address when there is no thumbnail, and has no picture when the
   article has none. `forenoon thumbs` makes thumbnails for articles delivered earlier.
@@ -659,19 +642,20 @@ place on start-up. Backing up the data folder backs up everything.
 
 ## 12. Deployment
 
-- Images are published to GHCR by CI on every push to `main`: the app, the recipes runner
-  and the web pages. Containers run as UID 1000 with a read-only root filesystem and no
+- Images are published to GHCR by CI on every push to `main`: the app, the browser and the
+  web pages. Containers run as UID 1000 with a read-only root filesystem and no
   added capabilities.
 - Three containers: the scheduler, the feedback service, and a `cloudflared` tunnel that
   shares the feedback container's network namespace. No host port is published. An optional
-  fourth runs Calibre recipes from its own image, and an optional fifth serves the web pages
+  fourth runs the browser for subscriber sessions from its own image (`BROWSER_IMAGE`), and
+  an optional fifth serves the web pages
   from theirs (`WEB_IMAGE`) on a host port chosen with `WEB_LISTEN`.
 - `deploy/docker-compose.yml`, or `deploy/deploy.sh` with plain `docker run`.
   `deploy/poll-deploy.sh` redeploys when the app image changes, replaces only the tunnel
   when just its image changed, and restarts the stack after a reboot.
 - The Kindle browser needs TLS 1.2, so the feedback hostname's zone must not require 1.3.
 
-See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
+See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 
 ## 13. Security properties
 

@@ -31,7 +31,6 @@ from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_
 from .rank import rank as rank_candidates
 from .read import Reading, Verdict
 from .read import read as read_candidates
-from .recipes import read_recipe
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
 from .sources import Item, is_front_page, read_feed
@@ -184,7 +183,7 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> E
     if item.source.extract != "feed":
         try:
             if site := sessions.for_url(cfg.sessions, item.url):
-                page_html = sessions.fetch(cfg.recipes_dir, sessions.name(site), item.url)
+                page_html = sessions.fetch(cfg.sessions_dir, sessions.name(site), item.url)
             else:
                 page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
         except FetchError as exc:
@@ -310,9 +309,6 @@ def _item_report(item: Item, result: Extracted, dropped: int) -> ItemReport:
 def _read_source(
     cfg: Config, source: Source, fetcher: Fetcher, conditional: bool, now: datetime, store: Store | None = None
 ) -> list[Item]:
-    if source.type == "recipe":
-        known = (lambda item_id: store.get_article(item_id) is not None) if store else None
-        return read_recipe(source, cfg.recipes_dir, cfg.max_age_days, now, known=known)
     return read_feed(source, fetcher, conditional=conditional)
 
 
@@ -472,7 +468,7 @@ def run(
         # first read has nothing to count from, so there its own dates decide and only the
         # newest few are taken; the rest of its back catalogue is recorded as seen before the
         # feed was followed, so it never becomes a candidate.
-        first_read = not store.has_articles_from(source.name) and source.type == "rss"
+        first_read = not store.has_articles_from(source.name)
         for n, item in enumerate(_newest_first(items)):
             seen.add(item.id)
             published = item.published.isoformat() if item.published else None
@@ -481,7 +477,7 @@ def run(
                 item.id, item.url, source.name, item.title, item.author, published,
                 abstract(item)[:MAX_SUMMARY_CHARS], seen=now if current else cutoff - timedelta(seconds=1),
             )  # fmt: skip
-            store.add_route(item.id, "recipe" if source.type == "recipe" else "feed", source.name)
+            store.add_route(item.id, "feed", source.name)
             row = store.get_article(item.id)
             if datetime.fromisoformat(row.first_seen) < cutoff:
                 continue
@@ -490,10 +486,10 @@ def run(
             if row.status == "failed" or store.has_had(user.id, item.id):
                 continue
             eligible.append(item)
-        if source.type == "rss" and source.extract != "feed":
+        if source.extract != "feed":
             # Read on an earlier run but never weighed: the feed has moved on since, or the
-            # run that would have weighed them did not happen. A recipe's issue has them all;
-            # a feed read for its own text cannot give it again once it has moved on.
+            # run that would have weighed them did not happen. A feed read for its own text
+            # cannot give it again once it has moved on.
             for row in store.unoffered(user.id, source.name, cutoff, now - OLDEST_NEW):
                 if row.id not in seen:
                     seen.add(row.id)
@@ -510,7 +506,7 @@ def run(
         store.add_route(item.id, "found", item.source.name)
 
     for site in cfg.sessions:
-        ends = sessions.sign_in_ends(cfg.recipes_dir, sessions.name(site))
+        ends = sessions.sign_in_ends(cfg.sessions_dir, sessions.name(site))
         if ends is not None and ends - now.date() <= SIGN_IN_WARNING:
             report.sign_in_ends[site] = ends.isoformat()
 
@@ -587,7 +583,7 @@ def run(
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
 
     def outbound(item: Item, body) -> list[_Link]:
-        if item.source.type != "rss" or item.id in found_ids:
+        if item.id in found_ids:
             return []
         return _linked_items(item, body, store, user, taken)[:MAX_LINKS_SHOWN]
 

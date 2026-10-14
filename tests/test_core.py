@@ -312,17 +312,15 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
     assert store.sources() == ()  # the web app has not run yet
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
         store.db.executescript(migration.read_text())
-    add = "INSERT INTO sources (name, kind, url, recipe, extract, pinned, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'x')"
-    store.db.execute(add, ("blog", "rss", "https://blog.example/feed", "", "auto", 0, 1))
-    store.db.execute(add, ("Paused", "rss", "https://paused.example/feed", "", "auto", 0, 0))
-    store.db.execute(add, ("FT", "recipe", "", "ft", "feed", 0, 1))
-    store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "", "page", 1, 1))
+    add = "INSERT INTO sources (name, kind, url, extract, pinned, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 'x')"
+    store.db.execute(add, ("blog", "rss", "https://blog.example/feed", "auto", 0, 1))
+    store.db.execute(add, ("Paused", "rss", "https://paused.example/feed", "auto", 0, 0))
+    store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "page", 1, 1))
     store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('zed.example', 'x'), ('ft.com', 'x')")
     assert store.session_sites() == ("ft.com", "zed.example")
     assert store.sources() == (
         Source("Zed", "https://zed.example/feed", pinned=True, extract="page"),
         Source("blog", "https://blog.example/feed"),
-        Source("FT", type="recipe", recipe="ft", extract="feed"),
     )
 
 

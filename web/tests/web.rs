@@ -804,8 +804,9 @@ async fn a_sites_subscriber_session_is_kept_apart_and_never_shown() {
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.find(r#"value="Aardvark""#).unwrap() < text.find(r#"value="Paper""#).unwrap());
     assert!(!text.contains("Just added"));
-    // The new-session form guesses the site from a feed that has none.
-    assert!(text.contains(r#"name="site" value="aardvark.example""#) && !text.contains("fetched with your"));
+    // The new-session form guesses nothing: no site is filled in for you.
+    assert!(text.contains(r#"<input name="site" maxlength="253" placeholder="nytimes.com""#));
+    assert!(!text.contains("fetched with your"));
 
     let path = "/sources/sessions";
     for (site_name, cookie, message) in [
@@ -835,8 +836,8 @@ async fn a_sites_subscriber_session_is_kept_apart_and_never_shown() {
     assert_eq!(count, 1);
 
     // How the last page fetched with it went, and the day the site says its sign-in ends.
-    std::fs::create_dir_all(site.folder.path().join("recipes")).unwrap();
-    let status = |body: &str| std::fs::write(site.folder.path().join("recipes/status.json"), body).unwrap();
+    std::fs::create_dir_all(site.folder.path().join("sessions")).unwrap();
+    let status = |body: &str| std::fs::write(site.folder.path().join("sessions/status.json"), body).unwrap();
     status(r#"{"site-paper.example": {"at": "2026-10-13T06:01:00-04:00", "ok": false, "note": "HTTP 403"}}"#);
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains(r#"<p class="hint failing">Last page with it failed 2026-10-13 06:01: HTTP 403</p>"#));
@@ -894,126 +895,6 @@ async fn built_in_sources_are_only_switched_on_or_off() {
     assert_eq!(mary.post(&site, &path, &[("csrf", &token), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
     assert_eq!(admin.post(&site, &path, &[("csrf", "wrong"), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
     assert!(!builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews").enabled);
-}
-
-#[tokio::test]
-async fn calibre_recipes_are_chosen_from_the_list_with_logins_kept_apart() {
-    let site = site(true).await;
-    let (recipes, logins) = (site.folder.path().join("recipes"), site.folder.path().join("logins"));
-    let mut admin = Browser::default();
-    admin.sign_in(&site, "john").await;
-    let page = admin.get(&site, "/sources").await;
-    let csrf = page.csrf();
-    assert!(page.text.contains("has not published its list") && !page.text.contains(r#"action="/sources/recipe""#));
-
-    // The recipes container publishes what it can fetch.
-    std::fs::create_dir_all(&recipes).unwrap();
-    std::fs::write(
-        recipes.join("catalogue.json"),
-        r#"{"recipes": [{"title": "Free Paper", "language": "en", "login": "no"},
-            {"title": "Paid <Paper>", "language": "en_GB", "login": "yes"}], "custom": ["mine.recipe"]}"#,
-    )
-    .unwrap();
-    let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains(r#"<option value="Paid &#60;Paper&#62;">en_GB · needs a login</option>"#));
-    assert!(text.contains(r#"<option value="mine.recipe">your own recipe file</option>"#));
-
-    let bad = admin.post(&site, "/sources/recipe", &[("csrf", &csrf), ("name", ""), ("recipe", "Made Up")]).await;
-    assert!(bad.status == StatusCode::BAD_REQUEST && bad.text.contains("Made Up is not a recipe this Calibre has"));
-    for (name, recipe) in [("", "Free Paper"), ("The Paid One", "Paid <Paper>")] {
-        let form = [("csrf", csrf.as_str()), ("name", name), ("recipe", recipe)];
-        assert!(admin.post(&site, "/sources/recipe", &form).await.location.starts_with("/sources?saved=recipe&new="));
-    }
-    let stored: Vec<_> = forenoon_web::sources::list(&site.pool)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|source| source.kind == "recipe")
-        .collect();
-    let rows: Vec<_> = stored
-        .iter()
-        .map(|s| {
-            (s.name.as_str(), s.recipe.as_str(), s.recipe_title.as_str(), s.extract.as_str(), s.check_state.as_str())
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("Free Paper", "free-paper", "Free Paper", "feed", ""),
-            ("The Paid One", "paid-paper", "Paid <Paper>", "feed", "")
-        ]
-    );
-    // The list the recipes container runs is written for it, and each new recipe is asked for now.
-    let conf = std::fs::read_to_string(recipes.join("recipes.conf")).unwrap();
-    assert!(conf.ends_with("free-paper = Free Paper\npaid-paper = Paid <Paper>\n"), "{conf}");
-    assert!(recipes.join(".requests/free-paper").exists() && recipes.join(".requests/paid-paper").exists());
-
-    // While it is being fetched the page says so and reloads; then it shows how the run went.
-    let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Fetching now") && text.contains("http-equiv"));
-    assert!(text.contains(r#"<summary class="hint failing">This recipe needs a subscriber"#));
-    assert!(text.contains(r#"<summary class="hint">This recipe does not ask for a login.</summary>"#));
-    assert_eq!(text.matches("<details open>").count(), 1, "only the one that needs a login is opened");
-    std::fs::remove_dir_all(recipes.join(".requests")).unwrap();
-    std::fs::write(
-        recipes.join("status.json"),
-        r#"{"free-paper": {"at": "2026-10-13T05:02:11-04:00", "ok": true, "note": "wrote 2026-10-13.epub (31415 bytes)"},
-            "paid-paper": {"at": "2026-10-13T05:03:40-04:00", "ok": false, "note": "failed (exit 1): <b>Login failed</b>"}}"#,
-    )
-    .unwrap();
-    let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Fetched 2026-10-13 05:02: wrote 2026-10-13.epub (31415 bytes)."));
-    assert!(text.contains(
-        r#"<p class="hint failing">Fetch failed 2026-10-13 05:03: failed (exit 1): &#60;b&#62;Login failed&#60;/b&#62;</p>"#
-    ));
-    assert!(!text.contains("http-equiv"));
-
-    // A login goes to its own folder, is never shown again, and the recipe is fetched with it.
-    let paid = stored[1].id;
-    let login = format!("/sources/{paid}/login");
-    let empty = admin.post(&site, &login, &[("csrf", &csrf), ("username", "me@example.com"), ("password", "")]).await;
-    assert!(empty.status == StatusCode::BAD_REQUEST && empty.text.contains("needs a username and a password"));
-    let form = [("csrf", csrf.as_str()), ("username", "me@example.com"), ("password", "s3cret \"quoted\"")];
-    assert_eq!(admin.post(&site, &login, &form).await.location, "/sources?saved=login");
-    let saved: String = std::fs::read_to_string(logins.join("paid-paper.json")).unwrap();
-    assert_eq!(saved, r#"{"password":"s3cret \"quoted\"","username":"me@example.com"}"#);
-    use std::os::unix::fs::PermissionsExt;
-    assert_eq!(std::fs::metadata(logins.join("paid-paper.json")).unwrap().permissions().mode() & 0o777, 0o600);
-    assert!(recipes.join(".requests/paid-paper").exists() && !recipes.join("paid-paper.json").exists());
-    let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Login saved for me@example.com.") && !text.contains("s3cret"));
-
-    // Fetch now, pause (it leaves the list), and remove (its login goes with it).
-    std::fs::remove_dir_all(recipes.join(".requests")).unwrap();
-    let free = stored[0].id;
-    assert_eq!(
-        admin.post(&site, &format!("/sources/{free}/fetch"), &[("csrf", &csrf)]).await.location,
-        "/sources?saved=fetching"
-    );
-    assert!(recipes.join(".requests/free-paper").exists());
-    let edit = [("csrf", csrf.as_str()), ("name", "Free"), ("recipe", "mine.recipe"), ("pinned", "1")];
-    assert_eq!(admin.post(&site, &format!("/sources/{free}"), &edit).await.location, "/sources?saved=saved");
-    assert!(!std::fs::read_to_string(recipes.join("recipes.conf")).unwrap().contains("free-paper"));
-    let edit = [("csrf", csrf.as_str()), ("name", "Free"), ("recipe", "mine.recipe"), ("enabled", "1")];
-    admin.post(&site, &format!("/sources/{free}"), &edit).await;
-    assert!(std::fs::read_to_string(recipes.join("recipes.conf")).unwrap().contains("free-paper = mine.recipe\n"));
-    assert_eq!(
-        admin.post(&site, &format!("/sources/{paid}/delete"), &[("csrf", &csrf)]).await.location,
-        "/sources?saved=removed"
-    );
-    assert!(!logins.join("paid-paper.json").exists());
-    assert!(!std::fs::read_to_string(recipes.join("recipes.conf")).unwrap().contains("paid-paper"));
-
-    // None of it is open to a reader.
-    let mut mary = Browser::default();
-    mary.sign_in(&site, "mary").await;
-    let token = mary.get(&site, "/account").await.csrf();
-    for path in [format!("/sources/{free}/login"), format!("/sources/{free}/fetch"), "/sources/recipe".to_owned()] {
-        let form =
-            [("csrf", token.as_str()), ("username", "x"), ("password", "y"), ("name", ""), ("recipe", "Free Paper")];
-        assert_eq!(mary.post(&site, &path, &form).await.status, StatusCode::FORBIDDEN, "{path}");
-    }
-    assert!(!logins.join("free-paper.json").exists());
 }
 
 #[tokio::test]

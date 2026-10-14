@@ -52,8 +52,8 @@ enum Command {
         /// The From address.
         #[arg(long, env = "FORENOON_SMTP_SENDER", default_value = "")]
         smtp_sender: String,
-        /// Where recipe logins are kept: a folder only this program and the recipes container
-        /// can read, never one inside the data folder. Without it, logins cannot be saved.
+        /// Where subscriber session cookies are kept: a folder only this program and the browser
+        /// container can read, never one inside the data folder. Without it, sessions cannot be saved.
         #[arg(long, env = "FORENOON_LOGINS_DIR")]
         logins_dir: Option<PathBuf>,
     },

@@ -8,16 +8,17 @@
 #   sudo sh deploy.sh [env-file] <image-tarball>  # load a saved image instead (offline)
 #
 #   sudo ONLY=tunnel sh deploy.sh [env-file]      # replace just the cloudflared container
-#   sudo ONLY=recipes sh deploy.sh [env-file]     # replace just the recipes container
+#   sudo ONLY=browser sh deploy.sh [env-file]     # replace just the browser container
 #   sudo ONLY=web sh deploy.sh [env-file]         # replace just the web pages container
 #
 # IMAGE comes from the environment, then the env file, then forenoon:local.
 # CLOUDFLARED_IMAGE likewise, defaulting to cloudflare/cloudflared:latest.
 # Roll back with:  sudo IMAGE=ghcr.io/<owner>/<repo>:sha-abc123 sh deploy.sh
 #
-# Recipes (optional): with RECIPES_IMAGE set, a fourth container runs Calibre news recipes
-# into <data>/recipes. Which ones, and their logins, are set on the web pages; the logins
-# are kept in the Docker volume forenoon-logins, which only it and the web pages mount.
+# Subscriber sessions (optional): with BROWSER_IMAGE set, a fourth container runs Chrome to
+# read article pages signed in as the reader, for the sites given a session on the web pages.
+# It exchanges requests and answers with the pipeline in <data>/sessions; the cookies are
+# kept in the Docker volume forenoon-logins, which only it and the web pages mount.
 #
 # Web pages (optional): with WEB_IMAGE and WEB_LISTEN (a port, or address:port) set, a
 # container serves the newsstand there (what was delivered; ratings can be changed), behind
@@ -55,7 +56,7 @@ IMAGE="${IMAGE:-$(env_get IMAGE)}"
 IMAGE="${IMAGE:-forenoon:local}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
-RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
+BROWSER_IMAGE="${BROWSER_IMAGE:-$(env_get BROWSER_IMAGE)}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
 WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 # Where the web pages are opened, for the links in their account emails.
@@ -70,8 +71,6 @@ FORENOON_SMTP_SENDER=$(env_get FORENOON_SMTP_SENDER)
 export FORENOON_WEB_URL FORENOON_SMTP_HOST FORENOON_SMTP_USERNAME FORENOON_SMTP_SENDER
 export FORENOON_PUBLIC_URL FORENOON_SMTP_MAX_MESSAGE_BYTES
 export FORENOON_SMTP_PORT="${FORENOON_SMTP_PORT:-587}"
-RECIPES_TIME=$(env_get RECIPES_TIME)
-export RECIPES_TIME="${RECIPES_TIME:-05:00}"
 DATA_DIR=$(env_get FORENOON_HOST_DATA)
 [ -n "$DATA_DIR" ] || { echo "FORENOON_HOST_DATA is not set in $ENV_FILE"; exit 1; }
 TZ=$(env_get TZ)
@@ -99,29 +98,32 @@ start_tunnel() {
         "$CLOUDFLARED_IMAGE" tunnel --no-autoupdate run >/dev/null
 }
 
-start_recipes() {
-    docker stop -t 30 forenoon-recipes >/dev/null 2>&1 || true
-    docker rm -f forenoon-recipes >/dev/null 2>&1 || true
-    [ -n "$RECIPES_IMAGE" ] || return 0
-    docker pull -q "$RECIPES_IMAGE" >/dev/null ||
-        echo "pull failed; will use local image $RECIPES_IMAGE if present"
-    if [ ! -d "$DATA_DIR/recipes" ]; then
-        mkdir -p "$DATA_DIR/recipes"
-        chown 1000:1000 "$DATA_DIR/recipes"
+start_browser() {
+    # forenoon-recipes was this container's name while it also ran Calibre.
+    for c in forenoon-browser forenoon-recipes; do
+        docker stop -t 30 "$c" >/dev/null 2>&1 || true
+        docker rm -f "$c" >/dev/null 2>&1 || true
+    done
+    [ -n "$BROWSER_IMAGE" ] || return 0
+    docker pull -q "$BROWSER_IMAGE" >/dev/null ||
+        echo "pull failed; will use local image $BROWSER_IMAGE if present"
+    if [ ! -d "$DATA_DIR/sessions" ]; then
+        mkdir -p "$DATA_DIR/sessions"
+        chown 1000:1000 "$DATA_DIR/sessions"
     fi
-    # Only the recipes folder and the logins volume are mounted: this container never sees
-    # the database. The web pages write the list of recipes and the logins. forenoon-browser
-    # holds what its browser keeps of a sign-in, and nothing else mounts it.
-    docker run -d --name forenoon-recipes --restart unless-stopped \
+    # Only the sessions folder and the logins volume are mounted: this container never sees
+    # the database. The web pages write the cookies. The forenoon-browser volume holds what
+    # its browser keeps of a sign-in, and nothing else mounts it.
+    docker run -d --name forenoon-browser --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true \
-        -v "$DATA_DIR/recipes:/recipes" \
+        -v "$DATA_DIR/sessions:/sessions" \
         -v forenoon-logins:/logins:ro \
         -v forenoon-browser:/browser \
-        -e TZ -e RECIPES_TIME \
-        "$RECIPES_IMAGE" >/dev/null ||
-        echo "recipes container did not start; the rest of the deploy is unaffected"
+        -e TZ \
+        "$BROWSER_IMAGE" >/dev/null ||
+        echo "browser container did not start; the rest of the deploy is unaffected"
 }
 
 start_web() {
@@ -137,7 +139,7 @@ start_web() {
     # It shares the data folder for the database: it reads what was delivered, and writes
     # accounts, sessions, sources, settings and rating changes. Its one secret from here is
     # the mail password, for the account emails; without FORENOON_SMTP_HOST those are
-    # written to its log instead. Recipe logins typed into it go to the logins volume.
+    # written to its log instead. Session cookies pasted into it go to the logins volume.
     docker run -d --name forenoon-web --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
@@ -167,11 +169,11 @@ if [ "${ONLY:-}" = "web" ]; then
     exit 0
 fi
 
-if [ "${ONLY:-}" = "recipes" ]; then
-    echo "$(date -u +%FT%TZ) recreating forenoon-recipes from ${RECIPES_IMAGE:-(none set)}"
-    start_recipes
+if [ "${ONLY:-}" = "browser" ]; then
+    echo "$(date -u +%FT%TZ) recreating forenoon-browser from ${BROWSER_IMAGE:-(none set)}"
+    start_browser
     sleep 3
-    docker ps --filter name=forenoon-recipes --format '{{.Names}}: {{.Status}}'
+    docker ps --filter name=forenoon-browser --format '{{.Names}}: {{.Status}}'
     exit 0
 fi
 
@@ -242,7 +244,7 @@ until docker exec forenoon-feedback python -c \
 done
 
 start_tunnel
-start_recipes
+start_browser
 start_web
 
 sleep 5

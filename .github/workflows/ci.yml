@@ -65,37 +65,28 @@ jobs:
           docker logs feedback
           exit 1
 
-  recipes:
-    name: Recipes image build and smoke test
+  browser:
+    name: Browser image build and smoke test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
-          context: recipes
+          context: browser
           load: true
-          tags: forenoon-recipes:ci
-          no-cache: ${{ github.event_name == 'schedule' }} # also how a newer Calibre is picked up
-          cache-from: type=gha,scope=recipes
-          cache-to: type=gha,mode=max,scope=recipes
-      - name: Calibre runs and the runner reads its list
-        run: |
-          docker run --rm --entrypoint ebook-convert forenoon-recipes:ci --list-recipes | grep -q "Financial Times"
-          mkdir -m 777 out && : > out/recipes.conf
-          docker run --rm --read-only --tmpfs /tmp --cap-drop ALL -v "$PWD/out:/recipes" \
-            forenoon-recipes:ci once
-          # The list the Sources page offers, with which publications want a login.
-          grep -q '"title": "Financial Times"' out/catalogue.json
-          grep -q '"login": "yes"' out/catalogue.json
+          tags: forenoon-browser:ci
+          no-cache: ${{ github.event_name == 'schedule' }} # also how a newer Chrome is picked up
+          cache-from: type=gha,scope=browser
+          cache-to: type=gha,mode=max,scope=browser
       # With the deploy's hardening, as the reader's user: the screen starts and Chrome draws a page.
       - name: The browser starts on its own screen
         run: |
           docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
-            --tmpfs /browser:uid=1000,gid=1000 --entrypoint python3 forenoon-recipes:ci -c '
-          import sys; sys.path.insert(0, "/usr/local/bin"); import runner
+            --tmpfs /browser:uid=1000,gid=1000 --entrypoint python3 forenoon-browser:ci -c '
+          import sys; sys.path.insert(0, "/usr/local/bin"); import fetcher
           from playwright.sync_api import sync_playwright
-          runner._start_display()
+          fetcher._start_display()
           with sync_playwright() as p:
               b = p.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
               page = b.new_page(); page.set_content("<title>ok</title>")
@@ -162,7 +153,7 @@ jobs:
   # redeploys when the digest changes. See docs/setup-deploy.md.
   publish:
     if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && (github.event_name == 'push' || github.event_name == 'schedule')
-    needs: [checks, docker, recipes, web, web-image]
+    needs: [checks, docker, browser, web, web-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -195,22 +186,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - uses: docker/metadata-action@v6
-        id: recipes-meta
+        id: browser-meta
         with:
-          images: ghcr.io/${{ github.repository }}-recipes
+          images: ghcr.io/${{ github.repository }}-browser
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
             type=ref,event=tag
       - uses: docker/build-push-action@v7
         with:
-          context: recipes
+          context: browser
           push: true
-          tags: ${{ steps.recipes-meta.outputs.tags }}
-          labels: ${{ steps.recipes-meta.outputs.labels }}
+          tags: ${{ steps.browser-meta.outputs.tags }}
+          labels: ${{ steps.browser-meta.outputs.labels }}
           no-cache: ${{ github.event_name == 'schedule' }}
-          cache-from: type=gha,scope=recipes
-          cache-to: type=gha,mode=max,scope=recipes
+          cache-from: type=gha,scope=browser
+          cache-to: type=gha,mode=max,scope=browser
       - uses: docker/metadata-action@v6
         id: web-meta
         with:

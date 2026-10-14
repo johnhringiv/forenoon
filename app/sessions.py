@@ -2,8 +2,8 @@
 
 A session is the cookie of a site the reader subscribes to, pasted on the Sources page. Every
 page on that site (from any feed, or added by hand) is fetched with it. The pipeline never
-holds the cookie: it knows only the site. It leaves a request in `<data>/recipes/.fetch/`,
-and the recipes container, the only one besides the web pages that mounts the logins volume,
+holds the cookie: it knows only the site. It leaves a request in `<data>/sessions/.fetch/`,
+and the browser container, the only one besides the web pages that mounts the logins volume,
 fetches the page with the cookie and leaves the answer beside it. Only pages the ranking
 wants read are asked for, a few a day; feeds themselves are read without the session.
 """
@@ -24,24 +24,24 @@ WAIT = 180.0  # seconds for one page: the pause between pages, and a sign-in whe
 RETRY_AFTER = 600.0  # after no answer at all, do not wait again for this long
 MAX_BYTES = 5 * 1024 * 1024
 
-# How the recipes container begins an error that needs the reader to sign in again.
+# How the browser container begins an error that needs the reader to sign in again.
 SIGNED_OUT = "Sign-in needed: "
 
-_silent_until = 0.0  # nothing answered: the recipes container is not running
-STATUS = "status.json"  # where the recipes container says how each session last went
+_silent_until = 0.0  # nothing answered: the browser container is not running
+STATUS = "status.json"  # where the browser container says how each session last went
 
 
-def sign_in_ends(recipes_dir: Path, session: str) -> date | None:
+def sign_in_ends(sessions_dir: Path, session: str) -> date | None:
     """The day the site said the session's sign-in ends, as of the last page fetched with it."""
     try:
-        status = json.loads((recipes_dir / STATUS).read_text(encoding="utf-8"))
+        status = json.loads((sessions_dir / STATUS).read_text(encoding="utf-8"))
         return date.fromisoformat(status[session]["expires"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
 def name(site: str) -> str:
-    """The session's name: its logins file, and its entry in the recipes container's status."""
+    """The session's name: its logins file, and its entry in the browser container's status."""
     return f"site-{site}"
 
 
@@ -55,12 +55,12 @@ def for_url(sites: tuple[str, ...], url: str) -> str:
     return max(covering, key=len, default="")  # the most particular, should two cover it
 
 
-def fetch(recipes_dir: Path, session: str, url: str, wait: float = WAIT, poll: float = 0.5) -> str:
+def fetch(sessions_dir: Path, session: str, url: str, wait: float = WAIT, poll: float = 0.5) -> str:
     """The page at `url`, fetched with the named session (see `name`). Raises FetchError."""
     global _silent_until
     if time.monotonic() < _silent_until:
         raise FetchError("session fetcher is not answering")
-    folder = recipes_dir / FOLDER
+    folder = sessions_dir / FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     name = uuid.uuid4().hex
     request, page, error = folder / f"{name}.json", folder / f"{name}.html", folder / f"{name}.err"
@@ -79,7 +79,7 @@ def fetch(recipes_dir: Path, session: str, url: str, wait: float = WAIT, poll: f
             time.sleep(poll)
         if request.exists():  # never picked up
             _silent_until = time.monotonic() + RETRY_AFTER
-            raise FetchError("session fetcher is not answering; is the recipes container running?")
+            raise FetchError("session fetcher is not answering; is the browser container running?")
         raise FetchError(f"session fetch took longer than {wait:.0f}s")
     finally:
         for path in (request, page, error):

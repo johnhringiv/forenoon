@@ -42,8 +42,8 @@ pub struct Options {
     pub base_url: String,
     /// The data folder, where the pipeline leaves each article's thumbnail.
     pub data_dir: std::path::PathBuf,
-    /// Where recipe logins are kept, apart from the data folder so that the pipeline, which
-    /// reads untrusted pages, never has them. `None`: logins cannot be saved.
+    /// Where subscriber session cookies are kept, apart from the data folder so that the
+    /// pipeline, which reads untrusted pages, never has them. `None`: sessions cannot be saved.
     pub logins_dir: Option<std::path::PathBuf>,
 }
 
@@ -66,7 +66,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         mailer: options.mailer,
         base_url: options.base_url.trim_end_matches('/').to_owned(),
         thumbs_dir: options.data_dir.join("thumbs"),
-        recipes_dir: options.data_dir.join("recipes"),
+        sessions_dir: options.data_dir.join("sessions"),
         logins_dir: options.logins_dir,
     };
     Ok(Router::new()
@@ -88,12 +88,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/learned/restore", post(learned::restore))
         .route("/sources", get(sources::page).post(sources::add))
         .route("/sources/{id}", post(sources::update))
-        .route("/sources/recipe", post(sources::add_recipe))
         .route("/sources/{id}/delete", post(sources::delete))
         .route("/sources/{id}/toggle", post(sources::toggle))
-        .route("/sources/{id}/fetch", post(sources::fetch))
-        .route("/sources/{id}/login", post(sources::set_login))
-        .route("/sources/{id}/login/delete", post(sources::remove_login))
         .route("/sources/sessions", post(sources::set_session))
         .route("/sources/sessions/delete", post(sources::remove_session))
         .route("/settings", get(settings::page).post(settings::save))

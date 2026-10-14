@@ -6,7 +6,7 @@ import hashlib
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 TRACKING_PARAMS = {"ref", "ref_src", "fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "source"}
-TRACKING_PREFIXES = ("utm_", "syn-")  # syn-<hex> is added to ft.com links by Calibre's FT recipe
+TRACKING_PREFIXES = ("utm_", "syn-")  # syn-<hex> is added to the links in ft.com's feeds
 
 
 def _is_tracking(key: str) -> bool:

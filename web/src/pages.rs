@@ -65,10 +65,9 @@ pub struct AppState {
     pub base_url: String,
     /// Where the pipeline leaves each article's thumbnail, as `<article id>.jpg`.
     pub thumbs_dir: std::path::PathBuf,
-    /// Shared with the recipes container: its list of recipes and how its runs went come
-    /// from here, and the list of recipes to run is written here.
-    pub recipes_dir: std::path::PathBuf,
-    /// Recipe logins, one file per recipe; see `Options::logins_dir`.
+    /// Shared with the browser container: how each subscriber session's last page went.
+    pub sessions_dir: std::path::PathBuf,
+    /// Subscriber session cookies, one file per site; see `Options::logins_dir`.
     pub logins_dir: Option<std::path::PathBuf>,
 }
 
