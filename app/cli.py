@@ -150,6 +150,8 @@ def _add_queue(cfg: Config) -> int:
         if not store.add_requests():
             store.close()
             return 0
+        # The sessions as saved now: the scheduler reloads its settings only once a delivery.
+        cfg = dataclasses.replace(cfg, sessions=store.session_sites())
         fetcher = Fetcher(cfg.user_agent, store)
         try:
             return add_requested(cfg, store, fetcher)

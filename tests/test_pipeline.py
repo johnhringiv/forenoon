@@ -1387,3 +1387,29 @@ def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
     report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
     assert report.sign_in_ends == {"blog.example": "2026-03-20"}
     assert "Your blog.example session ends on 2026-03-20." in " ".join(problems(report, cfg))
+
+
+def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(env, monkeypatch):
+    from app import cli, pipeline
+
+    cfg, store, _ = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    ask = "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, 'x')"
+    store.db.execute(ask, ("john", "https://www.paywall.example/story", "next", None))
+    # Saved on the Sources page after the scheduler read its settings, which had none.
+    store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('paywall.example', 'x')")
+    store.db.commit()
+    assert cfg.sessions == ()
+    asked = []
+
+    def with_session(recipes_dir, session, url):
+        asked.append((session, url))
+        return f"<html><body><article>{BODY}</article></body></html>"
+
+    monkeypatch.setattr(pipeline.sessions, "fetch", with_session)
+    assert cli._add_queue(cfg) == 1
+    assert asked == [("site-paywall.example", "https://www.paywall.example/story")]
+    row = store.db.execute("SELECT status, error FROM add_requests").fetchone()
+    assert (row["status"], row["error"]) == ("done", "")
