@@ -37,6 +37,8 @@ wrapped log line has no stretched spaces, and no hyphen appears that is not in t
 ├── main.rs      0O 1lI
 └── lib.rs       -> != &gt;= &lt;-x&gt;
 Jun 22 11:41:18 workstation mount[87790]: SSHFS version 3.7.1 executing &lt;-oServerAliveInterval=15&gt;</code></pre>
+<h2>Emoji</h2>
+<p>Each should show as one black-and-white glyph: 💩 🎉 ✅, a family 👨‍👩‍👧, a flag 🇺🇸, a keycap 1️⃣. These stay in the reading font: © ™.</p>
 <h2>Table</h2>
 <table><thead><tr><th>Model</th><th>Size</th><th>ms / doc</th></tr></thead>
 <tbody><tr><td>small</td><td>33 MB</td><td>12</td></tr>

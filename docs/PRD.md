@@ -221,6 +221,11 @@ are dropped and counted in the report.
   (about 200 KB), left-aligned and never hyphenated. The image downloads the font from a
   pinned release, checked against its hash; without the file (`FORENOON_CODE_FONT`, default
   `app/fonts/`), code uses the device's own monospace font. Why: [kindle-books.md](kindle-books.md).
+- Emoji are set in Noto Emoji (black and white), cut down to the emoji each book uses (a few
+  KB), because the Kindle's fonts have none. Sequences such as families, flags and keycaps
+  stay whole and are drawn as one glyph; symbols with a text form (`©`, `™`) are left to the
+  reading font. Without the file (`FORENOON_EMOJI_FONT`, default `app/fonts/`), emoji are left
+  as they are.
 
 ### Size limits
 
@@ -681,7 +686,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
   ligature settings are ignored. Code in the embedded font, left-aligned and unhyphenated,
   verified in test books on 14 October 2026 (see kindle-books.md).
 - Not yet checked on a device: the daily issue's contents page and chapter navigation, the
-  link card's appearance, and emoji in body text.
+  link card's appearance.
 - What has broken on the device and why: [kindle-books.md](kindle-books.md).
 
 ## 15. Not built yet

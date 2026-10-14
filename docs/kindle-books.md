@@ -127,12 +127,23 @@ samp {
 - Send to Kindle takes EPUB by email up to the relay's size limit (see
   [setup-email.md](setup-email.md)).
 
-### Emoji do not render (14 October 2026)
+### Emoji do not render, unless set in an embedded font (14 October 2026)
 
 The 14 October issue's "nobody should type code by hand anymore" has 💩 (U+1F4A9) in a
-sentence; on the Oasis it does not show. The reading fonts have no emoji. They are rare: 3 of
-119 saved articles have any (🔗 ×14, mostly heading-link icons, 💩 ×2, 🎉 ×1). Not handled
-yet.
+sentence; on the Oasis it does not show, because the reading fonts have no emoji. They are
+rare: 3 of 119 saved articles have any (🔗 ×14, mostly heading-link icons, 💩 ×2, 🎉 ×1).
+
+Each emoji is now wrapped in a span set in Noto Emoji (black and white, OFL), cut down to the
+emoji the book uses (17 KB for 18 emoji). A test book showed on the Oasis (`app/emoji.py`):
+
+- Every emoji renders, in body text, titles, headings, lists and code.
+- Sequences render as one glyph: families and professions joined with U+200D, the rainbow
+  flag, heart on fire, country flags (drawn as a lettered flag outline) and keycaps. Skin
+  tones show the plain emoji, since the font has no colour.
+- The font must be a fixed weight: Noto Emoji is published as a variable font, so the build
+  makes the Regular instance (the Kindle's support for variable fonts is not known).
+- Symbols with a text form of their own (`© ™ ❤ → ★` without U+FE0F) are left to the
+  reading font, which has them.
 
 ## Not yet checked on the device
 

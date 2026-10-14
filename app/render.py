@@ -18,6 +18,7 @@ import lxml.html
 from lxml import etree
 
 from .cover import cover_image
+from .emoji import emoji_font, wrap_emoji
 from .images import Asset
 
 CSS = """\
@@ -274,9 +275,11 @@ def render_epub(
 
     `title` is the book's name in the library (the dated one by default); `cover` is a JPEG.
     """
-    page = _content(article, feedback_links or {}, rating_style)
+    page = wrap_emoji(_content(article, feedback_links or {}, rating_style))
     font_css, font_assets = code_font([page])
-    assets = article.assets + font_assets
+    emoji_css, emoji_assets = emoji_font([page])
+    font_css += emoji_css
+    assets = article.assets + font_assets + emoji_assets
     stamp = (day.year, day.month, day.day, 0, 0, 0)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -403,8 +406,13 @@ def render_issue(
         page, chapter_assets = _chapter(entry, index, rating_style)
         chapters.append((f"a{index:02d}", entry.article.title, page))
         assets += chapter_assets
-    font_css, font_assets = code_font([page for _, _, page in chapters])
-    assets += font_assets
+    chapters = [(name, label, wrap_emoji(page)) for name, label, page in chapters]
+    contents = wrap_emoji(_issue_contents(entries, title, day))
+    pages = [page for _, _, page in chapters] + [contents]
+    font_css, font_assets = code_font(pages)
+    emoji_css, emoji_assets = emoji_font(pages)
+    font_css += emoji_css
+    assets += font_assets + emoji_assets
     toc = [("contents", "Contents")] + [(name, label) for name, label, _ in chapters]
 
     manifest = "\n".join(
@@ -479,7 +487,7 @@ def render_issue(
         # The library thumbnail: the mark, the date and the day's lead headlines.
         leads = [e.article.title for e in entries if not e.article.continues]
         add("OEBPS/cover.jpg", cover or cover_image(day, _issue_summary(entries), leads, part), zipfile.ZIP_STORED)
-        add("OEBPS/contents.xhtml", _issue_contents(entries, title, day))
+        add("OEBPS/contents.xhtml", contents)
         for name, _, page in chapters:
             add(f"OEBPS/{name}.xhtml", page)
         for asset in assets:

@@ -393,6 +393,49 @@ def test_code_gets_the_embedded_font_only_in_books_with_code(tmp_path, monkeypat
     render._code_font_data.cache_clear()
 
 
+def test_emoji_are_wrapped_whole_and_get_a_font_cut_to_the_book(monkeypatch):
+    """The Kindle's fonts have no emoji: each is set in an embedded font, sequences kept whole."""
+    from datetime import UTC, datetime
+
+    import lxml.html
+    import pytest
+    from fontTools.ttLib import TTFont
+
+    from app import emoji
+    from app.render import Article, render_epub
+
+    if emoji._emoji_font_data() is None:
+        pytest.skip("no emoji font here (the image downloads it)")
+    day = datetime(2026, 10, 14, tzinfo=UTC)
+
+    def book(html: str, title: str = "T") -> zipfile.ZipFile:
+        body = lxml.html.fragment_fromstring(f"<div>{html}</div>")
+        article = Article(id=title, url=f"https://e.example/{len(html)}", title=title, source="S", body=body)
+        data = render_epub(article, day)
+        assert data == render_epub(article, day)  # the cut-down font is the same every time
+        return zipfile.ZipFile(io.BytesIO(data))
+
+    family, flag, thumbs = "\U0001f468‍\U0001f469‍\U0001f467", "\U0001f1fa\U0001f1f8", "\U0001f44d\U0001f3fd"
+    zf = book(f"<p>A {family} and {flag}, {thumbs} \U0001f4a9; text forms © ™ ❤ stay.</p>", "Tea \U0001f375")
+    page = zf.read("OEBPS/article.xhtml").decode()
+    for whole in (family, flag, thumbs, "\U0001f4a9"):
+        assert f'<span class="emoji">{whole}</span>' in page
+    assert "© ™ ❤ stay" in page  # symbols with a text form are left to the reading font
+    head, body = page.split("<body", 1)
+    assert "<title>Tea \U0001f375</title>" in head and '<span class="emoji">\U0001f375</span>' in body
+    font = TTFont(io.BytesIO(zf.read("OEBPS/fonts/emoji.ttf")))
+    assert 0x1F4A9 in font.getBestCmap() and 0x1F600 not in font.getBestCmap()  # only what is used
+    assert ".emoji" in zf.read("OEBPS/style.css").decode()
+
+    plain = book("<p>No emoji.</p>")
+    assert "OEBPS/fonts/emoji.ttf" not in plain.namelist() and ".emoji" not in plain.read("OEBPS/style.css").decode()
+
+    monkeypatch.setattr(emoji, "_emoji_font_data", lambda: None)  # local runs without the file
+    bare = book("<p>Still \U0001f4a9.</p>")
+    assert "OEBPS/fonts/emoji.ttf" not in bare.namelist()
+    assert 'class="emoji"' not in bare.read("OEBPS/article.xhtml").decode()
+
+
 def test_the_settings_page_offers_the_pipelines_own_settings_with_its_defaults():
     import json
     from pathlib import Path
