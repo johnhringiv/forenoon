@@ -374,8 +374,9 @@ best candidates in full.
   text, up to `llm.read_words` (2,500) words each, goes to the model about ten articles to a
   call, with the reader's interests and ratings. Recipe articles need no fetch.
 - Per article the model returns a score from 0 to 10, a reason, whether the text is a
-  complete article (`ok`, `suspect`, `bad`), and which of its links are its subject (section
-  7e, in place of the separate link call).
+  complete article (`ok`, `suspect`, `bad`), how long it stays worth reading (`days` for
+  news tied to the week's events, `months`, or `years`), and which of its links are its
+  subject (section 7e, in place of the separate link call).
 - The read articles are tried first, best score first; candidates that were not read follow
   in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
   reading replace the ranking ones in the book and in what is recorded.
@@ -390,6 +391,27 @@ best candidates in full.
 - Measured on one day (October 2026, Claude Haiku 5.5): 23 sources including a full FT issue,
   about 165 candidates ranked, 40 read in full, 16 stories (25 articles) chosen, 167,000
   tokens, about $0.02, 80 seconds.
+
+## 7g. The library: what is kept about every candidate
+
+The pipeline keeps a record of what it considered, not only of what it sent. This is what
+the web pages' Archive shows (section 11).
+
+- **How an article reached us.** Every route is recorded, and an article can have several:
+  `feed` (a feed the install follows), `recipe`, `found` (on a built-in front page such as
+  Hacker News) and `linked` (followed from another article), each with the name of the feed,
+  recipe or front page. A followed blog's post that also reaches a front page has both.
+- **What the model made of it, per reader.** Every candidate the ranking scored has its
+  score and reason kept; a candidate the reading pass read has the score and reason from
+  reading, and how long it stays worth reading. A judgement made from a headline never
+  replaces one made by reading. Pinned articles are not put to the model and have none.
+- **A front-page find is on record once it has been ranked**, whether or not it is tried.
+  On later days it counts as already seen, so newer finds are considered before it.
+- **The text is kept for what passed the first filter.** The pages fetched for the reading
+  pass are saved as for delivered articles (`keep_pages_days`, for good by default), along
+  with their length and summary. Candidates ranked from a headline alone have a row and no
+  saved page.
+- Nothing is recorded on a dry run.
 
 ## 8. Delivery
 
@@ -453,8 +475,21 @@ database with the pipeline.
 - **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
   choose the reason with one click, or clear the rating. Changes are logged like taps, with `web` as their
   source.
-- **Send to Kindle.** Each delivered article has a button that sends it to the reader's own
-  Kindle address again, as a book of its own with fresh rating links. The web program only
+- **Archive** (`/archive`). The reader's library as a list, one row per article: everything
+  delivered to them, and everything the model weighed for them and passed over (section 7g).
+  A row shows the source, the title linked to the original, the summary when there is one,
+  the model's reason, whether it was delivered, read by the model or only weighed from its
+  headline, the score, the length, how long it stays worth reading and every way it reached
+  us. Filters are a form sent by GET, so any view is a link: words in the title, delivered
+  or read or everything, the feed, recipe or front page that brought it, how it arrived,
+  the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
+  length). Without a choice it shows what was delivered and what the model read, 50 to a
+  page. A row can be rated and sent to the Kindle like a newsstand card. A reader sees only
+  what was delivered to or weighed for them.
+- **Send to Kindle.** Each article has a button that sends it to the reader's own
+  Kindle address, as a book of its own with fresh rating links. An article the daily run
+  passed over can be sent from the Archive: it is then recorded as delivered and marked
+  "Sent on request", so the daily run never sends it again. The web program only
   queues the request; the scheduler checks the queue every minute, builds the book from the
   page saved when the article was first delivered (fetching it again only if there is none)
   and records the outcome, which the card shows. At most 10 a day per reader; it is not
@@ -526,7 +561,8 @@ A copy of each book sent is kept in `issues/`, for good by default (`keep_issues
 for saved pages).
 
 One SQLite database in the data folder, shared by the pipeline, the feedback service and the
-web pages: articles (with extraction verdict and preview data), deliveries, the tap event
+web pages: articles (with extraction verdict and preview data), the routes they arrived by,
+the model's judgements per reader, deliveries, the tap event
 log, current ratings, per-source failure counts, feed cache validators, and the web pages'
 accounts and sessions. Older databases are upgraded in
 place on start-up. Backing up the data folder backs up everything.

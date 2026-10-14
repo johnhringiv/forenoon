@@ -1,8 +1,9 @@
 """Articles a reader asked, on the web pages, to have sent to their Kindle again.
 
 The web app only queues the request. The book is built here, from the page saved when the
-article was first delivered (or fetched again when there is none), and goes to that
-reader's own Kindle addresses and nowhere else.
+article was first fetched (or fetched again when there is none), and goes to that reader's
+own Kindle addresses and nowhere else. It can be an article the daily run passed over: that
+one is then on record as delivered, so it is never sent a second time by the daily run.
 """
 
 from __future__ import annotations
@@ -76,10 +77,14 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
             user = readers.get(request["user_id"])
             if user is None or not user.kindle_addresses:
                 raise ValueError("the reader has no Kindle address")
-            if not store.is_delivered(user.id, request["article_id"]):
-                raise ValueError("not an article delivered to this reader")
-            ids = _story_ids(store, user.id, request["article_id"]) if request["story"] else [request["article_id"]]
-            articles = [_rebuild(cfg, store, fetcher, article_id)[0] for article_id in ids]
+            fresh = not store.is_delivered(user.id, request["article_id"])
+            judged = store.assessment(user.id, request["article_id"]) if fresh else None
+            if fresh and judged is None:
+                raise ValueError("not an article in this reader's library")
+            story = request["story"] and not fresh
+            ids = _story_ids(store, user.id, request["article_id"]) if story else [request["article_id"]]
+            rebuilt = [_rebuild(cfg, store, fetcher, article_id) for article_id in ids]
+            articles = [article for article, _ in rebuilt]
             first = articles[0]
             # A book asked for by name stands alone in the library: its own title, with no date
             # in front, and a cover made from the (first) article's picture.
@@ -102,6 +107,14 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                 book = render_issue(entries, now, title=first.title, cover=cover)
             attachment = Attachment(safe_filename(first.title), book, tuple(ids))
             sender([message for message, _ in build_messages(user, [attachment], cfg.smtp)], cfg.smtp)
+            if fresh:
+                result = rebuilt[0][1]
+                store.set_extraction(first.id, result.status, result.reason, result.word_count)
+                store.set_preview(first.id, result.image_url, result.description)
+                store.mark_delivered(user.id, [first.id], now)
+                store.record_selection(
+                    user.id, first.id, now, "requested", judged["score"], judged["reason"], None, False, None
+                )
         except Exception as exc:  # noqa: BLE001 - one bad request must not block the rest
             log.warning("send request %s failed: %s", request["id"], exc)
             store.finish_send(request["id"], "failed", str(exc)[:300])

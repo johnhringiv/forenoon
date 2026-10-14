@@ -95,6 +95,23 @@ CREATE TABLE IF NOT EXISTS http_cache (
     etag TEXT,
     last_modified TEXT
 );
+CREATE TABLE IF NOT EXISTS article_routes (
+    article_id TEXT NOT NULL,
+    route TEXT NOT NULL,
+    via TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    PRIMARY KEY (article_id, route, via)
+);
+CREATE TABLE IF NOT EXISTS assessments (
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    assessed_at TEXT NOT NULL,
+    score REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    read INTEGER NOT NULL DEFAULT 0,
+    lasting TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, article_id)
+);
 """
 
 
@@ -323,6 +340,10 @@ class Store:
                 (status, reason, word_count, id),
             )
 
+    def set_word_count(self, id: str, word_count: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE articles SET word_count = ? WHERE id = ?", (word_count, id))
+
     def set_title(self, id: str, title: str) -> None:
         with self.db:
             self.db.execute("UPDATE articles SET title = ? WHERE id = ?", (title, id))
@@ -341,6 +362,45 @@ class Store:
             (id,),
         ).fetchone()
         return ArticleRow(**dict(row)) if row else None
+
+    def add_route(self, article_id: str, route: str, via: str) -> None:
+        """Record one way an article reached us. It can have several: a followed blog's post
+        that also made a front page is both `feed` and `found`."""
+        with self.db:
+            self.db.execute(
+                "INSERT OR IGNORE INTO article_routes (article_id, route, via, first_seen) VALUES (?, ?, ?, ?)",
+                (article_id, route, via, now_iso()),
+            )
+
+    def routes(self, article_id: str) -> list[tuple[str, str]]:
+        rows = self.db.execute(
+            "SELECT route, via FROM article_routes WHERE article_id = ? ORDER BY first_seen, rowid", (article_id,)
+        )
+        return [(row["route"], row["via"]) for row in rows]
+
+    # assessments: what the model made of a candidate for a reader, delivered or not
+
+    def record_assessments(self, user_id: str, rows: list[tuple[str, float, str, bool, str]]) -> None:
+        """`rows` are (article id, score, reason, read in full, lasting).
+
+        A judgement from the headline never replaces one made by reading the article.
+        """
+        stamp = now_iso()
+        with self.db:
+            self.db.executemany(
+                "INSERT INTO assessments (user_id, article_id, assessed_at, score, reason, read, lasting)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(user_id, article_id) DO UPDATE SET assessed_at = excluded.assessed_at,"
+                " score = excluded.score, reason = excluded.reason, read = excluded.read, lasting = excluded.lasting"
+                " WHERE excluded.read >= assessments.read",
+                [(user_id, a, stamp, score, reason, int(read), lasting) for a, score, reason, read, lasting in rows],
+            )
+
+    def assessment(self, user_id: str, article_id: str) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT score, reason, read, lasting FROM assessments WHERE user_id = ? AND article_id = ?",
+            (user_id, article_id),
+        ).fetchone()
 
     # deliveries
 
@@ -375,7 +435,10 @@ class Store:
         """Stories delivered in the period: articles that share a story count once."""
         return self.db.execute(
             "SELECT COUNT(DISTINCT CASE WHEN story = '' THEN article_id ELSE story END) FROM deliveries"
-            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ?",
+            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ?"
+            # A book the reader asked for by hand takes none of the day's places.
+            " AND NOT EXISTS (SELECT 1 FROM selections s WHERE s.user_id = deliveries.user_id"
+            " AND s.article_id = deliveries.article_id AND s.policy = 'requested')",
             (user_id, utc_start, utc_end),
         ).fetchone()[0]
 

@@ -798,6 +798,7 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
                     "reason": "after reading",
                     "complete": complete,
                     "problem": problem,
+                    "lasting": "years" if a["title"] == "Post 2" else "soon",
                     "links": [5],
                 }
             )
@@ -822,6 +823,24 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
     assert post2["reason"] == "after reading"
     assert sorted(r["verdict"] for r in store.review_rows())[:1] == ["bad"]
     assert ("read", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+    # Every judgement is on record, delivered or not: read ones with how long they will last
+    # (only a value the model may give), and each article with the way it reached us.
+    judged = {
+        store.get_article(r["article_id"]).title: r
+        for r in store.db.execute("SELECT * FROM assessments WHERE user_id = ?", (user.id,))
+    }
+    assert (judged["Post 2"]["read"], judged["Post 2"]["lasting"], judged["Post 2"]["score"]) == (1, "years", 8)
+    assert (judged["Post 1"]["read"], judged["Post 1"]["lasting"], judged["Post 1"]["reason"]) == (
+        1,
+        "",
+        "after reading",
+    )
+    assert "Post 9" not in judged  # pinned: never put to the model
+    held_id = next(r["article_id"] for r in judged.values() if r["reason"] == "after reading" and r["score"] == 9)
+    assert store.routes(held_id) == [("feed", "Blog")] and store.get_article(held_id).word_count > 300
+    # A later look at the headline alone does not replace what reading it found.
+    store.record_assessments(user.id, [(held_id, 2.0, "from the abstract", False, "")])
+    assert store.assessment(user.id, held_id)["reason"] == "after reading"
 
 
 def test_saved_pages_and_books_are_kept_for_good_by_default(env):
@@ -911,7 +930,7 @@ def test_an_article_is_sent_again_on_request_from_its_saved_page(env):
     assert "cover" not in zipfile.ZipFile(io.BytesIO(next(first[0].iter_attachments()).get_content())).namelist()
     rows = store.db.execute("SELECT user_id, article_id, status, error FROM send_requests ORDER BY id").fetchall()
     assert [(r["status"]) for r in rows] == ["sent", "failed", "failed"]
-    assert "not an article delivered" in rows[1]["error"] and "no Kindle address" in rows[2]["error"]
+    assert "not an article in this reader's library" in rows[1]["error"] and "no Kindle address" in rows[2]["error"]
     assert store.send_requests() == []  # nothing is tried twice
 
     # A whole story on request: its articles as one book, named and covered by the lead.
@@ -944,6 +963,44 @@ def test_an_article_is_sent_again_on_request_from_its_saved_page(env):
     book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     assert f"<dc:title>{titles[1]}</dc:title>" in book.read("OEBPS/content.opf").decode()
     assert "OEBPS/article.xhtml" in book.namelist()
+
+
+def test_an_article_passed_over_can_be_sent_on_request_and_takes_no_place_of_the_day(env):
+    from app.resend import send_requested
+
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, explore_slots=0)
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)  # the pinned article and one other
+    cfg = dataclasses.replace(cfg, users=(user,))
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 9 - n, "reason": "abstract"} for n, i in enumerate(ids)])
+    backend.readings = lambda listed: [
+        {"id": a["id"], "score": 7, "reason": "read", "complete": "ok", "problem": "", "lasting": "years", "links": []}
+        for a in listed
+    ]
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=backend)
+    passed = store.db.execute(
+        "SELECT article_id FROM assessments WHERE read = 1 AND article_id NOT IN (SELECT article_id FROM deliveries)"
+    ).fetchone()["article_id"]
+    assert len(report.delivered) == 2 and not store.is_delivered(user.id, passed)
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses) VALUES ('john', 'John', 'x', 'x', 'john@kindle.com')"
+    )
+    store.db.execute("INSERT INTO send_requests (user_id, article_id, requested_at) VALUES ('john', ?, 'x')", (passed,))
+    store.db.commit()
+    day = ("2026-03-10T00:00:00+00:00", "2026-03-11T00:00:00+00:00")
+    assert store.delivered_on(user.id, *day) == 2
+
+    offline = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    sent = []
+    assert send_requested(cfg, store, offline, now=NOW, sender=lambda m, s: sent.extend(m)) == 1
+    assert len(sent) == 1 and sent[0]["To"] == "john@kindle.com"  # from the page saved when it was read
+    # It is now a delivery (never sent again by the daily run), marked as asked for, and the
+    # day's count of stories is as it was.
+    assert store.is_delivered(user.id, passed) and store.delivered_on(user.id, *day) == 2
+    chosen = {r["article_id"]: r for r in store.selection_rows(user.id)}[passed]
+    assert (chosen["policy"], chosen["score"], chosen["reason"]) == ("requested", 7, "read")
 
 
 def test_delivered_articles_get_a_thumbnail_for_the_web_pages(env):

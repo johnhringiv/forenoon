@@ -33,7 +33,7 @@ use crate::{
 };
 
 const ISSUES_PER_PAGE: usize = 14;
-const MAX_DESCRIPTION_CHARS: usize = 260;
+pub(crate) const MAX_DESCRIPTION_CHARS: usize = 260;
 const WORDS_PER_MINUTE: f64 = 230.0;
 const MAX_NAME: usize = 80;
 const MAX_INTERESTS: usize = 4000;
@@ -466,16 +466,56 @@ struct Filter {
     current: bool,
 }
 
-struct Star {
-    n: i64,
-    on: bool,
+pub(crate) struct Star {
+    pub(crate) n: i64,
+    pub(crate) on: bool,
 }
 
-struct ReasonOption {
-    key: &'static str,
-    short: &'static str,
-    label: &'static str,
-    selected: bool,
+pub(crate) struct ReasonOption {
+    pub(crate) key: &'static str,
+    pub(crate) short: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) selected: bool,
+}
+
+pub(crate) fn stars(rating: Option<i64>) -> Vec<Star> {
+    (1..=5).map(|n| Star { n, on: rating == Some(n) }).collect()
+}
+
+/// The reasons a reader can give for this rating, with the ones they chose marked.
+pub(crate) fn reason_options(rating: Option<i64>, why: &str) -> Vec<ReasonOption> {
+    match rating {
+        Some(_) => ratings::reasons_for(rating)
+            .iter()
+            .map(|(key, label)| ReasonOption {
+                key,
+                short: ratings::short(key),
+                label,
+                selected: ratings::chosen(why).any(|chosen| chosen == *key),
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// "1,200 words, 5 min", or nothing for an article whose length is not known.
+pub(crate) fn length(words: i64) -> Option<String> {
+    (words > 0).then(|| {
+        let minutes = (words as f64 / WORDS_PER_MINUTE).round().max(1.0);
+        format!("{} words, {minutes} min", thousands(words))
+    })
+}
+
+/// What became of a "Send to Kindle" request, as shown beside the button.
+pub(crate) fn send_outcome(request: &db::SendState, zone: Tz) -> String {
+    match request.status.as_str() {
+        "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
+        "sent" => {
+            let day = local(&request.requested_at, zone).map(|at| at.format("%-d %B").to_string());
+            format!("Sent to your Kindle{}.", day.map(|day| format!(" on {day}")).unwrap_or_default())
+        }
+        _ => format!("Could not be sent: {}", request.error),
+    }
 }
 
 struct Card {
@@ -555,7 +595,7 @@ pub(crate) fn web_url(url: &str) -> Option<String> {
     (has_host && plain).then(|| url.to_owned())
 }
 
-fn shorten(text: &str, limit: usize) -> String {
+pub(crate) fn shorten(text: &str, limit: usize) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.chars().count() <= limit {
         return text;
@@ -590,6 +630,9 @@ fn card(row: Delivered) -> Card {
     if policy == Some("pinned") {
         tags.push("Pinned");
     }
+    if policy == Some("requested") {
+        tags.push("Sent on request");
+    }
     if row.explore == Some(true) {
         tags.push("Exploration pick");
     }
@@ -600,10 +643,7 @@ fn card(row: Delivered) -> Card {
         let rank = row.rank.filter(|rank| *rank > 0).map(|rank| format!(", no. {rank} of the day")).unwrap_or_default();
         facts.push(format!("Score {score}{rank}"));
     }
-    if row.word_count > 0 {
-        let minutes = (row.word_count as f64 / WORDS_PER_MINUTE).round().max(1.0);
-        facts.push(format!("{} words, {minutes} min", thousands(row.word_count)));
-    }
+    facts.extend(length(row.word_count));
     let finished = row.finished == Some(true);
     let mut marks = Vec::new();
     if let Some(rating) = row.rating {
@@ -613,18 +653,7 @@ fn card(row: Delivered) -> Card {
         marks.push("Finished".to_owned());
     }
     facts.extend(ratings::chosen(&row.why).filter_map(ratings::label).map(str::to_owned));
-    let reasons = match row.rating {
-        Some(_) => ratings::reasons_for(row.rating)
-            .iter()
-            .map(|(key, label)| ReasonOption {
-                key,
-                short: ratings::short(key),
-                label,
-                selected: ratings::chosen(&row.why).any(|chosen| chosen == *key),
-            })
-            .collect(),
-        None => Vec::new(),
-    };
+    let reasons = reason_options(row.rating, &row.why);
     Card {
         link: web_url(&row.url),
         image: web_url(&row.image_url),
@@ -637,7 +666,7 @@ fn card(row: Delivered) -> Card {
         marks,
         unrated: row.rating.is_none() && !finished,
         finished,
-        stars: (1..=5).map(|n| Star { n, on: row.rating == Some(n) }).collect(),
+        stars: stars(row.rating),
         reasons,
         question: ratings::question(row.rating),
         sendable: false,
@@ -660,7 +689,7 @@ fn page_url(show: &str, before: Option<&str>) -> String {
     if parts.is_empty() { "/".to_owned() } else { format!("/?{}", parts.join("&")) }
 }
 
-fn local(stamp: &str, zone: Tz) -> Option<DateTime<Tz>> {
+pub(crate) fn local(stamp: &str, zone: Tz) -> Option<DateTime<Tz>> {
     DateTime::<FixedOffset>::parse_from_rfc3339(stamp).ok().map(|at| at.with_timezone(&zone))
 }
 
@@ -747,14 +776,7 @@ pub async fn newsstand(
     let can_send = !user.kindle_addresses.trim().is_empty();
     let requests = db::send_states(&state.pool, &user.id).await?;
     let reported = db::reported(&state.pool, &user.id).await?;
-    let outcome = |request: &db::SendState| match request.status.as_str() {
-        "queued" => "On its way to your Kindle, within a few minutes.".to_owned(),
-        "sent" => {
-            let day = local(&request.requested_at, zone).map(|at| at.format("%-d %B").to_string());
-            format!("Sent to your Kindle{}.", day.map(|day| format!(" on {day}")).unwrap_or_default())
-        }
-        _ => format!("Could not be sent: {}", request.error),
-    };
+    let outcome = |request: &db::SendState| send_outcome(request, zone);
     for story in page.issues.iter_mut().flat_map(|issue| &mut issue.stories).filter(|story| story.cards.len() > 1) {
         let last = requests.iter().rev().find(|request| request.story && request.article_id == story.cards[0].id);
         story.sendable = can_send && last.is_none_or(|request| request.status != "queued");
@@ -897,8 +919,9 @@ pub struct SendForm {
     back: Option<String>,
 }
 
-/// Ask for one delivered article to be sent to the reader's own Kindle again. This only queues
-/// it; the pipeline builds and sends the book.
+/// Ask for one article from the reader's library to be sent to their own Kindle: one delivered
+/// before, or one the daily run passed over. This only queues it; the pipeline builds and
+/// sends the book.
 pub async fn send(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -913,10 +936,12 @@ pub async fn send(
     if user.kindle_addresses.trim().is_empty() {
         return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; an admin sets it.");
     }
-    if !db::pipeline_ready(&state.pool).await? || !db::is_delivered(&state.pool, &user.id, &form.article).await? {
-        return refused(StatusCode::NOT_FOUND, "No such delivered article.");
+    if !db::pipeline_ready(&state.pool).await? || !db::in_library(&state.pool, &user.id, &form.article).await? {
+        return refused(StatusCode::NOT_FOUND, "No such article.");
     }
-    match db::queue_send(&state.pool, &user.id, &form.article, form.story.is_some()).await? {
+    // A story is something that was delivered; an article passed over is sent on its own.
+    let story = form.story.is_some() && db::is_delivered(&state.pool, &user.id, &form.article).await?;
+    match db::queue_send(&state.pool, &user.id, &form.article, story).await? {
         db::Queued::TooMany => {
             refused(StatusCode::TOO_MANY_REQUESTS, "That is the most articles that can be sent in a day.")
         }
@@ -945,8 +970,8 @@ pub async fn rate(
         return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
     }
     let pool = &state.pool;
-    if !db::pipeline_ready(pool).await? || !db::is_delivered(pool, &user.id, &form.article).await? {
-        return refused(StatusCode::NOT_FOUND, "No such delivered article.");
+    if !db::pipeline_ready(pool).await? || !db::in_library(pool, &user.id, &form.article).await? {
+        return refused(StatusCode::NOT_FOUND, "No such article.");
     }
     let now = db::get_rating(pool, &user.id, &form.article).await?;
     let rated = now.as_ref().and_then(|rating| rating.rating);

@@ -79,3 +79,20 @@ CREATE TABLE IF NOT EXISTS http_cache (
     etag TEXT,
     last_modified TEXT
 );
+CREATE TABLE IF NOT EXISTS article_routes (
+    article_id TEXT NOT NULL,
+    route TEXT NOT NULL,
+    via TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    PRIMARY KEY (article_id, route, via)
+);
+CREATE TABLE IF NOT EXISTS assessments (
+    user_id TEXT NOT NULL,
+    article_id TEXT NOT NULL,
+    assessed_at TEXT NOT NULL,
+    score REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    read INTEGER NOT NULL DEFAULT 0,
+    lasting TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, article_id)
+);

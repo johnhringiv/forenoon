@@ -1231,3 +1231,135 @@ async fn a_broken_article_is_reported_to_the_admin_apart_from_its_rating() {
             && text.contains("Extractor:")
     );
 }
+
+#[tokio::test]
+async fn the_archive_lists_the_readers_library_and_filters_it() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Compilers <b>today</b>", "john", sent).await;
+    article(pool, "m1", "https://blog.example/m", "Blog", "Mary's own", "mary", sent).await;
+    // Weighed for John and passed over: one the model read, one judged from its headline.
+    let seen = "INSERT INTO articles (id, url, source, title, first_seen, word_count) VALUES (?, ?, ?, ?, ?, 2300)";
+    let judged = "INSERT INTO assessments (user_id, article_id, assessed_at, score, reason, read, lasting)
+                  VALUES (?, ?, '2026-10-11T09:00:00+00:00', ?, ?, ?, ?)";
+    for (id, title, user, score, read, lasting) in [
+        ("n1", "A near miss on linear types", "john", 6.5, 1, "years"),
+        ("h1", "Headline only", "john", 2.0, 0, ""),
+        ("m2", "Passed over for Mary", "mary", 6.0, 1, "days"),
+    ] {
+        let url = format!("https://found.example/{id}");
+        sqlx::query(seen).bind(id).bind(url).bind("Hacker News").bind(title).bind(sent).execute(pool).await.unwrap();
+        sqlx::query(judged)
+            .bind(user)
+            .bind(id)
+            .bind(score)
+            .bind("Deep, but long")
+            .bind(read)
+            .bind(lasting)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    let route = "INSERT INTO article_routes (article_id, route, via, first_seen) VALUES (?, ?, ?, 'x')";
+    for (id, how, via) in
+        [("a1", "feed", "Blog"), ("n1", "found", "Hacker News"), ("n1", "feed", "Blog"), ("h1", "found", "Lobsters")]
+    {
+        sqlx::query(route).bind(id).bind(how).bind(via).execute(pool).await.unwrap();
+    }
+
+    let mut browser = Browser::default();
+    assert_eq!(browser.get(&site, "/archive").await.location, "/login");
+    browser.sign_in(&site, "john").await;
+    assert!(browser.get(&site, "/").await.text.contains(r#"<a href="/archive">Archive</a>"#));
+
+    // What was delivered and what the model read, newest first; never another reader's.
+    let page = browser.get(&site, "/archive").await;
+    let text = &page.text;
+    assert!(text.contains("Compilers &#60;b&#62;today&#60;/b&#62;") && !text.contains("<b>today</b>"));
+    assert!(text.find("A near miss").unwrap() < text.find("Compilers").unwrap());
+    assert!(!text.contains("Headline only") && !text.contains("Mary"));
+    assert!(text.contains("Read by the model 11 October 2026, not delivered") && text.contains("Score 6.5"));
+    assert!(text.contains("The model: Deep, but long") && text.contains("Worth reading for years"));
+    // Every way it reached us is shown.
+    assert!(text.contains("Found on Hacker News") && text.contains("From the feed Blog"));
+    assert!(text.contains("Delivered 10 October 2026") && text.contains("2,300 words, 10 min"));
+
+    let shows = |text: &str| {
+        ["Compilers", "A near miss", "Headline only"].map(|title| text.contains(&format!(">{title}"))).to_vec()
+    };
+    let view = |query: &'static str| format!("/archive?{query}");
+    for (query, expected) in [
+        ("show=all", [true, true, true]),
+        ("show=delivered", [true, false, false]),
+        ("show=near", [false, true, false]),
+        ("q=LINEAR", [false, true, false]),
+        ("show=all&via=Lobsters", [false, false, true]),
+        ("via=Blog", [true, true, false]),
+        ("route=found", [false, true, false]),
+        ("lasting=years", [false, true, false]),
+        ("rating=rated", [false, false, false]),
+        ("from=2026-10-11", [false, true, false]),
+        ("to=2026-10-10", [true, false, false]),
+        ("show=nonsense&via=Nobody&from=yesterday&sort=sideways&page=x", [true, true, false]),
+    ] {
+        assert_eq!(shows(&browser.get(&site, &view(query)).await.text), expected, "{query}");
+    }
+    let by_score = browser.get(&site, "/archive?show=all&sort=score").await.text;
+    assert!(by_score.find("A near miss").unwrap() < by_score.find("Headline only").unwrap());
+    assert!(by_score.contains("The model, from the headline: Deep, but long"));
+    assert!(by_score.contains("Weighed from its headline"));
+
+    // An article passed over can be rated and sent, and the reader lands back on this view.
+    let csrf = page.csrf();
+    let back = "/archive?show=near";
+    let rate = [("csrf", csrf.as_str()), ("article", "n1"), ("rating", "5"), ("back", back)];
+    assert_eq!(browser.post(&site, "/rate", &rate).await.location, "/archive?show=near#a-n1");
+    assert!(browser.get(&site, "/archive?rating=high").await.text.contains("Rated 5 of 5"));
+    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    assert!(browser.get(&site, back).await.text.contains("<button>Send to Kindle</button>"));
+    let send = [("csrf", csrf.as_str()), ("article", "n1"), ("story", "1"), ("back", back)];
+    assert_eq!(browser.post(&site, "/send", &send).await.location, "/archive?show=near#a-n1");
+    assert!(browser.get(&site, back).await.text.contains("On its way to your Kindle"));
+    let queued: Vec<(String, bool)> =
+        sqlx::query_as("SELECT article_id, story FROM send_requests").fetch_all(pool).await.unwrap();
+    assert_eq!(queued, [("n1".to_owned(), false)]); // never a story: it was not delivered as one
+    // Not what was weighed for someone else.
+    for other in ["m1", "m2"] {
+        let rate = [("csrf", csrf.as_str()), ("article", other), ("rating", "5")];
+        assert_eq!(browser.post(&site, "/rate", &rate).await.status, StatusCode::NOT_FOUND);
+        let send = [("csrf", csrf.as_str()), ("article", other)];
+        assert_eq!(browser.post(&site, "/send", &send).await.status, StatusCode::NOT_FOUND);
+    }
+
+    // More than a page: the next is one link away and keeps the filters.
+    for n in 0..55 {
+        let id = format!("x{n}");
+        sqlx::query(seen)
+            .bind(&id)
+            .bind("https://x.example/")
+            .bind("Blog")
+            .bind("Filler")
+            .bind(sent)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(judged).bind("john").bind(&id).bind(1.0).bind("").bind(1).bind("days").execute(pool).await.unwrap();
+    }
+    let first = browser.get(&site, "/archive?show=near").await.text;
+    assert_eq!(first.matches(r#"<div class="shelf""#).count(), 50);
+    assert!(first.contains(r#"<a href="/archive?show=near&#38;page=2">Older</a>"#) && !first.contains(">Newer<"));
+    let second = browser.get(&site, "/archive?show=near&page=2").await.text;
+    assert_eq!(second.matches(r#"<div class="shelf""#).count(), 6);
+    assert!(second.contains(r#"<a href="/archive?show=near">Newer</a>"#) && !second.contains(">Older<"));
+}
+
+#[tokio::test]
+async fn the_archive_waits_for_a_pipeline_that_keeps_what_it_weighs() {
+    let site = site(false).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let page = browser.get(&site, "/archive").await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.text.contains("has not started keeping what it weighs"));
+}
