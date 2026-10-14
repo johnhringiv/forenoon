@@ -414,9 +414,8 @@ async fn render(
                     .get(&format!("feed-{}", source.id))
                     .filter(|_| !source.session_domain.is_empty())
                     .map(|run| match run.ok {
-                        // A page fetched, or a sign-in when the login was saved.
-                        true => format!("{}: {}.", when(&run.at), run.note),
-                        false => format!("Failed {}: {}", when(&run.at), run.note),
+                        true => format!("Last page fetched with it: {}.", when(&run.at)),
+                        false => format!("Last page with it failed {}: {}", when(&run.at), run.note),
                     }),
                 session_failed: !source.session_domain.is_empty()
                     && runs.get(&format!("feed-{}", source.id)).is_some_and(|run| !run.ok),
@@ -496,9 +495,7 @@ pub async fn page(
         Some("fetching") => Some("Asked the recipes container to fetch it now."),
         Some("login") => Some("Login saved. The recipe is being fetched with it now."),
         Some("nologin") => Some("Login removed."),
-        Some("session") => Some(
-            "Session saved. With a username and password, the browser signs in within a minute and the result shows on the feed's row.",
-        ),
+        Some("session") => Some("Session saved. Article pages from that site are fetched with it from the next run."),
         Some("nosession") => Some("Session removed."),
         Some("saved") => Some("Saved."),
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
@@ -891,17 +888,11 @@ fn check_site(site: &str) -> Option<String> {
 pub struct SessionForm {
     csrf: String,
     site: String,
-    #[serde(default)]
     cookie: String,
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    password: String,
 }
 
-/// Save a feed's subscriber session where only the recipes container reads it: a cookie, or a
-/// username and password the browser there signs in with. Never shown again, never stored in
-/// the database, and used on that one site only.
+/// Save a feed's subscriber session where only the recipes container reads it. The cookie is
+/// never shown again, never stored in the database, and sent to that one site only.
 pub async fn set_session(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -927,39 +918,22 @@ pub async fn set_session(
         let problem = "Give the site the session is for, such as ft.com.".to_owned();
         return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
     };
-    let mut content = serde_json::json!({ "domain": site });
     // Pasted with or without the header's name. A line break would let it carry other headers.
     let cookie = form.cookie.trim();
     let cookie = cookie.strip_prefix("Cookie:").or_else(|| cookie.strip_prefix("cookie:")).unwrap_or(cookie).trim();
-    if !cookie.is_empty() {
-        if !plain(cookie, MAX_COOKIE) || !cookie.contains('=') || !cookie.is_ascii() {
-            let problem =
-                "Paste the Cookie header your browser sends to the site: one line of name=value pairs.".to_owned();
-            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
-        }
-        content["cookie"] = cookie.into();
-    }
-    let username = form.username.trim();
-    if !username.is_empty() || !form.password.is_empty() {
-        if !plain(username, MAX_LOGIN) || !plain(&form.password, MAX_LOGIN) {
-            let problem = "Give both the username and the password, or neither.".to_owned();
-            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
-        }
-        content["username"] = username.into();
-        content["password"] = form.password.as_str().into();
-    } else if cookie.is_empty() {
-        let problem = "Give a username and password, or paste a cookie.".to_owned();
+    if !plain(cookie, MAX_COOKIE) || !cookie.contains('=') || !cookie.is_ascii() {
+        let problem =
+            "Paste the Cookie header your browser sends to the site: one line of name=value pairs.".to_owned();
         return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
     }
+    let content = serde_json::json!({ "cookie": cookie, "domain": site }).to_string();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    write_whole(&path, content.to_string().as_bytes(), 0o600)?;
+    write_whole(&path, content.as_bytes(), 0o600)?;
     sqlx::query!("UPDATE sources SET session_domain = ? WHERE id = ? AND kind = 'rss'", site, id)
         .execute(&state.pool)
         .await?;
-    // The recipes container signs in straight away, so the page can say whether it worked.
-    request_run(&state, &format!("feed-{id}"))?;
     saved("session")
 }
 

@@ -15,9 +15,8 @@ named for a folder in `.requests/` asks for that recipe to be run now.
 It also fetches single article pages with a subscriber's session, for feed sources that have
 one: the pipeline leaves `<id>.json` (a session's name and an address) in `.fetch/`, and the
 page, or why there is none, is left beside it. The page is read by Chrome signed in as the
-reader, with a cookie or a username and password from the logins folder, one page at a time
-and no faster than one every FETCH_GAP seconds per site. What the browser keeps of a sign-in
-is in its own volume (RECIPES_BROWSER), which nothing else mounts.
+reader, with the cookie pasted on the Sources page, one page at a time and no faster than one
+every FETCH_GAP seconds per site. What the browser keeps of a session is in its own volume (RECIPES_BROWSER), which nothing else mounts.
 
     runner.py            run every day at RECIPES_TIME (default 05:00, in TZ)
     runner.py once       run every recipe now, then exit
@@ -223,9 +222,7 @@ def run_requested(out: Path = OUT) -> int:
         recipes = {}
     for request in asked:
         request.unlink(missing_ok=True)  # first, so a recipe that crashes is not run in a loop
-        if SESSION.fullmatch(request.name):
-            sign_in_now(request.name, out, LOGINS)
-        elif request.name in recipes:
+        if request.name in recipes:
             run_recipe(request.name, recipes[request.name], out)
         elif FOLDER.fullmatch(request.name):
             record(out, request.name, False, f"not listed in {CONF}")
@@ -240,7 +237,7 @@ def read_session(name: str, logins: Path = LOGINS) -> dict[str, str]:
         saved = json.loads((logins / f"{name}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    keys = ("cookie", "domain", "username", "password")
+    keys = ("cookie", "domain")
     return {k: v for k, v in saved.items() if k in keys and isinstance(v, str) and v}
 
 
@@ -259,8 +256,8 @@ def _public(host: str) -> bool:
 
 
 # Pages are read by an ordinary Chrome, run unchanged on a screen of its own (Xvfb), because
-# some sites put their articles behind a check that only a browser passes. It is not disguised
-# in any way, and nothing here answers a CAPTCHA: when a site asks for one, the reader is told.
+# some sites put their articles behind a check that only a browser passes. Nothing here answers
+# a CAPTCHA: when a site asks for one, the reader is told.
 
 # Begins every error that needs the reader to sign in again; the pipeline alerts on it.
 SIGNED_OUT = "Sign-in needed: "
@@ -289,38 +286,16 @@ def _captcha_showing(page) -> bool:
     return False
 
 
-def _ft_sign_in(page, username: str, password: str) -> None:
-    page.goto("https://accounts.ft.com/login?location=https%3A%2F%2Fwww.ft.com", wait_until="domcontentloaded")
-    page.fill("#enter-email", username)
-    page.click("#enter-email-next")
-    secret = page.locator("input[type=password]:visible").first
-    try:
-        secret.wait_for(timeout=20_000)
-    except Exception as exc:  # Playwright's timeout, said in the reader's words
-        if _captcha_showing(page):
-            raise ValueError(f"{SIGNED_OUT}ft.com asked for a CAPTCHA") from exc
-        raise ValueError(f"{SIGNED_OUT}ft.com did not ask for a password; its sign-in page may have changed") from exc
-    secret.fill(password)
-    secret.press("Enter")
-    try:
-        page.wait_for_url(lambda url: "accounts.ft.com" not in url, timeout=30_000)
-    except Exception as exc:
-        if _captcha_showing(page):
-            raise ValueError(f"{SIGNED_OUT}ft.com asked for a CAPTCHA") from exc
-        raise ValueError(f"{SIGNED_OUT}ft.com did not accept the username and password") from exc
-
-
 def _nyt_signed_in(page) -> bool:
     # The subscription gateway that covers the article for a reader who is not signed in.
     return page.locator('#gateway-content, [data-testid="gateway-content"]').count() == 0
 
 
-# What the browser knows about a site: how to tell an article was shown in full, and how to
-# sign in with a username and password. The NYT answers its sign-in page with a CAPTCHA at
-# once, so it takes a pasted cookie only, as does any site not here.
+# How to tell an article was shown in full, for the sites that say so in a way we know. Both
+# ask for a CAPTCHA at sign-in, so a session is the reader's cookie, pasted from their browser.
 SITES = {
-    "ft.com": {"signed_in": _ft_signed_in, "sign_in": _ft_sign_in},
-    "nytimes.com": {"signed_in": _nyt_signed_in},
+    "ft.com": _ft_signed_in,
+    "nytimes.com": _nyt_signed_in,
 }
 
 BROWSER_STATE = Path(os.environ.get("RECIPES_BROWSER", "/browser"))
@@ -386,8 +361,7 @@ def _load(page, url: str) -> str:
 def fetch_page(url: str, session: dict[str, str], name: str = "", state_dir: Path = BROWSER_STATE) -> bytes:
     """One page, read by the browser signed in as the reader. Raises ValueError saying why not."""
     domain = session.get("domain", "").lower()
-    login = bool(session.get("username") and session.get("password"))
-    if not domain or not (session.get("cookie") or login):
+    if not domain or not session.get("cookie"):
         raise ValueError("no session is saved for this source")
     if not on_site(url, domain):
         raise ValueError(f"not a page on {domain}")
@@ -396,9 +370,6 @@ def fetch_page(url: str, session: dict[str, str], name: str = "", state_dir: Pat
     from playwright.sync_api import Error as BrowserError  # only in the image; not needed to test the rest
     from playwright.sync_api import sync_playwright
 
-    site = SITES.get(domain, {})
-    if login and "sign_in" not in site:
-        raise ValueError(f"signing in to {domain} with a username and password is not supported; paste a cookie")
     state_dir.mkdir(parents=True, exist_ok=True)
     state = _state_file(name or domain, session, state_dir)
     wait = _last_visit.get(domain, 0.0) + FETCH_GAP - time.monotonic()
@@ -406,7 +377,7 @@ def fetch_page(url: str, session: dict[str, str], name: str = "", state_dir: Pat
         time.sleep(wait)
     _start_display()
     try:
-        html = _browse(sync_playwright, url, session, domain, site, login, state)
+        html = _browse(sync_playwright, url, session["cookie"], domain, state)
     except BrowserError as exc:
         raise ValueError(f"the browser failed: {str(exc).splitlines()[0][:200]}") from exc
     finally:
@@ -417,69 +388,28 @@ def fetch_page(url: str, session: dict[str, str], name: str = "", state_dir: Pat
     return page_bytes
 
 
-def _browse(
-    sync_playwright, url: str, session: dict[str, str], domain: str, site: dict, login: bool, state: Path
-) -> str:
+def _browse(sync_playwright, url: str, cookie: str, domain: str, state: Path) -> str:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
+        browser = playwright.chromium.launch(
+            headless=False,
+            args=["--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"],
+        )
         try:
             context = browser.new_context(storage_state=str(state) if state.exists() else None)
-            if not state.exists() and session.get("cookie"):
-                context.add_cookies(_cookies(session["cookie"], domain))
+            if not state.exists():
+                context.add_cookies(_cookies(cookie, domain))
             page = context.new_page()
             html = _load(page, url)
-            if site and not site["signed_in"](page):
-                if not (login and "sign_in" in site):
-                    raise ValueError(
-                        f"{SIGNED_OUT}the saved cookie no longer works; paste a new one or save a username and password"
-                    )
-                site["sign_in"](page, session["username"], session["password"])
-                html = _load(page, url)
-                if not site["signed_in"](page):
-                    # Signed in, so this one article is beyond the subscription: no alert.
-                    raise ValueError("signed in, but this article is still not shown in full")
+            signed_in = SITES.get(domain)
+            if signed_in and not signed_in(page):
+                raise ValueError(f"{SIGNED_OUT}the saved cookie no longer works; paste a new one")
             partial = state.with_name(f".{state.name}.tmp")
             context.storage_state(path=str(partial))
             os.replace(partial, state)
             return html
         finally:
             browser.close()
-
-
-def sign_in_now(name: str, out: Path = OUT, logins: Path = LOGINS, state_dir: Path = BROWSER_STATE) -> None:
-    """Sign in as soon as a username and password are saved, so the Sources page can say at
-    once whether the site took them (or asked for a CAPTCHA) instead of at the next run."""
-    session = read_session(name, logins)
-    domain = session.get("domain", "").lower()
-    site = SITES.get(domain)
-    if not (site and "sign_in" in site and session.get("username") and session.get("password")):
-        record(out, name, True, "saved; it is first used when the ranking wants a page from the site")
-        return
-    from playwright.sync_api import Error as BrowserError
-    from playwright.sync_api import sync_playwright
-
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state = _state_file(name, session, state_dir)
-    state.unlink(missing_ok=True)  # a fresh sign-in, not one left from before
-    try:
-        _start_display()
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
-            try:
-                context = browser.new_context()
-                site["sign_in"](context.new_page(), session["username"], session["password"])
-                partial = state.with_name(f".{state.name}.tmp")
-                context.storage_state(path=str(partial))
-                os.replace(partial, state)
-            finally:
-                browser.close()
-    except (BrowserError, ValueError) as exc:
-        note = str(exc).splitlines()[0][:300] if str(exc) else "sign-in failed"
-        record(out, name, False, note)
-        log(f"{name}: {note}")
-        return
-    record(out, name, True, f"signed in to {domain}")
-    log(f"{name}: signed in to {domain}")
 
 
 def _answer(path: Path, content: bytes) -> None:

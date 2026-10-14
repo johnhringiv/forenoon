@@ -29,7 +29,7 @@ def problems(report: RunReport, cfg: Config) -> list[str]:
     for name, why in report.sign_in_needed.items():
         found.append(
             f"'{name}' needs you to sign in again ({why}); its articles are held back until then."
-            " Save the login again on the Sources page."
+            " Paste a fresh cookie on the Sources page."
         )
     threshold = cfg.alerts.source_failures
     for source in feed_errors:

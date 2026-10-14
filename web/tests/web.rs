@@ -813,24 +813,6 @@ async fn a_feeds_subscriber_session_is_kept_apart_and_never_shown() {
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains("Subscriber session saved for paper.example.") && !text.contains("s3cret"));
 
-    // A username and password instead: kept the same way, and the recipes container is asked
-    // to sign in at once. Half a login is refused.
-    let half = [("csrf", csrf.as_str()), ("site", "paper.example"), ("username", "me@example.com")];
-    let reply = admin.post(&site, &path, &half).await;
-    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("both the username and the password"));
-    let none = [("csrf", csrf.as_str()), ("site", "paper.example")];
-    let reply = admin.post(&site, &path, &none).await;
-    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("or paste a cookie"));
-    let login =
-        [("csrf", csrf.as_str()), ("site", "paper.example"), ("username", "me@example.com"), ("password", "pa55 word")];
-    assert_eq!(admin.post(&site, &path, &login).await.location, "/sources?saved=session");
-    assert_eq!(
-        std::fs::read_to_string(&file).unwrap(),
-        r#"{"domain":"paper.example","password":"pa55 word","username":"me@example.com"}"#
-    );
-    assert!(site.folder.path().join(format!("recipes/.requests/feed-{}", feed.id)).exists());
-    assert!(!admin.get(&site, "/sources").await.text.contains("pa55"));
-
     // How the last page fetched with it went is shown, and a failure opens the form.
     std::fs::create_dir_all(site.folder.path().join("recipes")).unwrap();
     std::fs::write(
@@ -839,7 +821,7 @@ async fn a_feeds_subscriber_session_is_kept_apart_and_never_shown() {
     )
     .unwrap();
     let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Failed 2026-10-13 06:01: HTTP 403") && text.contains("<details open>"));
+    assert!(text.contains("Last page with it failed 2026-10-13 06:01: HTTP 403") && text.contains("<details open>"));
 
     // Not for a reader; not for a recipe or a built-in source; and it goes when removed.
     let mut mary = Browser::default();
