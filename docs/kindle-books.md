@@ -127,12 +127,17 @@ samp {
 - Send to Kindle takes EPUB by email up to the relay's size limit (see
   [setup-email.md](setup-email.md)).
 
+### Emoji do not render (14 October 2026)
+
+The 14 October issue's "nobody should type code by hand anymore" has 💩 (U+1F4A9) in a
+sentence; on the Oasis it does not show. The reading fonts have no emoji. They are rare: 3 of
+119 saved articles have any (🔗 ×14, mostly heading-link icons, 💩 ×2, 🎉 ×1). Not handled
+yet.
+
 ## Not yet checked on the device
 
 Found by scanning the three issues sent so far (12 to 14 October):
 
-- **Emoji in body text.** The 14 October issue has one (U+1F4A9) in a paragraph. The Kindle's
-  reading fonts probably have no emoji, so it may show as an empty box.
 - **Box drawing and arrows in code** (`├─ │ └`, `→ ← ↑ ↓`, from `tree` output and diagrams).
   JetBrains Mono NL has all of those seen so far except `⇄`. The golden test book has a
   `tree`-style block to check them.
