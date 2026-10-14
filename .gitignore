@@ -11,7 +11,7 @@ __pycache__/
 .ruff_cache/
 .local/
 .idea/
-# Third-party font used only by the local code-font trial in the golden test
+# The code font for local runs (JetBrainsMonoNL-Regular.ttf); the image downloads it
 app/fonts/
 # Build brief; kept out of the repository for now
 docs/SPEC.md

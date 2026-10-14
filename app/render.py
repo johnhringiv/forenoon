@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import copy
+import functools
 import io
+import os
+import re
 import uuid
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 import lxml.html
@@ -23,10 +27,11 @@ h2 { font-size: 1.25em; margin-top: 1.4em; }
 h3, h4, h5, h6 { font-size: 1.05em; margin-top: 1.2em; }
 .meta { font-size: 0.85em; margin: 0.2em 0; }
 .rule { border: 0; border-top: 1px solid #000; margin: 1em 0; }
-pre { font-family: monospace; font-size: 0.75em; line-height: 1.25; white-space: pre-wrap;
+pre { font-size: 0.75em; line-height: 1.25; white-space: pre-wrap;
   word-wrap: break-word; border-left: 2px solid #000; padding-left: 0.6em; margin: 1em 0; }
-code, kbd, samp { font-family: monospace; font-size: 0.9em; }
+code, kbd, samp { font-size: 0.9em; }
 pre code { font-size: 1em; }
+pre, code, kbd, samp { text-align: left; -webkit-hyphens: none; adobe-hyphenate: none; }
 blockquote { margin: 1em 0 1em 1em; padding-left: 0.6em; border-left: 2px solid #000; }
 a.noteref { font-size: 0.75em; vertical-align: super; line-height: 0; text-decoration: none; }
 aside.footnote { font-size: 0.9em; margin: 0.6em 0; }
@@ -48,6 +53,35 @@ td, th { border: 1px solid #000; padding: 0.2em 0.4em; vertical-align: top; text
 .feedback .scale { font-size: 0.8em; }
 """
 
+# Code is set in an embedded font: the Kindle draws `font-family: monospace` in its reading
+# font, while code that names no font gets the device's own monospace. So the stylesheet never
+# names `monospace`, and without the font file (local runs) code falls back to the device's.
+# The image fetches the file at build time. Found on the device: docs/kindle-books.md.
+CODE_FONT = Path(os.environ.get("FORENOON_CODE_FONT", Path(__file__).parent / "fonts" / "JetBrainsMonoNL-Regular.ttf"))
+CODE_FONT_ASSET = "fonts/code.ttf"
+CODE_FONT_CSS = f"""\
+@font-face {{ font-family: "JetBrains Mono NL"; src: url({CODE_FONT_ASSET}); }}
+pre, code, kbd, samp {{ font-family: "JetBrains Mono NL"; }}
+"""
+_CODE = re.compile(r"<(?:pre|code|kbd|samp)\b")
+
+
+@functools.cache
+def _code_font_data() -> bytes | None:
+    try:
+        return CODE_FONT.read_bytes()
+    except OSError:
+        return None
+
+
+def code_font(pages: list[str]) -> tuple[str, list[Asset]]:
+    """The code font's CSS and file, for a book whose pages hold code; nothing otherwise."""
+    data = _code_font_data()
+    if data is None or not any(_CODE.search(page) for page in pages):
+        return "", []
+    return CODE_FONT_CSS, [Asset(CODE_FONT_ASSET, data, "font/ttf")]
+
+
 CONTAINER = """\
 <?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -59,7 +93,7 @@ CONTAINER = """\
 
 # Two rows so one tap records both the rating and whether the article was finished.
 FEEDBACK_ROWS = (("f", "Finished? Rate it:"), ("r", "Didn't finish? Rate it:"))
-# Digits by default: e-reader fonts do not reliably include symbols.
+# Digits by default, by choice: stars render fine on the Oasis too.
 RATING_STYLES = {"numbers": "{n}", "stars": "\u2605"}
 
 
@@ -169,11 +203,10 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
 """
 
 
-def _opf(article: Article, title: str, modified: datetime, cover: bool = False) -> str:
+def _opf(article: Article, title: str, modified: datetime, assets: list[Asset], cover: bool = False) -> str:
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, article.url).urn
     images = "\n".join(
-        f'    <item id="img{i}" href={quoteattr(a.name)} media-type="{a.media_type}"/>'
-        for i, a in enumerate(article.assets, 1)
+        f'    <item id="img{i}" href={quoteattr(a.name)} media-type="{a.media_type}"/>' for i, a in enumerate(assets, 1)
     )
     creator = f"<dc:creator>{escape(article.author)}</dc:creator>" if article.author else ""
     date = f"<dc:date>{article.published:%Y-%m-%d}</dc:date>" if article.published else ""
@@ -241,6 +274,9 @@ def render_epub(
 
     `title` is the book's name in the library (the dated one by default); `cover` is a JPEG.
     """
+    page = _content(article, feedback_links or {}, rating_style)
+    font_css, font_assets = code_font([page])
+    assets = article.assets + font_assets
     stamp = (day.year, day.month, day.day, 0, 0, 0)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -253,14 +289,14 @@ def render_epub(
 
         add("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
         add("META-INF/container.xml", CONTAINER)
-        add("OEBPS/content.opf", _opf(article, title or book_title(article, day), day, cover is not None))
+        add("OEBPS/content.opf", _opf(article, title or book_title(article, day), day, assets, cover is not None))
         if cover is not None:
             add("OEBPS/cover.jpg", cover, zipfile.ZIP_STORED)
         add("OEBPS/nav.xhtml", _nav(article))
         add("OEBPS/toc.ncx", _ncx(article))
-        add("OEBPS/style.css", CSS + article.extra_css)
-        add("OEBPS/article.xhtml", _content(article, feedback_links or {}, rating_style))
-        for asset in article.assets:
+        add("OEBPS/style.css", CSS + font_css + article.extra_css)
+        add("OEBPS/article.xhtml", page)
+        for asset in assets:
             add(f"OEBPS/{asset.name}", asset.data, zipfile.ZIP_STORED)
     return buf.getvalue()
 
@@ -367,6 +403,8 @@ def render_issue(
         page, chapter_assets = _chapter(entry, index, rating_style)
         chapters.append((f"a{index:02d}", entry.article.title, page))
         assets += chapter_assets
+    font_css, font_assets = code_font([page for _, _, page in chapters])
+    assets += font_assets
     toc = [("contents", "Contents")] + [(name, label) for name, label, _ in chapters]
 
     manifest = "\n".join(
@@ -437,7 +475,7 @@ def render_issue(
         add("OEBPS/content.opf", opf)
         add("OEBPS/nav.xhtml", nav)
         add("OEBPS/toc.ncx", ncx)
-        add("OEBPS/style.css", CSS + ISSUE_CSS + extra_css)
+        add("OEBPS/style.css", CSS + ISSUE_CSS + font_css + extra_css)
         # The library thumbnail: the mark, the date and the day's lead headlines.
         leads = [e.article.title for e in entries if not e.article.continues]
         add("OEBPS/cover.jpg", cover or cover_image(day, _issue_summary(entries), leads, part), zipfile.ZIP_STORED)

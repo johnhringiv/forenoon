@@ -91,6 +91,9 @@ account. Setup guides:
 - [docs/setup-deploy.md](docs/setup-deploy.md): compose on a NAS, Cloudflare Tunnel, backups
 - [docs/setup-sessions.md](docs/setup-sessions.md): sites you subscribe to, read signed in as you (optional)
 
+What has gone wrong with books on the Kindle, and the rules that came from it:
+[docs/kindle-books.md](docs/kindle-books.md).
+
 ## Security notes
 
 - All fetched content is untrusted. Article HTML is reduced to an allowlist of elements and

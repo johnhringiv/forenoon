@@ -217,6 +217,10 @@ are dropped and counted in the report.
 - **Format `articles`.** One EPUB per article, titled `FN YYYY-MM-DD · Source · Title`.
 - Output is EPUB 3 with an NCX for older converters, and is byte-for-byte reproducible for
   the same input.
+- Code is set in JetBrains Mono NL (no ligatures), embedded only in books that contain code
+  (about 200 KB), left-aligned and never hyphenated. The image downloads the font from a
+  pinned release, checked against its hash; without the file (`FORENOON_CODE_FONT`, default
+  `app/fonts/`), code uses the device's own monospace font. Why: [kindle-books.md](kindle-books.md).
 
 ### Size limits
 
@@ -673,10 +677,12 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 - Verified on a Kindle Oasis (October 2026): delivery through Send to Kindle, rendering of
   text, headings, code, tables, lists, images including transparent ones, and rating taps
   through the tunnel.
-- Embedded fonts appear to be dropped by Send to Kindle's conversion; code uses the device's
-  monospace font.
-- Not yet checked on a device: the daily issue's contents page and chapter navigation, and
-  the link card's appearance.
+- Embedded fonts survive Send to Kindle's conversion when set on the element itself; CSS
+  ligature settings are ignored. Code in the embedded font, left-aligned and unhyphenated,
+  verified in test books on 14 October 2026 (see kindle-books.md).
+- Not yet checked on a device: the daily issue's contents page and chapter navigation, the
+  link card's appearance, and emoji in body text.
+- What has broken on the device and why: [kindle-books.md](kindle-books.md).
 
 ## 15. Not built yet
 

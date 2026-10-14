@@ -5,13 +5,12 @@ from __future__ import annotations
 import base64
 import io
 from datetime import UTC, datetime
-from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 from .config import Images
 from .extract import sanitize
-from .images import Asset, embed_images
+from .images import embed_images
 from .render import Article, render_epub
 from .tokens import LINK_SIGNALS
 
@@ -32,6 +31,12 @@ x<sup>2</sup>.</p>
     }
     // a deliberately long line: 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789
 }</code></pre>
+<p>Code must be monospaced, left-aligned and never hyphenated: the columns below line up, the
+wrapped log line has no stretched spaces, and no hyphen appears that is not in the text.</p>
+<pre><code>src/
+├── main.rs      0O 1lI
+└── lib.rs       -> != &gt;= &lt;-x&gt;
+Jun 22 11:41:18 workstation mount[87790]: SSHFS version 3.7.1 executing &lt;-oServerAliveInterval=15&gt;</code></pre>
 <h2>Table</h2>
 <table><thead><tr><th>Model</th><th>Size</th><th>ms / doc</th></tr></thead>
 <tbody><tr><td>small</td><td>33 MB</td><td>12</td></tr>
@@ -53,34 +58,6 @@ x<sup>2</sup>.</p>
 </figure>
 <p>Final paragraph. The rating links follow: two rows of five.</p>
 <script>alert("must not appear")</script>
-"""
-
-# Device experiment: does the conversion keep an embedded code font, and its ligatures?
-FONT = Path(__file__).parent / "fonts" / "JetBrainsMono-Regular.ttf"
-FONT_SAMPLE = """\
-if a != b &amp;&amp; c &lt;= d || e &gt;= f {
-    return x -&gt; y =&gt; z;   // === !== &lt;- :: ..
-}
-0O 1lI| {} [] () www"""
-FONT_TRIAL = f"""
-<div>
-<h2>Code font trial</h2>
-<p>The same sample three times. If A and B look identical, the embedded font was dropped.
-If B and C look identical, ligatures were not applied.</p>
-<p>A. Device monospace</p>
-<pre><code>{FONT_SAMPLE}</code></pre>
-<p>B. JetBrains Mono, ligatures off</p>
-<pre class="jbm"><code>{FONT_SAMPLE}</code></pre>
-<p>C. JetBrains Mono, ligatures on</p>
-<pre class="jbm-lig"><code>{FONT_SAMPLE}</code></pre>
-</div>
-"""
-FONT_CSS = """\
-@font-face { font-family: "JetBrains Mono"; font-weight: normal; font-style: normal;
-  src: url(fonts/JetBrainsMono-Regular.ttf); }
-pre.jbm, pre.jbm-lig { font-family: "JetBrains Mono", monospace; }
-pre.jbm { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
-pre.jbm-lig { font-variant-ligatures: contextual; font-feature-settings: "liga" 1, "calt" 1; }
 """
 
 
@@ -114,7 +91,6 @@ def _transparent_diagram() -> str:
 def golden_epub(
     links: dict[str, str] | None = None,
     label: str = "",
-    font_trial: bool = True,
     rating_style: str = "numbers",
 ) -> bytes:
     """Placeholder feedback links unless real signed ones are passed in.
@@ -131,12 +107,6 @@ def golden_epub(
         "https://example.com/golden",
     )
     assets, _ = embed_images(body, None, Images())
-    # Added after sanitising, which would strip the class attributes.
-    font_trial = font_trial and FONT.exists()  # the font file is not shipped in the repository
-    if font_trial:
-        table_heading = next(h for h in body.iter("h2") if h.text == "Table")
-        table_heading.addprevious(lxml.html.fragment_fromstring(FONT_TRIAL))
-        assets.append(Asset("fonts/JetBrainsMono-Regular.ttf", FONT.read_bytes(), "font/ttf"))
     suffix = f" {label}" if label else ""
     article = Article(
         id="golden",
@@ -148,7 +118,6 @@ def golden_epub(
         published=DAY,
         reading_minutes=2,
         assets=assets,
-        extra_css=FONT_CSS if font_trial else "",
     )
     if links is None:
         links = {s: f"https://feedback.example.com/f/golden-{s}" for s in LINK_SIGNALS}

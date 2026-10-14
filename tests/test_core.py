@@ -350,6 +350,49 @@ def test_a_book_has_no_self_closed_empty_elements():
     etree.fromstring(chapter.encode())
 
 
+def test_code_gets_the_embedded_font_only_in_books_with_code(tmp_path, monkeypatch):
+    """The Kindle draws `monospace` in its reading font: code is set in an embedded font."""
+    from datetime import UTC, datetime
+
+    import lxml.html
+
+    from app import render
+    from app.render import Article, IssueEntry, render_epub, render_issue
+
+    font = tmp_path / "code.ttf"
+    font.write_bytes(b"font bytes")
+    monkeypatch.setattr(render, "CODE_FONT", font)
+    render._code_font_data.cache_clear()
+    day = datetime(2026, 10, 14, tzinfo=UTC)
+
+    def article(html: str) -> Article:
+        return Article(id=html, url=f"https://e.example/{len(html)}", title="T", source="S",
+                       body=lxml.html.fragment_fromstring(f"<div>{html}</div>"))  # fmt: skip
+
+    coded = zipfile.ZipFile(io.BytesIO(render_epub(article("<pre><code>x = 1</code></pre>"), day)))
+    css = coded.read("OEBPS/style.css").decode()
+    assert coded.read("OEBPS/fonts/code.ttf") == b"font bytes"
+    assert 'href="fonts/code.ttf" media-type="font/ttf"' in coded.read("OEBPS/content.opf").decode()
+    assert 'font-family: "JetBrains Mono NL"' in css and "monospace" not in css
+    assert "adobe-hyphenate: none" in css and "text-align: left" in css
+
+    plain = zipfile.ZipFile(io.BytesIO(render_epub(article("<p>No code here.</p>"), day)))
+    assert "OEBPS/fonts/code.ttf" not in plain.namelist()
+    assert "JetBrains" not in plain.read("OEBPS/style.css").decode()
+
+    entries = [IssueEntry(article("<p>Plain.</p>")), IssueEntry(article("<p>Run <code>ls</code>.</p>"))]
+    issue = zipfile.ZipFile(io.BytesIO(render_issue(entries, day)))
+    assert issue.namelist().count("OEBPS/fonts/code.ttf") == 1
+    assert "JetBrains Mono NL" in issue.read("OEBPS/style.css").decode()
+
+    font.unlink()  # local runs without the file: code falls back to the device's own monospace
+    render._code_font_data.cache_clear()
+    bare = zipfile.ZipFile(io.BytesIO(render_epub(article("<pre><code>x = 1</code></pre>"), day)))
+    assert "OEBPS/fonts/code.ttf" not in bare.namelist()
+    assert "monospace" not in bare.read("OEBPS/style.css").decode()
+    render._code_font_data.cache_clear()
+
+
 def test_the_settings_page_offers_the_pipelines_own_settings_with_its_defaults():
     import json
     from pathlib import Path
