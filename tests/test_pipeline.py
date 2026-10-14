@@ -819,8 +819,10 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
     assert len(read["Post 2"]["text"].split()) == 40 and "<script" not in read["Post 1"]["text"]
     # The delivered article carries the reading pass's reason, and each page was fetched once.
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
-    post2 = next(r for r in rows.values() if r["score"] == 8)
-    assert post2["reason"] == "after reading"
+    post2 = next(r for i, r in rows.items() if store.get_article(i).title == "Post 2")
+    assert post2["reason"] == "after reading" and post2["score"] == 8
+    # The teaser's page is not found: it is a pick shown as a link, and nothing is sent for it.
+    assert [store.get_article(i).title for i in report.link_only] == ["Post 5"]
     assert sorted(r["verdict"] for r in store.review_rows())[:1] == ["bad"]
     assert ("read", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
     # Every judgement is on record, delivered or not: read ones with how long they will last
@@ -1236,7 +1238,7 @@ def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_gi
     assert not learn(off, Notes(), store, reader, start, NOW + 120 * day) and len(asked) == 3
 
 
-def test_a_signed_out_session_holds_its_articles_back_and_asks_for_a_sign_in(env, monkeypatch):
+def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_works(env, monkeypatch):
     from app import pipeline, sessions
     from app.alerts import problems
     from app.config import Alerts
@@ -1244,17 +1246,96 @@ def test_a_signed_out_session_holds_its_articles_back_and_asks_for_a_sign_in(env
 
     cfg, store, fetcher = env
     blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
+    user = dataclasses.replace(cfg.users[0], daily_cap=3)  # link cards are capped at the day's places
     cfg = dataclasses.replace(
-        cfg, sources=(blog, *cfg.sources[1:]), alerts=Alerts(to="me@example.com", source_failures=0)
+        cfg, users=(user,), sources=(blog, *cfg.sources[1:]), alerts=Alerts(to="me@example.com", source_failures=0)
     )
+    asked = []
 
     def signed_out(recipes_dir, session, url):
+        asked.append(url)
         raise FetchError(f"{sessions.SIGNED_OUT}the saved cookie no longer works")
 
     monkeypatch.setattr(pipeline.sessions, "fetch", signed_out)
     sent = []
-    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
     names = [part.get_filename() for msg in sent for part in msg.iter_attachments()]
     assert names and not any("Blog" in name for name in names), "the feed's summary is not sent in its place"
     assert report.sign_in_needed == {"Blog": "the saved cookie no longer works"}
     assert any(p.startswith("'Blog' needs you to sign in again") for p in problems(report, cfg))
+    # One page was asked for: once the session has failed, the rest of its picks are not tried.
+    assert len(asked) == 1
+    blog_posts = {store.get_article(i).title for i in report.link_only if store.get_article(i).source == "Blog"}
+    assert blog_posts == {"Post 1", "Post 2"}
+    # Shown as links: on record as picks, but they take none of the day's places.
+    day = NOW.replace(hour=0).isoformat()
+    assert store.delivered_on(user.id, day, (NOW + timedelta(days=1)).isoformat()) == len(report.delivered)
+    assert all(store.has_had(user.id, i) for i in report.link_only)
+
+    # The next day the session works again: both pages are had and join the issue after the
+    # day's own stories, and their records become deliveries on that day.
+    page = f"<html><body><article>{BODY}</article></body></html>"
+    monkeypatch.setattr(pipeline.sessions, "fetch", lambda d, s, url: page)
+    later = NOW + timedelta(days=1)
+    sent.clear()
+    again = run(cfg, store, fetcher, user, now=later, sender=lambda m, s: sent.extend(m))
+    retried = {store.get_article(i).title for i in again.retried}
+    assert retried == {"Post 1", "Post 2"} and not again.sign_in_needed
+    names = [part.get_filename() for msg in sent for part in msg.iter_attachments()]
+    assert names[-2:] == ["FN 2026-03-11 Blog Post 1.epub", "FN 2026-03-11 Blog Post 2.epub"]
+    rows = store.db.execute(
+        "SELECT link_only, delivered_at FROM deliveries WHERE article_id IN (?, ?)", tuple(again.retried)
+    ).fetchall()
+    assert all(r["link_only"] == 0 and r["delivered_at"] == later.isoformat() for r in rows)
+    # Each was picked once, by the first run: the retry did not record a second choice.
+    picked_at = {r["article_id"]: r["selected_at"] for r in store.selection_rows(user.id)}
+    assert all(picked_at[i] == NOW.isoformat() for i in again.retried)
+
+
+def test_a_link_only_source_is_never_fetched_and_its_picks_are_links(env):
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(cfg, sources=(Source("Teaser", "https://teaser.example/feed", extract="link"),))
+    asked = []
+    original = fetcher.get
+
+    def counting(url, *a, **kw):
+        asked.append(url)
+        return original(url, *a, **kw)
+
+    fetcher.get = counting
+    sent = []
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
+    assert not sent and [store.get_article(i).title for i in report.link_only] == ["Post 5"]
+    assert asked == ["https://teaser.example/feed"]
+    assert store.get_article(report.link_only[0]).description == "Just a teaser."
+    # Not tried again on a later run.
+    later = run(cfg, store, fetcher, cfg.users[0], now=NOW + timedelta(days=1), sender=lambda m, s: sent.extend(m))
+    assert not later.retried and not sent
+
+
+def test_a_missed_run_weighs_what_the_feed_published_meanwhile(env, monkeypatch):
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, explore_slots=0, read_candidates=0, group_stories=False, follow_links=False)
+    cfg = dataclasses.replace(cfg, sources=(Source("Blog", "https://blog.example/feed"),))
+    user = cfg.users[0]
+
+    def feed(numbers, day):
+        entries = [_entry(n, (day + timedelta(minutes=n)).strftime("%a, %d %b %Y %H:%M:%S GMT"), BODY) for n in numbers]
+        monkeypatch.setitem(ROUTES, "https://blog.example/feed", _rss(*entries))
+
+    weighed = []
+
+    def scores(ids):
+        weighed.append({store.get_article(i).title for i in ids})
+        return [{"id": i, "score": 5, "reason": "r"} for i in ids]
+
+    first = NOW - timedelta(days=2)
+    feed(range(1, 9), first.replace(hour=6))
+    run(cfg, store, fetcher, user, now=first, sender=lambda m, s: None, backend=FakeBackend(scores))
+    assert weighed[-1] == {f"Post {n}" for n in range(4, 9)}  # the day's share: the newest five
+
+    # The next run is two days later, and the feed has moved on: the three never weighed are
+    # still candidates, and the share is two days' worth. What was weighed is not weighed again.
+    feed(range(11, 19), NOW.replace(hour=6))
+    run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend(scores))
+    assert weighed[-1] == {f"Post {n}" for n in range(11, 19)} | {"Post 3", "Post 2"}

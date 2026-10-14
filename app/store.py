@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     article_id TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
     story TEXT NOT NULL DEFAULT '',
+    link_only INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS feedback_events (
@@ -88,7 +89,8 @@ CREATE TABLE IF NOT EXISTS source_health (
     source TEXT PRIMARY KEY,
     failures INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_ok TEXT
 );
 CREATE TABLE IF NOT EXISTS http_cache (
     url TEXT PRIMARY KEY,
@@ -158,9 +160,16 @@ class Store:
         if "reason" not in {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}:
             with self.db:
                 self.db.execute("ALTER TABLE ratings ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
-        if "story" not in {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}:
+        delivered = {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}
+        if "story" not in delivered:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN story TEXT NOT NULL DEFAULT ''")
+        if "link_only" not in delivered:
+            with self.db:
+                self.db.execute("ALTER TABLE deliveries ADD COLUMN link_only INTEGER NOT NULL DEFAULT 0")
+        if "last_ok" not in {row["name"] for row in self.db.execute("PRAGMA table_info(source_health)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE source_health ADD COLUMN last_ok TEXT")
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -393,13 +402,31 @@ class Store:
 
     # articles
 
-    def upsert_article(self, id: str, url: str, source: str, title: str, author: str, published: str | None) -> None:
+    def upsert_article(
+        self, id: str, url: str, source: str, title: str, author: str, published: str | None, description: str = ""
+    ) -> None:
+        """Recorded once, when first seen. `description` is the feed's summary, until a page gives one."""
         with self.db:
             self.db.execute(
-                "INSERT INTO articles (id, url, source, title, author, published, first_seen)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-                (id, url, source, title, author, published, now_iso()),
+                "INSERT INTO articles (id, url, source, title, author, published, first_seen, description)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                (id, url, source, title, author, published, now_iso(), description),
             )
+
+    def unoffered(self, user_id: str, source: str, since: str) -> list[ArticleRow]:
+        """A source's articles from the window that this reader has not had and the model has
+        never weighed for them, newest first: what a missed run, or a feed that has since moved
+        on, would otherwise lose."""
+        rows = self.db.execute(
+            "SELECT id, url, source, title, author, published, status, reason, word_count, image_url, description"
+            " FROM articles a WHERE source = ?1 AND status != 'failed' AND COALESCE(published, first_seen) >= ?3"
+            " AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = ?2 AND d.article_id = a.id)"
+            " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?2 AND r.article_id = a.id)"
+            " AND NOT EXISTS (SELECT 1 FROM assessments s WHERE s.user_id = ?2 AND s.article_id = a.id)"
+            " ORDER BY COALESCE(published, first_seen) DESC",
+            (source, user_id, since),
+        ).fetchall()
+        return [ArticleRow(**dict(row)) for row in rows]
 
     def has_articles_from(self, source: str) -> bool:
         """Whether this source has been read before."""
@@ -504,21 +531,46 @@ class Store:
         return [row["article_id"] for row in rows]
 
     def mark_delivered(
-        self, user_id: str, article_ids: list[str], when: datetime, stories: dict[str, str] | None = None
+        self,
+        user_id: str,
+        article_ids: list[str],
+        when: datetime,
+        stories: dict[str, str] | None = None,
+        link_only: bool = False,
     ) -> None:
-        """`stories` maps an article to its story; articles sharing one count once against the cap."""
+        """`stories` maps an article to its story; articles sharing one count once against the cap.
+
+        `link_only`: picked, but its page could not be had, so only the link is shown on the web
+        pages and nothing is sent. Sending it later turns it into a delivery on that day.
+        """
         stamp = when.astimezone(UTC).isoformat(timespec="seconds")
         with self.db:
             self.db.executemany(
-                "INSERT OR IGNORE INTO deliveries (user_id, article_id, delivered_at, story) VALUES (?, ?, ?, ?)",
-                [(user_id, a, stamp, (stories or {}).get(a, "")) for a in article_ids],
+                "INSERT INTO deliveries (user_id, article_id, delivered_at, story, link_only) VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(user_id, article_id) DO UPDATE SET delivered_at = excluded.delivered_at,"
+                " story = excluded.story, link_only = 0"
+                " WHERE deliveries.link_only = 1 AND excluded.link_only = 0",
+                [(user_id, a, stamp, (stories or {}).get(a, ""), int(link_only)) for a in article_ids],
             )
+
+    def links_waiting(self, user_id: str, since: str) -> list[ArticleRow]:
+        """Picks shown only as links since `since` that the reader has not rated, oldest first:
+        each run tries their pages again."""
+        rows = self.db.execute(
+            "SELECT a.id, a.url, a.source, a.title, a.author, a.published, a.status, a.reason, a.word_count,"
+            " a.image_url, a.description FROM deliveries d JOIN articles a ON a.id = d.article_id"
+            " WHERE d.user_id = ?1 AND d.link_only = 1 AND d.delivered_at >= ?2"
+            " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = a.id)"
+            " ORDER BY d.delivered_at, d.rowid",
+            (user_id, since),
+        ).fetchall()
+        return [ArticleRow(**dict(row)) for row in rows]
 
     def delivered_on(self, user_id: str, utc_start: str, utc_end: str) -> int:
         """Stories delivered in the period: articles that share a story count once."""
         return self.db.execute(
             "SELECT COUNT(DISTINCT CASE WHEN story = '' THEN article_id ELSE story END) FROM deliveries"
-            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ?"
+            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ? AND link_only = 0"
             # A book the reader asked for by hand takes none of the day's places.
             " AND NOT EXISTS (SELECT 1 FROM selections s WHERE s.user_id = deliveries.user_id"
             " AND s.article_id = deliveries.article_id AND s.policy = 'requested')",
@@ -686,15 +738,22 @@ class Store:
 
     # source health
 
-    def track_source(self, source: str, error: str = "") -> int:
+    def last_read(self, source: str) -> datetime | None:
+        """When the source was last read without an error."""
+        row = self.db.execute("SELECT last_ok FROM source_health WHERE source = ?", (source,)).fetchone()
+        return datetime.fromisoformat(row["last_ok"]) if row and row["last_ok"] else None
+
+    def track_source(self, source: str, error: str = "", when: datetime | None = None) -> int:
         """Record one run's outcome for a source. Returns its consecutive failures (0 = fine)."""
+        stamp = when.astimezone(UTC).isoformat(timespec="seconds") if when else now_iso()
         with self.db:
             self.db.execute(
-                "INSERT INTO source_health (source, failures, last_error, updated_at) VALUES (?, ?, ?, ?)"
+                "INSERT INTO source_health (source, failures, last_error, updated_at, last_ok) VALUES (?, ?, ?, ?, ?)"
                 " ON CONFLICT(source) DO UPDATE SET"
                 " failures = CASE WHEN excluded.failures = 0 THEN 0 ELSE failures + 1 END,"
-                " last_error = excluded.last_error, updated_at = excluded.updated_at",
-                (source, 1 if error else 0, error, now_iso()),
+                " last_error = excluded.last_error, updated_at = excluded.updated_at,"
+                " last_ok = COALESCE(excluded.last_ok, last_ok)",
+                (source, 1 if error else 0, error, stamp, None if error else stamp),
             )
         row = self.db.execute("SELECT failures FROM source_health WHERE source = ?", (source,)).fetchone()
         return row["failures"]

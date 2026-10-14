@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT COUNT(*) AS \"articles!: i64\", COUNT(DISTINCT d.delivered_at) AS \"issues!: i64\",\n           COUNT(r.rating) AS \"rated!: i64\"\n           FROM deliveries d LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?",
+  "query": "SELECT COUNT(*) FILTER (WHERE d.link_only = 0) AS \"articles!: i64\",\n           COUNT(DISTINCT d.delivered_at) FILTER (WHERE d.link_only = 0) AS \"issues!: i64\",\n           COUNT(r.rating) AS \"rated!: i64\"\n           FROM deliveries d LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?",
   "describe": {
     "columns": [
       {
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "c5fff1420b3a5881566a96fa7a0a263cd454b6c9616ac4778ce466040b461dc3"
+  "hash": "3e7d3bac241306ca9d50495564ac942efaf9560b4fee2f2d708841aa77e14ad7"
 }

@@ -28,8 +28,8 @@ def problems(report: RunReport, cfg: Config) -> list[str]:
             found.append("Nothing was delivered: no new articles were ready.")
     for name, why in report.sign_in_needed.items():
         found.append(
-            f"'{name}' needs you to sign in again ({why}); its articles are held back until then."
-            " Paste a fresh cookie on the Sources page."
+            f"'{name}' needs you to sign in again ({why}); until then its picks are shown as links on the web pages and not sent."
+            " Paste a fresh cookie on the Sources page and they are sent with the next issue."
         )
     threshold = cfg.alerts.source_failures
     for source in feed_errors:

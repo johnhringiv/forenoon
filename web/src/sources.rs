@@ -35,8 +35,12 @@ const MAX_COOKIE: usize = 16 * 1024;
 const MAX_FILE: u64 = 4 * 1024 * 1024;
 /// A run the recipes container started this long ago and never finished was interrupted.
 const RUN_MINUTES: i64 = 45;
-const EXTRACT: [(&str, &str); 3] =
-    [("auto", "Best of page and feed"), ("page", "Web page only"), ("feed", "Feed only")];
+const EXTRACT: [(&str, &str); 4] = [
+    ("auto", "Best of page and feed"),
+    ("page", "Web page only"),
+    ("feed", "Feed only"),
+    ("link", "Nowhere: show picks as links"),
+];
 
 pub struct Source {
     pub id: i64,

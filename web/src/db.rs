@@ -291,11 +291,13 @@ pub struct Totals {
     pub rated: i64,
 }
 
-/// Articles delivered to this reader, books sent, and articles rated.
+/// Articles delivered to this reader, books sent, and articles rated. Picks shown only as
+/// links were not sent, so they count only when rated.
 pub async fn totals(pool: &SqlitePool, user: &str) -> Result<Totals, sqlx::Error> {
     sqlx::query_as!(
         Totals,
-        r#"SELECT COUNT(*) AS "articles!: i64", COUNT(DISTINCT d.delivered_at) AS "issues!: i64",
+        r#"SELECT COUNT(*) FILTER (WHERE d.link_only = 0) AS "articles!: i64",
+           COUNT(DISTINCT d.delivered_at) FILTER (WHERE d.link_only = 0) AS "issues!: i64",
            COUNT(r.rating) AS "rated!: i64"
            FROM deliveries d LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
            WHERE d.user_id = ?"#,
@@ -349,6 +351,8 @@ pub struct Delivered {
     pub rating: Option<i64>,
     pub finished: Option<bool>,
     pub why: String,
+    /// Picked, but its page could not be had: shown as a link and not sent.
+    pub link_only: bool,
 }
 
 /// This reader's delivered articles between two delivery timestamps that match `show`, with
@@ -366,7 +370,7 @@ pub async fn delivered(
            a.image_url, a.description, s.policy AS "policy?", s.score AS "score?: f64",
            s.reason AS "picked?", s.rank AS "rank?: i64", s.explore AS "explore?: bool",
            r.rating AS "rating?: i64", r.finished AS "finished?: bool",
-           COALESCE(r.reason, '') AS "why!: String"
+           COALESCE(r.reason, '') AS "why!: String", d.link_only AS "link_only: bool"
            FROM deliveries d JOIN articles a ON a.id = d.article_id
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
@@ -386,6 +390,18 @@ pub async fn delivered(
     )
     .fetch_all(pool)
     .await
+}
+
+/// Whether this article was picked for the reader but shown only as a link.
+pub async fn is_link_only(pool: &SqlitePool, user: &str, article: &str) -> Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM deliveries WHERE user_id = ? AND article_id = ? AND link_only = 1",
+        user,
+        article
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(found > 0)
 }
 
 pub async fn is_delivered(pool: &SqlitePool, user: &str, article: &str) -> Result<bool, sqlx::Error> {

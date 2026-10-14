@@ -542,6 +542,8 @@ struct Card {
     sent: Option<String>,
     /// Whether the reader has reported this article as broken or incomplete.
     reported: bool,
+    /// Picked, but only its link could be had: grayed, and not offered for sending.
+    link_only: bool,
 }
 
 struct Issue {
@@ -639,6 +641,9 @@ fn card(row: Delivered) -> Card {
     if row.explore == Some(true) {
         tags.push("Exploration pick");
     }
+    if row.link_only {
+        tags.push("Link only");
+    }
     let mut facts = Vec::new();
     if let Some(score) = row.score
         && !matches!(policy, None | Some("pinned") | Some("newest-first"))
@@ -676,6 +681,7 @@ fn card(row: Delivered) -> Card {
         sent: None,
         source: row.source.split(" via ").next().unwrap_or_default().to_owned(),
         reported: false,
+        link_only: row.link_only,
         id: row.id,
     }
 }
@@ -792,15 +798,20 @@ pub async fn newsstand(
             card.image = Some(format!("/thumb/{}", card.id));
         }
         card.reported = reported.contains(&card.id);
-        card.sendable = can_send && last.is_none_or(|request| request.status != "queued");
+        card.sendable = can_send && !card.link_only && last.is_none_or(|request| request.status != "queued");
         card.sent = last.map(&outcome);
     }
     for issue in &mut page.issues {
-        let articles: usize = issue.stories.iter().map(|story| story.cards.len()).sum();
+        // Link-only picks are always on their own: they were never part of a story.
+        let links = issue.stories.iter().filter(|story| story.cards[0].link_only).count();
+        let articles: usize = issue.stories.iter().map(|story| story.cards.len()).sum::<usize>() - links;
+        let stories = issue.stories.len() - links;
         issue.count = count(articles, "article");
-        if articles > issue.stories.len() {
-            let stories = issue.stories.len();
+        if articles > stories {
             issue.count = format!("{} in {stories} {}", issue.count, if stories == 1 { "story" } else { "stories" });
+        }
+        if links > 0 {
+            issue.count = format!("{} (and {} shown as links only)", issue.count, links);
         }
         for story in &mut issue.stories {
             story.more = format!("One story · {} articles, delivered together", story.cards.len());
@@ -941,6 +952,11 @@ pub async fn send(
     }
     if !db::pipeline_ready(&state.pool).await? || !db::in_library(&state.pool, &user.id, &form.article).await? {
         return refused(StatusCode::NOT_FOUND, "No such article.");
+    }
+    if db::is_link_only(&state.pool, &user.id, &form.article).await? {
+        let why =
+            "Its page could not be had, so there is nothing to send yet. It goes with your next issue once it can.";
+        return refused(StatusCode::CONFLICT, why);
     }
     // A story is something that was delivered; an article passed over is sent on its own.
     let story = form.story.is_some() && db::is_delivered(&state.pool, &user.id, &form.article).await?;

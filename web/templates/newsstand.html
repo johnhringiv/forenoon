@@ -17,7 +17,7 @@
 <section><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
 <div class="grid">
 {% for story in issue.stories %}
-<article{% if story.cards.len() > 1 %} class="story"{% endif %}>
+<article{% if story.cards.len() > 1 %} class="story"{% else if story.cards[0].link_only %} class="link-only" title="Its page could not be had: open it on the site"{% endif %}>
 {% if story.cards.len() > 1 %}<div class="story-head"><span>{{ story.more }}</span>
 {% if story.sendable || story.sent.is_some() %}<form method="post" action="/send">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ story.cards[0].id }}"><input type="hidden" name="story" value="1"><input type="hidden" name="back" value="{{ back }}">

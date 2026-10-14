@@ -775,6 +775,13 @@ async fn sources_are_managed_by_admins_only() {
         ("The Blog", "https://blog.example/atom", false, false)
     );
     assert!(admin.get(&site, "/sources").await.text.contains("3 sources, 1 paused, 0 failing."));
+
+    // A link-only feed: its pages are never fetched, and its picks are shown as links.
+    let paper = add("Paper", "https://paper.example/feed", &[("extract", "link")]);
+    let paper: Vec<(&str, &str)> = paper.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    assert_eq!(admin.post(&site, "/sources", &paper).await.location, "/sources?saved=added");
+    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
+    assert!(stored.iter().any(|s| s.name == "Paper" && s.extract == "link"));
 }
 
 #[tokio::test]
@@ -1157,6 +1164,34 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
         .unwrap();
     }
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_pick_shown_only_as_a_link_is_grayed_and_never_sent() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Post 1", "john", sent).await;
+    article(pool, "p1", "https://paper.example/1", "Paper", "Behind the paywall", "john", sent).await;
+    sqlx::query("UPDATE deliveries SET link_only = 1 WHERE article_id = 'p1'").execute(pool).await.unwrap();
+    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    let page = browser.get(&site, "/").await;
+    let text = &page.text;
+    // In the day's issue, grayed and marked, with a link to the site and no Send button; the
+    // counts are of what was sent.
+    assert!(text.contains("1 article in 1 issue.") && text.contains("1 article (and 1 shown as links only)"));
+    let card = text.split("class=\"link-only\"").nth(1).unwrap().split("</article>").next().unwrap();
+    assert!(card.contains("Behind the paywall") && card.contains("Link only"));
+    assert!(card.contains("href=\"https://paper.example/1\"") && !card.contains("Send to Kindle"));
+    // It can still be rated, but not sent by hand.
+    let csrf = page.csrf();
+    let form = [("csrf", csrf.as_str()), ("article", "p1"), ("back", "/")];
+    assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::CONFLICT);
+    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM send_requests").fetch_one(pool).await.unwrap();
+    assert_eq!(queued, 0);
 }
 
 #[tokio::test]

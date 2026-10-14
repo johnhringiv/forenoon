@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     article_id TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
     story TEXT NOT NULL DEFAULT '',
+    link_only INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS feedback_events (
@@ -72,7 +73,8 @@ CREATE TABLE IF NOT EXISTS source_health (
     source TEXT PRIMARY KEY,
     failures INTEGER NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_ok TEXT
 );
 CREATE TABLE IF NOT EXISTS http_cache (
     url TEXT PRIMARY KEY,
