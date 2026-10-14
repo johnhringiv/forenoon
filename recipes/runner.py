@@ -310,9 +310,18 @@ def _ft_sign_in(page, username: str, password: str) -> None:
         raise ValueError(f"{SIGNED_OUT}ft.com did not accept the username and password") from exc
 
 
+def _nyt_signed_in(page) -> bool:
+    # The subscription gateway that covers the article for a reader who is not signed in.
+    return page.locator('#gateway-content, [data-testid="gateway-content"]').count() == 0
+
+
 # What the browser knows about a site: how to tell an article was shown in full, and how to
-# sign in with a username and password. A site not here can use a pasted cookie only.
-SITES = {"ft.com": {"signed_in": _ft_signed_in, "sign_in": _ft_sign_in}}
+# sign in with a username and password. The NYT answers its sign-in page with a CAPTCHA at
+# once, so it takes a pasted cookie only, as does any site not here.
+SITES = {
+    "ft.com": {"signed_in": _ft_signed_in, "sign_in": _ft_sign_in},
+    "nytimes.com": {"signed_in": _nyt_signed_in},
+}
 
 BROWSER_STATE = Path(os.environ.get("RECIPES_BROWSER", "/browser"))
 CHALLENGE_TITLES = ("Just a moment...", "Security Verification")
@@ -366,6 +375,8 @@ def _load(page, url: str) -> str:
         page.wait_for_load_state("load", timeout=15_000)
     except Exception:  # noqa: BLE001,S110 - a slow advert is no reason to give up the article
         pass
+    if any("captcha" in frame.url for frame in page.frames[1:]) or _captcha_showing(page):
+        raise ValueError(f"{urlsplit(url).hostname} asked for a CAPTCHA; it is not answered")
     # The check answers 403 until it is passed; the page that follows it is the one that counts.
     if not checked and reply is not None and reply.status >= 400:
         raise ValueError(f"HTTP {reply.status}")
@@ -386,7 +397,7 @@ def fetch_page(url: str, session: dict[str, str], name: str = "", state_dir: Pat
     from playwright.sync_api import sync_playwright
 
     site = SITES.get(domain, {})
-    if login and not site:
+    if login and "sign_in" not in site:
         raise ValueError(f"signing in to {domain} with a username and password is not supported; paste a cookie")
     state_dir.mkdir(parents=True, exist_ok=True)
     state = _state_file(name or domain, session, state_dir)
@@ -418,7 +429,7 @@ def _browse(
             page = context.new_page()
             html = _load(page, url)
             if site and not site["signed_in"](page):
-                if not login:
+                if not (login and "sign_in" in site):
                     raise ValueError(
                         f"{SIGNED_OUT}the saved cookie no longer works; paste a new one or save a username and password"
                     )
@@ -441,7 +452,7 @@ def sign_in_now(name: str, out: Path = OUT, logins: Path = LOGINS, state_dir: Pa
     session = read_session(name, logins)
     domain = session.get("domain", "").lower()
     site = SITES.get(domain)
-    if not (site and session.get("username") and session.get("password")):
+    if not (site and "sign_in" in site and session.get("username") and session.get("password")):
         record(out, name, True, "saved; it is first used when the ranking wants a page from the site")
         return
     from playwright.sync_api import Error as BrowserError

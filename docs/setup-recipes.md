@@ -56,7 +56,7 @@ feed under **Feeds** as usual, then open "Add your session" on its row and eithe
 - **For ft.com:** give your **Username** and **Password**, check **Site** says `ft.com` and
   press **Save session**. The recipes container signs in within a minute and the row says
   whether it worked. It signs in again by itself whenever the site signs it out.
-- **For any other site:** paste the cookie your browser sends to the site when you are
+- **For any other site, the NYT included** (its sign-in page asks for a CAPTCHA at once): paste the cookie your browser sends to the site when you are
   signed in. Sign in to the site in your browser, open the developer tools, go to the
   Network tab and reload, pick any request to the site and copy the value of its `Cookie`
   request header into **Or a cookie**. It works until the site ends that session.
