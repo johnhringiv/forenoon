@@ -5,12 +5,20 @@ reference for existing behaviour; planned work is listed at the end and is not b
 
 ## 1. Purpose
 
-Forenoon is a self-hosted reading digest for e-readers. Each morning it reads the feeds its
-owner configured, extracts the new articles, and emails them to the owner's Kindle as one
-book. Each article ends with rating links; ratings are recorded for later use in ranking.
+Forenoon is a self-hosted reading digest for e-readers. It exists for two reasons: its owner
+was spending too much time scrolling and reading whatever a feed served up, and was not
+using a Kindle because the long technical posts and news they like to read are not easily
+got onto one. Other aggregators exist, but they answer to advertisers or an agenda and are
+far less tailored. Forenoon answers only to its reader.
+
+Each morning it reads the feeds, publications and front pages its owner chose, has a model
+choose what that reader would want from a description of their interests and their past
+ratings, and emails the result to their Kindle as one book. Each article ends with rating
+links, and the ratings feed the next day's choices. Web pages show what was delivered and
+what was passed over, take ratings and links added by hand, and hold all the settings.
 
 It runs as containers on a home server. It is not a hosted service: each install fetches only
-the feeds its own users configure and delivers only to the addresses its admin has set.
+what its own users configure and delivers only to the addresses its admin has set.
 
 ## 2. Users and configuration
 
@@ -231,7 +239,7 @@ reader's reason when there is one, and is told to work out what a rating is abou
 learning from it (a low rating on a short post is a verdict on thin posts, not on its
 source).
 
-## 7a. Ranking with Claude (optional, off by default)
+## 7a. Ranking with Claude (on by default; needs an API key)
 
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
@@ -395,12 +403,12 @@ best candidates in full.
 ## 7g. The library: what is kept about every candidate
 
 The pipeline keeps a record of what it considered, not only of what it sent. This is what
-the web pages' Archive shows (section 11).
+the web pages' Archive shows (section 9a).
 
 - **How an article reached us.** Every route is recorded, and an article can have several:
   `feed` (a feed the install follows), `recipe`, `found` (on a built-in front page such as
-  Hacker News) and `linked` (followed from another article), each with the name of the feed,
-  recipe or front page. A followed blog's post that also reaches a front page has both.
+  Hacker News), `linked` (followed from another article) and `manual` (added by a reader by
+  hand), each with the name of the feed, recipe or front page. A followed blog's post that also reaches a front page has both.
 - **What the model made of it, per reader.** Every candidate the ranking scored has its
   score and reason kept; a candidate the reading pass read has the score and reason from
   reading, and how long it stays worth reading. A judgement made from a headline never
@@ -412,6 +420,25 @@ the web pages' Archive shows (section 11).
   with their length and summary. Candidates ranked from a headline alone have a row and no
   saved page.
 - Nothing is recorded on a dry run.
+- **Never sent twice, never sent once read.** The daily run skips an article the reader has
+  already been sent, rated or marked finished.
+
+### Links added by hand
+
+A reader adds a link on the Archive page and says what to do with it. The web program only
+queues it; the scheduler checks the queue every minute (`forenoon send-queue` works it at
+once), fetches the page as it fetches any article (public addresses only, and with a feed's
+subscriber session when one covers the site), saves the page, and stores the article with
+the route `manual` and its site as the source.
+
+- **Put it in my next issue.** It goes first in the reader's next daily issue, ahead of
+  pinned sources, built from the page saved when it was added, and takes one of the day's
+  places. If the day is already full it waits for the next. Recorded as chosen by `added`.
+- **Send it to my Kindle now.** Sent as a book of its own, as Send to Kindle does.
+- **Only keep it: I have read it.** Marked finished, with the reader's rating when given.
+  It is never sent, and the rating counts with the others when the model chooses.
+- A link that cannot be fetched or has no article in it is marked failed, with the reason
+  shown on the Archive page for a day. At most 30 links a day per reader.
 
 ## 8. Delivery
 
@@ -483,9 +510,10 @@ database with the pipeline.
   us. Filters are a form sent by GET, so any view is a link: words in the title, delivered
   or read or everything, the feed, recipe or front page that brought it, how it arrived,
   the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
-  length). Without a choice it shows what was delivered and what the model read, 50 to a
-  page. A row can be rated and sent to the Kindle like a newsstand card. A reader sees only
-  what was delivered to or weighed for them.
+  length). Without a choice it shows what was delivered, added by hand or read by the
+  model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
+  form at the top adds a link by hand (section 7g). A reader sees only what was delivered
+  to, added by or weighed for them.
 - **Send to Kindle.** Each article has a button that sends it to the reader's own
   Kindle address, as a book of its own with fresh rating links. An article the daily run
   passed over can be sent from the Archive: it is then recorded as delivered and marked
@@ -538,7 +566,7 @@ database with the pipeline.
 | `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X           |
 | `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                   |
 | `forenoon thumbs`                               | Make the web pages' thumbnails for articles delivered earlier |
-| `forenoon send-queue`                           | Send the articles readers asked for on the web pages, now     |
+| `forenoon send-queue`                           | Fetch the links readers added and send what they asked for    |
 | `forenoon feedback-log`                         | Print taps and current ratings                                |
 | `forenoon usage`                                | Print recent model calls and today's token use                |
 | `forenoon checks [--all]`                       | Print articles the model thought were badly extracted         |
@@ -609,7 +637,9 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-recipes.md`.
 - Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
 - Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
-- A web interface for sources and preferences, adding articles by hand, and account
-  management in the browser (sign-up, password reset, admin pages).
+- The whole archive of a followed blog; full-text search of stored articles; expiring
+  articles past their shelf life; a "throwback" section of older pieces worth a second look.
+- A search agent, or an MCP server, over the library.
+- Editing the prompts in the browser; sign-up and admin pages for accounts.
 - Newsletters by email as a source.
 - E-readers other than Kindle.

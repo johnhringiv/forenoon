@@ -292,6 +292,55 @@ class Store:
             "SELECT id, user_id, article_id, story FROM send_requests WHERE status = 'queued' ORDER BY id"
         ).fetchall()
 
+    def queue_send(self, user_id: str, article_id: str) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO send_requests (user_id, article_id, requested_at) VALUES (?, ?, ?)",
+                (user_id, article_id, now_iso()),
+            )
+
+    # links added by hand (queued by the web app's Archive page)
+
+    def add_requests(self) -> list[sqlite3.Row]:
+        """Links not yet fetched, oldest first; none until the web app has made its table."""
+        if not self._has_table("add_requests"):
+            return []
+        return self.db.execute(
+            "SELECT id, user_id, url, action, rating FROM add_requests WHERE status = 'queued' ORDER BY id"
+        ).fetchall()
+
+    def finish_add(self, request_id: int, status: str, article_id: str = "", error: str = "") -> None:
+        with self.db:
+            self.db.execute(
+                "UPDATE add_requests SET status = ?, article_id = ?, error = ?, done_at = ? WHERE id = ?",
+                (status, article_id, error, now_iso(), request_id),
+            )
+
+    def added_by(self, user_id: str, article_id: str) -> bool:
+        """Whether this reader added the article by hand."""
+        if not self._has_table("add_requests"):
+            return False
+        return bool(
+            self.db.execute(
+                "SELECT 1 FROM add_requests WHERE user_id = ? AND article_id = ? AND status = 'done'",
+                (user_id, article_id),
+            ).fetchone()
+        )
+
+    def waiting_adds(self, user_id: str) -> list[str]:
+        """Articles the reader added for their next issue that have not been delivered, oldest first."""
+        if not self._has_table("add_requests"):
+            return []
+        rows = self.db.execute(
+            "SELECT article_id, MIN(id) AS first FROM add_requests r"
+            " WHERE user_id = ? AND action = 'next' AND status = 'done'"
+            " AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = r.user_id AND d.article_id = r.article_id)"
+            " AND NOT EXISTS (SELECT 1 FROM ratings g WHERE g.user_id = r.user_id AND g.article_id = r.article_id)"
+            " GROUP BY article_id ORDER BY first",
+            (user_id,),
+        ).fetchall()
+        return [row["article_id"] for row in rows]
+
     def story_of(self, user_id: str, article_id: str) -> list[str]:
         """The articles delivered to this reader in the same story as this one, lead first.
 
@@ -408,6 +457,17 @@ class Store:
         return (
             self.db.execute(
                 "SELECT 1 FROM deliveries WHERE user_id = ? AND article_id = ?",
+                (user_id, article_id),
+            ).fetchone()
+            is not None
+        )
+
+    def has_had(self, user_id: str, article_id: str) -> bool:
+        """Delivered to this reader, or already rated or marked read by them: not to be sent."""
+        return (
+            self.db.execute(
+                "SELECT 1 FROM deliveries WHERE user_id = ?1 AND article_id = ?2"
+                " UNION ALL SELECT 1 FROM ratings WHERE user_id = ?1 AND article_id = ?2 LIMIT 1",
                 (user_id, article_id),
             ).fetchone()
             is not None

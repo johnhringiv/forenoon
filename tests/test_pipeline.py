@@ -1118,3 +1118,55 @@ def test_a_post_dated_before_it_appeared_is_not_lost(env):
         assert run(fresh, other, fetcher, user, now=NOW, sender=lambda m, s: None).delivered == []
     finally:
         del ROUTES["https://late.example/feed"]
+
+
+def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
+    from app.adds import add_requested
+    from app.resend import send_requested
+
+    cfg, store, fetcher = env
+    user = cfg.users[0]
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses) VALUES ('john', 'John', 'x', 'x', 'john@kindle.com')"
+    )
+    ask = "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, 'x')"
+    store.db.execute(ask, ("john", "https://found.example/post-70?utm_source=share", "keep", 4))
+    store.db.execute(ask, ("john", "https://found.example/post-71", "now", None))
+    store.db.execute(ask, ("john", "https://found.example/post-72", "next", None))
+    store.db.execute(ask, ("john", "https://found.example/missing", "next", None))
+    store.db.execute(ask, ("john", "file:///etc/passwd", "next", None))
+    store.db.execute(ask, ("stranger", "https://found.example/post-73", "next", None))
+    store.db.commit()
+    assert add_requested(cfg, store, fetcher) == 3 and store.add_requests() == []
+    rows = store.db.execute("SELECT status, error, article_id FROM add_requests ORDER BY id").fetchall()
+    assert [r["status"] for r in rows] == ["done", "done", "done", "failed", "failed", "failed"]
+    assert "nothing could be read" in rows[3]["error"] and rows[4]["error"] == "not a web address"
+    assert rows[5]["error"] == "no such reader"
+    kept, now_id, next_id = (r["article_id"] for r in rows[:3])
+
+    # Stored like any article, from its page, by the route "manual", without the tracking tag.
+    article = store.get_article(kept)
+    assert (article.url, article.source, article.status) == ("https://found.example/post-70", "found.example", "clean")
+    assert article.word_count == 350 and store.routes(kept) == [("manual", "")]
+    assert (cfg.pages_dir / f"{kept}.json.gz").exists()
+    # Kept as read: rated and finished, and so never delivered.
+    rating = store.get_rating("john", kept)
+    assert (rating.rating, rating.finished) == (4, True) and store.has_had("john", kept)
+
+    # Sent now: queued as a book of its own, built from the saved page.
+    offline = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    sent = []
+    assert send_requested(cfg, store, offline, now=NOW, sender=lambda m, s: sent.extend(m)) == 1
+    assert len(sent) == 1 and store.is_delivered("john", now_id)
+
+    # For the next issue: it leads the day, ahead of the pinned source, and takes a place.
+    assert store.waiting_adds("john") == [next_id]
+    sent.clear()
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
+    assert report.delivered[0] == next_id and len(report.delivered) == 2 and kept not in report.delivered
+    assert store.get_article(report.delivered[1]).title == "Post 9"
+    chosen = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
+    assert (chosen[next_id], chosen[now_id]) == ("added", "requested")
+    assert store.waiting_adds("john") == []

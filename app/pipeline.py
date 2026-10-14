@@ -265,7 +265,7 @@ def _linked_items(item: Item, body, store: Store, user: User, taken: set[str]) -
         if any(host == skip or host.endswith("." + skip) for skip in NOT_A_SUBJECT) or _is_documentation(url):
             continue
         linked = article_id(url)
-        if linked in out or linked in taken or store.is_delivered(user.id, linked):
+        if linked in out or linked in taken or store.has_had(user.id, linked):
             continue
         known = store.get_article(linked)
         if known and known.status == "failed":
@@ -376,7 +376,7 @@ def _discover(
             if item.id in seen or (item.published and item.published < cutoff):
                 continue
             seen.add(item.id)
-            if (row and row.status == "failed") or store.is_delivered(user.id, item.id):
+            if (row and row.status == "failed") or store.has_had(user.id, item.id):
                 continue
             fresh[row is not None].append(item)
         found += (fresh[False] + fresh[True])[: cfg.discovery.per_site]
@@ -458,7 +458,7 @@ def run(
                 appeared_late = established and not known and item.published >= now - LATE_MAX_AGE
                 if not appeared_late:
                     continue
-            if row.status == "failed" or store.is_delivered(user.id, item.id):
+            if row.status == "failed" or store.has_had(user.id, item.id):
                 continue
             eligible.append(item)
         # Undated feeds would otherwise flood the first run. A recipe's issue is a whole
@@ -473,6 +473,21 @@ def run(
         store.add_route(item.id, "found", item.source.name)
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
+    # What the reader added by hand for their next issue leads it, ahead of pinned sources.
+    added: list[Item] = []
+    for added_id in store.waiting_adds(user.id):
+        row = store.get_article(added_id)
+        if row is None or row.status == "failed":
+            continue
+        seen.add(added_id)
+        source = Source(row.source, extract="page")
+        if source.name not in reports:
+            reports[source.name] = SourceReport(source.name)
+            report.sources.append(reports[source.name])
+        added.append(Item(row.id, row.url, source, row.title, row.author, None, ""))
+    by_hand = {item.id for item in added}
+    pinned = added + [item for item in pinned if item.id not in by_hand]
+    others = [item for item in others if item.id not in by_hand]
     ranking = Ranking(others, {})
     found: list[Item] = []
     grouped: dict[str, list[Item]] = {}  # candidate id -> the candidates covering the same event
@@ -535,6 +550,11 @@ def run(
     # The reading pass: the best-ranked candidates are extracted now and read by the model,
     # whose scores decide the final order. What it read is reused when the article is built.
     extracted: dict[str, Extracted] = {}
+    for item in added:
+        # Built from the page saved when the link was added, not fetched a second time.
+        saved = archive.load(cfg.pages_dir, item.id)
+        if saved:
+            extracted[item.id] = extract(item.url, saved["page_html"], saved["feed_html"], saved["mode"])
     links_of: dict[str, list[_Link]] = {}
     verdicts: dict[str, Verdict] = {}
     if cfg.llm.enabled and backend is not None and ranking.choices and cfg.llm.read_candidates > 0:
@@ -812,9 +832,10 @@ def run(
                                 choice.score, choice.reason, choice.rank, choice.explore, choice.propensity,
                             )  # fmt: skip
                         else:
-                            pin = any(story_of.get(article_id, article_id) == item.id for item in pinned)
+                            lead = story_of.get(article_id, article_id)
+                            pin = any(lead == item.id for item in pinned)
                             store.record_selection(
-                                user.id, article_id, now, "pinned" if pin else "newest-first",
+                                user.id, article_id, now, "added" if lead in by_hand else "pinned" if pin else "newest-first",
                                 None, "", None, False, None,
                             )  # fmt: skip
                 report.delivered += [i for i in ids if i not in covered]

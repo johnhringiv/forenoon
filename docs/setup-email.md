@@ -20,25 +20,23 @@ Any relay that lets you send from your sender address works (Resend, SES, Fastma
 With Resend: verify your domain under Domains (it gives you the SPF and DKIM records to
 add), create an API key with _Sending access_ restricted to that domain, and use:
 
-```yaml
-smtp:
-  host: smtp.resend.com
-  port: 587
-  starttls: true
-  username: resend # literally "resend"; the API key is the password
-  sender: digest@your-domain.example
-  max_message_bytes: 38000000
+```sh
+FORENOON_SMTP_HOST=smtp.resend.com
+FORENOON_SMTP_PORT=587
+FORENOON_SMTP_USERNAME=resend   # literally "resend"; the API key is the password
+FORENOON_SMTP_SENDER=digest@your-domain.example
+FORENOON_SMTP_PASSWORD=...      # the API key
 ```
 
 Things to check when choosing a relay (figures as of October 2026; verify before relying on
 them):
 
-| Relay                    | Cost at one email a day                              | Message size limit          | Notes                                                                                                                        |
-| ------------------------ | ---------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Cloudflare Email Service | Needs Workers Paid ($5/month; 3,000 emails included) | 5 MiB including attachments | A Kindle address cannot be a "verified destination", so the free path does not apply. Set `smtp.max_message_bytes: 5000000`. |
-| Amazon SES               | Fractions of a cent                                  | 40 MB after encoding        | New accounts start in a sandbox that only sends to verified addresses; request production access first.                      |
-| Resend                   | Free plan: 100 emails a day, 3,000 a month           | 40 MB after encoding        | Up to 3 verified domains on the free plan; the quota is shared across them. `.epub` attachments are allowed.                 |
-| Postmark                 | Free plan: 100 emails a month                        | Not confirmed               | The free plan is a hard stop at 100.                                                                                         |
+| Relay                    | Cost at one email a day                              | Message size limit          | Notes                                                                                                                                |
+| ------------------------ | ---------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Cloudflare Email Service | Needs Workers Paid ($5/month; 3,000 emails included) | 5 MiB including attachments | A Kindle address cannot be a "verified destination", so the free path does not apply. Set `FORENOON_SMTP_MAX_MESSAGE_BYTES=5000000`. |
+| Amazon SES               | Fractions of a cent                                  | 40 MB after encoding        | New accounts start in a sandbox that only sends to verified addresses; request production access first.                              |
+| Resend                   | Free plan: 100 emails a day, 3,000 a month           | 40 MB after encoding        | Up to 3 verified domains on the free plan; the quota is shared across them. `.epub` attachments are allowed.                         |
+| Postmark                 | Free plan: 100 emails a month                        | Not confirmed               | The free plan is a hard stop at 100.                                                                                                 |
 
 If the relay's limit is below Amazon's, set `FORENOON_SMTP_MAX_MESSAGE_BYTES` in `.env` to it. A day's articles
 are then split across more emails, and an article that cannot fit in one email even without

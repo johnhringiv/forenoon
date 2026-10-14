@@ -630,6 +630,9 @@ fn card(row: Delivered) -> Card {
     if policy == Some("pinned") {
         tags.push("Pinned");
     }
+    if policy == Some("added") {
+        tags.push("Added by you");
+    }
     if policy == Some("requested") {
         tags.push("Sent on request");
     }
