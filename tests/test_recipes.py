@@ -283,15 +283,27 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
             runner.fetch_page(url, runner.read_session("feed-7", logins))
     with pytest.raises(ValueError, match="no session is saved"):
         runner.fetch_page("https://paper.example/a", {})
-    with pytest.raises(ValueError, match="redirected to accounts.evil.test"):
-        runner._StayOnSite("paper.example").redirect_request(
-            None, None, 302, "", {}, "https://accounts.evil.test/login"
-        )
+    with pytest.raises(ValueError, match="no session is saved"):
+        runner.fetch_page("https://paper.example/a", {"domain": "paper.example", "username": "me"})
+    # A pasted header becomes cookies for the session's own site and nowhere else.
+    assert runner._cookies(" a=1; b=x=y ;junk", "paper.example") == [
+        {"name": "a", "value": "1", "domain": ".paper.example", "path": "/", "secure": True},
+        {"name": "b", "value": "x=y", "domain": ".paper.example", "path": "/", "secure": True},
+    ]
+    # The browser's sign-in is kept per login: a changed login never reuses the old one.
+    browser = tmp_path / "browser"
+    browser.mkdir()
+    first = runner._state_file("feed-7", {"cookie": "a=1"}, browser)
+    first.write_text("{}")
+    (browser / "feed-70-0000.json").write_text("{}")
+    second = runner._state_file("feed-7", {"cookie": "a=2"}, browser)
+    assert second != first and not first.exists() and (browser / "feed-70-0000.json").exists()
 
     # The queue: each request is answered with the page or with why not.
     seen = []
 
-    def fetcher(url, session):
+    def fetcher(url, session, name):
+        assert name == "feed-7"
         seen.append((url, session.get("cookie")))
         if "missing" in url:
             raise ValueError("HTTP 404")
@@ -303,7 +315,7 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
     ):
         (out / ".fetch" / f"{name}.json").write_text(json.dumps({"session": session, "url": url}))
     (out / ".fetch" / "notes.txt").write_text("not a request")
-    assert runner.answer_fetches(out, logins, fetcher, gap=0) == 3
+    assert runner.answer_fetches(out, logins, fetcher) == 3
     assert (out / ".fetch" / f"{ids[0]}.html").read_bytes() == b"<html>the article</html>"
     assert (out / ".fetch" / f"{ids[1]}.err").read_text() == "HTTP 404"
     assert (out / ".fetch" / f"{ids[2]}.err").read_text() == "not a session"
@@ -360,3 +372,17 @@ def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_
         sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=30)
     assert time.monotonic() - started < 1
     sessions._silent_until = 0.0
+
+
+def test_saving_a_session_asks_for_a_sign_in_and_a_cookie_needs_none(tmp_path):
+    runner = _runner()
+    out, logins = tmp_path / "recipes", tmp_path / "logins"
+    (out / ".requests").mkdir(parents=True)
+    logins.mkdir()
+    (logins / "feed-7.json").write_text('{"cookie": "a=1", "domain": "paper.example"}')
+    (out / ".requests" / "feed-7").write_text("")
+    runner.LOGINS = logins  # run_requested reads the default folder
+    assert runner.run_requested(out) == 1
+    status = json.loads((out / "status.json").read_text())
+    assert status["feed-7"]["ok"] and status["feed-7"]["note"].startswith("saved")
+    assert not list((out / ".requests").iterdir())

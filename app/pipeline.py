@@ -106,6 +106,7 @@ class RunReport:
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
     reviews: dict[str, int] = field(default_factory=dict)  # model extraction verdicts, counted
+    sign_in_needed: dict[str, str] = field(default_factory=dict)  # source name -> why
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -179,6 +180,11 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> E
     if keep and cfg.keep_pages_days != 0 and (page_html or item.feed_html):
         archive.save(cfg.pages_dir, item, page_html)
     result = extract(item.url, page_html, item.feed_html, item.source.extract, fetch_error)
+    if fetch_error.startswith(sessions.SIGNED_OUT):
+        # The feed's summary is all there would be: hold it back until the reader signs in again.
+        result.body = None
+        result.signed_out = fetch_error.removeprefix(sessions.SIGNED_OUT)
+        result.word_count = 0
     if result.body is None and fetch_error:
         result.status = "error"  # transient: retried on later runs
     return result
@@ -564,6 +570,8 @@ def run(
             if item.id in found_ids:
                 record_found(item)
             result = extracted[item.id] = _extract(item, fetcher, cfg, keep=not dry_run)
+            if result.signed_out:
+                report.sign_in_needed[item.source.name] = result.signed_out
             if result.body is None:
                 continue
             links_of[item.id] = outbound(item, result.body)
@@ -607,6 +615,8 @@ def run(
     def prepare(item: Item, reason: str = "") -> _Prepared | None:
         """Extract one item and check it fits a message; None when it cannot be delivered."""
         result = extracted.pop(item.id, None) or _extract(item, fetcher, cfg, keep=not dry_run)
+        if result.signed_out:
+            report.sign_in_needed[item.source.name] = result.signed_out
         pictures = _pictures(result)
         article, dropped = _assemble(item, result, fetcher, cfg)
         if article is not None and not dry_run:

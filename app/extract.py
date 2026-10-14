@@ -101,6 +101,7 @@ class Extracted:
     author: str = ""
     image_url: str = ""  # untrusted, like everything else from the page
     description: str = ""
+    signed_out: str = ""  # why a subscriber's session needs signing in again; set by the pipeline
 
     @property
     def reason(self) -> str:

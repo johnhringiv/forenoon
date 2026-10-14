@@ -1234,3 +1234,27 @@ def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_gi
     for n in range(22, 28):
         rate(n, "2026-06-20T10:00:00+00:00")
     assert not learn(off, Notes(), store, reader, start, NOW + 120 * day) and len(asked) == 3
+
+
+def test_a_signed_out_session_holds_its_articles_back_and_asks_for_a_sign_in(env, monkeypatch):
+    from app import pipeline, sessions
+    from app.alerts import problems
+    from app.config import Alerts
+    from app.fetch import FetchError
+
+    cfg, store, fetcher = env
+    blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
+    cfg = dataclasses.replace(
+        cfg, sources=(blog, *cfg.sources[1:]), alerts=Alerts(to="me@example.com", source_failures=0)
+    )
+
+    def signed_out(recipes_dir, session, url):
+        raise FetchError(f"{sessions.SIGNED_OUT}the saved cookie no longer works")
+
+    monkeypatch.setattr(pipeline.sessions, "fetch", signed_out)
+    sent = []
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
+    names = [part.get_filename() for msg in sent for part in msg.iter_attachments()]
+    assert names and not any("Blog" in name for name in names), "the feed's summary is not sent in its place"
+    assert report.sign_in_needed == {"Blog": "the saved cookie no longer works"}
+    assert any(p.startswith("'Blog' needs you to sign in again") for p in problems(report, cfg))

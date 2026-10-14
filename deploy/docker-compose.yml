@@ -94,6 +94,8 @@ services:
     volumes:
       - ${FORENOON_HOST_DATA}/recipes:/recipes
       - logins:/logins:ro
+      # What the browser keeps of a sign-in. Only this container mounts it.
+      - browser:/browser
     environment:
       TZ: ${TZ:-UTC}
       RECIPES_TIME: ${RECIPES_TIME:-05:00}
@@ -116,3 +118,5 @@ volumes:
   # Not in the data folder on purpose: the pipeline, which reads untrusted pages, mounts that.
   logins:
     name: forenoon-logins
+  browser:
+    name: forenoon-browser

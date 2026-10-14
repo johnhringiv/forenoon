@@ -88,6 +88,20 @@ jobs:
           # The list the Sources page offers, with which publications want a login.
           grep -q '"title": "Financial Times"' out/catalogue.json
           grep -q '"login": "yes"' out/catalogue.json
+      # With the deploy's hardening, as the reader's user: the screen starts and Chrome draws a page.
+      - name: The browser starts on its own screen
+        run: |
+          docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /browser:uid=1000,gid=1000 --entrypoint python3 forenoon-recipes:ci -c '
+          import sys; sys.path.insert(0, "/usr/local/bin"); import runner
+          from playwright.sync_api import sync_playwright
+          runner._start_display()
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
+              page = b.new_page(); page.set_content("<title>ok</title>")
+              assert page.title() == "ok" and "Headless" not in page.evaluate("navigator.userAgent")
+              b.close()
+          print("browser ok")'
 
   web:
     name: Web app checks

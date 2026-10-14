@@ -1,6 +1,7 @@
 """Runs Calibre news recipes on a schedule and leaves each issue where Forenoon reads it.
 
-Standard library only: this runs in the recipes container, which has Calibre but not Forenoon.
+Standard library and Playwright only: this runs in the recipes container, which has Calibre
+and Chrome but not Forenoon.
 
 Reads `recipes.conf` from the output folder (one `folder = Recipe name` per line; the web
 pages write it from the Sources page) and writes `<folder>/<YYYY-MM-DD>.epub`. A recipe's
@@ -13,8 +14,10 @@ named for a folder in `.requests/` asks for that recipe to be run now.
 
 It also fetches single article pages with a subscriber's session, for feed sources that have
 one: the pipeline leaves `<id>.json` (a session's name and an address) in `.fetch/`, and the
-page, or why there is none, is left beside it. The session's cookie comes from the logins
-folder and is sent to that session's own site and nowhere else.
+page, or why there is none, is left beside it. The page is read by Chrome signed in as the
+reader, with a cookie or a username and password from the logins folder, one page at a time
+and no faster than one every FETCH_GAP seconds per site. What the browser keeps of a sign-in
+is in its own volume (RECIPES_BROWSER), which nothing else mounts.
 
     runner.py            run every day at RECIPES_TIME (default 05:00, in TZ)
     runner.py once       run every recipe now, then exit
@@ -22,6 +25,7 @@ folder and is sent to that session's own site and nowhere else.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -32,8 +36,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -52,9 +54,8 @@ FETCH = ".fetch"
 SESSION = re.compile(r"feed-\d{1,12}")
 REQUEST = re.compile(r"[0-9a-f]{32}\.json")
 ARTICLE = re.compile(r"(?:^|/)feed_\d+/article_\d+/")
-USER_AGENT = "Forenoon/0.1 (self-hosted personal reader)"
 MAX_PAGE_BYTES = 5 * 1024 * 1024
-FETCH_GAP = 2.0  # seconds between two pages
+FETCH_GAP = 20.0  # seconds between two pages from one site: a reader, not a crawler
 STATUS_LOCK = threading.Lock()
 KEEP_DAYS = int(os.environ.get("RECIPES_KEEP_DAYS", "7"))
 TIMEOUT = int(os.environ.get("RECIPES_TIMEOUT", "1800"))  # seconds per recipe
@@ -222,7 +223,9 @@ def run_requested(out: Path = OUT) -> int:
         recipes = {}
     for request in asked:
         request.unlink(missing_ok=True)  # first, so a recipe that crashes is not run in a loop
-        if request.name in recipes:
+        if SESSION.fullmatch(request.name):
+            sign_in_now(request.name, out, LOGINS)
+        elif request.name in recipes:
             run_recipe(request.name, recipes[request.name], out)
         elif FOLDER.fullmatch(request.name):
             record(out, request.name, False, f"not listed in {CONF}")
@@ -237,7 +240,8 @@ def read_session(name: str, logins: Path = LOGINS) -> dict[str, str]:
         saved = json.loads((logins / f"{name}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {k: v for k, v in saved.items() if k in ("cookie", "domain") and isinstance(v, str) and v}
+    keys = ("cookie", "domain", "username", "password")
+    return {k: v for k, v in saved.items() if k in keys and isinstance(v, str) and v}
 
 
 def on_site(url: str, domain: str) -> bool:
@@ -254,46 +258,217 @@ def _public(host: str) -> bool:
     return bool(found) and all(ipaddress.ip_address(entry[4][0]).is_global for entry in found)
 
 
-class _StayOnSite(urllib.request.HTTPRedirectHandler):
-    """Follow a redirect only within the session's site, so its cookie never goes elsewhere."""
+# Pages are read by an ordinary Chrome, run unchanged on a screen of its own (Xvfb), because
+# some sites put their articles behind a check that only a browser passes. It is not disguised
+# in any way, and nothing here answers a CAPTCHA: when a site asks for one, the reader is told.
 
-    def __init__(self, domain: str):
-        self.domain = domain
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not on_site(newurl, self.domain) or not _public(urlsplit(newurl).hostname or ""):
-            where = urlsplit(newurl).hostname or "elsewhere"
-            raise ValueError(f"redirected to {where}; the session may have ended")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+# Begins every error that needs the reader to sign in again; the pipeline alerts on it.
+SIGNED_OUT = "Sign-in needed: "
 
 
-def fetch_page(url: str, session: dict[str, str]) -> bytes:
-    """One page, with the session's cookie. Raises ValueError saying why not.
+def _cookies(header: str, domain: str) -> list[dict]:
+    """A pasted Cookie header as the browser's cookies, for the session's own site only."""
+    jar = []
+    for pair in header.split(";"):
+        name, sep, value = pair.strip().partition("=")
+        if sep and name:
+            jar.append({"name": name, "value": value, "domain": "." + domain, "path": "/", "secure": True})
+    return jar
 
-    It identifies itself as Forenoon and makes no attempt to pass as a browser: a site that
-    challenges or refuses it is reported, not worked around.
-    """
-    cookie, domain = session.get("cookie", ""), session.get("domain", "").lower()
-    if not cookie or not domain:
+
+def _ft_signed_in(page) -> bool:
+    # The paywall's own title. Not "has an article body": live blogs and podcasts have none.
+    return page.title() != "Subscribe to read"
+
+
+def _captcha_showing(page) -> bool:
+    for frame in page.locator('iframe[src*="captcha"]').all():
+        box = frame.bounding_box() if frame.is_visible() else None
+        if box and box["height"] > 100:  # the challenge itself, not the invisible widget
+            return True
+    return False
+
+
+def _ft_sign_in(page, username: str, password: str) -> None:
+    page.goto("https://accounts.ft.com/login?location=https%3A%2F%2Fwww.ft.com", wait_until="domcontentloaded")
+    page.fill("#enter-email", username)
+    page.click("#enter-email-next")
+    secret = page.locator("input[type=password]:visible").first
+    try:
+        secret.wait_for(timeout=20_000)
+    except Exception as exc:  # Playwright's timeout, said in the reader's words
+        if _captcha_showing(page):
+            raise ValueError(f"{SIGNED_OUT}ft.com asked for a CAPTCHA") from exc
+        raise ValueError(f"{SIGNED_OUT}ft.com did not ask for a password; its sign-in page may have changed") from exc
+    secret.fill(password)
+    secret.press("Enter")
+    try:
+        page.wait_for_url(lambda url: "accounts.ft.com" not in url, timeout=30_000)
+    except Exception as exc:
+        if _captcha_showing(page):
+            raise ValueError(f"{SIGNED_OUT}ft.com asked for a CAPTCHA") from exc
+        raise ValueError(f"{SIGNED_OUT}ft.com did not accept the username and password") from exc
+
+
+# What the browser knows about a site: how to tell an article was shown in full, and how to
+# sign in with a username and password. A site not here can use a pasted cookie only.
+SITES = {"ft.com": {"signed_in": _ft_signed_in, "sign_in": _ft_sign_in}}
+
+BROWSER_STATE = Path(os.environ.get("RECIPES_BROWSER", "/browser"))
+CHALLENGE_TITLES = ("Just a moment...", "Security Verification")
+_last_visit: dict[str, float] = {}
+_display: subprocess.Popen | None = None
+_display_lock = threading.Lock()
+
+
+def _state_file(name: str, session: dict[str, str], folder: Path) -> Path:
+    """Where the browser keeps a session's sign-in. Named for the saved login, so a changed or
+    removed login is never used with an old sign-in; older files for the session are deleted."""
+    digest = hashlib.sha256(json.dumps(session, sort_keys=True).encode()).hexdigest()[:16]
+    path = folder / f"{name}-{digest}.json"
+    for old in folder.glob(f"{name}-*.json"):
+        if old != path:
+            old.unlink(missing_ok=True)
+    return path
+
+
+def _start_display() -> None:
+    with _display_lock:  # the page fetcher and a sign-in asked for from the web pages
+        _start_display_once()
+
+
+def _start_display_once() -> None:
+    global _display
+    if _display is not None and _display.poll() is None:
+        return
+    _display = subprocess.Popen(
+        ["Xvfb", ":99", "-screen", "0", "1280x900x24", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
+    os.environ["DISPLAY"] = ":99"
+    for _ in range(50):
+        if Path("/tmp/.X11-unix/X99").exists():
+            return
+        time.sleep(0.1)
+    raise ValueError("the browser's screen did not start")
+
+
+def _load(page, url: str) -> str:
+    reply = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+    checked = page.title() in CHALLENGE_TITLES
+    for _ in range(30):  # the site's own browser check runs by itself in a real browser
+        if page.title() not in CHALLENGE_TITLES:
+            break
+        page.wait_for_timeout(1000)
+    else:
+        raise ValueError("the site's browser check did not let the browser through")
+    try:
+        page.wait_for_load_state("load", timeout=15_000)
+    except Exception:  # noqa: BLE001,S110 - a slow advert is no reason to give up the article
+        pass
+    # The check answers 403 until it is passed; the page that follows it is the one that counts.
+    if not checked and reply is not None and reply.status >= 400:
+        raise ValueError(f"HTTP {reply.status}")
+    return page.content()
+
+
+def fetch_page(url: str, session: dict[str, str], name: str = "", state_dir: Path = BROWSER_STATE) -> bytes:
+    """One page, read by the browser signed in as the reader. Raises ValueError saying why not."""
+    domain = session.get("domain", "").lower()
+    login = bool(session.get("username") and session.get("password"))
+    if not domain or not (session.get("cookie") or login):
         raise ValueError("no session is saved for this source")
     if not on_site(url, domain):
         raise ValueError(f"not a page on {domain}")
     if not _public(urlsplit(url).hostname or ""):
         raise ValueError("not a public address")
-    opener = urllib.request.build_opener(_StayOnSite(domain))
-    headers = {"Cookie": cookie, "User-Agent": USER_AGENT, "Accept": "text/html", "Accept-Language": "en"}
+    from playwright.sync_api import Error as BrowserError  # only in the image; not needed to test the rest
+    from playwright.sync_api import sync_playwright
+
+    site = SITES.get(domain, {})
+    if login and not site:
+        raise ValueError(f"signing in to {domain} with a username and password is not supported; paste a cookie")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = _state_file(name or domain, session, state_dir)
+    wait = _last_visit.get(domain, 0.0) + FETCH_GAP - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    _start_display()
     try:
-        with opener.open(urllib.request.Request(url, headers=headers), timeout=30) as reply:
-            if reply.status != 200:
-                raise ValueError(f"HTTP {reply.status}")
-            page = reply.read(MAX_PAGE_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        raise ValueError(f"HTTP {exc.code}") from exc
-    except (urllib.error.URLError, OSError) as exc:
-        raise ValueError(f"could not fetch: {getattr(exc, 'reason', exc)}") from exc
-    if len(page) > MAX_PAGE_BYTES:
+        html = _browse(sync_playwright, url, session, domain, site, login, state)
+    except BrowserError as exc:
+        raise ValueError(f"the browser failed: {str(exc).splitlines()[0][:200]}") from exc
+    finally:
+        _last_visit[domain] = time.monotonic()
+    page_bytes = html.encode("utf-8")
+    if len(page_bytes) > MAX_PAGE_BYTES:
         raise ValueError(f"page larger than {MAX_PAGE_BYTES} bytes")
-    return page
+    return page_bytes
+
+
+def _browse(
+    sync_playwright, url: str, session: dict[str, str], domain: str, site: dict, login: bool, state: Path
+) -> str:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
+        try:
+            context = browser.new_context(storage_state=str(state) if state.exists() else None)
+            if not state.exists() and session.get("cookie"):
+                context.add_cookies(_cookies(session["cookie"], domain))
+            page = context.new_page()
+            html = _load(page, url)
+            if site and not site["signed_in"](page):
+                if not login:
+                    raise ValueError(
+                        f"{SIGNED_OUT}the saved cookie no longer works; paste a new one or save a username and password"
+                    )
+                site["sign_in"](page, session["username"], session["password"])
+                html = _load(page, url)
+                if not site["signed_in"](page):
+                    # Signed in, so this one article is beyond the subscription: no alert.
+                    raise ValueError("signed in, but this article is still not shown in full")
+            partial = state.with_name(f".{state.name}.tmp")
+            context.storage_state(path=str(partial))
+            os.replace(partial, state)
+            return html
+        finally:
+            browser.close()
+
+
+def sign_in_now(name: str, out: Path = OUT, logins: Path = LOGINS, state_dir: Path = BROWSER_STATE) -> None:
+    """Sign in as soon as a username and password are saved, so the Sources page can say at
+    once whether the site took them (or asked for a CAPTCHA) instead of at the next run."""
+    session = read_session(name, logins)
+    domain = session.get("domain", "").lower()
+    site = SITES.get(domain)
+    if not (site and session.get("username") and session.get("password")):
+        record(out, name, True, "saved; it is first used when the ranking wants a page from the site")
+        return
+    from playwright.sync_api import Error as BrowserError
+    from playwright.sync_api import sync_playwright
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state = _state_file(name, session, state_dir)
+    state.unlink(missing_ok=True)  # a fresh sign-in, not one left from before
+    try:
+        _start_display()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=False, args=["--disable-dev-shm-usage"])
+            try:
+                context = browser.new_context()
+                site["sign_in"](context.new_page(), session["username"], session["password"])
+                partial = state.with_name(f".{state.name}.tmp")
+                context.storage_state(path=str(partial))
+                os.replace(partial, state)
+            finally:
+                browser.close()
+    except (BrowserError, ValueError) as exc:
+        note = str(exc).splitlines()[0][:300] if str(exc) else "sign-in failed"
+        record(out, name, False, note)
+        log(f"{name}: {note}")
+        return
+    record(out, name, True, f"signed in to {domain}")
+    log(f"{name}: signed in to {domain}")
 
 
 def _answer(path: Path, content: bytes) -> None:
@@ -303,7 +478,7 @@ def _answer(path: Path, content: bytes) -> None:
     os.replace(partial, path)
 
 
-def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page, gap: float = FETCH_GAP) -> int:
+def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page) -> int:
     """Fetch the pages the pipeline is waiting for. Returns how many were asked for."""
     folder = out / FETCH
     if not folder.is_dir():
@@ -313,7 +488,7 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page, g
         if stale.is_file() and stale.stat().st_mtime < cutoff:
             stale.unlink(missing_ok=True)
     asked = sorted(p for p in folder.iterdir() if REQUEST.fullmatch(p.name))
-    for number, request in enumerate(asked):
+    for request in asked:
         name = "?"
         try:
             wanted = json.loads(request.read_text(encoding="utf-8"))
@@ -321,9 +496,7 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page, g
             name, url = str(wanted.get("session", "")), str(wanted.get("url", ""))
             if not SESSION.fullmatch(name):
                 raise ValueError("not a session")
-            if number:
-                time.sleep(gap)
-            page = fetcher(url, read_session(name, logins))
+            page = fetcher(url, read_session(name, logins), name)
             _answer(request.with_suffix(".html"), page)
             record(out, name, True, f"fetched a page ({len(page)} bytes)")
         except (OSError, ValueError) as exc:

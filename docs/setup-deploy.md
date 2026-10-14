@@ -178,4 +178,5 @@ forward the port from the internet.
 Everything is in the data folder: `forenoon.sqlite3` (plus its `-wal` file), which holds
 readers, sources, settings and ratings, and what was fetched and sent. Back up the folder;
 keep `.env` somewhere safe too. Recipe logins are in the `forenoon-logins` Docker volume and
-are not part of that backup; they can be typed in again.
+are not part of that backup; they can be typed in again. The `forenoon-browser` volume only
+holds the recipes container's browser sign-ins, which it makes again by itself.
