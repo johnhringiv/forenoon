@@ -98,7 +98,6 @@ class Ranking:
     order: list[Item]  # every candidate, in the order to try them
     choices: dict[str, Choice]
     note: str = ""  # why the fallback order was used, when it was
-    found_slots: int = 0  # how many of the day's slots discovered articles may take
 
 
 def abstract(item: Item) -> str:
@@ -188,18 +187,16 @@ def rank(
     today_start: str,
     rng: random.Random | None = None,
     found: Sequence[Item] = (),
-    found_slots: int = 0,
-    found_min_score: float = 0.0,
 ) -> Ranking:
     """Order `candidates` for delivery. `slots` is how many the user can still receive today.
 
-    `found` are discovered articles, scored alongside the rest. Those scoring at least
-    `found_min_score` may take up to `found_slots` slots, and never more than half; they are
-    left out entirely when the fallback order is used.
+    `found` are discovered articles, scored alongside the rest and ranked with them on their
+    score alone. They need a score to be delivered, so they are left out when the fallback
+    order is used.
     """
     fallback = Ranking(list(candidates), {})
-    feed = candidates
-    candidates = [*feed, *found]
+    found_ids = {item.id for item in found}
+    candidates = [*candidates, *found]
     if backend is None or not candidates or slots <= 0:
         return fallback
     # Scored in batches: one reply holds about 200 scores, and a short list is judged with
@@ -236,12 +233,7 @@ def rank(
     def by_score(items: Sequence[Item]) -> list[Item]:
         return sorted(items, key=lambda item: -scores.get(item.id, (-1.0, ""))[0])
 
-    overall = {item.id: n for n, item in enumerate(by_score(candidates), 1)}
-    worthy = [item for item in by_score(found) if item.id in scores and scores[item.id][0] >= found_min_score]
-    reserved = min(found_slots, len(worthy), slots // 2 if feed else slots)
-    slots -= reserved
-
-    ranked = by_score(feed)
+    ranked = [item for item in by_score(candidates) if item.id in scores or item.id not in found_ids]
     position = {item.id: n for n, item in enumerate(ranked, 1)}
     order = list(ranked)
     explored = None
@@ -253,7 +245,7 @@ def rank(
         order.remove(explored)
         order.insert(slots - 1, explored)
     choices = {}
-    for item in feed:
+    for item in ranked:
         score, reason = scores.get(item.id, (0.0, ""))
         if explored is None:
             propensity = 1.0 if position[item.id] <= slots else 0.0
@@ -263,13 +255,8 @@ def rank(
             propensity = 0.0  # displaced by the exploration slot
         else:
             propensity = 1.0 / len(outside)
-        choices[item.id] = Choice(score, reason, overall[item.id], item is explored, propensity)
-    for n, item in enumerate(worthy):
-        score, reason = scores[item.id]
-        choices[item.id] = Choice(score, reason, overall[item.id], False, 1.0 if n < reserved else 0.0)
-    # Every worthy find follows the feed picks, so one that fails extraction is replaced by
-    # the next find; the caller stops taking them at `found_slots`.
-    return Ranking(order[:slots] + worthy + order[slots:], choices, note, found_slots=reserved)
+        choices[item.id] = Choice(score, reason, position[item.id], item is explored, propensity)
+    return Ranking(order, choices, note)
 
 
 # Stories: candidates that cover the same event are delivered together and count once.

@@ -933,7 +933,6 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     let defaults = [
         ("format", "issue"),
         ("max_age_days", "3"),
-        ("max_story_entries", "3"),
         ("max_article_words", "45000"),
         ("images.grayscale", "1"),
         ("llm.enabled", "1"),
@@ -946,7 +945,6 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.show_reasons", "1"),
         ("llm.check_extraction", "1"),
         ("llm.learn", "1"),
-        ("discovery.min_score", "6.0"),
         ("alerts.enabled", "1"),
         ("alerts.source_failures", "3"),
         ("keep_pages_days", "-1"),
@@ -959,7 +957,8 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         form
     };
     let send = |form: Vec<(&'static str, String)>| form;
-    let changed = send(form(&[("delivery_time", "07:30"), ("discovery.slots", "4"), ("alerts.to", "Ops@Example.com")]));
+    let changed =
+        send(form(&[("delivery_time", "07:30"), ("max_story_entries", "4"), ("alerts.to", "Ops@Example.com")]));
     let changed: Vec<(&str, &str)> = changed.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert_eq!(admin.post(&site, "/settings", &changed).await.location, "/settings?saved=1");
     let stored: Vec<(String, String)> =
@@ -972,7 +971,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
             ("alerts.on_empty", "0"),
             ("alerts.to", "ops@example.com"),
             ("delivery_time", "07:30"),
-            ("discovery.slots", "4")
+            ("max_story_entries", "4")
         ]
     );
     let text = admin.get(&site, "/settings?saved=1").await.text;
@@ -981,18 +980,18 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     );
 
     // Back to the defaults: the rows go away.
-    let back = form(&[("delivery_time", "06:00"), ("discovery.slots", "2"), ("alerts.on_empty", "1")]);
+    let back = form(&[("delivery_time", "06:00"), ("max_story_entries", "3"), ("alerts.on_empty", "1")]);
     let back: Vec<(&str, &str)> = back.iter().map(|(key, value)| (*key, value.as_str())).collect();
     admin.post(&site, "/settings", &back).await;
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
     assert_eq!(left, 0);
 
     // One wrong value saves nothing and keeps what was typed.
-    let wrong = form(&[("delivery_time", "25:00"), ("discovery.slots", "9")]);
+    let wrong = form(&[("delivery_time", "25:00"), ("max_story_entries", "9")]);
     let wrong: Vec<(&str, &str)> = wrong.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let reply = admin.post(&site, "/settings", &wrong).await;
     assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Deliver at: give a time such as 06:00."));
-    assert!(reply.text.contains(r#"name="discovery.slots" type="number" step="1" min="0" max="50" value="9""#));
+    assert!(reply.text.contains(r#"name="max_story_entries" type="number" step="1" min="1" max="10" value="9""#));
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
     assert_eq!(left, 0);
 

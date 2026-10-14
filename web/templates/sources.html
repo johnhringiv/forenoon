@@ -12,7 +12,7 @@
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
 <h2>Built in <span>front pages Forenoon knows how to read</span></h2>
-<p class="hint">Their stories join the day's candidates only when ranking is on, and take a limited number of the day's places (see <a href="/settings">Settings</a>).</p>
+<p class="hint">Their stories join the day's candidates only when ranking is on, and compete for the day's places on the model's score like any feed's articles.</p>
 {% for row in builtins %}
 <form class="source{% if !row.enabled %} paused{% endif %}" method="post" action="/sources/{{ row.id }}/toggle">
 <input type="hidden" name="csrf" value="{{ csrf }}">

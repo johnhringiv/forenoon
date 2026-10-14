@@ -308,8 +308,6 @@ mod tests {
         assert!(check("format", "articles").is_ok() && check("format", "pdf").is_err());
         assert!(check("keep_pages_days", "-1").is_ok() && check("keep_pages_days", "-2").is_err());
         assert!(check("max_age_days", "0").is_err() && check("max_age_days", "2.5").is_err());
-        assert!(check("discovery.min_score", "7.5").is_ok() && check("discovery.min_score", "11").is_err());
-        assert!(check("discovery.min_score", "NaN").is_err() && check("discovery.min_score", "inf").is_err());
         assert_eq!(check("alerts.to", " Me@Example.com ").unwrap(), "me@example.com");
         assert!(check("alerts.to", "").is_ok() && check("alerts.to", "nope").is_err());
         assert!(check("llm.model", "").is_err() && check("llm.model", "a\nb").is_err());

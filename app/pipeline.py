@@ -543,8 +543,6 @@ def run(
             slots,
             day_start.astimezone(UTC).isoformat(timespec="seconds"),
             found=found,
-            found_slots=cfg.discovery.slots,
-            found_min_score=cfg.discovery.min_score,
         )
         ranking.order += others[cfg.llm.max_candidates :]
         if ranking.choices and not dry_run:
@@ -576,7 +574,6 @@ def run(
     leftover: set[str] = set()
     checked: list[tuple[Article, ItemReport]] = []
     found_ids = {item.id for item in found}
-    found_ready = 0
     taken: set[str] = set()
     unreachable: set[str] = set()
     link_picks: list[str] = []  # picked, but only their links can be shown
@@ -716,7 +713,7 @@ def run(
         if item.id in taken:
             continue  # already delivered today as part of another story
         is_found = item.id in found_ids
-        if stories >= remaining or (is_found and found_ready >= ranking.found_slots):
+        if stories >= remaining:
             leftover.add(item.source.name)
             continue
         if is_found:
@@ -751,7 +748,6 @@ def run(
         story.links = links_of[item.id] if item.id in links_of else outbound(item, lead.article.body)
         picked.append(story)
         stories += 1
-        found_ready += is_found
 
     def record_selection(article_id: str) -> None:
         # An article brought in by a story is recorded with that story's choice.

@@ -433,14 +433,12 @@ def _listings(hn: list[dict], lobsters: list[dict]) -> None:
     ROUTES[SITES["lobsters"].url] = json.dumps(lobsters).encode()
 
 
-def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model(env):
+def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
     from app.config import Discovery
     from app.discover import SITES
 
     cfg, store, fetcher = env
-    cfg = dataclasses.replace(
-        _llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews", "lobsters"), slots=1)
-    )
+    cfg = dataclasses.replace(_llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews", "lobsters")))
     user = dataclasses.replace(cfg.users[0], daily_cap=4)
     when = "2026-03-10T06:00:00Z"
     _listings(
@@ -489,9 +487,10 @@ def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model
         assert "On Hacker News: 300 points, 80 comments. Site: found.example." in prompt
         assert "Tags: rust." in prompt
 
-        # One slot for finds: the best one only, though a second also scored well.
+        # Finds take places on their scores like any feed article: both that beat the feeds' 5s,
+        # and not the one that scored below them.
         delivered = [store.get_article(i) for i in report.delivered]
-        assert [a.title for a in delivered if a.source == "Hacker News"] == ["Great find"]
+        assert [a.title for a in delivered if a.source == "Hacker News"] == ["Great find", "Second find"]
         assert len(delivered) == 4 and not any(a.source == "Lobsters" for a in delivered)
         assert {s.name for s in report.sources} >= {"Hacker News", "Lobsters"}
         epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))

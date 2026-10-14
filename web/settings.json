@@ -17,9 +17,6 @@
   {"section": "Ranking", "key": "llm.learn", "kind": "bool", "default": true, "label": "Keep notes on what each reader's ratings show", "hint": "About once a week the model rewrites a short note per reader, which is given to it beside their interests. Readers see and edit theirs on the account page."},
   {"section": "Ranking", "key": "llm.check_extraction", "kind": "bool", "default": true, "label": "Ask the model whether each article looks complete", "hint": "Logged in the report; never changes what is delivered."},
 
-  {"section": "Built-in sources", "key": "discovery.slots", "kind": "int", "default": 2, "min": 0, "max": 50, "label": "Places a day for their stories, at most", "hint": "Never more than half the day. Which ones are read is set on the Sources page."},
-  {"section": "Built-in sources", "key": "discovery.min_score", "kind": "float", "default": 6.0, "min": 0, "max": 10, "label": "Score a story needs (0 to 10)"},
-
   {"section": "Alerts", "key": "alerts.enabled", "kind": "bool", "default": true, "label": "Email when a run needs attention", "hint": "A failed delivery, a crashed run, or a source that keeps failing."},
   {"section": "Alerts", "key": "alerts.to", "kind": "email", "default": "", "label": "Send alerts to", "hint": "Empty: every admin's sign-in address."},
   {"section": "Alerts", "key": "alerts.source_failures", "kind": "int", "default": 3, "min": 0, "max": 100, "label": "Failed runs in a row before a source is reported", "hint": "0 never reports one."},
