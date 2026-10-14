@@ -74,6 +74,8 @@ def handler(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     if url in ROUTES:
         return httpx.Response(200, content=ROUTES[url], headers={"ETag": '"v1"'})
+    if request.url.host.endswith("paywall.example"):
+        return httpx.Response(403)
     if request.url.host in ("blog.example", "pinned.example", "found.example") and "/post-" in url:
         return httpx.Response(200, text=f"<html><body><article>{BODY}</article></body></html>")
     return httpx.Response(404)
@@ -1140,12 +1142,15 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     store.db.execute(ask, ("john", "https://found.example/missing", "next", None))
     store.db.execute(ask, ("john", "file:///etc/passwd", "next", None))
     store.db.execute(ask, ("stranger", "https://found.example/post-73", "next", None))
+    store.db.execute(ask, ("john", "https://www.paywall.example/story", "next", None))
     store.db.commit()
     assert add_requested(cfg, store, fetcher) == 3 and store.add_requests() == []
     rows = store.db.execute("SELECT status, error, article_id FROM add_requests ORDER BY id").fetchall()
-    assert [r["status"] for r in rows] == ["done", "done", "done", "failed", "failed", "failed"]
+    assert [r["status"] for r in rows] == ["done", "done", "done", "failed", "failed", "failed", "failed"]
     assert "nothing could be read" in rows[3]["error"] and rows[4]["error"] == "not a web address"
-    assert rows[5]["error"] == "no such reader"
+    assert rows[5]["error"] == "no such reader" and "Subscriber sessions" not in rows[3]["error"]
+    # Turned away, from a site with no session saved: the reader is told how to get past it.
+    assert "If you subscribe to paywall.example, save a session for it under Subscriber sessions" in rows[6]["error"]
     kept, now_id, next_id = (r["article_id"] for r in rows[:3])
 
     # Stored like any article, from its page, by the route "manual", without the tracking tag.

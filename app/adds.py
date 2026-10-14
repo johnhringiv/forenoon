@@ -11,9 +11,10 @@ The link and the page are untrusted, as every fetched page is.
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import urlsplit
 
-from . import thumbs
+from . import sessions, thumbs
 from .config import Config, Source
 from .discover import site_host
 from .fetch import Fetcher
@@ -25,6 +26,7 @@ from .urls import article_id, without_tracking
 log = logging.getLogger("forenoon")
 
 MAX_URL_CHARS = 2000
+TURNED_AWAY = re.compile(r"\bHTTP 40[13]\b")  # how a refused page fetch is reported
 
 
 def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, rating) -> str:
@@ -40,7 +42,12 @@ def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str,
         item = Item(item_id, url, Source(site_host(url), extract="page"), known.title if known else "", "", None, "")
         result = _extract(item, fetcher, cfg, keep=True)
         if result.body is None:
-            raise ValueError(f"nothing could be read there: {result.reason or result.status}")
+            why = f"nothing could be read there: {result.reason or result.status}"
+            if TURNED_AWAY.search(result.reason) and not sessions.for_url(cfg.sessions, url):
+                # Most often a paywall or a bot check that the reader's own session gets past.
+                why += f". If you subscribe to {site_host(url)}, save a session for it under Subscriber sessions"
+                why += " on the Sources page and add the link again"
+            raise ValueError(why)
         store.upsert_article(item_id, url, item.source.name, result.title or url, result.author, None)
         if not (known and known.title):
             store.set_title(item_id, result.title or url)
