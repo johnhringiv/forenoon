@@ -140,6 +140,13 @@ SITES = {
 
 # The cookie each site keeps a reader's sign-in in, for saying when it ends.
 SIGN_IN_COOKIES = {"ft.com": "FTSession_s", "nytimes.com": "NYT-S"}
+
+
+def _known(table: dict, domain: str) -> tuple[str, object] | None:
+    """The entry for a session's site, saved as the site or any host on it (www.ft.com)."""
+    return next(((site, value) for site, value in table.items() if on_site(f"https://{domain}/", site)), None)
+
+
 BROWSER_STATE = Path(os.environ.get("BROWSER_STATE", "/browser"))
 CHALLENGE_TITLES = ("Just a moment...", "Security Verification")
 _last_visit: dict[str, float] = {}
@@ -243,7 +250,7 @@ def _browse(sync_playwright, url: str, cookie: str, domain: str, state: Path) ->
                 context.add_cookies(_cookies(cookie, domain))
             page = context.new_page()
             html = _load(page, url)
-            signed_in = SITES.get(domain)
+            signed_in = (_known(SITES, domain) or (None, None))[1]
             if signed_in and not signed_in(page):
                 raise ValueError(f"{SIGNED_OUT}the saved cookie no longer works; paste a new one")
             partial = state.with_name(f".{state.name}.tmp")
@@ -300,8 +307,10 @@ def sign_in_ends(name: str, session: dict[str, str], state_dir: Path = BROWSER_S
     the site keeps it in. "" for a site not in SIGN_IN_COOKIES (its other cookies, preferences
     and the like, often outlive the sign-in, so none of them is a guide), or when the site has
     not said (a pasted cookie carries no expiry until the site sends it again)."""
-    domain = session.get("domain", "").lower()
-    wanted = SIGN_IN_COOKIES.get(domain)
+    known = _known(SIGN_IN_COOKIES, session.get("domain", "").lower())
+    if known is None:
+        return ""
+    site, wanted = known
     try:
         saved = json.loads(_state_file(name, session, state_dir).read_text(encoding="utf-8"))
         cookies = saved.get("cookies", [])
@@ -314,7 +323,7 @@ def sign_in_ends(name: str, session: dict[str, str], state_dir: Path = BROWSER_S
         and cookie.get("name") == wanted
         and isinstance(cookie.get("expires"), int | float)
         and cookie["expires"] > 0
-        and on_site("https://" + str(cookie.get("domain", "")).lstrip("."), domain)
+        and on_site("https://" + str(cookie.get("domain", "")).lstrip("."), site)
     ]
     return datetime.fromtimestamp(max(ends)).astimezone().date().isoformat() if ends else ""
 

@@ -507,6 +507,8 @@ pub async fn delete(
 /// A site's name as the session fetcher will match it: a plain host name, not an address.
 fn check_site(site: &str) -> Option<String> {
     let site = site.trim().trim_start_matches("https://").trim_end_matches('/').to_ascii_lowercase();
+    // Saved for the whole site: a session for www.ft.com is one for ft.com.
+    let site = site.strip_prefix("www.").map(str::to_owned).unwrap_or(site);
     let labels: Vec<&str> = site.split('.').collect();
     let named = labels.len() >= 2
         && site.len() <= 253
@@ -617,7 +619,7 @@ mod tests {
     #[test]
     fn a_sessions_site_is_a_plain_host_name() {
         assert_eq!(check_site(" https://FT.com/ ").as_deref(), Some("ft.com"));
-        assert_eq!(check_site("www.nytimes.com").as_deref(), Some("www.nytimes.com"));
+        assert_eq!(check_site("www.nytimes.com").as_deref(), Some("nytimes.com"));
         for bad in ["", "com", "localhost", "192.168.1.1", "ft.com/path", "ft.com:443", "a b.com", "-x.com", "x..com"] {
             assert_eq!(check_site(bad), None, "{bad}");
         }

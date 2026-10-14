@@ -69,6 +69,11 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
     ]
     runner._state_file("site-paper.example", session, browser).write_text(json.dumps({"cookies": cookies}))
     assert runner.sign_in_ends("site-paper.example", session, browser) == "2027-10-14"
+    # A session saved for a host on the site (www.nytimes.com) is the site's: the same cookie counts.
+    www = {"cookie": "a=2", "domain": "www.nytimes.com"}
+    runner._state_file("site-www.nytimes.com", www, browser).write_text(json.dumps({"cookies": cookies}))
+    assert runner.sign_in_ends("site-www.nytimes.com", www, browser) == "2027-10-14"
+    assert runner._known(runner.SITES, "www.ft.com")[0] == "ft.com" and runner._known(runner.SITES, "notft.com") is None
     # A pasted cookie has no expiry until the site sends it again; a site not listed has none.
     cookies[0]["expires"] = -1
     runner._state_file("site-paper.example", session, browser).write_text(json.dumps({"cookies": cookies}))
