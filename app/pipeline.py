@@ -670,6 +670,8 @@ def run(
             store.set_title(item.id, item.title)
         if article is not None and reason and cfg.llm.show_reasons:
             article.reason = reason
+        if article is not None and item.id in by_hand:
+            article.added = True  # marked in the book's contents and on its page
         store.set_extraction(item.id, result.status, result.reason, result.word_count)
         if result.image_url or result.description:  # else the feed's summary stays
             store.set_preview(item.id, result.image_url, result.description)
