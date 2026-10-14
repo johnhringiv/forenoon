@@ -184,8 +184,10 @@ class Store:
         """Every reader with their delivery settings; none until the web app has made an account."""
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
             return ()
+        learned = "learned" if self.can_learn() else "''"  # older web app: no such column
         rows = self.db.execute(
-            "SELECT id, name, kindle_addresses, daily_stories, interests FROM users ORDER BY created_at, id"
+            f"SELECT id, name, kindle_addresses, daily_stories, interests, {learned} AS learned"
+            " FROM users ORDER BY created_at, id"
         ).fetchall()
         return tuple(
             User(
@@ -194,9 +196,30 @@ class Store:
                 kindle_addresses=tuple(line.strip() for line in row["kindle_addresses"].splitlines() if line.strip()),
                 daily_cap=row["daily_stories"],
                 interests=row["interests"],
+                learned=row["learned"],
             )
             for row in rows
         )
+
+    def can_learn(self) -> bool:
+        """Whether the web app has made room for the notes kept on each reader."""
+        return self._has_table("profile_history")
+
+    def learned_at(self, user_id: str) -> datetime | None:
+        """When the pipeline last looked at this reader's ratings for its notes."""
+        row = self.db.execute("SELECT learned_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        return datetime.fromisoformat(row["learned_at"]) if row and row["learned_at"] else None
+
+    def set_learned(self, user_id: str, notes: str, when: datetime, changed: bool = True) -> None:
+        """Store the notes and when they were written; a changed text also goes in the history."""
+        stamp = when.astimezone(UTC).isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("UPDATE users SET learned = ?, learned_at = ? WHERE id = ?", (notes, stamp, user_id))
+            if changed:
+                self.db.execute(
+                    "INSERT INTO profile_history (user_id, notes, author, created_at) VALUES (?, ?, 'agent', ?)",
+                    (user_id, notes, stamp),
+                )
 
     def sources(self) -> tuple[Source, ...]:
         """The sources to read, as set on the web app's sources page; paused ones are left out."""

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT notes FROM profile_history WHERE user_id = ? AND id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "notes",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4c794c469f19f0885c6532230cd9def42421c81887883221c16dac60cc233fce"
+}

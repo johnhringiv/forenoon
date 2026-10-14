@@ -76,6 +76,13 @@ a { color:var(--accent) }
 button, select, input { font:inherit; color:var(--ink); background:var(--card); border:1px solid var(--line);
   border-radius:3px }
 button, select { padding:.15rem .45rem; cursor:pointer }
+/* The one button that carries out a form, and the one that sends a book, must not look like the small
+   choice buttons beside them (ratings, reasons). */
+button.primary { background:var(--accent); border-color:var(--accent); color:var(--card); font-weight:600 }
+button.kindle { border:1.5px solid var(--accent); color:var(--accent); font-weight:600; padding:.25rem .7rem }
+button.primary:hover, button.kindle:hover { filter:brightness(1.1) }
+.extra, form.send.apart { border-top:1px solid var(--line); padding-top:.45rem; margin-top:.25rem }
+.notes { white-space:pre-line; color:var(--ink) }
 form.rate { margin:0; display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; font-size:.78rem }
 form.rate button.on { background:var(--ink); color:var(--card); border-color:var(--ink) }
 .extra { display:flex; flex-wrap:wrap; gap:.3rem .9rem; align-items:center; font-size:.78rem; color:var(--soft) }

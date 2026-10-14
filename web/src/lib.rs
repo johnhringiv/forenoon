@@ -3,6 +3,7 @@
 pub mod archive;
 pub mod auth;
 pub mod db;
+pub mod learned;
 pub mod limit;
 pub mod mail;
 pub mod pages;
@@ -83,6 +84,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/account/email", post(pages::set_email))
         .route("/account/email/cancel", post(pages::cancel_email))
         .route("/account/verify", post(pages::resend_verification))
+        .route("/learned", get(learned::page).post(learned::save))
+        .route("/learned/restore", post(learned::restore))
         .route("/sources", get(sources::page).post(sources::add))
         .route("/sources/{id}", post(sources::update))
         .route("/sources/recipe", post(sources::add_recipe))

@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -85,11 +85,24 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             print(f"Report written to {path}", file=sys.stderr)
             if not args.dry_run:
                 notify_run(cfg, report)
+                _learn(cfg, store, backend, user)
             failed += bool(report.delivery_error)
     finally:
         fetcher.close()
         store.close()
     return 1 if failed else 0
+
+
+def _learn(cfg: Config, store: Store, backend, user) -> None:
+    """After a delivery: bring the notes on this reader's taste up to date when they are due."""
+    from .learn import learn
+
+    try:
+        zone = ZoneInfo(cfg.timezone)
+        day_start = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+        learn(cfg.llm, backend, store, user, day_start.astimezone(UTC).isoformat(timespec="seconds"))
+    except Exception:
+        log.exception("reader notes failed for %s", user.id)
 
 
 def _next_run(cfg: Config, now: datetime) -> datetime:

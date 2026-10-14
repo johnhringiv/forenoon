@@ -227,6 +227,62 @@ pub async fn confirm_email(pool: &SqlitePool, id: &str, email: &str) -> Result<b
     Ok(done.rows_affected() > 0)
 }
 
+// what the pipeline has learned about a reader (its notes; see learned.rs)
+
+pub struct Learned {
+    pub notes: String,
+    /// When the pipeline last rewrote them.
+    pub learned_at: Option<String>,
+}
+
+pub async fn learned(pool: &SqlitePool, user: &str) -> Result<Learned, sqlx::Error> {
+    sqlx::query_as!(Learned, "SELECT learned AS notes, learned_at FROM users WHERE id = ?", user).fetch_one(pool).await
+}
+
+/// The reader's own version of the notes. `learned_at` is left alone: it says when the
+/// pipeline last looked at the ratings, which an edit does not change.
+pub async fn set_learned(pool: &SqlitePool, user: &str, notes: &str) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    let mut tx = pool.begin().await?;
+    sqlx::query!("UPDATE users SET learned = ? WHERE id = ?", notes, user).execute(&mut *tx).await?;
+    sqlx::query!(
+        "INSERT INTO profile_history (user_id, notes, author, created_at) VALUES (?, ?, 'reader', ?)",
+        user,
+        notes,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+pub struct ProfileVersion {
+    pub id: i64,
+    pub notes: String,
+    pub author: String,
+    pub created_at: String,
+}
+
+/// The reader's notes as they have been, newest first.
+pub async fn profile_history(pool: &SqlitePool, user: &str, limit: i64) -> Result<Vec<ProfileVersion>, sqlx::Error> {
+    sqlx::query_as!(
+        ProfileVersion,
+        r#"SELECT id AS "id!", notes, author, created_at FROM profile_history
+           WHERE user_id = ? ORDER BY id DESC LIMIT ?"#,
+        user,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// One earlier version, only if it is this reader's.
+pub async fn profile_version(pool: &SqlitePool, user: &str, id: i64) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar!("SELECT notes FROM profile_history WHERE user_id = ? AND id = ?", user, id)
+        .fetch_optional(pool)
+        .await
+}
+
 // the newsstand
 
 pub struct Totals {

@@ -16,6 +16,7 @@
   {"section": "Ranking", "key": "llm.group_stories", "kind": "bool", "default": true, "label": "Group articles on the same event into one story"},
   {"section": "Ranking", "key": "llm.follow_links", "kind": "bool", "default": true, "label": "Deliver the page a short post is about"},
   {"section": "Ranking", "key": "llm.show_reasons", "kind": "bool", "default": true, "label": "Print the model's reason in the book"},
+  {"section": "Ranking", "key": "llm.learn", "kind": "bool", "default": true, "label": "Keep notes on what each reader's ratings show", "hint": "About once a week the model rewrites a short note per reader, which is given to it beside their interests. Readers see and edit theirs on the account page."},
   {"section": "Ranking", "key": "llm.check_extraction", "kind": "bool", "default": true, "label": "Ask the model whether each article looks complete", "hint": "Logged in the report; never changes what is delivered."},
 
   {"section": "Built-in sources", "key": "discovery.slots", "kind": "int", "default": 2, "min": 0, "max": 50, "label": "Places a day for their stories, at most", "hint": "Never more than half the day. Which ones are read is set on the Sources page."},

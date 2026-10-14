@@ -15,7 +15,7 @@
 <label class="wide">Add a link <input name="link" type="url" maxlength="2000" placeholder="https://example.com/an-article" required></label>
 <label>Then <select name="then"><option value="next">Put it in my next issue</option><option value="now">Send it to my Kindle now</option><option value="keep">Only keep it: I have read it</option></select></label>
 <label>Your rating, if read <select name="rating"><option value="">None</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
-<button>Add</button>
+<button class="primary">Add</button>
 </div>
 <p class="hint">The page is fetched and kept like any article. In your next issue it goes first and takes one of the day's places. Kept as read, it is never sent, and its rating counts when choosing what to send you.</p>
 {% for add in pending %}<p class="hint{% if add.failed %} failing{% endif %}">{{ add.url }}: {{ add.note }}</p>{% endfor %}
@@ -27,9 +27,10 @@
 {% endfor %}
 <label>From <input type="date" name="from" value="{{ from }}"></label>
 <label>To <input type="date" name="to" value="{{ to }}"></label>
-<button>Show</button>
+<button class="primary">Apply filters</button>
 {% if filtered %}<a href="/archive">Clear</a>{% endif %}
 </div>
+<p class="hint">Choose what to show, then press Apply filters. The address of a filtered view can be bookmarked.</p>
 </form>
 {% if !ready %}<p class="empty">The pipeline has not started keeping what it weighs yet. That begins with its next daily run.</p>
 {% else if rows.is_empty() %}<p class="empty">{% if filtered %}No articles match.{% else %}Nothing here yet.{% endif %}</p>{% endif %}
@@ -44,9 +45,9 @@
 {% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
 </div>
 {% include "_rate.html" %}
-{% if card.sendable || card.sent.is_some() %}<form class="send" method="post" action="/send">
+{% if card.sendable || card.sent.is_some() %}<form class="send apart" method="post" action="/send">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
-{% if card.sendable %}<button>Send to Kindle</button>{% endif %}
+{% if card.sendable %}<button class="kindle">Send to Kindle</button>{% endif %}
 {% if let Some(sent) = card.sent %}<span>{{ sent }}</span>{% endif %}
 </form>{% endif %}
 </div>

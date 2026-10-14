@@ -1028,6 +1028,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.follow_links", "1"),
         ("llm.show_reasons", "1"),
         ("llm.check_extraction", "1"),
+        ("llm.learn", "1"),
         ("discovery.min_score", "6.0"),
         ("alerts.enabled", "1"),
         ("alerts.source_failures", "3"),
@@ -1108,11 +1109,14 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::BAD_REQUEST);
 
     db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
-    assert!(browser.get(&site, "/").await.text.contains("<button>Send to Kindle</button>"));
+    assert!(browser.get(&site, "/").await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
     assert_eq!(browser.post(&site, "/send", &form).await.location, "/#a-a1");
     browser.post(&site, "/send", &form).await; // pressed twice: still one request
     let page = browser.get(&site, "/").await.text;
-    assert!(page.contains("On its way to your Kindle") && !page.contains("<button>Send to Kindle</button>"));
+    assert!(
+        page.contains("On its way to your Kindle")
+            && !page.contains("<button class=\"kindle\">Send to Kindle</button>")
+    );
 
     // Not someone else's article, not an unknown one, not without the page's token.
     for other in ["m1", "nope"] {
@@ -1131,7 +1135,10 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
     // The pipeline records the outcome; the card shows it and offers the button again.
     sqlx::query("UPDATE send_requests SET status = 'failed', error = 'smtp said no'").execute(pool).await.unwrap();
     let page = browser.get(&site, "/").await.text;
-    assert!(page.contains("Could not be sent: smtp said no") && page.contains("<button>Send to Kindle</button>"));
+    assert!(
+        page.contains("Could not be sent: smtp said no")
+            && page.contains("<button class=\"kindle\">Send to Kindle</button>")
+    );
     sqlx::query("UPDATE send_requests SET status = 'sent', requested_at = '2026-10-11T12:00:00+00:00'")
         .execute(pool)
         .await
@@ -1317,7 +1324,7 @@ async fn the_archive_lists_the_readers_library_and_filters_it() {
     assert_eq!(browser.post(&site, "/rate", &rate).await.location, "/archive?show=near#a-n1");
     assert!(browser.get(&site, "/archive?rating=high").await.text.contains("Rated 5 of 5"));
     db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
-    assert!(browser.get(&site, back).await.text.contains("<button>Send to Kindle</button>"));
+    assert!(browser.get(&site, back).await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
     let send = [("csrf", csrf.as_str()), ("article", "n1"), ("story", "1"), ("back", back)];
     assert_eq!(browser.post(&site, "/send", &send).await.location, "/archive?show=near#a-n1");
     assert!(browser.get(&site, back).await.text.contains("On its way to your Kindle"));
@@ -1463,4 +1470,57 @@ async fn a_link_added_by_hand_is_only_queued_and_then_shown_as_the_readers_own()
     }
     let form = [("csrf", csrf.as_str()), ("link", "https://blog.example/z"), ("then", "keep")];
     assert_eq!(other.post(&site, "/archive", &form).await.location, "/archive?show=added&error=many");
+}
+
+#[tokio::test]
+async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let mut browser = Browser::default();
+    assert_eq!(browser.get(&site, "/learned").await.location, "/login");
+    browser.sign_in(&site, "john").await;
+    assert!(browser.get(&site, "/account").await.text.contains(r#"<a href="/learned">"#));
+    let page = browser.get(&site, "/learned").await;
+    let csrf = page.csrf();
+    assert!(page.text.contains("Nothing has been learned yet") && !page.text.contains("Earlier versions"));
+
+    // What the pipeline writes: the notes, when, and a version in the history.
+    sqlx::query("UPDATE users SET learned = 'Finishes long <b>technical</b> pieces.', learned_at = '2026-10-12T11:00:00+00:00' WHERE id = 'john'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let version = "INSERT INTO profile_history (user_id, notes, author, created_at) VALUES (?, ?, 'agent', ?)";
+    for (user, notes) in [("john", "Finishes long <b>technical</b> pieces."), ("mary", "Mary's notes")] {
+        sqlx::query(version).bind(user).bind(notes).bind("2026-10-12T11:00:00+00:00").execute(pool).await.unwrap();
+    }
+    let text = browser.get(&site, "/learned").await.text;
+    assert!(text.contains("Last rewritten from your ratings on 12 October 2026"));
+    assert!(text.contains("Finishes long &#60;b&#62;technical&#60;/b&#62; pieces.") && !text.contains("<b>technical"));
+    assert!(text.contains("Rewritten from your ratings · in use") && !text.contains("Mary"));
+    assert!(!text.contains("Restore this version"));
+
+    // The reader's edit replaces it and is a version too; the pipeline's date is left alone.
+    let edit = [("csrf", csrf.as_str()), ("notes", "  Skips market reports.\r\nLikes long pieces.  ")];
+    assert_eq!(browser.post(&site, "/learned", &edit).await.location, "/learned?saved=notes");
+    let now = db::learned(pool, "john").await.unwrap();
+    assert_eq!(now.notes, "Skips market reports.\nLikes long pieces.");
+    assert_eq!(now.learned_at.as_deref(), Some("2026-10-12T11:00:00+00:00"));
+    let text = browser.get(&site, "/learned?saved=notes").await.text;
+    assert!(text.contains("Edited by you · in use") && text.contains("Restore this version"));
+    let long = "x".repeat(2001);
+    let too_long = [("csrf", csrf.as_str()), ("notes", long.as_str())];
+    assert_eq!(browser.post(&site, "/learned", &too_long).await.location, "/learned?saved=long");
+
+    // Back to an earlier version of their own; never to someone else's, never without the token.
+    let ids: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, user_id FROM profile_history ORDER BY id").fetch_all(pool).await.unwrap();
+    let (mine, marys) = (ids[0].0.to_string(), ids[1].0.to_string());
+    let theirs = [("csrf", csrf.as_str()), ("version", marys.as_str())];
+    assert_eq!(browser.post(&site, "/learned/restore", &theirs).await.status, StatusCode::NOT_FOUND);
+    let forged = [("csrf", "wrong"), ("version", mine.as_str())];
+    assert_eq!(browser.post(&site, "/learned/restore", &forged).await.status, StatusCode::FORBIDDEN);
+    let back = [("csrf", csrf.as_str()), ("version", mine.as_str())];
+    assert_eq!(browser.post(&site, "/learned/restore", &back).await.location, "/learned?saved=restored");
+    assert_eq!(db::learned(pool, "john").await.unwrap().notes, "Finishes long <b>technical</b> pieces.");
+    assert_eq!(db::learned(pool, "mary").await.unwrap().notes, "");
 }
