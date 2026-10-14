@@ -19,9 +19,12 @@ from .config import Source
 from .fetch import FetchError
 
 FOLDER = ".fetch"
-WAIT = 90.0  # seconds for one page
+WAIT = 180.0  # seconds for one page: the pause between pages, and a sign-in when one is needed
 RETRY_AFTER = 600.0  # after no answer at all, do not wait again for this long
 MAX_BYTES = 5 * 1024 * 1024
+
+# How the recipes container begins an error that needs the reader to sign in again.
+SIGNED_OUT = "Sign-in needed: "
 
 _silent_until = 0.0  # nothing answered: the recipes container is not running
 

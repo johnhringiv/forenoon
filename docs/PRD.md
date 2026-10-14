@@ -56,17 +56,23 @@ what its own users configure and delivers only to the addresses its admin has se
   record afresh.
 
   **Subscriber sessions.** A feed of a site the reader subscribes to can carry a session:
-  the site's cookie, pasted once on the feed's row. The feed is read as usual, without it.
+  the cookie the reader's own browser sends to the site, pasted once on the feed's row. (A
+  username and password are not offered: the FT and the NYT both ask for a CAPTCHA at
+  sign-in.) The feed is read as usual, without it.
   Only the article pages the ranking wants read (the reading pass and the day's choices) are
-  then fetched with the session, a few a day, instead of a whole paper. The cookie is kept in
-  the logins volume beside recipe logins: never in the database or the data folder, never
-  shown again, and sent only over https to the one site named with it and its subdomains (a
-  redirect elsewhere ends the fetch). The pipeline never holds it. It leaves a request in
-  `<data>/recipes/.fetch/`, and the recipes container fetches the page and leaves the answer
-  there, so sessions need that container running. The fetch identifies itself as Forenoon. A
-  site that refuses or challenges it is reported on the feed's row, not worked around, and
-  the article falls back to the feed's own text like any page that cannot be fetched. Pages
-  the source links to on other sites are fetched as usual, without the session.
+  then fetched with the session, a few a day and at least 20 seconds apart per site, instead
+  of a whole paper. The cookie is kept in the logins volume beside recipe logins: never in the
+  database or the data folder, never shown again, and used only on https pages of the one
+  site named with it and its subdomains. The pipeline never holds it. It leaves a request in
+  `<data>/recipes/.fetch/`, and the recipes container reads the page and leaves the answer
+  there, so sessions need that container running. Pages are read by Chrome on a virtual
+  screen (Xvfb), since some sites admit only a browser, and what it keeps of the session is
+  in its own volume. Nothing answers a CAPTCHA: a site that asks for one, shows its paywall
+  (the cookie has expired) or keeps the browser out is reported on the feed's row. When a
+  session needs a fresh cookie, its
+  articles are held back (not sent as the feed's summary) and the run's alert email names
+  the feed. Pages the source links to on other sites are fetched as usual, without the
+  session.
 
 - **Settings** for the whole install (delivery time, the format, ranking and its model,
   how many places built-in sources may take, alerts, what is kept) are on the web pages'

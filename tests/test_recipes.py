@@ -283,15 +283,27 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
             runner.fetch_page(url, runner.read_session("feed-7", logins))
     with pytest.raises(ValueError, match="no session is saved"):
         runner.fetch_page("https://paper.example/a", {})
-    with pytest.raises(ValueError, match="redirected to accounts.evil.test"):
-        runner._StayOnSite("paper.example").redirect_request(
-            None, None, 302, "", {}, "https://accounts.evil.test/login"
-        )
+    with pytest.raises(ValueError, match="no session is saved"):
+        runner.fetch_page("https://paper.example/a", {"domain": "paper.example", "username": "me", "password": "x"})
+    # A pasted header becomes cookies for the session's own site and nowhere else.
+    assert runner._cookies(" a=1; b=x=y ;junk", "paper.example") == [
+        {"name": "a", "value": "1", "domain": ".paper.example", "path": "/", "secure": True},
+        {"name": "b", "value": "x=y", "domain": ".paper.example", "path": "/", "secure": True},
+    ]
+    # What the browser keeps is per cookie: a new cookie never reuses the old session.
+    browser = tmp_path / "browser"
+    browser.mkdir()
+    first = runner._state_file("feed-7", {"cookie": "a=1"}, browser)
+    first.write_text("{}")
+    (browser / "feed-70-0000.json").write_text("{}")
+    second = runner._state_file("feed-7", {"cookie": "a=2"}, browser)
+    assert second != first and not first.exists() and (browser / "feed-70-0000.json").exists()
 
     # The queue: each request is answered with the page or with why not.
     seen = []
 
-    def fetcher(url, session):
+    def fetcher(url, session, name):
+        assert name == "feed-7"
         seen.append((url, session.get("cookie")))
         if "missing" in url:
             raise ValueError("HTTP 404")
@@ -303,7 +315,7 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
     ):
         (out / ".fetch" / f"{name}.json").write_text(json.dumps({"session": session, "url": url}))
     (out / ".fetch" / "notes.txt").write_text("not a request")
-    assert runner.answer_fetches(out, logins, fetcher, gap=0) == 3
+    assert runner.answer_fetches(out, logins, fetcher) == 3
     assert (out / ".fetch" / f"{ids[0]}.html").read_bytes() == b"<html>the article</html>"
     assert (out / ".fetch" / f"{ids[1]}.err").read_text() == "HTTP 404"
     assert (out / ".fetch" / f"{ids[2]}.err").read_text() == "not a session"

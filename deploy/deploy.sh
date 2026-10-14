@@ -110,13 +110,15 @@ start_recipes() {
         chown 1000:1000 "$DATA_DIR/recipes"
     fi
     # Only the recipes folder and the logins volume are mounted: this container never sees
-    # the database. The web pages write the list of recipes and the logins.
+    # the database. The web pages write the list of recipes and the logins. forenoon-browser
+    # holds what its browser keeps of a sign-in, and nothing else mounts it.
     docker run -d --name forenoon-recipes --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true \
         -v "$DATA_DIR/recipes:/recipes" \
         -v forenoon-logins:/logins:ro \
+        -v forenoon-browser:/browser \
         -e TZ -e RECIPES_TIME \
         "$RECIPES_IMAGE" >/dev/null ||
         echo "recipes container did not start; the rest of the deploy is unaffected"

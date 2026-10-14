@@ -66,7 +66,7 @@
 <button class="primary">Save session</button>
 {% if row.has_session %}<button class="link" formaction="/sources/{{ row.id }}/session/delete" formnovalidate>Remove session</button>{% endif %}
 </div>
-<p class="hint">The feed is read as usual; only the articles the ranking wants read are then fetched from the site, signed in as you, a few a day. To get the cookie: sign in to the site in your browser, open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. It is kept where only the recipes container can read it, never shown again, and sent to this site and its subdomains only. It works until the site signs that session out; a failure shows here. Use it only for what your subscription lets you read; the fetch says it is Forenoon, and a site that refuses it is not worked around.</p>
+<p class="hint">The feed is read as usual; only the articles the ranking wants read are then fetched from the site, one at a time and at least 20 seconds apart, by Chrome signed in as you. To get the cookie: sign in to the site in your browser, open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. It is kept where only the recipes container can read it, never shown again, and sent to this site and its subdomains only. It works until the site signs that session out; a failure shows here. If the site asks for a CAPTCHA, the fetch stops and says so here and by email. Use it only for what your subscription lets you read.</p>
 </form>
 {% else %}
 <p class="hint">This install has no logins folder (<code>FORENOON_LOGINS_DIR</code>), so a session cannot be saved.</p>

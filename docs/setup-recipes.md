@@ -52,22 +52,29 @@ next time the recipes container starts or finishes its daily run.
 
 For a site you subscribe to that has a feed, there is a lighter way than a recipe. Add its
 feed under **Feeds** as usual, then open "Add your session" on its row and paste the cookie
-your browser sends to the site when you are signed in:
+your browser sends to the site when you are signed in: sign in to the site in your browser,
+open the developer tools, go to the Network tab and reload, pick any request to the site and
+copy the value of its `Cookie` request header into **Cookie**. Check **Site** (such as
+`ft.com` or `nytimes.com`) and press **Save session**. It works until the site ends that
+session.
 
-1. Sign in to the site in your browser.
-2. Open the developer tools, go to the Network tab and reload the page.
-3. Pick any request to the site and copy the value of its `Cookie` request header.
-4. Paste it into **Cookie**, check **Site** (for example `ft.com`) and press **Save session**.
+A username and password are not offered: the FT and the NYT both ask for a CAPTCHA at sign-in,
+and nothing here answers one.
 
 The feed supplies headlines; the ranking picks; only the articles it wants read are fetched
-from the site, signed in as you. The cookie is kept in the same volume as recipe logins and
-is sent to that one site only. It works until the site ends that session, after which the
-row shows the failure and you paste a fresh one.
+from the site, one at a time and at least 20 seconds apart. They are read by an ordinary
+Chrome running on a virtual screen in the recipes container, because some sites (the FT
+among them) let only a browser through to their articles. Nothing answers a CAPTCHA: if the
+site asks for one, the row and an alert email say so.
 
-This needs the recipes container, which does the fetching. The fetch says it is Forenoon and
-does not pretend to be a browser. A site that refuses it is not worked around; its articles
-then come from the feed's own text, which is usually a summary. Automated access may be
-against a site's terms even for subscribers: that is yours to check.
+When a session stops working, its articles are held back rather than sent as the feed's
+summary, and the daily run's alert email names the feed. Paste a fresh cookie and they
+come in the next run.
+
+The cookie is kept in the same volume as recipe logins and used on that one site
+only; what the browser keeps of the session is in a second volume, `forenoon-browser`, which
+only the recipes container mounts. Automated access may be against a site's terms even for
+subscribers: that is yours to check.
 
 ## When something goes wrong
 
