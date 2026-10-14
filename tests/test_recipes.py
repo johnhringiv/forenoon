@@ -270,8 +270,8 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
     out, logins = tmp_path / "recipes", tmp_path / "logins"
     (out / ".fetch").mkdir(parents=True)
     logins.mkdir()
-    (logins / "feed-7.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example", "x": 1}')
-    assert runner.read_session("feed-7", logins) == {"cookie": "session=s3cret", "domain": "paper.example"}
+    (logins / "site-paper.example.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example", "x": 1}')
+    assert runner.read_session("site-paper.example", logins) == {"cookie": "session=s3cret", "domain": "paper.example"}
     assert runner.on_site("https://www.paper.example/a", "paper.example")
     for elsewhere in ("http://paper.example/a", "https://paper.example.evil.test/a", "https://notpaper.example/a"):
         assert not runner.on_site(elsewhere, "paper.example"), elsewhere
@@ -280,7 +280,7 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
         ("http://paper.example/a", "not a page on paper.example"),
     ):
         with pytest.raises(ValueError, match=why):
-            runner.fetch_page(url, runner.read_session("feed-7", logins))
+            runner.fetch_page(url, runner.read_session("site-paper.example", logins))
     with pytest.raises(ValueError, match="no session is saved"):
         runner.fetch_page("https://paper.example/a", {})
     with pytest.raises(ValueError, match="no session is saved"):
@@ -293,56 +293,61 @@ def test_a_session_is_used_only_for_its_own_site_and_never_leaves_the_logins_fol
     # What the browser keeps is per cookie: a new cookie never reuses the old session.
     browser = tmp_path / "browser"
     browser.mkdir()
-    first = runner._state_file("feed-7", {"cookie": "a=1"}, browser)
+    first = runner._state_file("site-paper.example", {"cookie": "a=1"}, browser)
     first.write_text("{}")
-    (browser / "feed-70-0000.json").write_text("{}")
-    second = runner._state_file("feed-7", {"cookie": "a=2"}, browser)
-    assert second != first and not first.exists() and (browser / "feed-70-0000.json").exists()
+    (browser / "site-paper.example.co-0000.json").write_text("{}")
+    second = runner._state_file("site-paper.example", {"cookie": "a=2"}, browser)
+    assert second != first and not first.exists() and (browser / "site-paper.example.co-0000.json").exists()
     # When the sign-in ends: the expiry the site set on the cookie it keeps the sign-in in.
     session = {"cookie": "a=2", "domain": "nytimes.com"}
-    assert runner.sign_in_ends("feed-7", session, browser) == ""
+    assert runner.sign_in_ends("site-paper.example", session, browser) == ""
     year = datetime(2027, 10, 14, 12).timestamp()
     cookies = [
         {"name": "NYT-S", "domain": ".nytimes.com", "httpOnly": True, "expires": year},
         {"name": "purr-cache", "domain": ".nytimes.com", "httpOnly": True, "expires": year + 86400 * 31},
         {"name": "NYT-S", "domain": ".tracker.example", "httpOnly": True, "expires": year + 86400 * 900},
     ]
-    runner._state_file("feed-7", session, browser).write_text(json.dumps({"cookies": cookies}))
-    assert runner.sign_in_ends("feed-7", session, browser) == "2027-10-14"
+    runner._state_file("site-paper.example", session, browser).write_text(json.dumps({"cookies": cookies}))
+    assert runner.sign_in_ends("site-paper.example", session, browser) == "2027-10-14"
     # A pasted cookie has no expiry until the site sends it again; a site not listed has none.
     cookies[0]["expires"] = -1
-    runner._state_file("feed-7", session, browser).write_text(json.dumps({"cookies": cookies}))
-    assert runner.sign_in_ends("feed-7", session, browser) == ""
+    runner._state_file("site-paper.example", session, browser).write_text(json.dumps({"cookies": cookies}))
+    assert runner.sign_in_ends("site-paper.example", session, browser) == ""
     other = {"cookie": "a=2", "domain": "paper.example"}
-    runner._state_file("feed-7", other, browser).write_text(
+    runner._state_file("site-paper.example", other, browser).write_text(
         json.dumps({"cookies": [{**cookies[1], "domain": ".paper.example"}]})
     )
-    assert runner.sign_in_ends("feed-7", other, browser) == ""
+    assert runner.sign_in_ends("site-paper.example", other, browser) == ""
 
     # The queue: each request is answered with the page or with why not.
     seen = []
 
     def fetcher(url, session, name):
-        assert name == "feed-7"
+        assert name == "site-paper.example"
         seen.append((url, session.get("cookie")))
         if "missing" in url:
             raise ValueError("HTTP 404")
         return b"<html>the article</html>"
 
-    ids = ["a" * 32, "b" * 32, "c" * 32]
+    # A session file that names another site than its own is refused.
+    (logins / "site-evil.example.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example"}')
+    ids = ["a" * 32, "b" * 32, "c" * 32, "d" * 32]
     for name, session, url in zip(
-        ids, ("feed-7", "feed-7", "../feed-7"), ("https://paper.example/1", "https://paper.example/missing", "x")
+        ids,
+        ("site-paper.example", "site-paper.example", "../site-paper.example", "site-evil.example"),
+        ("https://paper.example/1", "https://paper.example/missing", "x", "https://paper.example/2"),
     ):
         (out / ".fetch" / f"{name}.json").write_text(json.dumps({"session": session, "url": url}))
     (out / ".fetch" / "notes.txt").write_text("not a request")
-    assert runner.answer_fetches(out, logins, fetcher) == 3
+    assert runner.answer_fetches(out, logins, fetcher) == 4
     assert (out / ".fetch" / f"{ids[0]}.html").read_bytes() == b"<html>the article</html>"
     assert (out / ".fetch" / f"{ids[1]}.err").read_text() == "HTTP 404"
     assert (out / ".fetch" / f"{ids[2]}.err").read_text() == "not a session"
+    assert (out / ".fetch" / f"{ids[3]}.err").read_text() == "the session is saved for another site"
     assert seen == [("https://paper.example/1", "session=s3cret"), ("https://paper.example/missing", "session=s3cret")]
     assert not list((out / ".fetch").glob("*.json"))
     status = json.loads((out / "status.json").read_text())
-    assert not status["feed-7"]["ok"] and status["feed-7"]["note"] == "HTTP 404"
+    assert not status["site-paper.example"]["ok"] and status["site-paper.example"]["note"] == "HTTP 404"
     assert "s3cret" not in "".join(p.read_text(errors="replace") for p in out.rglob("*") if p.is_file())
 
 
@@ -352,10 +357,13 @@ def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_
     from app import sessions
     from app.fetch import FetchError
 
-    paper = Source("Paper", "https://paper.example/rss", session="feed-7", session_domain="paper.example")
-    assert sessions.covers(paper, "https://www.paper.example/a")
-    assert not sessions.covers(paper, "https://other.example/a"), "a linked page elsewhere is fetched as usual"
-    assert not sessions.covers(Source("Blog", "https://blog.example/feed"), "https://blog.example/a")
+    # A session is a site's: every page on it and its subdomains, over https, whatever the source.
+    sites = ("paper.example", "news.paper.example", "other.example")
+    assert sessions.for_url(sites, "https://www.paper.example/a") == "paper.example"
+    assert sessions.for_url(sites, "https://news.paper.example/a") == "news.paper.example"
+    assert sessions.for_url(sites, "http://paper.example/a") == ""
+    assert sessions.for_url(sites, "https://notpaper.example/a") == ""
+    assert sessions.name("paper.example") == "site-paper.example"
 
     def answer(text: str | None, error: str | None = None):
         def work():
@@ -363,7 +371,7 @@ def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_
                 waiting = list((tmp_path / ".fetch").glob("*.json")) if (tmp_path / ".fetch").is_dir() else []
                 if waiting:
                     wanted = json.loads(waiting[0].read_text())
-                    assert wanted == {"session": "feed-7", "url": "https://paper.example/a"}
+                    assert wanted == {"session": "site-paper.example", "url": "https://paper.example/a"}
                     waiting[0].unlink()
                     partial = waiting[0].with_name(".answer.tmp")
                     partial.write_text(text or error)
@@ -376,19 +384,22 @@ def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_
         return thread
 
     worker = answer("<html>full text</html>")
-    assert sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=5, poll=0.01) == "<html>full text</html>"
+    assert (
+        sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=5, poll=0.01)
+        == "<html>full text</html>"
+    )
     worker.join()
     worker = answer(None, "HTTP 403")
     with pytest.raises(FetchError, match="HTTP 403"):
-        sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=5, poll=0.01)
+        sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=5, poll=0.01)
     worker.join()
     assert list((tmp_path / ".fetch").iterdir()) == [], "nothing is left behind"
 
     # Nobody answering: said once, then not waited for again in the same run.
     with pytest.raises(FetchError, match="is the recipes container running"):
-        sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=0.05, poll=0.01)
+        sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=0.05, poll=0.01)
     started = time.monotonic()
     with pytest.raises(FetchError, match="not answering"):
-        sessions.fetch(tmp_path, "feed-7", "https://paper.example/a", wait=30)
+        sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=30)
     assert time.monotonic() - started < 1
     sessions._silent_until = 0.0

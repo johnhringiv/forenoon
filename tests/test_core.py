@@ -317,16 +317,10 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
     store.db.execute(add, ("Paused", "rss", "https://paused.example/feed", "", "auto", 0, 0))
     store.db.execute(add, ("FT", "recipe", "", "ft", "feed", 0, 1))
     store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "", "page", 1, 1))
-    store.db.execute("UPDATE sources SET session_domain = 'zed.example' WHERE name IN ('Zed', 'FT')")
+    store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('zed.example', 'x'), ('ft.com', 'x')")
+    assert store.session_sites() == ("ft.com", "zed.example")
     assert store.sources() == (
-        Source(
-            "Zed",
-            "https://zed.example/feed",
-            pinned=True,
-            extract="page",
-            session="feed-6",
-            session_domain="zed.example",
-        ),
+        Source("Zed", "https://zed.example/feed", pinned=True, extract="page"),
         Source("blog", "https://blog.example/feed"),
         Source("FT", type="recipe", recipe="ft", extract="feed"),
     )

@@ -252,10 +252,8 @@ class Store:
         """The sources to read, as set on the web app's sources page; paused ones are left out."""
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
             return ()
-        columns = {column["name"] for column in self.db.execute("PRAGMA table_info(sources)")}
-        session = "session_domain" if "session_domain" in columns else "''"  # older web app: none
         rows = self.db.execute(
-            f"SELECT id, name, kind, url, recipe, extract, pinned, {session} AS session_domain FROM sources"
+            "SELECT id, name, kind, url, recipe, extract, pinned FROM sources"
             " WHERE enabled = 1 AND kind != 'builtin'"
             " ORDER BY pinned DESC, name COLLATE NOCASE"
         ).fetchall()
@@ -267,11 +265,15 @@ class Store:
                 recipe=row["recipe"],
                 extract=row["extract"],
                 pinned=bool(row["pinned"]),
-                session=f"feed-{row['id']}" if row["kind"] == "rss" and row["session_domain"] else "",
-                session_domain=row["session_domain"] if row["kind"] == "rss" else "",
             )
             for row in rows
         )
+
+    def session_sites(self) -> tuple[str, ...]:
+        """The sites a subscriber session is saved for, on the Sources page."""
+        if not self._has_table("sessions"):
+            return ()
+        return tuple(row["domain"] for row in self.db.execute("SELECT domain FROM sessions ORDER BY domain"))
 
     def _has_table(self, name: str) -> bool:
         return bool(

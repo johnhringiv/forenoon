@@ -1245,10 +1245,9 @@ def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_wo
     from app.fetch import FetchError
 
     cfg, store, fetcher = env
-    blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
     user = dataclasses.replace(cfg.users[0], daily_cap=3)  # link cards are capped at the day's places
     cfg = dataclasses.replace(
-        cfg, users=(user,), sources=(blog, *cfg.sources[1:]), alerts=Alerts(to="me@example.com", source_failures=0)
+        cfg, users=(user,), sessions=("blog.example",), alerts=Alerts(to="me@example.com", source_failures=0)
     )
     asked = []
 
@@ -1261,8 +1260,8 @@ def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_wo
     report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
     names = [part.get_filename() for msg in sent for part in msg.iter_attachments()]
     assert names and not any("Blog" in name for name in names), "the feed's summary is not sent in its place"
-    assert report.sign_in_needed == {"Blog": "the saved cookie no longer works"}
-    assert any(p.startswith("'Blog' needs you to sign in again") for p in problems(report, cfg))
+    assert report.sign_in_needed == {"blog.example": "the saved cookie no longer works"}
+    assert any(p.startswith("Your blog.example session needs a fresh cookie") for p in problems(report, cfg))
     # One page was asked for: once the session has failed, the rest of its picks are not tried.
     assert len(asked) == 1
     blog_posts = {store.get_article(i).title for i in report.link_only if store.get_article(i).source == "Blog"}
@@ -1369,14 +1368,17 @@ def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
     from app.config import Alerts
 
     cfg, store, fetcher = env
-    blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
-    paper = Source("Paper", "https://pinned.example/feed", session="feed-2", session_domain="pinned.example")
-    cfg = dataclasses.replace(cfg, sources=(blog, paper), alerts=Alerts(to="me@example.com", source_failures=0))
+    cfg = dataclasses.replace(
+        cfg, sessions=("blog.example", "pinned.example"), alerts=Alerts(to="me@example.com", source_failures=0)
+    )
     page = f"<html><body><article>{BODY}</article></body></html>"
     monkeypatch.setattr(pipeline.sessions, "fetch", lambda d, s, url: page)
     cfg.recipes_dir.mkdir(parents=True, exist_ok=True)
-    status = {"feed-1": {"ok": True, "expires": "2026-03-20"}, "feed-2": {"ok": True, "expires": "2027-03-10"}}
+    status = {
+        "site-blog.example": {"ok": True, "expires": "2026-03-20"},
+        "site-pinned.example": {"ok": True, "expires": "2027-03-10"},
+    }
     (cfg.recipes_dir / "status.json").write_text(json.dumps(status))
     report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
-    assert report.sign_in_ends == {"Blog": "2026-03-20"}
-    assert "'Blog': the site's sign-in ends on 2026-03-20." in " ".join(problems(report, cfg))
+    assert report.sign_in_ends == {"blog.example": "2026-03-20"}
+    assert "Your blog.example session ends on 2026-03-20." in " ".join(problems(report, cfg))

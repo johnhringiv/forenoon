@@ -1,7 +1,7 @@
 """Links a reader added by hand on the web pages.
 
 The web app only queues the link. Here the page is fetched like any article's (public
-addresses only, and with the reader's subscriber session when a feed has one for that site),
+addresses only, and with the reader's subscriber session when one is saved for that site),
 stored with the route `manual`, and then dealt with as the reader asked: kept as read with
 their rating, sent now as a book of its own, or left to lead their next issue.
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlsplit
 
-from . import sessions, thumbs
+from . import thumbs
 from .config import Config, Source
 from .discover import site_host
 from .fetch import Fetcher
@@ -27,15 +27,6 @@ log = logging.getLogger("forenoon")
 MAX_URL_CHARS = 2000
 
 
-def _source_for(cfg: Config, url: str) -> Source:
-    """The site as a source of its own; with a feed's subscriber session when one covers it."""
-    name = site_host(url)
-    for source in cfg.sources:
-        if sessions.covers(source, url):
-            return Source(name, extract="page", session=source.session, session_domain=source.session_domain)
-    return Source(name, extract="page")
-
-
 def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, rating) -> str:
     """Store the article behind a link for a reader. Returns its id; raises ValueError when it cannot."""
     url = without_tracking(url.strip())
@@ -45,7 +36,8 @@ def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str,
     item_id = article_id(url)
     known = store.get_article(item_id)
     if known is None or known.status in ("new", "error") or not (cfg.pages_dir / f"{item_id}.json.gz").exists():
-        item = Item(item_id, url, _source_for(cfg, url), known.title if known else "", "", None, "")
+        # Fetched with the subscriber session of its site, when one is saved (see _extract).
+        item = Item(item_id, url, Source(site_host(url), extract="page"), known.title if known else "", "", None, "")
         result = _extract(item, fetcher, cfg, keep=True)
         if result.body is None:
             raise ValueError(f"nothing could be read there: {result.reason or result.status}")

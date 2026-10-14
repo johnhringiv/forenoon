@@ -109,10 +109,6 @@ class Source:
     extract: str = "auto"
     users: tuple[str, ...] = ()
     recipe: str = ""  # for type "recipe": the folder under <data>/recipes holding its issues
-    # For a feed of a site the reader subscribes to: the name of the session its article pages
-    # are fetched with (see app/sessions.py). Empty: fetched like any other page.
-    session: str = ""
-    session_domain: str = ""  # the session is used for this site and its subdomains only
 
 
 @dataclass(frozen=True)
@@ -144,6 +140,9 @@ class Config:
     llm: Llm = field(default_factory=Llm)
     discovery: Discovery = field(default_factory=Discovery)
     sources: tuple[Source, ...] = ()
+    # Sites the reader subscribes to and saved a session for (app/sessions.py): their pages,
+    # from any source or added by hand, are fetched with it.
+    sessions: tuple[str, ...] = ()
 
     @property
     def recipes_dir(self) -> Path:

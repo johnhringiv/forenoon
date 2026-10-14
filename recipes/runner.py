@@ -12,7 +12,7 @@ It also leaves two files for the web pages: `catalogue.json`, the recipes this C
 and which of them want a login, and `status.json`, how each recipe's last run went. A file
 named for a folder in `.requests/` asks for that recipe to be run now.
 
-It also fetches single article pages with a subscriber's session, for feed sources that have
+It also fetches single article pages with a subscriber's session, for the sites that have
 one: the pipeline leaves `<id>.json` (a session's name and an address) in `.fetch/`, and the
 page, or why there is none, is left beside it. The page is read by Chrome signed in as the
 reader, with the cookie pasted on the Sources page, one page at a time and no faster than one
@@ -50,7 +50,8 @@ STATUS = "status.json"
 REQUESTS = ".requests"
 POLL = 20  # seconds between looks at the requests folder
 FETCH = ".fetch"
-SESSION = re.compile(r"feed-\d{1,12}")
+# A subscriber session is named for its site, the file `site-<domain>.json` in the logins folder.
+SESSION = re.compile(r"site-([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)")
 REQUEST = re.compile(r"[0-9a-f]{32}\.json")
 ARTICLE = re.compile(r"(?:^|/)feed_\d+/article_\d+/")
 MAX_PAGE_BYTES = 5 * 1024 * 1024
@@ -440,9 +441,12 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page) -
             wanted = json.loads(request.read_text(encoding="utf-8"))
             request.unlink()  # taken: the pipeline now waits for the answer
             name, url = str(wanted.get("session", "")), str(wanted.get("url", ""))
-            if not SESSION.fullmatch(name):
+            named = SESSION.fullmatch(name)
+            if not named:
                 raise ValueError("not a session")
             session = read_session(name, logins)
+            if session and session.get("domain", "").lower() != named.group(1):
+                raise ValueError("the session is saved for another site")
             page = fetcher(url, session, name)
             _answer(request.with_suffix(".html"), page)
             record(out, name, True, f"fetched a page ({len(page)} bytes)", expires=sign_in_ends(name, session))

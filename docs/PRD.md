@@ -57,23 +57,27 @@ what its own users configure and delivers only to the addresses its admin has se
   Articles and health records refer to a source by name, so renaming one starts its health
   record afresh.
 
-  **Subscriber sessions.** A feed of a site the reader subscribes to can carry a session:
-  the cookie the reader's own browser sends to the site, pasted once on the feed's row. (A
+  **Subscriber sessions.** A site the reader subscribes to can have a session: the cookie
+  the reader's own browser sends to it, pasted once in the Sources page's Subscriber
+  sessions section. It belongs to the site, not to a feed: every page on the site and its
+  subdomains is fetched with it, from any of its feeds or added by hand, and each feed on
+  the site says so on its row. The pipeline knows only which sites have one (the `sessions`
+  table). (A
   username and password are not offered: the FT and the NYT both ask for a CAPTCHA at
-  sign-in.) The feed is read as usual, without it.
+  sign-in.) Feeds are read as usual, without it.
   Only the article pages the ranking wants read (the reading pass and the day's choices) are
   then fetched with the session, a few a day and at least 20 seconds apart per site, instead
   of a whole paper. The cookie is kept in the logins volume beside recipe logins: never in the
   database or the data folder, never shown again, and used only on https pages of the one
-  site named with it and its subdomains. The pipeline never holds it. It leaves a request in
+  site named with it and its subdomains (`site-<domain>.json`). The pipeline never holds it. It leaves a request in
   `<data>/recipes/.fetch/`, and the recipes container reads the page and leaves the answer
   there, so sessions need that container running. Pages are read by Chrome on a virtual
   screen (Xvfb), since some sites admit only a browser, and what it keeps of the session is
   in its own volume. Nothing answers a CAPTCHA: a site that asks for one, shows its paywall
-  (the cookie has expired) or keeps the browser out is reported on the feed's row. When a
+  (the cookie has expired) or keeps the browser out is reported on the session's row. When a
   session needs a fresh cookie, its picks are shown as links (step 4 of section 3), not sent as the
-  feed's summary, and the run's alert email names the feed. Once a page has been fetched with
-  it, the feed's row shows the day the site says its sign-in ends (for the sites whose
+  feed's summary, and the run's alert email names the site. Once a page has been fetched with
+  it, the session's row shows the day the site says its sign-in ends (for the sites whose
   sign-in cookie is known: the FT and the NYT), and the alert email says so from 14 days
   before. Pages the source links to on other sites are fetched as usual, without the
   session.
