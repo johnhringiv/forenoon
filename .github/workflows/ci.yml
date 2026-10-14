@@ -50,6 +50,13 @@ jobs:
         run: |
           docker run --rm --read-only --tmpfs /tmp --cap-drop ALL \
             forenoon:ci golden --out /tmp/out
+      # The image's fonts reach the book: code in the code font, emoji in the emoji font.
+      - name: The golden book embeds the code and emoji fonts
+        run: |
+          docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --entrypoint sh forenoon:ci -c \
+            'forenoon golden --out /tmp/out >/dev/null && python -c "import glob, zipfile; \
+            names = zipfile.ZipFile(glob.glob(\"/tmp/out/*.epub\")[0]).namelist(); \
+            assert {\"OEBPS/fonts/code.ttf\", \"OEBPS/fonts/emoji.ttf\"} <= set(names), names"'
       - name: Feedback service answers its health check
         run: |
           docker run -d --name feedback --read-only --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
