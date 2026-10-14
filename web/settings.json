@@ -1,7 +1,7 @@
 [
-  {"section": "Delivery", "key": "delivery_time", "kind": "time", "default": "06:00", "label": "Deliver at", "hint": "In the install's time zone (TZ in the deploy's env file). Recipes are fetched at RECIPES_TIME and should finish before this."},
+  {"section": "Delivery", "key": "delivery_time", "kind": "time", "default": "06:00", "label": "Deliver at", "hint": "In the install's time zone (TZ in the deploy's env file)."},
   {"section": "Delivery", "key": "format", "kind": "choice", "default": "issue", "label": "Send as", "choices": [["issue", "One book a day, with a contents page"], ["articles", "One book per article"]]},
-  {"section": "Delivery", "key": "max_age_days", "kind": "int", "default": 3, "min": 1, "max": 30, "label": "Ignore articles older than (days)", "hint": "Also how far back Hacker News is searched and how old a recipe's issue may be."},
+  {"section": "Delivery", "key": "max_age_days", "kind": "int", "default": 3, "min": 1, "max": 30, "label": "Ignore articles older than (days)", "hint": "Counted from when an article was first seen. Also how far back Hacker News is searched, and how long a pick shown only as a link is tried again."},
   {"section": "Delivery", "key": "max_story_entries", "kind": "int", "default": 3, "min": 1, "max": 10, "label": "Most articles in one story"},
   {"section": "Delivery", "key": "max_article_words", "kind": "int", "default": 45000, "min": 0, "max": 1000000, "label": "Longest article (words)", "hint": "A failsafe against manuals and whole books; 0 for no limit."},
   {"section": "Delivery", "key": "images.grayscale", "kind": "bool", "default": true, "label": "Grayscale images", "hint": "Turn off for a colour e-reader."},

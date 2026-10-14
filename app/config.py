@@ -11,7 +11,6 @@ import re
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
-RECIPE_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
 DISCOVERY_SITES = ("hackernews", "lobsters")
 
 
@@ -102,13 +101,11 @@ class Alerts:
 class Source:
     name: str
     url: str = ""
-    type: str = "rss"  # "rss", or "recipe" for issues written by the recipes container
     tier: str = "clean"
     pinned: bool = False
     # auto: extract from the page, fall back to feed content. page / feed force one.
     extract: str = "auto"
     users: tuple[str, ...] = ()
-    recipe: str = ""  # for type "recipe": the folder under <data>/recipes holding its issues
 
 
 @dataclass(frozen=True)
@@ -145,8 +142,10 @@ class Config:
     sessions: tuple[str, ...] = ()
 
     @property
-    def recipes_dir(self) -> Path:
-        return self.data_dir / "recipes"
+    def sessions_dir(self) -> Path:
+        """Shared with the browser container: page requests for subscriber sessions, and how
+        each session's last page went (app/sessions.py)."""
+        return self.data_dir / "sessions"
 
     @property
     def pages_dir(self) -> Path:

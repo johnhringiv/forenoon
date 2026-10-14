@@ -10,8 +10,8 @@ Other aggregators exist. They are paid for by ads or pushed along by an agenda, 
 know far less about what you want. Forenoon runs on your own machine and has one job:
 find what you would choose to read, and put it where you read best.
 
-Every morning it reads your RSS feeds, pulls the publications you subscribe to through
-Calibre recipes, and searches aggregation sites (Hacker News, Lobsters). Claude chooses from
+Every morning it reads your RSS feeds, including those of the publications you subscribe to,
+and searches aggregation sites (Hacker News, Lobsters). Claude chooses from
 all of it against a plain-English description of your interests, and the result is emailed
 to your Kindle as one book with a contents page. Each article ends with rating links, so
 you can say what you thought without leaving your e-reader, and your ratings shape the next
@@ -26,8 +26,8 @@ day's choices.
   one-tap reason. Describe your interests in your own words and change them whenever you like.
 - **Stories, not links.** A short post that only points at an article is replaced by the
   article. Several reports of one event share one place in the day.
-- **Your subscriptions.** Publications you pay for come in through Calibre news recipes,
-  chosen from a list, or through their feeds with your own subscriber session.
+- **Your subscriptions.** Publications you pay for come in through their feeds; the articles
+  chosen are read signed in as you, with your own browser's cookie for the site.
 - **A newsstand and an archive.** Web pages show each day's issue, and everything the
   model considered and passed over, with its reasons. Filter by source, rating, date or how
   an article arrived; send anything to the Kindle as a book of its own.
@@ -83,13 +83,13 @@ pages and kept in the database.
 ## Deploy
 
 `deploy/docker-compose.yml` runs the pipeline, the feedback endpoint and (optionally) a
-Cloudflare Tunnel, the recipes runner and the web pages. The web pages are a separate Rust
+Cloudflare Tunnel, the browser for subscriber sessions and the web pages. The web pages are a separate Rust
 program in `web/`, behind a login: the newsstand, the archive, sources, settings and your
 account. Setup guides:
 
 - [docs/setup-email.md](docs/setup-email.md): SMTP relay and Amazon's approved sender list
 - [docs/setup-deploy.md](docs/setup-deploy.md): compose on a NAS, Cloudflare Tunnel, backups
-- [docs/setup-recipes.md](docs/setup-recipes.md): subscriber publications through Calibre news recipes (optional)
+- [docs/setup-sessions.md](docs/setup-sessions.md): sites you subscribe to, read signed in as you (optional)
 
 ## Security notes
 

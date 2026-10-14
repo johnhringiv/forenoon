@@ -15,7 +15,7 @@ RUN mkdir /logins && chown 1000:1000 /logins
 FROM gcr.io/distroless/cc-debian12
 COPY --from=build /src/target/release/forenoon-web /usr/local/bin/forenoon-web
 COPY --from=build --chown=1000:1000 /logins /logins
-# Recipe logins are kept here: a volume shared with the recipes container and no other.
+# Subscriber session cookies are kept here: a volume shared with the browser container and no other.
 ENV FORENOON_DB=/data/forenoon.sqlite3 FORENOON_LOGINS_DIR=/logins
 WORKDIR /data
 # Fixed UID/GID 1000, the same as the app image: both write the database in the data folder.

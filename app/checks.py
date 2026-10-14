@@ -8,7 +8,6 @@ finds the feed and stores its address in place of the site's.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
 import lxml.html
@@ -66,15 +65,6 @@ def check_sources(cfg: Config, store: Store, fetcher: Fetcher) -> int:
     checked = 0
     for row in store.pending_source_checks():
         checked += 1
-        if row["kind"] == "recipe":
-            issues = sorted((cfg.recipes_dir / row["recipe"]).glob("*.epub"), key=lambda p: p.stat().st_mtime)
-            if issues:
-                written = datetime.fromtimestamp(issues[-1].stat().st_mtime, tz=UTC)
-                store.finish_source_check(row["id"], "ok", f"Newest issue: {written:%-d %B %Y}.")
-            else:
-                note = f"No issue in recipes/{row['recipe']} yet."
-                store.finish_source_check(row["id"], "failed", note)
-            continue
         try:
             feed_url, items = find_feed(row["url"], fetcher)
         except FetchError as exc:

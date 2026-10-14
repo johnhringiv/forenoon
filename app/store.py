@@ -253,16 +253,14 @@ class Store:
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
             return ()
         rows = self.db.execute(
-            "SELECT id, name, kind, url, recipe, extract, pinned FROM sources"
-            " WHERE enabled = 1 AND kind != 'builtin'"
+            "SELECT id, name, url, extract, pinned FROM sources"
+            " WHERE enabled = 1 AND kind = 'rss'"
             " ORDER BY pinned DESC, name COLLATE NOCASE"
         ).fetchall()
         return tuple(
             Source(
                 name=row["name"],
                 url=row["url"],
-                type=row["kind"],
-                recipe=row["recipe"],
                 extract=row["extract"],
                 pinned=bool(row["pinned"]),
             )
@@ -321,7 +319,7 @@ class Store:
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
             return []
         return self.db.execute(
-            "SELECT id, name, kind, url, recipe FROM sources WHERE check_state = 'pending' ORDER BY id"
+            "SELECT id, name, kind, url FROM sources WHERE check_state = 'pending' ORDER BY id"
         ).fetchall()
 
     def finish_source_check(self, source_id: int, state: str, note: str, url: str | None = None) -> None:

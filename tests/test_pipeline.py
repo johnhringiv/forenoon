@@ -1021,7 +1021,7 @@ def test_delivered_articles_get_a_thumbnail_for_the_web_pages(env):
     # Too small to be a picture, unreachable, or absent: no thumbnail, and no error.
     for sources in (("https://blog.example/pixel.gif",), ("https://blog.example/missing.png",), ("",), ()):
         assert not thumbs.save(cfg.thumbs_dir, "none", sources, fetcher)
-    # An inline picture, as recipe articles have, works; a later source is used when the first fails.
+    # An inline picture works; a later source is used when the first fails.
     inline = "data:image/png;base64," + __import__("base64").b64encode(_png((640, 480))).decode()
     assert thumbs.save(cfg.thumbs_dir, "inline", ("https://blog.example/missing.png", inline), fetcher)
     assert (cfg.thumbs_dir / "inline.jpg").exists() and not list(cfg.thumbs_dir.glob("*.part"))
@@ -1060,14 +1060,13 @@ def test_a_sites_address_is_turned_into_its_feed(tmp_path):
 
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
         store.db.executescript(migration.read_text())
-    add = "INSERT INTO sources (name, kind, url, recipe, created_at, check_state) VALUES (?, ?, ?, ?, 'x', ?)"
-    store.db.execute(add, ("Quiet", "rss", "https://quiet.example/", "", "pending"))
-    store.db.execute(add, ("None", "rss", "https://none.example/", "", "pending"))
-    store.db.execute(add, ("Paper", "recipe", "", "paper", "pending"))
-    store.db.execute(add, ("Settled", "rss", "https://direct.example/feed", "", "ok"))
+    add = "INSERT INTO sources (name, kind, url, created_at, check_state) VALUES (?, ?, ?, 'x', ?)"
+    store.db.execute(add, ("Quiet", "rss", "https://quiet.example/", "pending"))
+    store.db.execute(add, ("None", "rss", "https://none.example/", "pending"))
+    store.db.execute(add, ("Settled", "rss", "https://direct.example/feed", "ok"))
     store.db.commit()
     cfg = Config(data_dir=tmp_path)
-    assert check_sources(cfg, store, fetcher) == 3 and store.pending_source_checks() == []
+    assert check_sources(cfg, store, fetcher) == 2 and store.pending_source_checks() == []
     rows = {r["name"]: r for r in store.db.execute("SELECT name, url, check_state, check_note FROM sources")}
     assert rows["Quiet"]["url"] == "https://quiet.example/rss.xml" and rows["Quiet"]["check_state"] == "ok"
     assert (
@@ -1075,8 +1074,7 @@ def test_a_sites_address_is_turned_into_its_feed(tmp_path):
     )
     assert rows["None"]["check_state"] == "failed" and "no feed found" in rows["None"]["check_note"]
     assert rows["None"]["url"] == "https://none.example/"  # left as typed
-    assert rows["Paper"]["check_state"] == "failed" and "No issue in recipes/paper" in rows["Paper"]["check_note"]
-    assert [s.name for s in store.sources()] == ["None", "Paper", "Quiet", "Settled"]
+    assert [s.name for s in store.sources()] == ["None", "Quiet", "Settled"]
 
 
 def test_discovery_looks_back_as_far_as_the_age_limit_and_takes_new_stories_first():
@@ -1256,7 +1254,7 @@ def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_wo
     )
     asked = []
 
-    def signed_out(recipes_dir, session, url):
+    def signed_out(sessions_dir, session, url):
         asked.append(url)
         raise FetchError(f"{sessions.SIGNED_OUT}the saved cookie no longer works")
 
@@ -1378,12 +1376,12 @@ def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
     )
     page = f"<html><body><article>{BODY}</article></body></html>"
     monkeypatch.setattr(pipeline.sessions, "fetch", lambda d, s, url: page)
-    cfg.recipes_dir.mkdir(parents=True, exist_ok=True)
+    cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     status = {
         "site-blog.example": {"ok": True, "expires": "2026-03-20"},
         "site-pinned.example": {"ok": True, "expires": "2027-03-10"},
     }
-    (cfg.recipes_dir / "status.json").write_text(json.dumps(status))
+    (cfg.sessions_dir / "status.json").write_text(json.dumps(status))
     report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
     assert report.sign_in_ends == {"blog.example": "2026-03-20"}
     assert "Your blog.example session ends on 2026-03-20." in " ".join(problems(report, cfg))
@@ -1404,7 +1402,7 @@ def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(en
     assert cfg.sessions == ()
     asked = []
 
-    def with_session(recipes_dir, session, url):
+    def with_session(sessions_dir, session, url):
         asked.append((session, url))
         return f"<html><body><article>{BODY}</article></body></html>"
 

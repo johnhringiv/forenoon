@@ -1,9 +1,8 @@
 """A small picture for each article, kept in the data folder for the web pages' cards.
 
-Linking to an article's own lead image leaves many cards empty: recipe articles carry their
-images inside the issue, and plenty of pages name none. A thumbnail made once here, from the
-lead image or else the article's first picture, covers both, and the reader's browser then
-loads nothing from other sites.
+Linking to an article's own lead image leaves many cards empty: plenty of pages name none. A
+thumbnail made once here, from the lead image or else the article's first picture, covers
+them, and the reader's browser then loads nothing from other sites.
 """
 
 from __future__ import annotations

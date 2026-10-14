@@ -160,8 +160,9 @@ internet.
 6. On **Account**, write your interests and set the stories a day. Changes apply from the
    next run.
 7. On **Sources** (admins only), add the feeds to read; without any, nothing is delivered.
-   Hacker News and Lobsters are built in and can be switched off there. Calibre recipes are
-   added there too once the recipes container runs ([setup-recipes.md](setup-recipes.md)).
+   Hacker News and Lobsters are built in and can be switched off there. Sessions for sites
+   you subscribe to are saved there too once the browser container runs
+   ([setup-sessions.md](setup-sessions.md)).
 8. On **Settings** (admins only), change the delivery time and anything else from its
    default. Nothing needs changing for a first run.
 
@@ -169,14 +170,14 @@ Other account commands, run the same way: `set-password <id>` (also signs the ac
 everywhere) and `users`, which lists each account's email. `set-password` is the way back in
 if the email route fails.
 
-The mail password is the only secret the container is given by the deploy. Recipe logins
-typed into the Sources page are written to the `forenoon-logins` Docker volume. Check that your router does not
+The mail password is the only secret the container is given by the deploy. Session cookies
+pasted into the Sources page are written to the `forenoon-logins` Docker volume. Check that your router does not
 forward the port from the internet.
 
 ## Backups
 
 Everything is in the data folder: `forenoon.sqlite3` (plus its `-wal` file), which holds
 readers, sources, settings and ratings, and what was fetched and sent. Back up the folder;
-keep `.env` somewhere safe too. Recipe logins are in the `forenoon-logins` Docker volume and
-are not part of that backup; they can be typed in again. The `forenoon-browser` volume only
-holds the recipes container's browser sign-ins, which it makes again by itself.
+keep `.env` somewhere safe too. Session cookies are in the `forenoon-logins` Docker volume and
+are not part of that backup; they can be pasted in again. The `forenoon-browser` volume only
+holds what the browser container keeps of each session, which it makes again by itself.

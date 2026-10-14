@@ -8,7 +8,7 @@
 # minutes, as root; elsewhere: cron). Deploys are pull-based: CI publishes to
 # GHCR and this poller converges on it, so the host needs no inbound access.
 # The cloudflared image is polled the same way; when only it changed, only the
-# tunnel container is replaced; the optional recipes image likewise. Unchanged
+# tunnel container is replaced; the optional browser image likewise. Unchanged
 # healthy tags cost a manifest check each and one /healthz probe.
 #
 #   sh poll-deploy.sh [env-file]
@@ -36,13 +36,13 @@ TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 
-RECIPES_IMAGE="${RECIPES_IMAGE:-$(env_get RECIPES_IMAGE)}"
+BROWSER_IMAGE="${BROWSER_IMAGE:-$(env_get BROWSER_IMAGE)}"
 
 CONTAINERS="forenoon forenoon-feedback"
 [ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
 WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
-# The recipes container is healed on its own below: its trouble must never bounce the app.
+# The browser container is healed on its own below: its trouble must never bounce the app.
 
 all_running() {
     for c in $CONTAINERS; do
@@ -79,15 +79,15 @@ if [ -n "$TUNNEL_TOKEN" ] && docker pull -q "$CLOUDFLARED_IMAGE" >/dev/null 2>&1
     [ "$tunnel_latest" = "$tunnel_running" ] || tunnel_changed=true
 fi
 
-# The recipes image likewise: when it changed, or its container stopped, only that
+# The browser image likewise: when it changed, or its container stopped, only that
 # container is replaced.
-recipes_changed=false
-if [ -n "$RECIPES_IMAGE" ] && docker pull -q "$RECIPES_IMAGE" >/dev/null 2>&1; then
-    recipes_latest=$(docker image inspect "$RECIPES_IMAGE" --format '{{.Id}}')
-    recipes_running=$(docker inspect forenoon-recipes --format '{{.Image}}' 2>/dev/null || echo none)
-    recipes_up=$(docker inspect forenoon-recipes --format '{{.State.Running}}' 2>/dev/null || echo false)
-    if [ "$recipes_latest" != "$recipes_running" ] || [ "$recipes_up" != "true" ]; then
-        recipes_changed=true
+browser_changed=false
+if [ -n "$BROWSER_IMAGE" ] && docker pull -q "$BROWSER_IMAGE" >/dev/null 2>&1; then
+    browser_latest=$(docker image inspect "$BROWSER_IMAGE" --format '{{.Id}}')
+    browser_running=$(docker inspect forenoon-browser --format '{{.Image}}' 2>/dev/null || echo none)
+    browser_up=$(docker inspect forenoon-browser --format '{{.State.Running}}' 2>/dev/null || echo false)
+    if [ "$browser_latest" != "$browser_running" ] || [ "$browser_up" != "true" ]; then
+        browser_changed=true
     fi
 fi
 
@@ -114,9 +114,9 @@ if [ "$latest" = "$running" ]; then
             ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) web container did not start"
             docker image prune -f >/dev/null
         fi
-        if [ "$recipes_changed" = true ]; then
-            echo "$(date -u +%FT%TZ) recipes container is stale or stopped; replacing it only"
-            ONLY=recipes sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) recipes container did not start"
+        if [ "$browser_changed" = true ]; then
+            echo "$(date -u +%FT%TZ) browser container is stale or stopped; replacing it only"
+            ONLY=browser sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) browser container did not start"
             docker image prune -f >/dev/null
         fi
         if [ "$tunnel_changed" = true ]; then

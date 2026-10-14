@@ -74,66 +74,14 @@
 <form class="source add" method="post" action="/sources/sessions">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
-<label>Site <input name="site" value="{{ session_site }}" maxlength="253" placeholder="nytimes.com" autocomplete="off" required></label>
+<label>Site <input name="site" maxlength="253" placeholder="nytimes.com" autocomplete="off" required></label>
 <label class="wide">Cookie <input name="cookie" type="password" maxlength="16384" autocomplete="off" required></label>
 <button class="primary">Save session</button>
 </div>
-<p class="hint">Every page on the site and its subdomains is then fetched with it: articles from any of its feeds, and links you add by hand. Feeds are read as usual; only the articles the ranking wants read are fetched, one at a time and at least 20 seconds apart, by Chrome signed in as you. To get the cookie, sign in to the site in your browser and either export its cookies as a header string with an extension such as Cookie-Editor, or open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. Saving a site again replaces its cookie. It is kept where only the recipes container can read it, never shown again, and sent to that site only. If it stops working, or the site asks for a CAPTCHA, it says so here and by email, and picks from the site are shown as links until it is replaced. Use it only for what your subscription lets you read.</p>
+<p class="hint">Every page on the site and its subdomains is then fetched with it: articles from any of its feeds, and links you add by hand. Feeds are read as usual; only the articles the ranking wants read are fetched, one at a time and at least 20 seconds apart, by Chrome signed in as you. To get the cookie, sign in to the site in your browser and either export its cookies as a header string with an extension such as Cookie-Editor, or open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. Saving a site again replaces its cookie. It is kept where only the browser container can read it, never shown again, and sent to that site only. If it stops working, or the site asks for a CAPTCHA, it says so here and by email, and picks from the site are shown as links until it is replaced. Use it only for what your subscription lets you read.</p>
 </form>
 {% else %}
 <p class="hint">This install has no logins folder (<code>FORENOON_LOGINS_DIR</code>), so a session cannot be saved.</p>
 {% endif %}
 
-<h2>Calibre recipes <span>newspapers and magazines, fetched whole once a day</span></h2>
-{% if catalogue.is_empty() %}
-<p class="hint">The recipes container has not published its list of recipes, so none can be added yet. It is optional: set <code>RECIPES_IMAGE</code> (or the <code>recipes</code> profile) in the deploy and the list appears here.</p>
-{% else %}
-<datalist id="calibre">{% for option in catalogue %}<option value="{{ option.title }}">{{ option.note }}</option>{% endfor %}</datalist>
-<form class="source add" method="post" action="/sources/recipe">
-<input type="hidden" name="csrf" value="{{ csrf }}">
-<div class="fields">
-<label class="wide">Publication <input name="recipe" list="calibre" maxlength="200" placeholder="Start typing: Wired, The Atlantic…" autocomplete="off" required></label>
-<label>Name <input name="name" maxlength="80" placeholder="Same as the publication"></label>
-<label class="tick"><input type="checkbox" name="pinned" value="1"> Pinned</label>
-<button class="primary">Add</button>
-</div>
-<p class="hint">Choose from the {{ catalogue.len() }} publications this Calibre can fetch. The first issue is fetched straight away and the result shown here; if the publication wants a subscriber's login you are asked for it below. Use a recipe only for what you are entitled to read.</p>
-</form>
-{% endif %}
-{% for row in recipes %}
-<div class="source{% if !row.enabled %} paused{% endif %}{% if row.new %} new{% endif %}" id="s-{{ row.id }}">
-{% if row.new %}<p class="tag">Just added</p>{% endif %}
-<form method="post" action="/sources/{{ row.id }}">
-<input type="hidden" name="csrf" value="{{ csrf }}">
-<div class="fields">
-<label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
-<label class="wide">Publication <input name="recipe" value="{{ row.title }}" list="calibre" maxlength="200" autocomplete="off" required></label>
-<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>
-<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>
-<button class="primary">Save</button>
-<button formaction="/sources/{{ row.id }}/fetch" formnovalidate>Fetch now</button>
-<button class="link" formaction="/sources/{{ row.id }}/delete" formnovalidate>Remove</button>
-</div>
-</form>
-{% if let Some(run) = row.run %}<p class="hint{% if row.run_failed %} failing{% endif %}">{{ run }}</p>{% endif %}
-<p class="hint{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %} Issues are kept in <code>recipes/{{ row.folder }}</code>.</p>
-<details{% if row.login_missing %} open{% endif %}>
-<summary class="hint{% if row.login_missing %} failing{% endif %}">{{ row.login_note }}</summary>
-{% if logins %}
-<form method="post" action="/sources/{{ row.id }}/login">
-<input type="hidden" name="csrf" value="{{ csrf }}">
-<div class="fields">
-<label>Username <input name="username" value="{{ row.username }}" maxlength="500" autocomplete="off" required></label>
-<label>Password <input name="password" type="password" maxlength="500" autocomplete="new-password" required></label>
-<button class="primary">Save login</button>
-{% if !row.username.is_empty() %}<button class="link" formaction="/sources/{{ row.id }}/login/delete" formnovalidate>Remove login</button>{% endif %}
-</div>
-<p class="hint">Kept where only the recipes container can read it, and never shown again. Saving fetches the recipe with it straight away.</p>
-</form>
-{% else %}
-<p class="hint">This install has no logins folder (<code>FORENOON_LOGINS_DIR</code>), so a login cannot be saved.</p>
-{% endif %}
-</details>
-</div>
-{% endfor %}
 {% endblock %}
