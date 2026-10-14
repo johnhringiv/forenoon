@@ -1320,7 +1320,7 @@ def test_an_articles_age_counts_from_when_it_was_first_seen(env, monkeypatch):
     user = cfg.users[0]
 
     def feed(*entries):
-        stamp = lambda when: when.strftime("%a, %d %b %Y %H:%M:%S GMT") if when else ""  # noqa: E731
+        stamp = lambda when: when.strftime("%a, %d %b %Y %H:%M:%S GMT") if when else ""
         items = [_entry(n, stamp(when), BODY) for n, when in entries]
         monkeypatch.setitem(ROUTES, "https://blog.example/feed", _rss(*items).replace(b"<pubDate></pubDate>", b""))
 

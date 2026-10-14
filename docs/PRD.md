@@ -286,10 +286,14 @@ source).
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
   checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
-  later batches are skipped. Every call is logged with model, input and output tokens and outcome;
-  `forenoon usage` prints the log, today's total and this month's, each with an estimated cost
-  from the prices in `llm.input_price` and `llm.output_price` (the API does not report
-  prices).
+  later batches are skipped; the cap counts cached input too. Every call is logged with
+  model, input, cache-write, cache-read and output tokens, outcome and cost. The cost is
+  worked out when the call is logged, from a table of each model's published prices kept in
+  the code (`app/prices.py`; the API does not report prices), so cached input is priced at
+  the cache's rates and a long prompt at the model's long-prompt rates. A model missing from
+  the table is logged without a cost and reported as unpriced, never guessed. Calls logged
+  before cached tokens were kept apart are priced as if none was cached. `forenoon usage`
+  prints the log, today's total and this month's; the Settings page shows the totals.
 - **Fallback.** With no API key, or when fewer than half the candidates end up scored
   (failed or timed-out calls, unusable answers, the cap reached), the run uses the
   newest-first order, the report says why, and the operator is alerted. When some batches

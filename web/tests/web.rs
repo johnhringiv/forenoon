@@ -1029,6 +1029,27 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     assert!(page.text.contains(r#"<input name="delivery_time" type="time" value="06:00" required>"#));
     assert!(page.text.contains(r#"name="llm.enabled" value="1" checked"#) && !page.text.contains("changed"));
     assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/settings">Settings</a>"#));
+    // What the model used, priced by the pipeline when it logged each call; a call to a model
+    // with no known price is said apart. Nothing about prices is a setting.
+    assert!(
+        page.text.contains("Today: 0 of 600,000 tokens, about $0.0000.") && !page.text.contains("Price per million")
+    );
+    let now = forenoon_web::db::now_iso();
+    for (model, cost) in [("claude-haiku-5-5", Some(0.0125)), ("claude-new-9", None)] {
+        sqlx::query(
+            "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status,
+             cache_write_tokens, cache_read_tokens, cost) VALUES (?, 'rank', ?, 1000, 200, 'ok', 300, 50000, ?)",
+        )
+        .bind(&now)
+        .bind(model)
+        .bind(cost)
+        .execute(&site.pool)
+        .await
+        .unwrap();
+    }
+    let text = admin.get(&site, "/settings").await.text;
+    assert!(text.contains("Today: 103,000 of 600,000 tokens, about $0.0125.") && text.contains("This month: 103,000"));
+    assert!(text.contains("1 calls this month were to a model with no known price"));
 
     // Every field as the page shows it, with a few changed.
     let defaults = [
@@ -1040,8 +1061,6 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.enabled", "1"),
         ("llm.model", "claude-haiku-5-5"),
         ("llm.daily_token_cap", "600000"),
-        ("llm.input_price", "0.1"),
-        ("llm.output_price", "0.5"),
         ("llm.read_candidates", "40"),
         ("llm.explore_slots", "1"),
         ("llm.group_stories", "1"),

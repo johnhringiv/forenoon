@@ -11,6 +11,9 @@
 {% if saved %}<p class="notice">Saved.</p>{% endif %}
 <form class="sheet wide settings" method="post" action="/settings">
 <input type="hidden" name="csrf" value="{{ csrf }}">
+{% if !usage.is_empty() %}<h2>Model use</h2>
+{% for line in usage %}<p>{{ line }}</p>
+{% endfor %}<p class="hint">An estimate from the model's published prices, kept in the pipeline's code; cached input is priced at the cache's rates. <code>forenoon usage</code> lists each call.</p>{% endif %}
 {% for section in sections %}
 <h2>{{ section.title }}</h2>
 {% for field in section.fields %}

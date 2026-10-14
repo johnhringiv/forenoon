@@ -38,6 +38,27 @@ pub async fn pipeline_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     Ok(found > 0)
 }
 
+pub struct Usage {
+    pub tokens: i64,
+    pub cost: f64,
+    /// Calls to a model whose price the pipeline does not know: not in `cost`.
+    pub unpriced: i64,
+}
+
+/// The model's tokens (cached ones too) and their cost since `start`, as the pipeline logged them.
+pub async fn usage_since(pool: &SqlitePool, start: &str) -> Result<Usage, sqlx::Error> {
+    sqlx::query_as!(
+        Usage,
+        r#"SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS "tokens!: i64",
+           COALESCE(SUM(cost), 0.0) AS "cost!: f64",
+           COUNT(*) FILTER (WHERE cost IS NULL AND status != 'error') AS "unpriced!: i64"
+           FROM llm_calls WHERE created_at >= ?"#,
+        start
+    )
+    .fetch_one(pool)
+    .await
+}
+
 // accounts
 
 pub async fn user_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {

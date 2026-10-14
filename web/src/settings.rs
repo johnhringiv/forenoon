@@ -16,10 +16,14 @@ use axum::{
 use serde::Deserialize;
 use tower_sessions::Session;
 
+use chrono::{Datelike, NaiveDate, Utc};
+use chrono_tz::Tz;
+use std::str::FromStr;
+
 use crate::{
     auth::AuthSession,
-    db::now_iso,
-    pages::{AppState, NOT_FROM_HERE, Page, allowed, csrf_token, html, reader, refused},
+    db::{self, now_iso},
+    pages::{AppState, NOT_FROM_HERE, Page, allowed, csrf_token, html, reader, refused, thousands},
 };
 
 const MAX_TEXT: usize = 200;
@@ -122,6 +126,44 @@ struct SettingsPage {
     sections: Vec<Section>,
     error: Option<String>,
     saved: bool,
+    /// What the model has used today and this month, and what it cost.
+    usage: Vec<String>,
+}
+
+/// Today's and this month's use of the model, in the install's time zone (the pipeline's day).
+async fn usage(state: &AppState, stored: &HashMap<String, String>) -> Result<Vec<String>, sqlx::Error> {
+    if !db::pipeline_ready(&state.pool).await? {
+        return Ok(Vec::new());
+    }
+    let zone = std::env::var("TZ").ok().and_then(|zone| Tz::from_str(&zone).ok()).unwrap_or(Tz::UTC);
+    let today = Utc::now().with_timezone(&zone).date_naive();
+    let start = |day: NaiveDate| {
+        day.and_hms_opt(0, 0, 0)
+            .and_then(|midnight| midnight.and_local_timezone(zone).earliest())
+            .map(|at| at.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%S+00:00").to_string())
+            .unwrap_or_default()
+    };
+    let cap = stored.get("llm.daily_token_cap").cloned().unwrap_or_else(|| {
+        SPECS.iter().find(|spec| spec.key == "llm.daily_token_cap").map(Spec::default_text).unwrap_or_default()
+    });
+    let day = db::usage_since(&state.pool, &start(today)).await?;
+    let month = db::usage_since(&state.pool, &start(today.with_day(1).unwrap_or(today))).await?;
+    let mut lines = vec![
+        format!(
+            "Today: {} of {} tokens, about ${:.4}.",
+            thousands(day.tokens),
+            thousands(cap.parse().unwrap_or(0)),
+            day.cost
+        ),
+        format!("This month: {} tokens, about ${:.2}.", thousands(month.tokens), month.cost),
+    ];
+    if month.unpriced > 0 {
+        lines.push(format!(
+            "{} calls this month were to a model with no known price and are not in the cost.",
+            month.unpriced
+        ));
+    }
+    Ok(lines)
 }
 
 async fn stored(state: &AppState) -> Result<HashMap<String, String>, sqlx::Error> {
@@ -177,6 +219,7 @@ pub async fn page(
         sections: sections(&stored, &stored),
         error: None,
         saved: query.saved.is_some(),
+        usage: usage(&state, &stored).await?,
     };
     html(StatusCode::OK, page)
 }
@@ -205,12 +248,14 @@ pub async fn save(
                 for spec in SPECS.iter().filter(|spec| spec.kind == "bool") {
                     typed.insert(spec.key.clone(), if form.contains_key(&spec.key) { "1" } else { "0" }.to_owned());
                 }
+                let stored = stored(&state).await?;
                 let page = SettingsPage {
                     name: user.name,
                     csrf: csrf_token(&session).await?,
-                    sections: sections(&typed, &stored(&state).await?),
+                    sections: sections(&typed, &stored),
                     error: Some(problem),
                     saved: false,
+                    usage: usage(&state, &stored).await?,
                 };
                 return html(StatusCode::BAD_REQUEST, page);
             }
@@ -264,7 +309,7 @@ mod tests {
         assert!(check("keep_pages_days", "-1").is_ok() && check("keep_pages_days", "-2").is_err());
         assert!(check("max_age_days", "0").is_err() && check("max_age_days", "2.5").is_err());
         assert!(check("discovery.min_score", "7.5").is_ok() && check("discovery.min_score", "11").is_err());
-        assert!(check("llm.input_price", "NaN").is_err() && check("llm.input_price", "inf").is_err());
+        assert!(check("discovery.min_score", "NaN").is_err() && check("discovery.min_score", "inf").is_err());
         assert_eq!(check("alerts.to", " Me@Example.com ").unwrap(), "me@example.com");
         assert!(check("alerts.to", "").is_ok() && check("alerts.to", "nope").is_err());
         assert!(check("llm.model", "").is_err() && check("llm.model", "a\nb").is_err());

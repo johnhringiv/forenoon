@@ -75,10 +75,6 @@ class Llm:
     check_extraction: bool = True  # ask the model whether each article looks complete; log only
     learn: bool = True  # keep a note per reader of what their ratings show, for the prompts
     timeout: float = 60.0  # seconds
-    # US dollars per million tokens for `model`, used only to show cost in `forenoon usage`.
-    # The API does not report prices, so update these when the model or its price changes.
-    input_price: float = 0.10
-    output_price: float = 0.50
 
 
 @dataclass(frozen=True)

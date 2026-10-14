@@ -379,3 +379,42 @@ def test_the_settings_page_offers_the_pipelines_own_settings_with_its_defaults()
         for bound in ("min", "max"):
             if bound in spec:
                 assert with_settings(cfg, {key: str(spec[bound])})[1] == [], f"{key}: {bound} is refused"
+
+
+def test_a_call_is_priced_at_its_models_rates_with_cached_input_apart(tmp_path):
+    import sqlite3
+
+    from app import prices
+    from app.llm import Reply
+    from app.store import Store
+
+    # Haiku 5.5: $0.10 in, $0.125 to write the cache, $0.01 to read it, $0.50 out, per million;
+    # five times that for a prompt over 100,000 tokens.
+    assert abs(prices.cost("claude-haiku-5-5", 100_000, 0) - 0.01) < 1e-12  # 100,000 is not over
+    assert abs(prices.cost("claude-haiku-5-5", 10_000, 1_000, 20_000, 50_000) - 0.0045) < 1e-12
+    assert abs(prices.cost("claude-haiku-5-5", 60_000, 0, 0, 50_000) - 0.0325) < 1e-12  # 110,000 in all
+    assert prices.cost("claude-unknown-1", 1000, 1000) is None
+
+    store = Store(tmp_path / "f.db")
+    store.log_llm_reply("rank", "claude-haiku-5-5", Reply({}, 10_000, 1_000, 20_000, 50_000), "ok")
+    store.log_llm_call("rank", "claude-unknown-1", 100, 10, "ok")
+    store.log_llm_call("rank", "claude-unknown-1", 0, 0, "error", "overloaded")
+    assert store.llm_tokens_since("2000-01-01") == 81_110  # the daily cap counts cached tokens too
+    used = store.llm_usage_since("2000-01-01")
+    assert abs(used["cost"] - 0.0045) < 1e-12 and used["unpriced"] == 1
+    store.close()
+
+    # A database from before: its calls are priced as if nothing was cached.
+    old = tmp_path / "old.db"
+    db = sqlite3.connect(old)
+    db.execute(
+        "CREATE TABLE llm_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, purpose TEXT NOT NULL,"
+        " model TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, status TEXT NOT NULL,"
+        " error TEXT NOT NULL DEFAULT '')"
+    )
+    db.execute(
+        "INSERT INTO llm_calls VALUES (1, '2026-10-01T06:00:00+00:00', 'rank', 'claude-haiku-5-5', 100000, 0, 'ok', '')"
+    )
+    db.commit()
+    db.close()
+    assert abs(Store(old).llm_usage_since("2000-01-01")["cost"] - 0.01) < 1e-12

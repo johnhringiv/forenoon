@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import prices
 from .config import Source, User
 from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
@@ -63,7 +64,10 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     status TEXT NOT NULL,
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost REAL
 );
 CREATE TABLE IF NOT EXISTS selections (
     user_id TEXT NOT NULL,
@@ -171,6 +175,19 @@ class Store:
         if "link_only" not in delivered:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN link_only INTEGER NOT NULL DEFAULT 0")
+        calls = {row["name"] for row in self.db.execute("PRAGMA table_info(llm_calls)")}
+        if "cost" not in calls:
+            # Calls logged before cached tokens were kept apart: their input is priced as if
+            # none of it was cached, the best that can be said of them now.
+            with self.db:
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0")
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0")
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cost REAL")
+                old = self.db.execute("SELECT id, model, input_tokens, output_tokens FROM llm_calls").fetchall()
+                self.db.executemany(
+                    "UPDATE llm_calls SET cost = ? WHERE id = ?",
+                    [(prices.cost(r["model"], r["input_tokens"], r["output_tokens"]), r["id"]) for r in old],
+                )
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -666,30 +683,49 @@ class Store:
     # llm use and selection records
 
     def log_llm_call(
-        self, purpose: str, model: str, input_tokens: int, output_tokens: int, status: str, error: str = ""
+        self,
+        purpose: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        status: str,
+        error: str = "",
+        cache_write: int = 0,
+        cache_read: int = 0,
     ) -> None:
+        """One call, with what it cost at the model's published prices (none when unknown)."""
+        spent = prices.cost(model, input_tokens, output_tokens, cache_write, cache_read)
         with self.db:
             self.db.execute(
-                "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (now_iso(), purpose, model, input_tokens, output_tokens, status, error),
+                "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error,"
+                " cache_write_tokens, cache_read_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (now_iso(), purpose, model, input_tokens, output_tokens, status, error, cache_write, cache_read, spent),
             )
 
+    def log_llm_reply(self, purpose: str, model: str, reply, status: str) -> None:
+        """A call that was answered: its tokens as the API counted them."""
+        self.log_llm_call(
+            purpose, model, reply.input_tokens, reply.output_tokens, status,
+            cache_write=reply.cache_write_tokens, cache_read=reply.cache_read_tokens,
+        )  # fmt: skip
+
     def llm_tokens_since(self, start: str) -> int:
+        """Every token since `start`, cached ones too: what the daily cap counts."""
         row = self.db.execute(
-            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS n FROM llm_calls WHERE created_at >= ?",
+            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS n"
+            " FROM llm_calls WHERE created_at >= ?",
             (start,),
         ).fetchone()
         return row["n"]
 
-    def llm_tokens_split_since(self, start: str) -> tuple[int, int]:
-        """Input and output tokens logged since `start`."""
-        row = self.db.execute(
-            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM llm_calls"
-            " WHERE created_at >= ?",
+    def llm_usage_since(self, start: str) -> sqlite3.Row:
+        """Tokens and cost since `start`. `unpriced` counts calls to a model with no known price."""
+        return self.db.execute(
+            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS tokens,"
+            " COALESCE(SUM(cost), 0) AS cost, COUNT(*) FILTER (WHERE cost IS NULL AND status != 'error') AS unpriced"
+            " FROM llm_calls WHERE created_at >= ?",
             (start,),
         ).fetchone()
-        return row[0], row[1]
 
     def llm_call_rows(self, limit: int = 30) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", (limit,)).fetchall()[::-1]

@@ -114,7 +114,7 @@ def review(
             continue
         problem = " ".join(str(entry.get("problem", "")).split())[:MAX_PROBLEM_CHARS]
         out[entry["id"]] = Review(entry["verdict"], "" if entry["verdict"] == "ok" else problem)
-    store.log_llm_call("check", cfg.model, reply.input_tokens, reply.output_tokens, "ok" if out else "invalid")
+    store.log_llm_reply("check", cfg.model, reply, "ok" if out else "invalid")
     for article_id, verdict in out.items():
         store.record_review(article_id, verdict.verdict, verdict.problem, cfg.model)
     return out
