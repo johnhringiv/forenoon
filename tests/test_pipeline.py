@@ -74,6 +74,8 @@ def handler(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     if url in ROUTES:
         return httpx.Response(200, content=ROUTES[url], headers={"ETag": '"v1"'})
+    if request.url.host.endswith("paywall.example"):
+        return httpx.Response(403)
     if request.url.host in ("blog.example", "pinned.example", "found.example") and "/post-" in url:
         return httpx.Response(200, text=f"<html><body><article>{BODY}</article></body></html>")
     return httpx.Response(404)
@@ -1140,12 +1142,15 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     store.db.execute(ask, ("john", "https://found.example/missing", "next", None))
     store.db.execute(ask, ("john", "file:///etc/passwd", "next", None))
     store.db.execute(ask, ("stranger", "https://found.example/post-73", "next", None))
+    store.db.execute(ask, ("john", "https://www.paywall.example/story", "next", None))
     store.db.commit()
     assert add_requested(cfg, store, fetcher) == 3 and store.add_requests() == []
     rows = store.db.execute("SELECT status, error, article_id FROM add_requests ORDER BY id").fetchall()
-    assert [r["status"] for r in rows] == ["done", "done", "done", "failed", "failed", "failed"]
+    assert [r["status"] for r in rows] == ["done", "done", "done", "failed", "failed", "failed", "failed"]
     assert "nothing could be read" in rows[3]["error"] and rows[4]["error"] == "not a web address"
-    assert rows[5]["error"] == "no such reader"
+    assert rows[5]["error"] == "no such reader" and "Subscriber sessions" not in rows[3]["error"]
+    # Turned away, from a site with no session saved: the reader is told how to get past it.
+    assert "If you subscribe to paywall.example, save a session for it under Subscriber sessions" in rows[6]["error"]
     kept, now_id, next_id = (r["article_id"] for r in rows[:3])
 
     # Stored like any article, from its page, by the route "manual", without the tracking tag.
@@ -1245,10 +1250,9 @@ def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_wo
     from app.fetch import FetchError
 
     cfg, store, fetcher = env
-    blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
     user = dataclasses.replace(cfg.users[0], daily_cap=3)  # link cards are capped at the day's places
     cfg = dataclasses.replace(
-        cfg, users=(user,), sources=(blog, *cfg.sources[1:]), alerts=Alerts(to="me@example.com", source_failures=0)
+        cfg, users=(user,), sessions=("blog.example",), alerts=Alerts(to="me@example.com", source_failures=0)
     )
     asked = []
 
@@ -1261,8 +1265,8 @@ def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_wo
     report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
     names = [part.get_filename() for msg in sent for part in msg.iter_attachments()]
     assert names and not any("Blog" in name for name in names), "the feed's summary is not sent in its place"
-    assert report.sign_in_needed == {"Blog": "the saved cookie no longer works"}
-    assert any(p.startswith("'Blog' needs you to sign in again") for p in problems(report, cfg))
+    assert report.sign_in_needed == {"blog.example": "the saved cookie no longer works"}
+    assert any(p.startswith("Your blog.example session needs a fresh cookie") for p in problems(report, cfg))
     # One page was asked for: once the session has failed, the rest of its picks are not tried.
     assert len(asked) == 1
     blog_posts = {store.get_article(i).title for i in report.link_only if store.get_article(i).source == "Blog"}
@@ -1369,14 +1373,43 @@ def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
     from app.config import Alerts
 
     cfg, store, fetcher = env
-    blog = Source("Blog", "https://blog.example/feed", session="feed-1", session_domain="blog.example")
-    paper = Source("Paper", "https://pinned.example/feed", session="feed-2", session_domain="pinned.example")
-    cfg = dataclasses.replace(cfg, sources=(blog, paper), alerts=Alerts(to="me@example.com", source_failures=0))
+    cfg = dataclasses.replace(
+        cfg, sessions=("blog.example", "pinned.example"), alerts=Alerts(to="me@example.com", source_failures=0)
+    )
     page = f"<html><body><article>{BODY}</article></body></html>"
     monkeypatch.setattr(pipeline.sessions, "fetch", lambda d, s, url: page)
     cfg.recipes_dir.mkdir(parents=True, exist_ok=True)
-    status = {"feed-1": {"ok": True, "expires": "2026-03-20"}, "feed-2": {"ok": True, "expires": "2027-03-10"}}
+    status = {
+        "site-blog.example": {"ok": True, "expires": "2026-03-20"},
+        "site-pinned.example": {"ok": True, "expires": "2027-03-10"},
+    }
     (cfg.recipes_dir / "status.json").write_text(json.dumps(status))
     report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
-    assert report.sign_in_ends == {"Blog": "2026-03-20"}
-    assert "'Blog': the site's sign-in ends on 2026-03-20." in " ".join(problems(report, cfg))
+    assert report.sign_in_ends == {"blog.example": "2026-03-20"}
+    assert "Your blog.example session ends on 2026-03-20." in " ".join(problems(report, cfg))
+
+
+def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(env, monkeypatch):
+    from app import cli, pipeline
+
+    cfg, store, _ = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    ask = "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, 'x')"
+    store.db.execute(ask, ("john", "https://www.paywall.example/story", "next", None))
+    # Saved on the Sources page after the scheduler read its settings, which had none.
+    store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('paywall.example', 'x')")
+    store.db.commit()
+    assert cfg.sessions == ()
+    asked = []
+
+    def with_session(recipes_dir, session, url):
+        asked.append((session, url))
+        return f"<html><body><article>{BODY}</article></body></html>"
+
+    monkeypatch.setattr(pipeline.sessions, "fetch", with_session)
+    assert cli._add_queue(cfg) == 1
+    assert asked == [("site-paywall.example", "https://www.paywall.example/story")]
+    row = store.db.execute("SELECT status, error FROM add_requests").fetchone()
+    assert (row["status"], row["error"]) == ("done", "")

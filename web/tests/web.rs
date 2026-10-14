@@ -705,7 +705,7 @@ async fn sources_are_managed_by_admins_only() {
         add("Other", "https://other.example/", &[]),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
-        assert_eq!(admin.post(&site, "/sources", &form).await.location, "/sources?saved=added");
+        assert!(admin.post(&site, "/sources", &form).await.location.starts_with("/sources?saved=added&new="));
     }
     let again = add("Other", "https://third.example/feed", &[]);
     let again: Vec<(&str, &str)> = again.iter().map(|(key, value)| (*key, value.as_str())).collect();
@@ -779,90 +779,87 @@ async fn sources_are_managed_by_admins_only() {
     // A link-only feed: its pages are never fetched, and its picks are shown as links.
     let paper = add("Paper", "https://paper.example/feed", &[("extract", "link")]);
     let paper: Vec<(&str, &str)> = paper.iter().map(|(key, value)| (*key, value.as_str())).collect();
-    assert_eq!(admin.post(&site, "/sources", &paper).await.location, "/sources?saved=added");
+    assert!(admin.post(&site, "/sources", &paper).await.location.starts_with("/sources?saved=added&new="));
     let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
     assert!(stored.iter().any(|s| s.name == "Paper" && s.extract == "link"));
 }
 
 #[tokio::test]
-async fn a_feeds_subscriber_session_is_kept_apart_and_never_shown() {
+async fn a_sites_subscriber_session_is_kept_apart_and_never_shown() {
     let site = site(true).await;
     let logins = site.folder.path().join("logins");
     let mut admin = Browser::default();
     admin.sign_in(&site, "john").await;
     let csrf = admin.get(&site, "/sources").await.csrf();
+    // A feed just added comes first, marked, until the page is loaded afresh.
     let add = [("csrf", csrf.as_str()), ("name", "Paper"), ("address", "https://www.paper.example/rss")];
-    admin.post(&site, "/sources", &add).await;
+    let added = admin.post(&site, "/sources", &add).await.location;
+    let other = [("csrf", csrf.as_str()), ("name", "Aardvark"), ("address", "https://aardvark.example/rss")];
+    admin.post(&site, "/sources", &other).await;
     let feed = forenoon_web::sources::list(&site.pool).await.unwrap().into_iter().find(|s| s.name == "Paper").unwrap();
+    assert_eq!(added, format!("/sources?saved=added&new={0}#s-{0}", feed.id));
+    let text = admin.get(&site, &format!("/sources?saved=added&new={}", feed.id)).await.text;
+    let (paper, aardvark) = (text.find(r#"value="Paper""#).unwrap(), text.find(r#"value="Aardvark""#).unwrap());
+    assert!(paper < aardvark && text.contains("Just added"));
     let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Add your session") && text.contains(r#"name="site" value="paper.example""#));
+    assert!(text.find(r#"value="Aardvark""#).unwrap() < text.find(r#"value="Paper""#).unwrap());
+    assert!(!text.contains("Just added"));
+    // The new-session form guesses the site from a feed that has none.
+    assert!(text.contains(r#"name="site" value="aardvark.example""#) && !text.contains("fetched with your"));
 
-    let path = format!("/sources/{}/session", feed.id);
+    let path = "/sources/sessions";
     for (site_name, cookie, message) in [
         ("localhost", "id=1", "Give the site the session is for"),
         ("paper.example", "no pairs here", "Paste the Cookie header"),
         ("paper.example", "id=1\r\nX-Evil: 1", "Paste the Cookie header"),
     ] {
-        let reply = admin.post(&site, &path, &[("csrf", &csrf), ("site", site_name), ("cookie", cookie)]).await;
+        let reply = admin.post(&site, path, &[("csrf", &csrf), ("site", site_name), ("cookie", cookie)]).await;
         assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
     }
     let form = [("csrf", csrf.as_str()), ("site", "Paper.Example"), ("cookie", "Cookie: id=s3cret; theme=dark")];
-    assert_eq!(admin.post(&site, &path, &form).await.location, "/sources?saved=session");
-    let file = logins.join(format!("feed-{}.json", feed.id));
+    assert_eq!(admin.post(&site, path, &form).await.location, "/sources?saved=session");
+    let file = logins.join("site-paper.example.json");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         r#"{"cookie":"id=s3cret; theme=dark","domain":"paper.example"}"#
     );
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
-    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
-    assert_eq!(stored.iter().find(|s| s.id == feed.id).unwrap().session_domain, "paper.example");
+    // Saved for the site, and every feed on it says so; saving it again replaces the cookie.
     let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Subscriber session saved for paper.example.") && !text.contains("s3cret"));
+    assert!(text.contains("<b class=\"wide\">paper.example</b>") && text.contains("No page fetched with it yet."));
+    assert!(text.contains("Its pages are fetched with your paper.example session.") && !text.contains("s3cret"));
+    admin.post(&site, path, &[("csrf", &csrf), ("site", "paper.example"), ("cookie", "id=newer")]).await;
+    assert!(std::fs::read_to_string(&file).unwrap().contains("id=newer"));
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions").fetch_one(&site.pool).await.unwrap();
+    assert_eq!(count, 1);
 
-    // How the last page fetched with it went is shown, and a failure opens the form.
+    // How the last page fetched with it went, and the day the site says its sign-in ends.
     std::fs::create_dir_all(site.folder.path().join("recipes")).unwrap();
-    std::fs::write(
-        site.folder.path().join("recipes/status.json"),
-        format!(r#"{{"feed-{}": {{"at": "2026-10-13T06:01:00-04:00", "ok": false, "note": "HTTP 403"}}}}"#, feed.id),
-    )
-    .unwrap();
+    let status = |body: &str| std::fs::write(site.folder.path().join("recipes/status.json"), body).unwrap();
+    status(r#"{"site-paper.example": {"at": "2026-10-13T06:01:00-04:00", "ok": false, "note": "HTTP 403"}}"#);
     let text = admin.get(&site, "/sources").await.text;
-    assert!(text.contains("Last page with it failed 2026-10-13 06:01: HTTP 403") && text.contains("<details open>"));
-    // A page fetched, and the day the site says its sign-in ends.
-    std::fs::write(
-        site.folder.path().join("recipes/status.json"),
-        format!(
-            r#"{{"feed-{}": {{"at": "2026-10-14T06:01:00-04:00", "ok": true, "note": "fetched", "expires": "2027-10-14"}}}}"#,
-            feed.id
-        ),
-    )
-    .unwrap();
+    assert!(text.contains(r#"<p class="hint failing">Last page with it failed 2026-10-13 06:01: HTTP 403</p>"#));
+    status(
+        r#"{"site-paper.example": {"at": "2026-10-14T06:01:00-04:00", "ok": true, "note": "x", "expires": "2027-10-14"}}"#,
+    );
     let text = admin.get(&site, "/sources").await.text;
     assert!(
         text.contains("Last page fetched with it: 2026-10-14 06:01. The site&#39;s sign-in lasts until 2027-10-14.")
     );
 
-    // Not for a reader; not for a recipe or a built-in source; and it goes when removed.
+    // Not for a reader; removing a feed leaves the site's session; removing the session takes it.
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
     let token = mary.get(&site, "/account").await.csrf();
-    let form = [("csrf", token.as_str()), ("site", "paper.example"), ("cookie", "id=mine")];
-    assert_eq!(mary.post(&site, &path, &form).await.status, StatusCode::FORBIDDEN);
-    let builtin = stored.iter().find(|s| s.kind == "builtin").unwrap().id;
-    let form = [("csrf", csrf.as_str()), ("site", "paper.example"), ("cookie", "id=1")];
-    admin.post(&site, &format!("/sources/{builtin}/session"), &form).await;
-    assert!(!logins.join(format!("feed-{builtin}.json")).exists());
-    assert_eq!(
-        admin.post(&site, &format!("{path}/delete"), &[("csrf", &csrf)]).await.location,
-        "/sources?saved=nosession"
-    );
-    assert!(!file.exists());
-    let stored = forenoon_web::sources::list(&site.pool).await.unwrap();
-    assert_eq!(stored.iter().find(|s| s.id == feed.id).unwrap().session_domain, "");
-    admin.post(&site, &path, &[("csrf", &csrf), ("site", "paper.example"), ("cookie", "id=2")]).await;
+    let form = [("csrf", token.as_str()), ("site", "evil.example"), ("cookie", "id=mine")];
+    assert_eq!(mary.post(&site, path, &form).await.status, StatusCode::FORBIDDEN);
+    assert!(!logins.join("site-evil.example.json").exists());
     admin.post(&site, &format!("/sources/{}/delete", feed.id), &[("csrf", &csrf)]).await;
-    assert!(!file.exists(), "removing the feed removes its session");
+    assert!(file.exists());
+    let remove = [("csrf", csrf.as_str()), ("site", "paper.example")];
+    assert_eq!(admin.post(&site, "/sources/sessions/delete", &remove).await.location, "/sources?saved=nosession");
+    assert!(!file.exists() && !admin.get(&site, "/sources").await.text.contains("<b class=\"wide\">paper.example</b>"));
 }
 
 #[tokio::test]
@@ -925,7 +922,7 @@ async fn calibre_recipes_are_chosen_from_the_list_with_logins_kept_apart() {
     assert!(bad.status == StatusCode::BAD_REQUEST && bad.text.contains("Made Up is not a recipe this Calibre has"));
     for (name, recipe) in [("", "Free Paper"), ("The Paid One", "Paid <Paper>")] {
         let form = [("csrf", csrf.as_str()), ("name", name), ("recipe", recipe)];
-        assert_eq!(admin.post(&site, "/sources/recipe", &form).await.location, "/sources?saved=recipe");
+        assert!(admin.post(&site, "/sources/recipe", &form).await.location.starts_with("/sources?saved=recipe&new="));
     }
     let stored: Vec<_> = forenoon_web::sources::list(&site.pool)
         .await

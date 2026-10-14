@@ -59,15 +59,13 @@ pub struct Source {
     /// "" (never checked), "pending", "ok" or "failed": the pipeline's check of the address.
     pub check_state: String,
     pub check_note: String,
-    /// For a feed with a subscriber's session: the only site its cookie is sent to. "" for none.
-    pub session_domain: String,
 }
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
     sqlx::query_as!(
         Source,
         r#"SELECT id AS "id!", name, kind, url, recipe, recipe_title, builtin, extract, pinned AS "pinned: bool",
-           enabled AS "enabled: bool", check_state, check_note, session_domain
+           enabled AS "enabled: bool", check_state, check_note
            FROM sources ORDER BY pinned DESC, name COLLATE NOCASE"#
     )
     .fetch_all(pool)
@@ -265,12 +263,17 @@ struct FeedRow {
     /// What the check of its address found; `None` when it was never checked.
     check: Option<String>,
     check_failed: bool,
-    /// The site a saved session is for, or a guess at it for the form.
-    session_site: String,
-    has_session: bool,
-    /// How the last page fetched with the session went.
-    session_note: Option<String>,
-    session_failed: bool,
+    /// The site whose subscriber session its pages are fetched with, when one covers it.
+    session: Option<String>,
+    /// Just added: shown first until the page is loaded afresh.
+    new: bool,
+}
+
+struct SessionRow {
+    site: String,
+    /// How the last page fetched with it went, and when the site says its sign-in ends.
+    note: Option<String>,
+    failed: bool,
 }
 
 struct RecipeRow {
@@ -291,6 +294,7 @@ struct RecipeRow {
     login_note: String,
     login_missing: bool,
     username: String,
+    new: bool,
 }
 
 struct Option_ {
@@ -304,6 +308,9 @@ struct SourcesPage {
     name: String,
     csrf: String,
     builtins: Vec<BuiltinRow>,
+    sessions: Vec<SessionRow>,
+    /// A guess at the site for a new session: the first feed's that has none.
+    session_site: String,
     feeds: Vec<FeedRow>,
     recipes: Vec<RecipeRow>,
     /// The recipes that can be chosen; empty until the recipes container has run.
@@ -339,10 +346,12 @@ async fn render(
     status: StatusCode,
     error: Option<String>,
     notice: Option<&'static str>,
+    new: Option<i64>,
 ) -> Page {
     let user = reader(auth)?;
     let health = health(&state.pool).await?;
     let sources = list(&state.pool).await?;
+    let sites = session_sites(&state.pool).await?;
     let catalogue: Option<Catalogue> = read_json(&state.recipes_dir.join("catalogue.json"));
     let runs: std::collections::HashMap<String, Run> =
         read_json(&state.recipes_dir.join("status.json")).unwrap_or_default();
@@ -406,31 +415,15 @@ async fn render(
                     login_note,
                     login_missing,
                     username: saved.map(|login| login.username).unwrap_or_default(),
+                    new: new == Some(source.id),
                     title: source.recipe_title,
                     folder: source.recipe,
                 });
             }
             _ => feeds.push(FeedRow {
                 id: source.id,
-                has_session: !source.session_domain.is_empty(),
-                session_site: match source.session_domain.as_str() {
-                    "" => guess_site(&source.url),
-                    domain => domain.to_owned(),
-                },
-                session_note: runs
-                    .get(&format!("feed-{}", source.id))
-                    .filter(|_| !source.session_domain.is_empty())
-                    .map(|run| match run.ok {
-                        true if run.expires.is_empty() => format!("Last page fetched with it: {}.", when(&run.at)),
-                        true => format!(
-                            "Last page fetched with it: {}. The site's sign-in lasts until {}.",
-                            when(&run.at),
-                            run.expires.get(..10).unwrap_or(&run.expires)
-                        ),
-                        false => format!("Last page with it failed {}: {}", when(&run.at), run.note),
-                    }),
-                session_failed: !source.session_domain.is_empty()
-                    && runs.get(&format!("feed-{}", source.id)).is_some_and(|run| !run.ok),
+                session: covering(&sites, &source.url),
+                new: new == Some(source.id),
                 address: source.url,
                 extract: choices(&source.extract),
                 pinned: source.pinned,
@@ -447,6 +440,30 @@ async fn render(
             }),
         }
     }
+    // What was just added stays first until the page is loaded afresh, beside its check.
+    feeds.sort_by_key(|row| !row.new);
+    recipes.sort_by_key(|row| !row.new);
+    let session_site =
+        feeds.iter().filter(|row| row.session.is_none()).map(|row| guess_site(&row.address)).next().unwrap_or_default();
+    let sessions = sites
+        .into_iter()
+        .map(|site| {
+            let run = runs.get(&format!("site-{site}"));
+            SessionRow {
+                note: run.map(|run| match run.ok {
+                    true if run.expires.is_empty() => format!("Last page fetched with it: {}.", when(&run.at)),
+                    true => format!(
+                        "Last page fetched with it: {}. The site's sign-in lasts until {}.",
+                        when(&run.at),
+                        run.expires.get(..10).unwrap_or(&run.expires)
+                    ),
+                    false => format!("Last page with it failed {}: {}", when(&run.at), run.note),
+                }),
+                failed: run.is_some_and(|run| !run.ok),
+                site,
+            }
+        })
+        .collect();
     let summary =
         format!("{total} source{}, {paused} paused, {failing_count} failing.", if total == 1 { "" } else { "s" });
     let checking = recipes.iter().any(|row| row.fetching)
@@ -468,6 +485,8 @@ async fn render(
         name: user.name,
         csrf: csrf_token(session).await?,
         builtins,
+        sessions,
+        session_site,
         feeds,
         recipes,
         catalogue: catalogue.unwrap_or_default(),
@@ -490,6 +509,8 @@ const ADMINS_ONLY: &str = "Sources are managed by an admin.";
 #[derive(Deserialize)]
 pub struct PageQuery {
     saved: Option<String>,
+    /// The source just added, shown first.
+    new: Option<i64>,
 }
 
 pub async fn page(
@@ -507,13 +528,13 @@ pub async fn page(
         Some("fetching") => Some("Asked the recipes container to fetch it now."),
         Some("login") => Some("Login saved. The recipe is being fetched with it now."),
         Some("nologin") => Some("Login removed."),
-        Some("session") => Some("Session saved. Article pages from that site are fetched with it from the next run."),
+        Some("session") => Some("Session saved. Pages from that site are fetched with it from the next run."),
         Some("nosession") => Some("Session removed."),
         Some("saved") => Some("Saved."),
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
         _ => None,
     };
-    render(&state, &auth, &session, StatusCode::OK, None, notice).await
+    render(&state, &auth, &session, StatusCode::OK, None, notice, query.new).await
 }
 
 /// `None` when the form may be acted on; otherwise the response that refuses it.
@@ -582,7 +603,7 @@ async fn finish(
         Err(error) if name_taken(&error) => format!("There is already a source named {name}."),
         Err(error) => return Err(error.into()),
     };
-    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None).await
+    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, None).await
 }
 
 pub async fn add(
@@ -611,7 +632,8 @@ pub async fn add(
     )
     .execute(&state.pool)
     .await;
-    finish(&state, &auth, &session, done.map(|_| Ok("added")), &name).await
+    let what = done.as_ref().map(|row| format!("added&new={0}#s-{0}", row.last_insert_rowid())).unwrap_or_default();
+    finish(&state, &auth, &session, done.map(|_| Ok(what.as_str())), &name).await
 }
 
 pub async fn add_recipe(
@@ -655,7 +677,8 @@ pub async fn add_recipe(
         write_conf(&state).await?;
         request_run(&state, &folder)?;
     }
-    finish(&state, &auth, &session, done.map(|_| Ok("recipe")), &name).await
+    let what = done.as_ref().map(|row| format!("recipe&new={0}#s-{0}", row.last_insert_rowid())).unwrap_or_default();
+    finish(&state, &auth, &session, done.map(|_| Ok(what.as_str())), &name).await
 }
 
 pub async fn update(
@@ -776,9 +799,6 @@ pub async fn delete(
     }
     let folder = recipe_folder(&state, id).await?;
     sqlx::query!("DELETE FROM sources WHERE id = ? AND kind != 'builtin'", id).execute(&state.pool).await?;
-    if let Some(path) = login_file(&state, &format!("feed-{id}")) {
-        let _ = std::fs::remove_file(path); // a feed's session goes with it
-    }
     if let Some(folder) = folder {
         // Its login goes with it; the issues already fetched stay where they are.
         if let Some(path) = login_file(&state, &folder) {
@@ -896,6 +916,21 @@ fn check_site(site: &str) -> Option<String> {
     named.then_some(site)
 }
 
+async fn session_sites(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(r#"SELECT domain AS "domain!" FROM sessions ORDER BY domain"#).fetch_all(pool).await
+}
+
+/// The site whose session a page at `url` is fetched with, as the pipeline matches it: the
+/// most particular one the page's host is, or is under.
+fn covering(sites: &[String], url: &str) -> Option<String> {
+    let host = url.split("://").nth(1)?.split(['/', ':', '?', '#']).next()?.to_ascii_lowercase();
+    sites
+        .iter()
+        .filter(|site| host == **site || host.ends_with(&format!(".{site}")))
+        .max_by_key(|site| site.len())
+        .cloned()
+}
+
 #[derive(Deserialize)]
 pub struct SessionForm {
     csrf: String,
@@ -903,31 +938,25 @@ pub struct SessionForm {
     cookie: String,
 }
 
-/// Save a feed's subscriber session where only the recipes container reads it. The cookie is
-/// never shown again, never stored in the database, and sent to that one site only.
+/// Save a subscriber session for a site, where only the recipes container reads it. Every page
+/// on that site, from any feed or added by hand, is fetched with it. The cookie is never shown
+/// again, never stored in the database, and sent to that one site only.
 pub async fn set_session(
     State(state): State<AppState>,
     auth: AuthSession,
     session: Session,
     headers: HeaderMap,
-    Path(id): Path<i64>,
     Form(form): Form<SessionForm>,
 ) -> Page {
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let feed = sqlx::query_scalar!("SELECT id FROM sources WHERE id = ? AND kind = 'rss'", id)
-        .fetch_optional(&state.pool)
-        .await?;
-    if feed.is_none() {
-        return saved("saved");
-    }
-    let Some(path) = login_file(&state, &format!("feed-{id}")) else {
-        let problem = "Sessions cannot be saved: this install has no logins folder (FORENOON_LOGINS_DIR).".to_owned();
-        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
-    };
     let Some(site) = check_site(&form.site) else {
         let problem = "Give the site the session is for, such as ft.com.".to_owned();
+        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+    };
+    let Some(path) = login_file(&state, &format!("site-{site}")) else {
+        let problem = "Sessions cannot be saved: this install has no logins folder (FORENOON_LOGINS_DIR).".to_owned();
         return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
     };
     // Pasted with or without the header's name. A line break would let it carry other headers.
@@ -943,10 +972,17 @@ pub async fn set_session(
         std::fs::create_dir_all(parent)?;
     }
     write_whole(&path, content.as_bytes(), 0o600)?;
-    sqlx::query!("UPDATE sources SET session_domain = ? WHERE id = ? AND kind = 'rss'", site, id)
+    let now = now_iso();
+    sqlx::query!("INSERT OR IGNORE INTO sessions (domain, created_at) VALUES (?, ?)", site, now)
         .execute(&state.pool)
         .await?;
     saved("session")
+}
+
+#[derive(Deserialize)]
+pub struct RemoveSessionForm {
+    csrf: String,
+    site: String,
 }
 
 pub async fn remove_session(
@@ -954,16 +990,14 @@ pub async fn remove_session(
     auth: AuthSession,
     session: Session,
     headers: HeaderMap,
-    Path(id): Path<i64>,
-    Form(form): Form<CsrfForm>,
+    Form(form): Form<RemoveSessionForm>,
 ) -> Page {
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    sqlx::query!("UPDATE sources SET session_domain = '' WHERE id = ? AND kind = 'rss'", id)
-        .execute(&state.pool)
-        .await?;
-    if let Some(path) = login_file(&state, &format!("feed-{id}")) {
+    let Some(site) = check_site(&form.site) else { return saved("nosession") };
+    sqlx::query!("DELETE FROM sessions WHERE domain = ?", site).execute(&state.pool).await?;
+    if let Some(path) = login_file(&state, &format!("site-{site}")) {
         match std::fs::remove_file(path) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
             _ => {}

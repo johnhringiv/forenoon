@@ -1,10 +1,11 @@
 """Article pages fetched with a subscriber's own session.
 
-A feed source can carry a session: the cookie of a site the reader subscribes to, typed on the
-Sources page. The pipeline never holds it. It leaves a request in `<data>/recipes/.fetch/`,
+A session is the cookie of a site the reader subscribes to, pasted on the Sources page. Every
+page on that site (from any feed, or added by hand) is fetched with it. The pipeline never
+holds the cookie: it knows only the site. It leaves a request in `<data>/recipes/.fetch/`,
 and the recipes container, the only one besides the web pages that mounts the logins volume,
 fetches the page with the cookie and leaves the answer beside it. Only pages the ranking
-wants read are asked for, a few a day; the feed itself is read without the session.
+wants read are asked for, a few a day; feeds themselves are read without the session.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import Source
 from .fetch import FetchError
 
 FOLDER = ".fetch"
@@ -40,20 +40,23 @@ def sign_in_ends(recipes_dir: Path, session: str) -> date | None:
         return None
 
 
-def covers(source: Source, url: str) -> bool:
-    """Whether this page is the session's to fetch: the source has one, and the page is on its site.
+def name(site: str) -> str:
+    """The session's name: its logins file, and its entry in the recipes container's status."""
+    return f"site-{site}"
 
-    An article the source links to on another site is fetched like any other page.
-    """
+
+def for_url(sites: tuple[str, ...], url: str) -> str:
+    """The site whose session this page is fetched with; "" when none covers it (https only)."""
     parts = urlsplit(url)
-    host, domain = (parts.hostname or "").lower(), source.session_domain.lower()
-    return (
-        bool(source.session and domain) and parts.scheme == "https" and (host == domain or host.endswith("." + domain))
-    )
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https":
+        return ""
+    covering = [site for site in sites if host == site or host.endswith("." + site)]
+    return max(covering, key=len, default="")  # the most particular, should two cover it
 
 
 def fetch(recipes_dir: Path, session: str, url: str, wait: float = WAIT, poll: float = 0.5) -> str:
-    """The page at `url`, fetched with the named session. Raises FetchError."""
+    """The page at `url`, fetched with the named session (see `name`). Raises FetchError."""
     global _silent_until
     if time.monotonic() < _silent_until:
         raise FetchError("session fetcher is not answering")

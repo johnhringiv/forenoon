@@ -26,16 +26,15 @@ def problems(report: RunReport, cfg: Config) -> list[str]:
             found.append("Nothing was delivered: every source failed to load.")
         elif cfg.alerts.on_empty and not report.cap_reached:
             found.append("Nothing was delivered: no new articles were ready.")
-    for name, why in report.sign_in_needed.items():
+    for site, why in report.sign_in_needed.items():
         found.append(
-            f"'{name}' needs you to sign in again ({why}); until then its picks are shown as links on the web pages and not sent."
-            " Paste a fresh cookie on the Sources page and they are sent with the next issue."
+            f"Your {site} session needs a fresh cookie ({why}). Until then, picks from {site} are shown"
+            " as links on the web pages and not sent; paste one on the Sources page and they are sent"
+            " with the next issue."
         )
-    for name, day in report.sign_in_ends.items():
-        if name not in report.sign_in_needed:
-            found.append(
-                f"'{name}': the site's sign-in ends on {day}. Paste a fresh cookie on the Sources page before then."
-            )
+    for site, day in report.sign_in_ends.items():
+        if site not in report.sign_in_needed:
+            found.append(f"Your {site} session ends on {day}. Paste a fresh cookie on the Sources page before then.")
     threshold = cfg.alerts.source_failures
     for source in feed_errors:
         # At the threshold and then every further multiple, not on every run.

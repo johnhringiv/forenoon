@@ -94,8 +94,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/sources/{id}/fetch", post(sources::fetch))
         .route("/sources/{id}/login", post(sources::set_login))
         .route("/sources/{id}/login/delete", post(sources::remove_login))
-        .route("/sources/{id}/session", post(sources::set_session))
-        .route("/sources/{id}/session/delete", post(sources::remove_session))
+        .route("/sources/sessions", post(sources::set_session))
+        .route("/sources/sessions/delete", post(sources::remove_session))
         .route("/settings", get(settings::page).post(settings::save))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.

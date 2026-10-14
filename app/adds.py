@@ -1,7 +1,7 @@
 """Links a reader added by hand on the web pages.
 
 The web app only queues the link. Here the page is fetched like any article's (public
-addresses only, and with the reader's subscriber session when a feed has one for that site),
+addresses only, and with the reader's subscriber session when one is saved for that site),
 stored with the route `manual`, and then dealt with as the reader asked: kept as read with
 their rating, sent now as a book of its own, or left to lead their next issue.
 
@@ -11,6 +11,7 @@ The link and the page are untrusted, as every fetched page is.
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import urlsplit
 
 from . import sessions, thumbs
@@ -25,15 +26,7 @@ from .urls import article_id, without_tracking
 log = logging.getLogger("forenoon")
 
 MAX_URL_CHARS = 2000
-
-
-def _source_for(cfg: Config, url: str) -> Source:
-    """The site as a source of its own; with a feed's subscriber session when one covers it."""
-    name = site_host(url)
-    for source in cfg.sources:
-        if sessions.covers(source, url):
-            return Source(name, extract="page", session=source.session, session_domain=source.session_domain)
-    return Source(name, extract="page")
+TURNED_AWAY = re.compile(r"\bHTTP 40[13]\b")  # how a refused page fetch is reported
 
 
 def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, rating) -> str:
@@ -45,10 +38,16 @@ def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str,
     item_id = article_id(url)
     known = store.get_article(item_id)
     if known is None or known.status in ("new", "error") or not (cfg.pages_dir / f"{item_id}.json.gz").exists():
-        item = Item(item_id, url, _source_for(cfg, url), known.title if known else "", "", None, "")
+        # Fetched with the subscriber session of its site, when one is saved (see _extract).
+        item = Item(item_id, url, Source(site_host(url), extract="page"), known.title if known else "", "", None, "")
         result = _extract(item, fetcher, cfg, keep=True)
         if result.body is None:
-            raise ValueError(f"nothing could be read there: {result.reason or result.status}")
+            why = f"nothing could be read there: {result.reason or result.status}"
+            if TURNED_AWAY.search(result.reason) and not sessions.for_url(cfg.sessions, url):
+                # Most often a paywall or a bot check that the reader's own session gets past.
+                why += f". If you subscribe to {site_host(url)}, save a session for it under Subscriber sessions"
+                why += " on the Sources page and add the link again"
+            raise ValueError(why)
         store.upsert_article(item_id, url, item.source.name, result.title or url, result.author, None)
         if not (known and known.title):
             store.set_title(item_id, result.title or url)

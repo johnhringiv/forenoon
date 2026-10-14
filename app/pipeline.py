@@ -108,10 +108,10 @@ class RunReport:
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
     reviews: dict[str, int] = field(default_factory=dict)  # model extraction verdicts, counted
-    sign_in_needed: dict[str, str] = field(default_factory=dict)  # source name -> why
+    sign_in_needed: dict[str, str] = field(default_factory=dict)  # site -> why its session failed
     link_only: list[str] = field(default_factory=list)  # picked, but only the link could be had
     retried: list[str] = field(default_factory=list)  # earlier link-only picks delivered now
-    sign_in_ends: dict[str, str] = field(default_factory=dict)  # source name -> day, when soon
+    sign_in_ends: dict[str, str] = field(default_factory=dict)  # site -> the day, when soon
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -183,8 +183,8 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> E
     page_html, fetch_error = None, ""
     if item.source.extract != "feed":
         try:
-            if sessions.covers(item.source, item.url):
-                page_html = sessions.fetch(cfg.recipes_dir, item.source.session, item.url)
+            if site := sessions.for_url(cfg.sessions, item.url):
+                page_html = sessions.fetch(cfg.recipes_dir, sessions.name(site), item.url)
             else:
                 page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
         except FetchError as exc:
@@ -509,10 +509,10 @@ def run(
         store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
         store.add_route(item.id, "found", item.source.name)
 
-    for source in by_source.values():
-        ends = sessions.sign_in_ends(cfg.recipes_dir, source.session) if source.session else None
+    for site in cfg.sessions:
+        ends = sessions.sign_in_ends(cfg.recipes_dir, sessions.name(site))
         if ends is not None and ends - now.date() <= SIGN_IN_WARNING:
-            report.sign_in_ends[source.name] = ends.isoformat()
+            report.sign_in_ends[site] = ends.isoformat()
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     # What the reader added by hand for their next issue leads it, ahead of pinned sources.
@@ -609,7 +609,7 @@ def run(
                 record_found(item)
             result = extracted[item.id] = _extract(item, fetcher, cfg, keep=not dry_run)
             if result.signed_out:
-                report.sign_in_needed[item.source.name] = result.signed_out
+                report.sign_in_needed[sessions.for_url(cfg.sessions, item.url)] = result.signed_out
             if result.body is None:
                 continue
             links_of[item.id] = outbound(item, result.body)
@@ -653,13 +653,14 @@ def run(
     def prepare(item: Item, reason: str = "") -> _Prepared | None:
         """Extract one item and check it fits a message; None when it cannot be delivered."""
         result = extracted.pop(item.id, None)
-        if result is None and sessions.covers(item.source, item.url) and item.source.name in report.sign_in_needed:
+        site = sessions.for_url(cfg.sessions, item.url)
+        if result is None and site and site in report.sign_in_needed:
             # Its session failed earlier in this run: the next page would fail the same way.
             result = Extracted(None, "error", ["the session needs signing in again"])
         if result is None:
             result = _extract(item, fetcher, cfg, keep=not dry_run)
         if result.signed_out:
-            report.sign_in_needed[item.source.name] = result.signed_out
+            report.sign_in_needed[site] = result.signed_out
         pictures = _pictures(result)
         article, dropped = _assemble(item, result, fetcher, cfg)
         if article is not None and not dry_run:

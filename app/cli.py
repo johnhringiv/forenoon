@@ -39,6 +39,7 @@ def load(store: Store | None = None) -> Config:
             # Without a key there is nothing to rank with; that is a choice, not a failure.
             llm=dataclasses.replace(cfg.llm, enabled=cfg.llm.enabled and bool(os.environ.get(API_KEY_ENV))),
             discovery=dataclasses.replace(cfg.discovery, sites=sites),
+            sessions=store.session_sites(),
             alerts=dataclasses.replace(cfg.alerts, to=to if cfg.alerts.enabled else ""),
         )
     finally:
@@ -53,7 +54,7 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     failed = 0
     try:
         # Read at every run, so a change made on the account page applies to the next one.
-        cfg = dataclasses.replace(cfg, users=store.readers(), sources=store.sources())
+        cfg = dataclasses.replace(cfg, users=store.readers(), sources=store.sources(), sessions=store.session_sites())
         if not cfg.sources:
             log.error("no sources: add some on the web pages' Sources page")
             if not args.dry_run:
@@ -149,6 +150,8 @@ def _add_queue(cfg: Config) -> int:
         if not store.add_requests():
             store.close()
             return 0
+        # The sessions as saved now: the scheduler reloads its settings only once a delivery.
+        cfg = dataclasses.replace(cfg, sessions=store.session_sites())
         fetcher = Fetcher(cfg.user_agent, store)
         try:
             return add_requested(cfg, store, fetcher)
@@ -200,7 +203,9 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _report(cfg: Config, args: argparse.Namespace) -> int:
-    cfg = dataclasses.replace(cfg, sources=Store(cfg.db_path).sources())
+    store = Store(cfg.db_path)
+    cfg = dataclasses.replace(cfg, sources=store.sources(), sessions=store.session_sites())
+    store.close()
     fetcher = Fetcher(cfg.user_agent)
     try:
         report = triage(cfg, fetcher, args.per_source, args.source)

@@ -50,10 +50,13 @@ next time the recipes container starts or finishes its daily run.
 
 ## Subscriber sessions: a few articles instead of a whole paper
 
-For a site you subscribe to that has a feed, there is a lighter way than a recipe. Add its
-feed under **Feeds** as usual, then open "Add your session" on its row and paste the cookie
-your browser sends to the site when you are signed in, and press **Save session**. Check
-**Site** says the site (such as `ft.com` or `nytimes.com`). Two ways to get the cookie:
+For a site you subscribe to that has feeds, there is a lighter way than a recipe. Add its
+feeds under **Feeds** as usual (as many as you like: several sections of one paper share one
+session). Then, under **Subscriber sessions**, give the site (such as `ft.com` or
+`nytimes.com`), paste the cookie your browser sends to it when you are signed in, and press
+**Save session**. Every page on that site and its subdomains is then fetched with it: from
+any of its feeds, and links you add by hand. Each feed on the site says so on its row. Saving
+the site again replaces the cookie. Two ways to get the cookie:
 
 - **A cookie-export extension** (quickest), such as Cookie-Editor: on the signed-in site,
   export its cookies as a header string and paste that.
@@ -62,8 +65,8 @@ your browser sends to the site when you are signed in, and press **Save session*
 
 It works until the site ends that session. Every page fetched with it keeps what the site
 sends back, so a session a site renews as it is used lasts as long as it is used. For the FT
-and the NYT the row shows the day the site says the sign-in ends (the NYT's is a year), and
-the alert email says so from 14 days before.
+and the NYT the session's row shows the day the site says the sign-in ends (the NYT's is a
+year), and the alert email says so from 14 days before.
 
 A username and password are not offered: the FT and the NYT both ask for a CAPTCHA at sign-in,
 and nothing here answers one.
@@ -72,16 +75,13 @@ The feed supplies headlines; the ranking picks; only the articles it wants read 
 from the site, one at a time and at least 20 seconds apart. They are read by an ordinary
 Chrome running on a virtual screen in the recipes container, because some sites (the FT
 among them) let only a browser through to their articles. Nothing answers a CAPTCHA: if the
-site asks for one, the row and an alert email say so.
+site asks for one, the session's row and an alert email say so.
 
 When a session stops working, the articles the ranking picks from it are shown on the
 newsstand as grayed links rather than sent as the feed's summary, and the daily run's alert
-email names the feed. Paste a fresh cookie and each run fetches them again: those it gets
+email names the site. Paste a fresh cookie and each run fetches them again: those it gets
 within the age limit (the Settings page) are sent with that day's issue, after its own
 stories.
-
-Hand-added links use the session too: a link to a site that a feed's session covers is
-fetched with it.
 
 A feed you want only as headlines (a paywalled site with no session, say) can have **Take
 the text from** set to **Nowhere: show picks as links**: its pages are never fetched, and
