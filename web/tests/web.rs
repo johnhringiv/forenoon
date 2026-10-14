@@ -1363,3 +1363,104 @@ async fn the_archive_waits_for_a_pipeline_that_keeps_what_it_weighs() {
     assert_eq!(page.status, StatusCode::OK);
     assert!(page.text.contains("has not started keeping what it weighs"));
 }
+
+#[tokio::test]
+async fn a_link_added_by_hand_is_only_queued_and_then_shown_as_the_readers_own() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let page = browser.get(&site, "/archive").await;
+    let csrf = page.csrf();
+    assert!(page.text.contains("Add a link") && !page.text.contains("http-equiv"));
+    let add = |link: &'static str, then: &'static str, rating: &'static str| {
+        [("csrf", csrf.clone()), ("link", link.to_owned()), ("then", then.to_owned()), ("rating", rating.to_owned())]
+    };
+    let post = |form: &[(&'static str, String); 4]| -> Vec<(&'static str, String)> { form.to_vec() };
+    macro_rules! send {
+        ($form:expr) => {{
+            let form = post(&$form);
+            let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+            browser.post(&site, "/archive", &form).await
+        }};
+    }
+
+    // Kept as read needs no Kindle; anything to be sent does. Only web addresses are taken.
+    assert_eq!(send!(add("https://blog.example/read", "keep", "4")).location, "/archive?show=added");
+    assert_eq!(send!(add("https://blog.example/x", "next", "")).status, StatusCode::BAD_REQUEST);
+    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    assert_eq!(send!(add("https://blog.example/next", "next", "5")).location, "/archive?show=added");
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", "blog.example/no-scheme"] {
+        assert_eq!(send!(add(bad, "next", "")).location, "/archive?show=added&error=link");
+    }
+    assert_eq!(send!(add("https://blog.example/x", "sideways", "")).status, StatusCode::BAD_REQUEST);
+    let wrong = [("csrf", "wrong"), ("link", "https://blog.example/x"), ("then", "next")];
+    assert_eq!(browser.post(&site, "/archive", &wrong).await.status, StatusCode::FORBIDDEN);
+    let rows: Vec<(String, String, String, Option<i64>, String)> =
+        sqlx::query_as("SELECT user_id, url, action, rating, status FROM add_requests ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    let row = |url: &str, action: &str, rating| {
+        ("john".to_owned(), url.to_owned(), action.to_owned(), rating, "queued".to_owned())
+    };
+    // A rating is taken only with something already read.
+    assert_eq!(
+        rows,
+        [row("https://blog.example/read", "keep", Some(4)), row("https://blog.example/next", "next", None)]
+    );
+
+    // While it is fetched the page says so and reloads itself; a failure is shown.
+    let waiting = browser.get(&site, "/archive?error=link").await.text;
+    assert!(waiting.contains("https://blog.example/next: Being fetched") && waiting.contains("http-equiv"));
+    assert!(waiting.contains("That is not a web address"));
+    sqlx::query("UPDATE add_requests SET status = 'failed', error = 'HTTP 404 <b>' WHERE action = 'next'")
+        .execute(pool)
+        .await
+        .unwrap();
+    // What the pipeline does with the other: the article exists, tied to the request.
+    sqlx::query(
+        "INSERT INTO articles (id, url, source, title, first_seen, word_count)
+         VALUES ('k1', 'https://blog.example/read', 'blog.example', 'Read elsewhere', 'x', 900)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO article_routes (article_id, route, via, first_seen) VALUES ('k1', 'manual', '', 'x')")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE add_requests SET status = 'done', article_id = 'k1', requested_at = '2026-10-12T09:00:00+00:00'
+         WHERE action = 'keep'",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(text.contains("Could not be added: HTTP 404 &#60;b&#62;") && !text.contains("http-equiv"));
+    assert!(text.contains(">Read elsewhere<") && text.contains("Added by you 12 October 2026"));
+    for (query, shown) in
+        [("show=added", true), ("route=manual", true), ("show=near", false), ("show=delivered", false)]
+    {
+        let text = browser.get(&site, &format!("/archive?{query}")).await.text;
+        assert_eq!(text.contains(">Read elsewhere<"), shown, "{query}");
+    }
+    // It is theirs to rate and send, and nobody else's.
+    let rate = [("csrf", csrf.as_str()), ("article", "k1"), ("rating", "5"), ("back", "/archive")];
+    assert_eq!(browser.post(&site, "/rate", &rate).await.location, "/archive#a-k1");
+    let mut other = Browser::default();
+    other.sign_in(&site, "mary").await;
+    let page = other.get(&site, "/archive?show=all").await;
+    assert!(!page.text.contains("Read elsewhere") && !page.text.contains("blog.example/next"));
+    let csrf = page.csrf();
+    let rate = [("csrf", csrf.as_str()), ("article", "k1"), ("rating", "1")];
+    assert_eq!(other.post(&site, "/rate", &rate).await.status, StatusCode::NOT_FOUND);
+
+    // A day's worth and no more.
+    for _ in 0..db::ADDS_PER_DAY {
+        db::queue_add(pool, "mary", "https://blog.example/y", "keep", None).await.unwrap();
+    }
+    let form = [("csrf", csrf.as_str()), ("link", "https://blog.example/z"), ("then", "keep")];
+    assert_eq!(other.post(&site, "/archive", &form).await.location, "/archive?show=added&error=many");
+}

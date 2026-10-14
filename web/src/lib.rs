@@ -70,7 +70,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     };
     Ok(Router::new()
         .route("/", get(pages::newsstand))
-        .route("/archive", get(archive::page))
+        .route("/archive", get(archive::page).post(archive::add))
         .route("/rate", post(pages::rate))
         .route("/thumb/{id}", get(pages::thumb))
         .route("/send", post(pages::send))

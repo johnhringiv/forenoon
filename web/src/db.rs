@@ -353,9 +353,19 @@ pub async fn library_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     Ok(found == 2)
 }
 
-/// Whether this article was delivered to the reader or weighed for them.
+/// Whether this article was delivered to the reader, added by them or weighed for them.
 pub async fn in_library(pool: &SqlitePool, user: &str, article: &str) -> Result<bool, sqlx::Error> {
     if is_delivered(pool, user, article).await? {
+        return Ok(true);
+    }
+    let added = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM add_requests WHERE user_id = ? AND article_id = ? AND status = 'done'",
+        user,
+        article
+    )
+    .fetch_one(pool)
+    .await?;
+    if added > 0 {
         return Ok(true);
     }
     if !library_ready(pool).await? {
@@ -378,7 +388,8 @@ pub async fn brought_by(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
 /// What to show from a reader's library. An empty string means "any" for every filter.
 pub struct Shelf<'a> {
     pub user: &'a str,
-    /// "delivered", "near" (read by the model, not delivered), "all", or "" for the first two.
+    /// "delivered", "near" (read by the model, not delivered), "added" (by hand), "all", or ""
+    /// for everything but what was only weighed from a headline.
     pub show: &'a str,
     /// Words the title must contain.
     pub title: &'a str,
@@ -408,7 +419,10 @@ pub struct Shelved {
     pub word_count: i64,
     pub description: String,
     pub delivered_at: Option<String>,
-    /// When it was delivered, or else weighed.
+    /// When the reader added it by hand, and what they asked for: next, now or keep.
+    pub added_at: Option<String>,
+    pub added_for: Option<String>,
+    /// When it was delivered, or else added or weighed.
     pub at: String,
     pub score: Option<f64>,
     /// The model's reason, from reading it when it did.
@@ -429,7 +443,11 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
         Shelved,
         r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description,
            d.delivered_at AS "delivered_at?",
-           COALESCE(d.delivered_at, x.assessed_at, a.first_seen) AS "at!: String",
+           (SELECT m.requested_at FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
+                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_at?: String",
+           (SELECT m.action FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
+                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_for?: String",
+           COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) AS "at!: String",
            COALESCE(s.score, x.score) AS "score?: f64",
            COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
            COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
@@ -442,10 +460,11 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
            LEFT JOIN assessments x ON x.article_id = a.id AND x.user_id = ?1
            LEFT JOIN selections s ON s.article_id = a.id AND s.user_id = ?1
            LEFT JOIN ratings r ON r.article_id = a.id AND r.user_id = ?1
-           WHERE (d.article_id IS NOT NULL OR x.article_id IS NOT NULL)
+           WHERE (d.article_id IS NOT NULL OR x.article_id IS NOT NULL OR EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'))
            AND CASE ?2 WHEN 'all' THEN 1 WHEN 'delivered' THEN d.article_id IS NOT NULL
-               WHEN 'near' THEN d.article_id IS NULL AND x.read = 1
-               ELSE d.article_id IS NOT NULL OR x.read = 1 END
+               WHEN 'near' THEN d.article_id IS NULL AND COALESCE(x.read, 0)
+               WHEN 'added' THEN EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done')
+               ELSE d.article_id IS NOT NULL OR COALESCE(x.read, 0) OR EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done') END
            AND (?3 = '' OR instr(lower(a.title), lower(?3)) > 0)
            AND (?4 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.via = ?4))
            AND (?5 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.route = ?5))
@@ -454,11 +473,11 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
                WHEN 'finished' THEN COALESCE(r.finished, 0) ELSE 1 END
            AND CASE ?7 WHEN 'years' THEN COALESCE(x.lasting = 'years', 0)
                WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END
-           AND (?8 = '' OR substr(COALESCE(d.delivered_at, x.assessed_at, a.first_seen), 1, 10) >= ?8)
-           AND (?9 = '' OR substr(COALESCE(d.delivered_at, x.assessed_at, a.first_seen), 1, 10) <= ?9)
+           AND (?8 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) >= ?8)
+           AND (?9 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) <= ?9)
            ORDER BY CASE ?10 WHEN 'score' THEN -COALESCE(s.score, x.score, -1)
                WHEN 'rating' THEN -COALESCE(r.rating, 0) WHEN 'length' THEN -a.word_count ELSE 0 END,
-               COALESCE(d.delivered_at, x.assessed_at, a.first_seen) DESC, a.id
+               COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) DESC, a.id
            LIMIT ?11 OFFSET ?12"#,
         shelf.user,
         shelf.show,
@@ -472,6 +491,62 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
         shelf.sort,
         shelf.limit,
         shelf.offset
+    )
+    .fetch_all(pool)
+    .await
+}
+
+// links added by hand; the pipeline's scheduler fetches them and records the outcome
+
+pub const ADDS_PER_DAY: i64 = 30;
+
+/// `action` is next (the reader's next issue), now (sent as its own book) or keep (already
+/// read, with their rating when they gave one). False when the day's limit is reached.
+pub async fn queue_add(
+    pool: &SqlitePool,
+    user: &str,
+    url: &str,
+    action: &str,
+    rating: Option<i64>,
+) -> Result<bool, sqlx::Error> {
+    let (now, day_ago) = (now_iso(), iso_in(-24 * 3600));
+    let mut tx = pool.begin().await?;
+    let recent =
+        sqlx::query_scalar!("SELECT COUNT(*) FROM add_requests WHERE user_id = ? AND requested_at > ?", user, day_ago)
+            .fetch_one(&mut *tx)
+            .await?;
+    if recent >= ADDS_PER_DAY {
+        return Ok(false);
+    }
+    sqlx::query!(
+        "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, ?)",
+        user,
+        url,
+        action,
+        rating,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub struct AddState {
+    pub url: String,
+    pub status: String,
+    pub error: String,
+}
+
+/// The reader's links from the last day that are still being fetched or could not be, newest first.
+pub async fn unfinished_adds(pool: &SqlitePool, user: &str) -> Result<Vec<AddState>, sqlx::Error> {
+    let day_ago = iso_in(-24 * 3600);
+    sqlx::query_as!(
+        AddState,
+        "SELECT url, status, error FROM add_requests
+         WHERE user_id = ? AND requested_at > ? AND status != 'done' ORDER BY id DESC LIMIT 20",
+        user,
+        day_ago
     )
     .fetch_all(pool)
     .await

@@ -79,7 +79,7 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                 raise ValueError("the reader has no Kindle address")
             fresh = not store.is_delivered(user.id, request["article_id"])
             judged = store.assessment(user.id, request["article_id"]) if fresh else None
-            if fresh and judged is None:
+            if fresh and judged is None and not store.added_by(user.id, request["article_id"]):
                 raise ValueError("not an article in this reader's library")
             story = request["story"] and not fresh
             ids = _story_ids(store, user.id, request["article_id"]) if story else [request["article_id"]]
@@ -113,7 +113,15 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                 store.set_preview(first.id, result.image_url, result.description)
                 store.mark_delivered(user.id, [first.id], now)
                 store.record_selection(
-                    user.id, first.id, now, "requested", judged["score"], judged["reason"], None, False, None
+                    user.id,
+                    first.id,
+                    now,
+                    "requested",
+                    judged and judged["score"],
+                    judged["reason"] if judged else "",
+                    None,
+                    False,
+                    None,
                 )
         except Exception as exc:  # noqa: BLE001 - one bad request must not block the rest
             log.warning("send request %s failed: %s", request["id"], exc)

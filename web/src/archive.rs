@@ -9,8 +9,10 @@ use std::str::FromStr;
 
 use askama::Template;
 use axum::{
+    Form,
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Redirect},
 };
 use chrono::NaiveDate;
 use chrono_tz::Tz;
@@ -22,26 +24,29 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, Page, ReasonOption, Star, csrf_token, html, length, local, reader,
-        reason_options, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Page, ReasonOption, Star, allowed, csrf_token, html, length,
+        local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
     },
     ratings,
 };
 
 const PER_PAGE: i64 = 50;
 const MAX_SEARCH: usize = 100;
-const SHOW: [(&str, &str); 4] = [
-    ("", "Delivered, or read by the model"),
+const MAX_URL: usize = 2000;
+const SHOW: [(&str, &str); 5] = [
+    ("", "Delivered, added, or read by the model"),
     ("delivered", "Delivered"),
     ("near", "Read by the model, not delivered"),
+    ("added", "Added by you"),
     ("all", "Everything weighed"),
 ];
-const ROUTE: [(&str, &str); 5] = [
+const ROUTE: [(&str, &str); 6] = [
     ("", "Any way"),
     ("feed", "A feed you follow"),
     ("recipe", "A Calibre recipe"),
     ("found", "Found on a front page"),
     ("linked", "Linked from another article"),
+    ("manual", "Added by hand"),
 ];
 const RATING: [(&str, &str); 6] = [
     ("", "Any"),
@@ -67,6 +72,13 @@ pub struct ArchiveQuery {
     to: Option<String>,
     sort: Option<String>,
     page: Option<String>,
+    error: Option<String>,
+}
+
+struct Pending {
+    url: String,
+    note: String,
+    failed: bool,
 }
 
 struct Choice {
@@ -114,6 +126,11 @@ struct ArchivePage {
     to: String,
     selects: Vec<Select>,
     filtered: bool,
+    error: Option<&'static str>,
+    /// Links still being fetched, and ones that could not be.
+    pending: Vec<Pending>,
+    /// Reload while a link is being fetched, so its article appears without a click.
+    fetching: bool,
     rows: Vec<Row>,
     back: String,
     newer: Option<String>,
@@ -159,13 +176,15 @@ fn arrivals(routes: &str) -> Vec<String> {
     routes
         .lines()
         .filter_map(|line| line.split_once(':'))
-        .map(|(route, via)| match route {
-            "feed" => format!("From the feed {via}"),
-            "recipe" => format!("From the recipe {via}"),
-            "found" => format!("Found on {via}"),
-            "linked" => format!("Linked from an article in {via}"),
-            "manual" => "Added by hand".to_owned(),
-            _ => format!("Through {via}"),
+        .filter_map(|(route, via)| {
+            Some(match route {
+                "feed" => format!("From the feed {via}"),
+                "recipe" => format!("From the recipe {via}"),
+                "found" => format!("Found on {via}"),
+                "linked" => format!("Linked from an article in {via}"),
+                "manual" => return None,
+                _ => format!("Through {via}"),
+            })
         })
         .collect()
 }
@@ -175,10 +194,16 @@ fn row(found: Shelved, zone: Tz) -> Row {
     let kicker =
         [found.source.as_str(), author].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
     let day = |stamp: &str| local(stamp, zone).map_or(stamp.to_owned(), |at| at.format("%-d %B %Y").to_string());
+    let finished = found.finished == Some(true);
     let mut facts = Vec::new();
+    let added = found.added_at.as_deref().zip(found.added_for.as_deref());
     facts.push(match (&found.delivered_at, found.policy.as_deref(), found.read) {
         (Some(at), Some("requested"), _) => format!("Sent on request {}", day(at)),
         (Some(at), _, _) => format!("Delivered {}", day(at)),
+        (None, _, _) if added.is_some_and(|(_, wanted)| wanted == "next") && found.rating.is_none() && !finished => {
+            "Added by you; in your next issue".to_owned()
+        }
+        (None, _, _) if added.is_some() => format!("Added by you {}", day(added.map_or("", |(at, _)| at))),
         (None, _, true) => format!("Read by the model {}, not delivered", day(&found.at)),
         (None, _, false) => format!("Weighed from its headline {}", day(&found.at)),
     });
@@ -194,7 +219,6 @@ fn row(found: Shelved, zone: Tz) -> Row {
     }
     facts.extend(arrivals(&found.routes));
     facts.extend(ratings::chosen(&found.why).filter_map(ratings::label).map(str::to_owned));
-    let finished = found.finished == Some(true);
     let mut marks = Vec::new();
     if let Some(rating) = found.rating {
         marks.push(format!("Rated {rating} of 5"));
@@ -273,6 +297,13 @@ pub async fn page(
             select("lasting", "Worth reading for", &LASTING, lasting),
             select("sort", "Order", &SORT, sort),
         ],
+        error: match query.error.as_deref() {
+            Some("link") => Some("That is not a web address. It must start with http:// or https://."),
+            Some("many") => Some("That is the most links that can be added in a day."),
+            _ => None,
+        },
+        pending: Vec::new(),
+        fetching: false,
         rows: Vec::new(),
         back: address(&parts, number),
         newer: (number > 1).then(|| address(&parts, number - 1)),
@@ -281,6 +312,20 @@ pub async fn page(
         from: from.clone(),
         to: to.clone(),
     };
+    page.pending = db::unfinished_adds(pool, &user.id)
+        .await?
+        .into_iter()
+        .map(|add| Pending {
+            failed: add.status == "failed",
+            note: if add.status == "failed" {
+                format!("Could not be added: {}", add.error)
+            } else {
+                "Being fetched; it appears here within a minute or two.".to_owned()
+            },
+            url: add.url,
+        })
+        .collect();
+    page.fetching = page.pending.iter().any(|add| !add.failed);
     if !ready {
         return html(StatusCode::OK, page);
     }
@@ -317,4 +362,44 @@ pub async fn page(
         })
         .collect();
     html(StatusCode::OK, page)
+}
+
+#[derive(Deserialize)]
+pub struct AddForm {
+    csrf: String,
+    link: String,
+    /// next, now or keep.
+    then: String,
+    rating: Option<String>,
+}
+
+/// Add a link by hand. This only queues it: the pipeline fetches the page, as it does every
+/// article, and the link is never opened from here.
+pub async fn add(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<AddForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let Some(action) = ["next", "now", "keep"].into_iter().find(|action| *action == form.then) else {
+        return refused(StatusCode::BAD_REQUEST, "Choose what to do with the link.");
+    };
+    let Some(link) = web_url(&form.link).filter(|link| link.len() <= MAX_URL) else {
+        return Ok(Redirect::to("/archive?show=added&error=link").into_response());
+    };
+    if action != "keep" && user.kindle_addresses.trim().is_empty() {
+        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; an admin sets it.");
+    }
+    // A rating belongs to something already read.
+    let rating = form.rating.as_deref().and_then(|n| n.parse::<i64>().ok()).filter(|n| (1..=5).contains(n));
+    let rating = if action == "keep" { rating } else { None };
+    if !db::queue_add(&state.pool, &user.id, &link, action, rating).await? {
+        return Ok(Redirect::to("/archive?show=added&error=many").into_response());
+    }
+    Ok(Redirect::to("/archive?show=added").into_response())
 }

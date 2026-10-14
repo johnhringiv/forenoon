@@ -399,8 +399,8 @@ the web pages' Archive shows (section 11).
 
 - **How an article reached us.** Every route is recorded, and an article can have several:
   `feed` (a feed the install follows), `recipe`, `found` (on a built-in front page such as
-  Hacker News) and `linked` (followed from another article), each with the name of the feed,
-  recipe or front page. A followed blog's post that also reaches a front page has both.
+  Hacker News), `linked` (followed from another article) and `manual` (added by a reader by
+  hand), each with the name of the feed, recipe or front page. A followed blog's post that also reaches a front page has both.
 - **What the model made of it, per reader.** Every candidate the ranking scored has its
   score and reason kept; a candidate the reading pass read has the score and reason from
   reading, and how long it stays worth reading. A judgement made from a headline never
@@ -412,6 +412,25 @@ the web pages' Archive shows (section 11).
   with their length and summary. Candidates ranked from a headline alone have a row and no
   saved page.
 - Nothing is recorded on a dry run.
+- **Never sent twice, never sent once read.** The daily run skips an article the reader has
+  already been sent, rated or marked finished.
+
+### Links added by hand
+
+A reader adds a link on the Archive page and says what to do with it. The web program only
+queues it; the scheduler checks the queue every minute (`forenoon send-queue` works it at
+once), fetches the page as it fetches any article (public addresses only, and with a feed's
+subscriber session when one covers the site), saves the page, and stores the article with
+the route `manual` and its site as the source.
+
+- **Put it in my next issue.** It goes first in the reader's next daily issue, ahead of
+  pinned sources, built from the page saved when it was added, and takes one of the day's
+  places. If the day is already full it waits for the next. Recorded as chosen by `added`.
+- **Send it to my Kindle now.** Sent as a book of its own, as Send to Kindle does.
+- **Only keep it: I have read it.** Marked finished, with the reader's rating when given.
+  It is never sent, and the rating counts with the others when the model chooses.
+- A link that cannot be fetched or has no article in it is marked failed, with the reason
+  shown on the Archive page for a day. At most 30 links a day per reader.
 
 ## 8. Delivery
 
@@ -483,9 +502,10 @@ database with the pipeline.
   us. Filters are a form sent by GET, so any view is a link: words in the title, delivered
   or read or everything, the feed, recipe or front page that brought it, how it arrived,
   the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
-  length). Without a choice it shows what was delivered and what the model read, 50 to a
-  page. A row can be rated and sent to the Kindle like a newsstand card. A reader sees only
-  what was delivered to or weighed for them.
+  length). Without a choice it shows what was delivered, added by hand or read by the
+  model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
+  form at the top adds a link by hand (section 7g). A reader sees only what was delivered
+  to, added by or weighed for them.
 - **Send to Kindle.** Each article has a button that sends it to the reader's own
   Kindle address, as a book of its own with fresh rating links. An article the daily run
   passed over can be sent from the Archive: it is then recorded as delivered and marked

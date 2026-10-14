@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT url, status, error FROM add_requests\n         WHERE user_id = ? AND requested_at > ? AND status != 'done' ORDER BY id DESC LIMIT 20",
+  "describe": {
+    "columns": [
+      {
+        "name": "url",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "error",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3bf255089708138ba89b89edeef227300c5099c7c6171b8f3aa9e1acde54dd26"
+}

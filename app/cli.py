@@ -127,6 +127,26 @@ def _send_queue(cfg: Config) -> int:
         return 0
 
 
+def _add_queue(cfg: Config) -> int:
+    """Fetch the links readers added on the web pages. Checked every minute by the scheduler."""
+    from .adds import add_requested
+
+    try:
+        store = Store(cfg.db_path)
+        if not store.add_requests():
+            store.close()
+            return 0
+        fetcher = Fetcher(cfg.user_agent, store)
+        try:
+            return add_requested(cfg, store, fetcher)
+        finally:
+            fetcher.close()
+            store.close()
+    except Exception:
+        log.exception("add queue failed")
+        return 0
+
+
 def _check_sources(cfg: Config) -> int:
     """Check the addresses of sources just added or saved. Run every minute by the scheduler."""
     from .checks import check_sources
@@ -156,6 +176,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
             time.sleep(min(wait, 60))
             if not args.dry_run:
+                _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
                 _check_sources(cfg)
         cfg = _reload(cfg)
@@ -348,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "schedule":
             return _schedule(cfg, args)
         if args.command == "send-queue":
+            print(f"{_add_queue(cfg)} added.")
             print(f"{_send_queue(cfg)} sent.")
             return 0
         if args.command == "report":
