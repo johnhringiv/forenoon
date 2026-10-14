@@ -27,7 +27,7 @@ from .extract import Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
 from .llm import Backend
-from .rank import LINK_WORDS, POLICY, Ranking, group_stories, subject_links
+from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
 from .read import Reading, Verdict
 from .read import read as read_candidates
@@ -41,7 +41,8 @@ from .urls import article_id, without_tracking
 
 log = logging.getLogger("forenoon")
 
-MAX_ITEMS_PER_SOURCE = 5
+FIRST_READ_ITEMS = 20  # of a feed just added: the newest, not its whole back catalogue
+MAX_SUMMARY_CHARS = 1000  # of a feed entry's summary, kept for ranking it on a later run
 # A feed post this short that is about a page it links to is a pointer: that page is
 # delivered in its place. A longer one that responds to a page is delivered along with it.
 POINTER_MAX_WORDS = 150
@@ -49,7 +50,8 @@ MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links ma
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 THUMB_TRIES = 4
-LATE_MAX_AGE = timedelta(days=30)
+OLDEST_NEW = timedelta(days=30)  # an article dated earlier than this is never a candidate
+SIGN_IN_WARNING = timedelta(days=14)  # the alert says a session's sign-in is ending this soon
 # Never followed as an article's subject: project and package pages, and reference works.
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
 # Documentation is never what an article is about, whatever a model says: the address gives it away.
@@ -107,6 +109,9 @@ class RunReport:
     ranking: str = ""  # "", "model" or "fallback: <why>"
     reviews: dict[str, int] = field(default_factory=dict)  # model extraction verdicts, counted
     sign_in_needed: dict[str, str] = field(default_factory=dict)  # source name -> why
+    link_only: list[str] = field(default_factory=list)  # picked, but only the link could be had
+    retried: list[str] = field(default_factory=list)  # earlier link-only picks delivered now
+    sign_in_ends: dict[str, str] = field(default_factory=dict)  # source name -> day, when soon
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -120,6 +125,10 @@ class RunReport:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
         if self.ranking:
             lines += [f"Ranking: {self.ranking}.", ""]
+        if self.link_only:
+            lines += [f"Shown as links only, their pages not to be had: {len(self.link_only)}.", ""]
+        if self.retried:
+            lines += [f"Earlier link-only picks sent now: {len(self.retried)}.", ""]
         if self.reviews:
             counts = ", ".join(f"{n} {verdict}" for verdict, n in sorted(self.reviews.items()))
             lines += [f"Extraction check by the model: {counts}.", ""]
@@ -168,6 +177,9 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> E
 
     With `keep`, what it was extracted from is saved for `forenoon replay`.
     """
+    if item.source.extract == "link":
+        # A link-only source: its pages are never fetched, and its picks are shown as links.
+        return Extracted(None, "link", ["a link-only source"])
     page_html, fetch_error = None, ""
     if item.source.extract != "feed":
         try:
@@ -302,6 +314,12 @@ def _read_source(
         known = (lambda item_id: store.get_article(item_id) is not None) if store else None
         return read_recipe(source, cfg.recipes_dir, cfg.max_age_days, now, known=known)
     return read_feed(source, fetcher, conditional=conditional)
+
+
+def _stored_item(row, source: Source) -> Item:
+    """An article read from its feed on an earlier run, with the summary kept from then."""
+    published = datetime.fromisoformat(row.published) if row.published else None
+    return Item(row.id, row.url, source, row.title, row.author, published, "", summary=row.description)
 
 
 def _newest_first(items: list[Item]) -> list[Item]:
@@ -449,34 +467,52 @@ def run(
             store.track_source(source.name)
         src.not_modified = not items
         eligible = []
-        established = store.has_articles_from(source.name)
-        for item in _newest_first(items):
+        # An article's age is counted from when it was first seen here, not from the date its
+        # feed gives: posts are often dated before they appear, and some have no date. A feed's
+        # first read has nothing to count from, so there its own dates decide and only the
+        # newest few are taken; the rest of its back catalogue is recorded as seen before the
+        # feed was followed, so it never becomes a candidate.
+        first_read = not store.has_articles_from(source.name) and source.type == "rss"
+        for n, item in enumerate(_newest_first(items)):
             seen.add(item.id)
-            known = store.get_article(item.id) is not None
             published = item.published.isoformat() if item.published else None
-            store.upsert_article(item.id, item.url, source.name, item.title, item.author, published)
+            current = not first_read or (n < FIRST_READ_ITEMS and (item.published is None or item.published >= cutoff))
+            store.upsert_article(
+                item.id, item.url, source.name, item.title, item.author, published,
+                abstract(item)[:MAX_SUMMARY_CHARS], seen=now if current else cutoff - timedelta(seconds=1),
+            )  # fmt: skip
             store.add_route(item.id, "recipe" if source.type == "recipe" else "feed", source.name)
             row = store.get_article(item.id)
-            if item.published and item.published < cutoff:
-                # Old by its own date. It is still new to us when a feed we already follow lists
-                # it for the first time: posts are often dated before they appear. A feed just
-                # added keeps the plain cutoff, or its whole back catalogue would arrive.
-                appeared_late = established and not known and item.published >= now - LATE_MAX_AGE
-                if not appeared_late:
-                    continue
+            if datetime.fromisoformat(row.first_seen) < cutoff:
+                continue
+            if item.published and item.published < now - OLDEST_NEW:
+                continue  # an old post the feed has brought back, not news
             if row.status == "failed" or store.has_had(user.id, item.id):
                 continue
             eligible.append(item)
-        # Undated feeds would otherwise flood the first run. A recipe's issue is a whole
-        # publication, so all of it is considered unless it is pinned (pinned items skip ranking).
-        whole = source.type == "recipe" and not source.pinned
-        pools[source.pinned].append(eligible if whole else eligible[:MAX_ITEMS_PER_SOURCE])
+        if source.type == "rss" and source.extract != "feed":
+            # Read on an earlier run but never weighed: the feed has moved on since, or the
+            # run that would have weighed them did not happen. A recipe's issue has them all;
+            # a feed read for its own text cannot give it again once it has moved on.
+            for row in store.unoffered(user.id, source.name, cutoff, now - OLDEST_NEW):
+                if row.id not in seen:
+                    seen.add(row.id)
+                    eligible.append(_stored_item(row, source))
+            eligible = _newest_first(eligible)
+        # No share per source: the model weighs all of it (up to llm.max_candidates, taken
+        # round-robin across sources); without the model the day's cap is the limit.
+        pools[source.pinned].append(eligible)
 
     def record_found(item: Item) -> None:
         # Feed items are recorded when their feed is read; a find once it has been weighed.
         published = item.published.isoformat() if item.published else None
         store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
         store.add_route(item.id, "found", item.source.name)
+
+    for source in by_source.values():
+        ends = sessions.sign_in_ends(cfg.recipes_dir, source.session) if source.session else None
+        if ends is not None and ends - now.date() <= SIGN_IN_WARNING:
+            report.sign_in_ends[source.name] = ends.isoformat()
 
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     # What the reader added by hand for their next issue leads it, ahead of pinned sources.
@@ -546,6 +582,8 @@ def run(
     found_ids = {item.id for item in found}
     found_ready = 0
     taken: set[str] = set()
+    unreachable: set[str] = set()
+    link_picks: list[str] = []  # picked, but only their links can be shown
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
 
     def outbound(item: Item, body) -> list[_Link]:
@@ -614,7 +652,12 @@ def run(
 
     def prepare(item: Item, reason: str = "") -> _Prepared | None:
         """Extract one item and check it fits a message; None when it cannot be delivered."""
-        result = extracted.pop(item.id, None) or _extract(item, fetcher, cfg, keep=not dry_run)
+        result = extracted.pop(item.id, None)
+        if result is None and sessions.covers(item.source, item.url) and item.source.name in report.sign_in_needed:
+            # Its session failed earlier in this run: the next page would fail the same way.
+            result = Extracted(None, "error", ["the session needs signing in again"])
+        if result is None:
+            result = _extract(item, fetcher, cfg, keep=not dry_run)
         if result.signed_out:
             report.sign_in_needed[item.source.name] = result.signed_out
         pictures = _pictures(result)
@@ -627,7 +670,8 @@ def run(
         if article is not None and reason and cfg.llm.show_reasons:
             article.reason = reason
         store.set_extraction(item.id, result.status, result.reason, result.word_count)
-        store.set_preview(item.id, result.image_url, result.description)
+        if result.image_url or result.description:  # else the feed's summary stays
+            store.set_preview(item.id, result.image_url, result.description)
         entry = _item_report(item, result, dropped)
         verdict = verdicts.get(item.id)
         if verdict:
@@ -645,6 +689,8 @@ def run(
         if article is None:
             if result.status == "error":
                 leftover.add(item.source.name)
+            if result.status in ("error", "link"):
+                unreachable.add(item.id)  # the page could not be had, not a bad page
             return None
         links = _feedback_links(cfg, user, item.id, now)
         epub = render_epub(article, now, links)
@@ -681,6 +727,11 @@ def run(
         reason = choice.reason if choice else ""
         lead = prepare(item, reason)
         if lead is None:
+            # Its page could not be had (a lapsed session, a site that turned the fetch away,
+            # or a link-only source): shown on the web pages as a link instead, and its page
+            # is tried again on the next runs. The day's place goes to the next candidate.
+            if item.id in unreachable and item.id not in by_hand and len(link_picks) < remaining:
+                link_picks.append(item.id)
             continue
         story = _Story(item.id, [lead], reason)
         # Other candidates on the same event join this story instead of taking a slot each.
@@ -702,6 +753,43 @@ def run(
         picked.append(story)
         stories += 1
         found_ready += is_found
+
+    def record_selection(article_id: str) -> None:
+        # An article brought in by a story is recorded with that story's choice.
+        choice = ranking.choices.get(article_id) or ranking.choices.get(story_of.get(article_id, ""))
+        if choice:
+            store.record_selection(
+                user.id, article_id, now, POLICY,
+                choice.score, choice.reason, choice.rank, choice.explore, choice.propensity,
+            )  # fmt: skip
+        else:
+            lead = story_of.get(article_id, article_id)
+            pin = any(lead == item.id for item in pinned)
+            store.record_selection(
+                user.id, article_id, now, "added" if lead in by_hand else "pinned" if pin else "newest-first",
+                None, "", None, False, None,
+            )  # fmt: skip
+
+    report.link_only = link_picks
+    if link_picks and not dry_run:
+        store.mark_delivered(user.id, link_picks, now, link_only=True)
+        for article_id in link_picks:
+            record_selection(article_id)
+
+    # Earlier picks shown only as links, while the age limit lasts: each whose page can be had
+    # now joins this issue after the day's own stories, without taking one of their places.
+    retried: set[str] = set()
+    for row in store.links_waiting(user.id, cutoff.astimezone(UTC).isoformat(timespec="seconds")):
+        source = by_source.get(row.source) or Source(row.source, extract="page")
+        if row.id in taken or source.extract == "link":
+            continue
+        taken.add(row.id)
+        assessed = store.assessment(user.id, row.id)
+        reason = assessed["reason"] if assessed else ""
+        ready = prepare(_stored_item(row, source), reason)
+        if ready is not None:
+            picked.append(_Story(row.id, [ready], reason))
+            retried.add(row.id)
 
     # Articles that are about another page bring that page into their story. The model says
     # which links those are; without it, only short posts are followed, through every link.
@@ -834,21 +922,10 @@ def run(
                         for attachment in group:
                             (cfg.issues_dir / attachment.filename).write_bytes(attachment.data)
                     for article_id in ids:
-                        # An article brought in by a story is recorded with that story's choice.
-                        choice = ranking.choices.get(article_id) or ranking.choices.get(story_of.get(article_id, ""))
-                        if choice:
-                            store.record_selection(
-                                user.id, article_id, now, POLICY,
-                                choice.score, choice.reason, choice.rank, choice.explore, choice.propensity,
-                            )  # fmt: skip
-                        else:
-                            lead = story_of.get(article_id, article_id)
-                            pin = any(lead == item.id for item in pinned)
-                            store.record_selection(
-                                user.id, article_id, now, "added" if lead in by_hand else "pinned" if pin else "newest-first",
-                                None, "", None, False, None,
-                            )  # fmt: skip
+                        if article_id not in retried:  # its selection was recorded when it was picked
+                            record_selection(article_id)
                 report.delivered += [i for i in ids if i not in covered]
+                report.retried += [i for i in ids if i in retried]
                 report.stories += len({story_of.get(i, i) for i in ids})
         except Exception as exc:  # noqa: BLE001 - keep the extraction report
             report.delivery_error = f"{type(exc).__name__}: {exc}"

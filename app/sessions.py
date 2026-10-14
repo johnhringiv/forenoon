@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -27,6 +28,16 @@ MAX_BYTES = 5 * 1024 * 1024
 SIGNED_OUT = "Sign-in needed: "
 
 _silent_until = 0.0  # nothing answered: the recipes container is not running
+STATUS = "status.json"  # where the recipes container says how each session last went
+
+
+def sign_in_ends(recipes_dir: Path, session: str) -> date | None:
+    """The day the site said the session's sign-in ends, as of the last page fetched with it."""
+    try:
+        status = json.loads((recipes_dir / STATUS).read_text(encoding="utf-8"))
+        return date.fromisoformat(status[session]["expires"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def covers(source: Source, url: str) -> bool:

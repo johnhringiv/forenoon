@@ -775,6 +775,13 @@ async fn sources_are_managed_by_admins_only() {
         ("The Blog", "https://blog.example/atom", false, false)
     );
     assert!(admin.get(&site, "/sources").await.text.contains("3 sources, 1 paused, 0 failing."));
+
+    // A link-only feed: its pages are never fetched, and its picks are shown as links.
+    let paper = add("Paper", "https://paper.example/feed", &[("extract", "link")]);
+    let paper: Vec<(&str, &str)> = paper.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    assert_eq!(admin.post(&site, "/sources", &paper).await.location, "/sources?saved=added");
+    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
+    assert!(stored.iter().any(|s| s.name == "Paper" && s.extract == "link"));
 }
 
 #[tokio::test]
@@ -822,6 +829,19 @@ async fn a_feeds_subscriber_session_is_kept_apart_and_never_shown() {
     .unwrap();
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains("Last page with it failed 2026-10-13 06:01: HTTP 403") && text.contains("<details open>"));
+    // A page fetched, and the day the site says its sign-in ends.
+    std::fs::write(
+        site.folder.path().join("recipes/status.json"),
+        format!(
+            r#"{{"feed-{}": {{"at": "2026-10-14T06:01:00-04:00", "ok": true, "note": "fetched", "expires": "2027-10-14"}}}}"#,
+            feed.id
+        ),
+    )
+    .unwrap();
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(
+        text.contains("Last page fetched with it: 2026-10-14 06:01. The site&#39;s sign-in lasts until 2027-10-14.")
+    );
 
     // Not for a reader; not for a recipe or a built-in source; and it goes when removed.
     let mut mary = Browser::default();
@@ -1009,6 +1029,27 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     assert!(page.text.contains(r#"<input name="delivery_time" type="time" value="06:00" required>"#));
     assert!(page.text.contains(r#"name="llm.enabled" value="1" checked"#) && !page.text.contains("changed"));
     assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/settings">Settings</a>"#));
+    // What the model used, priced by the pipeline when it logged each call; a call to a model
+    // with no known price is said apart. Nothing about prices is a setting.
+    assert!(
+        page.text.contains("Today: 0 of 600,000 tokens, about $0.0000.") && !page.text.contains("Price per million")
+    );
+    let now = forenoon_web::db::now_iso();
+    for (model, cost) in [("claude-haiku-5-5", Some(0.0125)), ("claude-new-9", None)] {
+        sqlx::query(
+            "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status,
+             cache_write_tokens, cache_read_tokens, cost) VALUES (?, 'rank', ?, 1000, 200, 'ok', 300, 50000, ?)",
+        )
+        .bind(&now)
+        .bind(model)
+        .bind(cost)
+        .execute(&site.pool)
+        .await
+        .unwrap();
+    }
+    let text = admin.get(&site, "/settings").await.text;
+    assert!(text.contains("Today: 103,000 of 600,000 tokens, about $0.0125.") && text.contains("This month: 103,000"));
+    assert!(text.contains("1 calls this month were to a model with no known price"));
 
     // Every field as the page shows it, with a few changed.
     let defaults = [
@@ -1020,8 +1061,6 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.enabled", "1"),
         ("llm.model", "claude-haiku-5-5"),
         ("llm.daily_token_cap", "600000"),
-        ("llm.input_price", "0.1"),
-        ("llm.output_price", "0.5"),
         ("llm.read_candidates", "40"),
         ("llm.explore_slots", "1"),
         ("llm.group_stories", "1"),
@@ -1157,6 +1196,34 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
         .unwrap();
     }
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_pick_shown_only_as_a_link_is_grayed_and_never_sent() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Post 1", "john", sent).await;
+    article(pool, "p1", "https://paper.example/1", "Paper", "Behind the paywall", "john", sent).await;
+    sqlx::query("UPDATE deliveries SET link_only = 1 WHERE article_id = 'p1'").execute(pool).await.unwrap();
+    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    let page = browser.get(&site, "/").await;
+    let text = &page.text;
+    // In the day's issue, grayed and marked, with a link to the site and no Send button; the
+    // counts are of what was sent.
+    assert!(text.contains("1 article in 1 issue.") && text.contains("1 article (and 1 shown as links only)"));
+    let card = text.split("class=\"link-only\"").nth(1).unwrap().split("</article>").next().unwrap();
+    assert!(card.contains("Behind the paywall") && card.contains("Link only"));
+    assert!(card.contains("href=\"https://paper.example/1\"") && !card.contains("Send to Kindle"));
+    // It can still be rated, but not sent by hand.
+    let csrf = page.csrf();
+    let form = [("csrf", csrf.as_str()), ("article", "p1"), ("back", "/")];
+    assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::CONFLICT);
+    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM send_requests").fetch_one(pool).await.unwrap();
+    assert_eq!(queued, 0);
 }
 
 #[tokio::test]

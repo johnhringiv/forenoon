@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     article_id TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
     story TEXT NOT NULL DEFAULT '',
+    link_only INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS feedback_events (
@@ -46,7 +47,10 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     status TEXT NOT NULL,
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost REAL
 );
 CREATE TABLE IF NOT EXISTS selections (
     user_id TEXT NOT NULL,

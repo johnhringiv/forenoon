@@ -43,7 +43,9 @@ what its own users configure and delivers only to the addresses its admin has se
   and:
   - pinned: its articles are taken before all other sources.
   - where the text comes from: the page, falling back to the feed (default); always the
-    page; or only the feed, in which case the article page is never fetched.
+    page; only the feed, in which case the article page is never fetched; or nowhere
+    (link-only), in which case its pages are never fetched and what the ranking picks from it
+    is shown on the newsstand as a link, not sent.
   - paused: kept, but not read.
 
   A source's address is checked within a minute of being added or saved: the scheduler
@@ -69,9 +71,11 @@ what its own users configure and delivers only to the addresses its admin has se
   screen (Xvfb), since some sites admit only a browser, and what it keeps of the session is
   in its own volume. Nothing answers a CAPTCHA: a site that asks for one, shows its paywall
   (the cookie has expired) or keeps the browser out is reported on the feed's row. When a
-  session needs a fresh cookie, its
-  articles are held back (not sent as the feed's summary) and the run's alert email names
-  the feed. Pages the source links to on other sites are fetched as usual, without the
+  session needs a fresh cookie, its picks are shown as links (step 4 of section 3), not sent as the
+  feed's summary, and the run's alert email names the feed. Once a page has been fetched with
+  it, the feed's row shows the day the site says its sign-in ends (for the sites whose
+  sign-in cookie is known: the FT and the NYT), and the alert email says so from 14 days
+  before. Pages the source links to on other sites are fetched as usual, without the
   session.
 
 - **Settings** for the whole install (delivery time, the format, ranking and its model,
@@ -98,19 +102,34 @@ be read it keeps the previous settings and logs the error. For each user:
    an unchanged feed is skipped. A response that is not a feed, or any status other than 200
    or 304, counts as a failed source for this run. A feed entry that links to a site's front
    page rather than an article is ignored.
-2. **Select candidates.** Items older than `max_age_days` (default 3) are ignored, as are
-   items already delivered to this user and items whose extraction previously failed. One
-   exception keeps late arrivals: an item a feed lists for the first time counts as new even
-   when its own date is older (up to 30 days), provided the feed was already being followed.
-   Every window that finds candidates reaches back the same `max_age_days`, so nothing falls
-   between two daily runs and a missed run loses nothing younger than that. At most
-   5 items per source are considered per run.
+2. **Select candidates.** An item is a candidate for `max_age_days` (default 3) from when
+   it was first seen here, not from the date its feed gives: posts are often dated before
+   they appear, and some carry no date. Items already delivered to this user, and items
+   whose extraction previously failed, are not candidates; nor is an item dated more than 30
+   days ago (an old post a feed has brought back). A feed's first read has nothing to count
+   from, so there its own dates decide and only its newest 20 are taken; the rest of its back
+   catalogue is recorded as seen before the feed was followed and never becomes a candidate.
+   A feed's candidates are what it lists now plus what earlier runs read from it within the
+   window and the model never weighed for this user, so an article is not lost because the
+   feed moved on or the run that would have weighed it did not happen; one the model weighed
+   and passed over comes back only while the feed still lists it. There is no limit per
+   source: the model weighs at most `llm.max_candidates`, taken round-robin across sources,
+   and without the model the daily cap is the limit. Every window that finds candidates
+   reaches back the same `max_age_days`, so nothing falls between two daily runs.
 3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
    (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
    sources with the newest item of each source first.
 4. **Cap.** Candidates are processed in that order until the user's daily cap is reached. The
    cap counts stories delivered during the local calendar day (section 7e), so a second run on
    the same day only sends what is left of the cap. Most stories are a single article.
+   **Link-only picks.** A candidate whose page cannot be had (a lapsed subscriber session, a
+   site that turns the fetch away, a link-only feed) is not sent and does not take a place:
+   the next candidate does. It is recorded as a link-only pick, at most as many a day as the
+   cap, and shown on the newsstand as a grayed card with the feed's title and summary and a
+   link to the site; it can be rated but not sent by hand. Every run tries its page again
+   while it is younger than `max_age_days` and unrated (except for a link-only feed's); once
+   it is had, it is sent with that run's issue after the day's own stories, without taking
+   one of their places, and its card moves to that issue.
 5. **Extract, render, deliver** (sections 4 to 6).
 6. **Report.** A Markdown and JSON report is written to `reports/` in the data folder.
 
@@ -267,10 +286,14 @@ source).
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
   checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
-  later batches are skipped. Every call is logged with model, input and output tokens and outcome;
-  `forenoon usage` prints the log, today's total and this month's, each with an estimated cost
-  from the prices in `llm.input_price` and `llm.output_price` (the API does not report
-  prices).
+  later batches are skipped; the cap counts cached input too. Every call is logged with
+  model, input, cache-write, cache-read and output tokens, outcome and cost. The cost is
+  worked out when the call is logged, from a table of each model's published prices kept in
+  the code (`app/prices.py`; the API does not report prices), so cached input is priced at
+  the cache's rates and a long prompt at the model's long-prompt rates. A model missing from
+  the table is logged without a cost and reported as unpriced, never guessed. Calls logged
+  before cached tokens were kept apart are priced as if none was cached. `forenoon usage`
+  prints the log, today's total and this month's; the Settings page shows the totals.
 - **Fallback.** With no API key, or when fewer than half the candidates end up scored
   (failed or timed-out calls, unusable answers, the cap reached), the run uses the
   newest-first order, the report says why, and the operator is alerted. When some batches
@@ -340,7 +363,7 @@ source).
   articles, in the issue's order: navigation is removed, the original URL is taken from the
   issue (minus tracking parameters, including the marker Calibre's FT recipe adds), and images
   are taken from the issue itself. Every article in the issue becomes a
-  candidate (the 5 newest when the source is pinned).
+  candidate.
 - Recipe articles are extracted from the issue only; their pages are never fetched. From
   there they are treated like feed articles: sanitised, ranked, capped, rated and
   deduplicated by URL against every other source.

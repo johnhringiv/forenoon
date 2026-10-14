@@ -23,8 +23,10 @@ class LlmError(Exception):
 @dataclass(frozen=True)
 class Reply:
     data: dict[str, Any]
-    input_tokens: int
+    input_tokens: int  # read at the full price; the cached part is apart, below
     output_tokens: int
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
 
 
 class Backend(Protocol):
@@ -64,11 +66,11 @@ class ClaudeBackend:
         except self._anthropic.APIError as exc:
             raise LlmError(f"{type(exc).__name__}: {exc}") from exc
         usage = response.usage
-        # Cached input is reported apart from the rest; the daily cap counts all of it.
-        sent = usage.input_tokens + (usage.cache_creation_input_tokens or 0) + (usage.cache_read_input_tokens or 0)
+        # Cached input is reported, and priced, apart from the rest; the daily cap counts all of it.
+        written, read = usage.cache_creation_input_tokens or 0, usage.cache_read_input_tokens or 0
         for block in response.content:
             if block.type == "tool_use" and isinstance(block.input, dict):
-                return Reply(block.input, sent, usage.output_tokens)
+                return Reply(block.input, usage.input_tokens, usage.output_tokens, written, read)
         raise LlmError(f"no structured answer (stop reason: {response.stop_reason})")
 
 

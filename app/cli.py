@@ -242,25 +242,28 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
 
 def _usage(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
-
-    def cost(tokens_in: int, tokens_out: int) -> float:
-        return (tokens_in * cfg.llm.input_price + tokens_out * cfg.llm.output_price) / 1_000_000
-
     for row in store.llm_call_rows():
+        cost = "      ?" if row["cost"] is None else f"${row['cost']:.4f}"
+        cached = (
+            f" cache +{row['cache_write_tokens']}/{row['cache_read_tokens']}"
+            if row["cache_read_tokens"] or row["cache_write_tokens"]
+            else ""
+        )
         print(
-            f"{row['created_at']}  {row['purpose']:<6} {row['model']:<20} in {row['input_tokens']:>6}"
-            f"  out {row['output_tokens']:>5}  ${cost(row['input_tokens'], row['output_tokens']):.4f}"
-            f"  {row['status']} {row['error']}"
+            f"{row['created_at']}  {row['purpose']:<6} {row['model']:<20} in {row['input_tokens']:>6}{cached}"
+            f"  out {row['output_tokens']:>5}  {cost}  {row['status']} {row['error']}"
         )
     utc = ZoneInfo("UTC")
     day = datetime.now(ZoneInfo(cfg.timezone)).replace(hour=0, minute=0, second=0, microsecond=0)
-    today = store.llm_tokens_split_since(day.astimezone(utc).isoformat(timespec="seconds"))
-    month = store.llm_tokens_split_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
-    print(f"\nToday: {sum(today)} of {cfg.llm.daily_token_cap} tokens, about ${cost(*today):.4f}.")
-    print(f"This month: {sum(month)} tokens, about ${cost(*month):.2f}.")
+    today = store.llm_usage_since(day.astimezone(utc).isoformat(timespec="seconds"))
+    month = store.llm_usage_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
+    print(f"\nToday: {today['tokens']} of {cfg.llm.daily_token_cap} tokens, about ${today['cost']:.4f}.")
+    print(f"This month: {month['tokens']} tokens, about ${month['cost']:.2f}.")
+    if month["unpriced"]:
+        print(f"{month['unpriced']} calls this month were to a model with no known price, and are not counted.")
     print(
-        f"Cost is an estimate at ${cfg.llm.input_price:g} in and ${cfg.llm.output_price:g} out per million"
-        " tokens (llm.input_price, llm.output_price); every call is priced at today's rates."
+        "Cost is an estimate from the published prices kept in app/prices.py: each call at its own"
+        " model's rates, with cached input at the cache's rates. Cache is the tokens written/read."
     )
     return 0
 

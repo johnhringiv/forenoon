@@ -199,7 +199,7 @@ def read(
             log.warning("reading pass batch failed: %s", exc)
             continue
         got = _validated(reply.data, batch)
-        store.log_llm_call("read", cfg.model, reply.input_tokens, reply.output_tokens, "ok" if got else "invalid")
+        store.log_llm_reply("read", cfg.model, reply, "ok" if got else "invalid")
         out.update(got)
     for article_id, verdict in out.items():
         store.record_review(article_id, verdict.complete, verdict.problem, cfg.model)

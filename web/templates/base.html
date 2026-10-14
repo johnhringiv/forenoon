@@ -39,6 +39,8 @@ h3 a:hover { text-decoration:underline }
 .meta { margin-top:auto; padding-top:.5rem; border-top:1px solid var(--line); font-size:.78rem;
   color:var(--soft); display:flex; flex-wrap:wrap; gap:.3rem .8rem }
 /* A story: its lead article beside (or above) the other articles delivered with it. */
+article.link-only { opacity:.62; filter:grayscale(1); border-style:dashed }
+article.link-only:hover, article.link-only:focus-within { opacity:1; filter:none }
 article.story { grid-column:span 2; flex-direction:row; flex-wrap:wrap; border:2px solid var(--accent) }
 /* Across the top of the whole card, so its two halves read as one thing. */
 .story-head { flex:0 0 100%; margin:0; padding:.3rem .9rem; background:var(--accent); color:var(--card);

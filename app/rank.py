@@ -222,7 +222,7 @@ def rank(
             continue
         got = _validated(reply.data, batch)
         ok = len(got) >= max(1, len(batch) // 2)
-        store.log_llm_call("rank", cfg.model, reply.input_tokens, reply.output_tokens, "ok" if ok else "invalid")
+        store.log_llm_reply("rank", cfg.model, reply, "ok" if ok else "invalid")
         if ok:
             scores.update(got)
         else:
@@ -338,7 +338,7 @@ def group_stories(
     except LlmError as exc:
         store.log_llm_call("group", cfg.model, 0, 0, "error", str(exc)[:300])
         return {}
-    store.log_llm_call("group", cfg.model, reply.input_tokens, reply.output_tokens, "ok")
+    store.log_llm_reply("group", cfg.model, reply, "ok")
     by_id = {item.id: item for item in top}
     groups: dict[str, list[Item]] = {}
     entries = reply.data.get("stories")
@@ -417,7 +417,7 @@ def subject_links(
     except LlmError as exc:
         store.log_llm_call("links", cfg.model, 0, 0, "error", str(exc)[:300])
         return None
-    store.log_llm_call("links", cfg.model, reply.input_tokens, reply.output_tokens, "ok")
+    store.log_llm_reply("links", cfg.model, reply, "ok")
     counts = {a["id"]: len(a["links"]) for a in articles}
     out: dict[str, list[int]] = {}
     entries = reply.data.get("articles")

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import prices
 from .config import Source, User
 from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     article_id TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
     story TEXT NOT NULL DEFAULT '',
+    link_only INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS feedback_events (
@@ -62,7 +64,10 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
     status TEXT NOT NULL,
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost REAL
 );
 CREATE TABLE IF NOT EXISTS selections (
     user_id TEXT NOT NULL,
@@ -115,6 +120,10 @@ CREATE TABLE IF NOT EXISTS assessments (
 """
 
 
+def _utc(when: datetime) -> str:
+    return when.astimezone(UTC).isoformat(timespec="seconds")
+
+
 def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -132,6 +141,7 @@ class ArticleRow:
     word_count: int
     image_url: str = ""
     description: str = ""
+    first_seen: str = ""
 
 
 @dataclass(frozen=True)
@@ -158,9 +168,26 @@ class Store:
         if "reason" not in {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}:
             with self.db:
                 self.db.execute("ALTER TABLE ratings ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
-        if "story" not in {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}:
+        delivered = {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}
+        if "story" not in delivered:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN story TEXT NOT NULL DEFAULT ''")
+        if "link_only" not in delivered:
+            with self.db:
+                self.db.execute("ALTER TABLE deliveries ADD COLUMN link_only INTEGER NOT NULL DEFAULT 0")
+        calls = {row["name"] for row in self.db.execute("PRAGMA table_info(llm_calls)")}
+        if "cost" not in calls:
+            # Calls logged before cached tokens were kept apart: their input is priced as if
+            # none of it was cached, the best that can be said of them now.
+            with self.db:
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0")
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0")
+                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cost REAL")
+                old = self.db.execute("SELECT id, model, input_tokens, output_tokens FROM llm_calls").fetchall()
+                self.db.executemany(
+                    "UPDATE llm_calls SET cost = ? WHERE id = ?",
+                    [(prices.cost(r["model"], r["input_tokens"], r["output_tokens"]), r["id"]) for r in old],
+                )
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -393,13 +420,42 @@ class Store:
 
     # articles
 
-    def upsert_article(self, id: str, url: str, source: str, title: str, author: str, published: str | None) -> None:
+    def upsert_article(
+        self,
+        id: str,
+        url: str,
+        source: str,
+        title: str,
+        author: str,
+        published: str | None,
+        description: str = "",
+        seen: datetime | None = None,
+    ) -> None:
+        """Recorded once, when first `seen` (default now). `description` is the feed's summary,
+        until a page gives one."""
+        stamp = seen.astimezone(UTC).isoformat(timespec="seconds") if seen else now_iso()
         with self.db:
             self.db.execute(
-                "INSERT INTO articles (id, url, source, title, author, published, first_seen)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-                (id, url, source, title, author, published, now_iso()),
+                "INSERT INTO articles (id, url, source, title, author, published, first_seen, description)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                (id, url, source, title, author, published, stamp, description),
             )
+
+    def unoffered(self, user_id: str, source: str, since: datetime, dated_after: datetime) -> list[ArticleRow]:
+        """A source's articles first seen since `since` (and not dated before `dated_after`) that
+        this reader has not had and the model has never weighed for them, newest first: what a
+        missed run, or a feed that has since moved on, would otherwise lose."""
+        rows = self.db.execute(
+            "SELECT id, url, source, title, author, published, status, reason, word_count, image_url, description,"
+            " first_seen FROM articles a WHERE source = ?1 AND status != 'failed' AND first_seen >= ?3"
+            " AND (published IS NULL OR published >= ?4)"
+            " AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = ?2 AND d.article_id = a.id)"
+            " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?2 AND r.article_id = a.id)"
+            " AND NOT EXISTS (SELECT 1 FROM assessments s WHERE s.user_id = ?2 AND s.article_id = a.id)"
+            " ORDER BY first_seen DESC, COALESCE(published, '') DESC",
+            (source, user_id, _utc(since), _utc(dated_after)),
+        ).fetchall()
+        return [ArticleRow(**dict(row)) for row in rows]
 
     def has_articles_from(self, source: str) -> bool:
         """Whether this source has been read before."""
@@ -430,7 +486,7 @@ class Store:
     def get_article(self, id: str) -> ArticleRow | None:
         row = self.db.execute(
             "SELECT id, url, source, title, author, published, status, reason, word_count,"
-            " image_url, description FROM articles WHERE id = ?",
+            " image_url, description, first_seen FROM articles WHERE id = ?",
             (id,),
         ).fetchone()
         return ArticleRow(**dict(row)) if row else None
@@ -504,21 +560,46 @@ class Store:
         return [row["article_id"] for row in rows]
 
     def mark_delivered(
-        self, user_id: str, article_ids: list[str], when: datetime, stories: dict[str, str] | None = None
+        self,
+        user_id: str,
+        article_ids: list[str],
+        when: datetime,
+        stories: dict[str, str] | None = None,
+        link_only: bool = False,
     ) -> None:
-        """`stories` maps an article to its story; articles sharing one count once against the cap."""
+        """`stories` maps an article to its story; articles sharing one count once against the cap.
+
+        `link_only`: picked, but its page could not be had, so only the link is shown on the web
+        pages and nothing is sent. Sending it later turns it into a delivery on that day.
+        """
         stamp = when.astimezone(UTC).isoformat(timespec="seconds")
         with self.db:
             self.db.executemany(
-                "INSERT OR IGNORE INTO deliveries (user_id, article_id, delivered_at, story) VALUES (?, ?, ?, ?)",
-                [(user_id, a, stamp, (stories or {}).get(a, "")) for a in article_ids],
+                "INSERT INTO deliveries (user_id, article_id, delivered_at, story, link_only) VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(user_id, article_id) DO UPDATE SET delivered_at = excluded.delivered_at,"
+                " story = excluded.story, link_only = 0"
+                " WHERE deliveries.link_only = 1 AND excluded.link_only = 0",
+                [(user_id, a, stamp, (stories or {}).get(a, ""), int(link_only)) for a in article_ids],
             )
+
+    def links_waiting(self, user_id: str, since: str) -> list[ArticleRow]:
+        """Picks shown only as links since `since` that the reader has not rated, oldest first:
+        each run tries their pages again."""
+        rows = self.db.execute(
+            "SELECT a.id, a.url, a.source, a.title, a.author, a.published, a.status, a.reason, a.word_count,"
+            " a.image_url, a.description, a.first_seen FROM deliveries d JOIN articles a ON a.id = d.article_id"
+            " WHERE d.user_id = ?1 AND d.link_only = 1 AND d.delivered_at >= ?2"
+            " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = a.id)"
+            " ORDER BY d.delivered_at, d.rowid",
+            (user_id, since),
+        ).fetchall()
+        return [ArticleRow(**dict(row)) for row in rows]
 
     def delivered_on(self, user_id: str, utc_start: str, utc_end: str) -> int:
         """Stories delivered in the period: articles that share a story count once."""
         return self.db.execute(
             "SELECT COUNT(DISTINCT CASE WHEN story = '' THEN article_id ELSE story END) FROM deliveries"
-            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ?"
+            " WHERE user_id = ? AND delivered_at >= ? AND delivered_at < ? AND link_only = 0"
             # A book the reader asked for by hand takes none of the day's places.
             " AND NOT EXISTS (SELECT 1 FROM selections s WHERE s.user_id = deliveries.user_id"
             " AND s.article_id = deliveries.article_id AND s.policy = 'requested')",
@@ -602,30 +683,49 @@ class Store:
     # llm use and selection records
 
     def log_llm_call(
-        self, purpose: str, model: str, input_tokens: int, output_tokens: int, status: str, error: str = ""
+        self,
+        purpose: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        status: str,
+        error: str = "",
+        cache_write: int = 0,
+        cache_read: int = 0,
     ) -> None:
+        """One call, with what it cost at the model's published prices (none when unknown)."""
+        spent = prices.cost(model, input_tokens, output_tokens, cache_write, cache_read)
         with self.db:
             self.db.execute(
-                "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (now_iso(), purpose, model, input_tokens, output_tokens, status, error),
+                "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error,"
+                " cache_write_tokens, cache_read_tokens, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (now_iso(), purpose, model, input_tokens, output_tokens, status, error, cache_write, cache_read, spent),
             )
 
+    def log_llm_reply(self, purpose: str, model: str, reply, status: str) -> None:
+        """A call that was answered: its tokens as the API counted them."""
+        self.log_llm_call(
+            purpose, model, reply.input_tokens, reply.output_tokens, status,
+            cache_write=reply.cache_write_tokens, cache_read=reply.cache_read_tokens,
+        )  # fmt: skip
+
     def llm_tokens_since(self, start: str) -> int:
+        """Every token since `start`, cached ones too: what the daily cap counts."""
         row = self.db.execute(
-            "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS n FROM llm_calls WHERE created_at >= ?",
+            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS n"
+            " FROM llm_calls WHERE created_at >= ?",
             (start,),
         ).fetchone()
         return row["n"]
 
-    def llm_tokens_split_since(self, start: str) -> tuple[int, int]:
-        """Input and output tokens logged since `start`."""
-        row = self.db.execute(
-            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) FROM llm_calls"
-            " WHERE created_at >= ?",
+    def llm_usage_since(self, start: str) -> sqlite3.Row:
+        """Tokens and cost since `start`. `unpriced` counts calls to a model with no known price."""
+        return self.db.execute(
+            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS tokens,"
+            " COALESCE(SUM(cost), 0) AS cost, COUNT(*) FILTER (WHERE cost IS NULL AND status != 'error') AS unpriced"
+            " FROM llm_calls WHERE created_at >= ?",
             (start,),
         ).fetchone()
-        return row[0], row[1]
 
     def llm_call_rows(self, limit: int = 30) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", (limit,)).fetchall()[::-1]

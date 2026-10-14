@@ -103,7 +103,7 @@ def learn(
         log.warning("reader notes not updated: %s", exc)
         return False
     notes = _validated(reply.data)
-    store.log_llm_call("learn", cfg.model, reply.input_tokens, reply.output_tokens, "ok")
+    store.log_llm_reply("learn", cfg.model, reply, "ok")
     # Nothing reliable to say leaves the note as it is; the attempt still counts as this week's.
     store.set_learned(user.id, "\n".join(notes) if notes else user.learned, now, changed=bool(notes))
     log.info("reader notes for %s: %d lines", user.id, len(notes))

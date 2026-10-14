@@ -125,13 +125,14 @@ def command(folder: str, recipe: str, target: Path, out: Path, login: dict[str, 
     return cmd
 
 
-def record(out: Path, folder: str, ok: bool, note: str, running: bool = False) -> None:
-    """Keep how this recipe's last run went, or that one has begun, for the Sources page."""
+def record(out: Path, folder: str, ok: bool, note: str, running: bool = False, expires: str = "") -> None:
+    """Keep how this recipe's last run went, or that one has begun, for the Sources page.
+    For a session, `expires` is the day its sign-in ends, when the site says."""
     with STATUS_LOCK:  # the page fetcher records from its own thread
-        _record(out, folder, ok, note, running)
+        _record(out, folder, ok, note, running, expires)
 
 
-def _record(out: Path, folder: str, ok: bool, note: str, running: bool) -> None:
+def _record(out: Path, folder: str, ok: bool, note: str, running: bool, expires: str = "") -> None:
     try:
         status = json.loads((out / STATUS).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -140,6 +141,8 @@ def _record(out: Path, folder: str, ok: bool, note: str, running: bool) -> None:
         status = {}
     at = datetime.now().astimezone().isoformat(timespec="seconds")
     status[folder] = {"at": at, "ok": ok, "running": running, "note": note[:300]}
+    if expires:
+        status[folder]["expires"] = expires
     try:
         write_json(out / STATUS, status)
     except OSError as exc:
@@ -298,6 +301,8 @@ SITES = {
     "nytimes.com": _nyt_signed_in,
 }
 
+# The cookie each site keeps a reader's sign-in in, for saying when it ends.
+SIGN_IN_COOKIES = {"ft.com": "FTSession_s", "nytimes.com": "NYT-S"}
 BROWSER_STATE = Path(os.environ.get("RECIPES_BROWSER", "/browser"))
 CHALLENGE_TITLES = ("Just a moment...", "Security Verification")
 _last_visit: dict[str, float] = {}
@@ -437,9 +442,10 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page) -
             name, url = str(wanted.get("session", "")), str(wanted.get("url", ""))
             if not SESSION.fullmatch(name):
                 raise ValueError("not a session")
-            page = fetcher(url, read_session(name, logins), name)
+            session = read_session(name, logins)
+            page = fetcher(url, session, name)
             _answer(request.with_suffix(".html"), page)
-            record(out, name, True, f"fetched a page ({len(page)} bytes)")
+            record(out, name, True, f"fetched a page ({len(page)} bytes)", expires=sign_in_ends(name, session))
         except (OSError, ValueError) as exc:
             request.unlink(missing_ok=True)
             _answer(request.with_suffix(".err"), str(exc)[:300].encode())
@@ -447,6 +453,30 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page) -
                 record(out, name, False, str(exc)[:300])
             log(f"page for {name} not fetched: {exc}")
     return len(asked)
+
+
+def sign_in_ends(name: str, session: dict[str, str], state_dir: Path = BROWSER_STATE) -> str:
+    """The day the site's sign-in ends, as the browser was last told: the expiry of the cookie
+    the site keeps it in. "" for a site not in SIGN_IN_COOKIES (its other cookies, preferences
+    and the like, often outlive the sign-in, so none of them is a guide), or when the site has
+    not said (a pasted cookie carries no expiry until the site sends it again)."""
+    domain = session.get("domain", "").lower()
+    wanted = SIGN_IN_COOKIES.get(domain)
+    try:
+        saved = json.loads(_state_file(name, session, state_dir).read_text(encoding="utf-8"))
+        cookies = saved.get("cookies", [])
+    except (OSError, ValueError, AttributeError):
+        return ""
+    ends = [
+        cookie["expires"]
+        for cookie in cookies
+        if isinstance(cookie, dict)
+        and cookie.get("name") == wanted
+        and isinstance(cookie.get("expires"), int | float)
+        and cookie["expires"] > 0
+        and on_site("https://" + str(cookie.get("domain", "")).lstrip("."), domain)
+    ]
+    return datetime.fromtimestamp(max(ends)).astimezone().date().isoformat() if ends else ""
 
 
 def fetch_forever(out: Path = OUT) -> None:
