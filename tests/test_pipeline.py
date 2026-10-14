@@ -1169,9 +1169,16 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     # For the next issue: it leads the day, ahead of the pinned source, and takes a place.
     assert store.waiting_adds("john") == [next_id]
     sent.clear()
-    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
+    issue = dataclasses.replace(cfg, format="issue")
+    report = run(issue, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
     assert report.delivered[0] == next_id and len(report.delivered) == 2 and kept not in report.delivered
     assert store.get_article(report.delivered[1]).title == "Post 9"
+    # Marked as the reader's own in the book's contents and on its page; the other is not.
+    book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
+    contents = book.read("OEBPS/contents.xhtml").decode()
+    assert contents.count("Added by you") == 1 and "Added by you · found.example" in contents
+    assert '<p class="meta">Added by you</p>' in book.read("OEBPS/a01.xhtml").decode()
+    assert "Added by you" not in book.read("OEBPS/a02.xhtml").decode()
     chosen = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
     assert (chosen[next_id], chosen[now_id]) == ("added", "requested")
     assert store.waiting_adds("john") == []

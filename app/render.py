@@ -77,6 +77,7 @@ class Article:
     language: str = "en"
     extra_css: str = ""
     reason: str = ""  # why it was picked; model output, escaped like any other text
+    added: bool = False  # the reader added it by hand for this issue
     discussion_url: str = ""  # comment thread where the article was found
     # Stories: several articles on one subject, delivered together.
     story: str = ""  # on an article delivered in place of the post that pointed to it: the credit
@@ -147,6 +148,8 @@ def _content(article: Article, feedback_links: dict[str, str], rating_style: str
     byline_html = escape(" · ".join(part for part in byline if part))
     footer = _footer(feedback_links, rating_style)
     why = f'<p class="meta">Picked because: {escape(article.reason)}</p>\n' if article.reason else ""
+    if article.added:
+        why = '<p class="meta">Added by you</p>\n' + why
     talk = f" · <a href={quoteattr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
     if article.continues:
         why += f'<p class="meta">More on: {escape(article.continues)}</p>\n'
@@ -308,7 +311,13 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
     for index, entry in enumerate(entries, 1):
         a = entry.article
         detail = " · ".join(
-            part for part in (a.source, f"{a.reading_minutes} min" if a.reading_minutes else "") if part
+            part
+            for part in (
+                "Added by you" if a.added else "",
+                a.source,
+                f"{a.reading_minutes} min" if a.reading_minutes else "",
+            )
+            if part
         )
         if a.continues:
             # A later article of the story above: listed under it, without repeating the reason.
