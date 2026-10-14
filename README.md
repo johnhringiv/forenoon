@@ -2,18 +2,20 @@
 
 **A morning paper for your e-reader, edited for one reader: you.**
 
-Forenoon is for people with two problems. You spend too much time scrolling, reading
-whatever a feed decided to show you. And your Kindle sits unused, because what you actually
-like to read (long technical blog posts, real reporting) is not easy to get onto it.
+Forenoon is made to cut the time you spend scrolling, find the writing you actually care
+about, and make your e-reader useful for more than books. Reading on e-ink, away from a
+feed, helps with the scrolling too.
 
 Other aggregators exist. They are paid for by ads or pushed along by an agenda, and they
 know far less about what you want. Forenoon runs on your own machine and has one job:
 find what you would choose to read, and put it where you read best.
 
-Every morning it goes through your feeds, your newspaper subscriptions and the front pages
-of Hacker News and Lobsters, has Claude choose from them against a plain-English description
-of your interests, and emails the result to your Kindle as one book with a contents page.
-Each article ends with rating links, and your ratings shape the next day's choices.
+Every morning it reads your RSS feeds, pulls the publications you subscribe to through
+Calibre recipes, and searches aggregation sites (Hacker News, Lobsters). Claude chooses from
+all of it against a plain-English description of your interests, and the result is emailed
+to your Kindle as one book with a contents page. Each article ends with rating links, so
+you can say what you thought without leaving your e-reader, and your ratings shape the next
+day's choices.
 
 ## What it does
 
@@ -41,8 +43,7 @@ Each article ends with rating links, and your ratings shape the next day's choic
   SQLite file and a folder on your own machine. The only public endpoint accepts signed
   rating links and nothing else.
 
-Everything is set up in the browser: sources, interests, delivery time and the rest. There
-is no configuration file.
+Everything is set up in the browser: sources, interests, delivery time and the rest.
 
 What it does today is described in full in [docs/PRD.md](docs/PRD.md).
 
@@ -65,7 +66,7 @@ uv run forenoon golden --out run/out                           # rendering test 
 
 To deliver for real, set the mail server in the environment (`FORENOON_SMTP_HOST`,
 `FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`) and run
-`forenoon run`. There is no configuration file: what belongs to the deploy is in the
+`forenoon run`. What belongs to the deploy is in the
 environment (`deploy/.env.example` lists it all), and everything else is set on the web
 pages and kept in the database.
 
