@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}What Forenoon has learned · Forenoon{% endblock %}
+{% block header %}
+<p>What your ratings have shown, kept as notes for the model that chooses your articles.</p>
+<div class="bar"><a href="/">Back to the newsstand</a> <a href="/account">Account</a>
+<div class="who">{{ name }}
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+{% endblock %}
+{% block main %}
+{% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+{% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
+<form class="sheet wide" method="post" action="/learned">
+<h2>The notes</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="hint">{% if let Some(day) = rewritten %}Last rewritten from your ratings on {{ day }}.{% else %}Nothing has been learned yet: the first notes are written once you have rated ten articles.{% endif %} About once a week, when there are new ratings, the model rewrites these from everything you have rated. It is given them beside your interests, and where the two disagree your interests win.</p>
+<label>What your ratings have shown <textarea name="notes" rows="10" maxlength="2000">{{ notes }}</textarea></label>
+<p class="hint">You can correct or empty them. An edit is a starting point, not a lock: the next rewrite keeps what your ratings still bear out and may change the rest. What you want held for good belongs in your interests, on the <a href="/account">account page</a>.</p>
+<button class="primary">Save the notes</button>
+</form>
+{% if !versions.is_empty() %}
+<h2>Earlier versions <span>newest first</span></h2>
+{% for version in versions %}
+<div class="shelf">
+<p class="kicker">{{ version.when }} · {{ version.who }}{% if version.current %} · in use{% endif %}</p>
+<p class="desc notes">{{ version.notes }}</p>
+{% if !version.current %}<form method="post" action="/learned/restore"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ version.id }}"><button>Restore this version</button></form>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

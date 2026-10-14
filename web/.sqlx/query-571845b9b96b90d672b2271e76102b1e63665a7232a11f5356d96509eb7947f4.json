@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT learned AS notes, learned_at FROM users WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "notes",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "learned_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "571845b9b96b90d672b2271e76102b1e63665a7232a11f5356d96509eb7947f4"
+}

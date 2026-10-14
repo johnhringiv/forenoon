@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET learned = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5a9b94dac2dd03bc7dcdb6c025a9c42828b47cfc67e2f19ef8d3679ac564abb3"
+}

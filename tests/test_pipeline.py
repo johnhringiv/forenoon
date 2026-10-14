@@ -5,7 +5,7 @@ import io
 import os
 import re
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -1170,3 +1170,67 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     chosen = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
     assert (chosen[next_id], chosen[now_id]) == ("added", "requested")
     assert store.waiting_adds("john") == []
+
+
+def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_given_to_the_model(env):
+    from app.learn import learn
+    from app.llm import Reply
+    from app.rank import reader_profile
+
+    cfg, store, _ = env
+    cfg = _llm_cfg(cfg)
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, interests) VALUES ('john', 'John', 'x', 'x', 'Compilers.')"
+    )
+    store.db.commit()
+    asked = []
+
+    answer = {"notes": ["  - Finishes long technical pieces.  ", "x" * 500, 7, "Finishes long technical pieces."]}
+
+    class Notes:
+        def structured(self, system, user, schema, shared=""):
+            asked.append(user)
+            return Reply(answer, 900, 80)
+
+    def rate(n: int, when: str) -> None:
+        store.upsert_article(f"r{n}", f"https://blog.example/r{n}", "Blog", f"Rated {n}", "", None)
+        store.record_feedback("john", f"r{n}", "f5", "kindle", when)
+
+    reader = store.readers()[0]
+    start, day = "2026-03-10T00:00:00+00:00", timedelta(days=1)
+    for n in range(9):
+        rate(n, "2026-03-01T10:00:00+00:00")
+    assert not learn(cfg.llm, Notes(), store, reader, start, NOW) and not asked  # too few to say anything
+    rate(9, "2026-03-01T10:00:00+00:00")
+    assert learn(cfg.llm, Notes(), store, reader, start, NOW)
+    # Short single lines, no repeats, nothing that is not text; the ratings went as material.
+    reader = store.readers()[0]
+    assert reader.learned == "Finishes long technical pieces.\n" + "x" * 200
+    assert "<interests>\nCompilers.\n</interests>" in asked[0] and '"title": "Rated 3"' in asked[0]
+    assert "<learned>\nFinishes long technical pieces." in reader_profile(reader, store)
+    assert "<learned>" not in reader_profile(dataclasses.replace(reader, learned=""), store)
+    history = store.db.execute("SELECT author, notes FROM profile_history").fetchall()
+    assert [(h["author"], h["notes"]) for h in history] == [("agent", reader.learned)]
+
+    # Not again within the week, nor later without new ratings; then with them, seeing its own notes.
+    for n in range(10, 16):
+        rate(n, "2026-03-11T10:00:00+00:00")
+    assert not learn(cfg.llm, Notes(), store, reader, start, NOW + 3 * day)
+    assert learn(cfg.llm, Notes(), store, reader, start, NOW + 8 * day)
+    assert "<current_notes>\nFinishes long technical pieces." in asked[-1]
+    assert not learn(cfg.llm, Notes(), store, reader, start, NOW + 30 * day) and len(asked) == 2
+    # Nothing reliable to say leaves the note alone; switched off, the model is not asked.
+    for n in range(16, 22):
+        rate(n, "2026-04-20T10:00:00+00:00")
+    answer["notes"] = []
+    assert not learn(cfg.llm, Notes(), store, reader, start, NOW + 60 * day) and len(asked) == 3
+    assert (
+        store.readers()[0].learned == reader.learned
+        and len(store.db.execute("SELECT 1 FROM profile_history").fetchall()) == 2
+    )
+    off = dataclasses.replace(cfg.llm, learn=False)
+    for n in range(22, 28):
+        rate(n, "2026-06-20T10:00:00+00:00")
+    assert not learn(off, Notes(), store, reader, start, NOW + 120 * day) and len(asked) == 3

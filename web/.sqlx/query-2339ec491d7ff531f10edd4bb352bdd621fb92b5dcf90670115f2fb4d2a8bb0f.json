@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO profile_history (user_id, notes, author, created_at) VALUES (?, ?, 'reader', ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2339ec491d7ff531f10edd4bb352bdd621fb92b5dcf90670115f2fb4d2a8bb0f"
+}

@@ -16,13 +16,13 @@
 <label>Display name <input name="name" value="{{ user.name }}" maxlength="80" required></label>
 <label>Time zone <input name="timezone" value="{{ user.timezone }}" maxlength="64" required></label>
 <p class="hint">A zone name such as America/New_York or Europe/London. Issue dates and times are shown in it.</p>
-<button>Save</button>
+<button class="primary">Save</button>
 </form>
 <form class="sheet wide" method="post" action="/account/reading">
 <h2>Reading</h2>
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label>Interests <textarea name="interests" rows="10" maxlength="4000">{{ user.interests }}</textarea></label>
-<p class="hint">What you want to read, in your own words. The model that picks your articles is given this. It applies from the next run.</p>
+<p class="hint">What you want to read, in your own words. The model that picks your articles is given this. It applies from the next run. It also keeps its own notes on what your ratings show: <a href="/learned">see what Forenoon has learned</a>.</p>
 <label>Stories a day <input name="daily_stories" type="number" min="1" max="50" value="{{ user.daily_stories }}" required></label>
 <p class="hint">A target, not a hard limit. A story is one article, or a few on one subject.</p>
 {% if user.is_admin() %}
@@ -31,7 +31,7 @@
 {% else %}
 <p class="hint">Sent to: {% if user.kindle_addresses.is_empty() %}no address yet{% else %}{{ user.kindle_addresses }}{% endif %}. An admin sets this.</p>
 {% endif %}
-<button>Save</button>
+<button class="primary">Save</button>
 </form>
 <form class="sheet" method="post" action="/account/email">
 <h2>Email</h2>
@@ -40,7 +40,7 @@
 <label>New email <input name="email" type="email" maxlength="254" autocomplete="email" autocapitalize="none" required></label>
 <label>Current password <input name="current" type="password" maxlength="256" autocomplete="current-password" required></label>
 <p class="hint">We email a link to the new address. The old one keeps working until that link is opened.</p>
-<button>Change email</button>
+<button class="primary">Change email</button>
 </form>
 {% if user.pending_email.is_some() %}
 <form class="sheet" method="post" action="/account/email/cancel"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Cancel the email change</button></form>
@@ -52,6 +52,6 @@
 <label>New password <input name="password" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
 <label>New password again <input name="again" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
 <p class="hint">At least 10 characters. Changing it signs out every other browser.</p>
-<button>Change password</button>
+<button class="primary">Change password</button>
 </form>
 {% endblock %}

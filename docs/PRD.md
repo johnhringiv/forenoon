@@ -400,6 +400,27 @@ best candidates in full.
   about 165 candidates ranked, 40 read in full, 16 stories (25 articles) chosen, 167,000
   tokens, about $0.02, 80 seconds.
 
+## 7h. Notes on each reader's taste (on when ranking is on)
+
+A reader's interests are their own words and are never changed by the pipeline. Beside them
+it keeps a second text of its own: a few plain statements of what the reader's ratings show.
+
+- **When.** After a delivery, at most once a week per reader, and only when the reader has
+  at least 10 ratings and at least 5 new ones since the last time. One model call.
+- **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
+  with each article's length, whether it was finished, why it was picked and the reader's
+  own reason. Titles are untrusted and are given only as material.
+- **What comes back.** At most 8 statements of at most 200 characters each, each resting on
+  several ratings. The model is told to keep a current note the ratings still bear out, to
+  change one they contradict, and to write no instructions. When it has nothing reliable to
+  say, the notes stay as they were.
+- **Use.** The ranking and reading prompts are given the notes beside the interests; where
+  the two disagree, the interests win.
+- **The reader's.** The web pages show the notes, let the reader edit or empty them, and
+  keep every version, the pipeline's and the reader's, with a way back to each (section
+  9a). An edit is not a lock: the next rewrite starts from it. `llm.learn` on the Settings
+  page turns the whole thing off.
+
 ## 7g. The library: what is kept about every candidate
 
 The pipeline keeps a record of what it considered, not only of what it sent. This is what
@@ -514,6 +535,14 @@ database with the pipeline.
   model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
   form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
+- **What Forenoon has learned** (`/learned`, linked from the account page). The notes the
+  pipeline keeps on the reader's taste (section 7h): when they were last rewritten, a box to
+  edit them (2,000 characters at most), and the last 10 versions with who wrote each and a
+  button to restore it.
+- **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
+  Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
+  choices: ratings, reasons, finished. The pages use no scripts, so the Archive's filters
+  apply when "Apply filters" is pressed.
 - **Send to Kindle.** Each article has a button that sends it to the reader's own
   Kindle address, as a book of its own with fresh rating links. An article the daily run
   passed over can be sent from the Archive: it is then recorded as delivered and marked

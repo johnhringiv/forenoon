@@ -26,6 +26,7 @@ class User:
     kindle_addresses: tuple[str, ...]
     daily_cap: int = 8  # stories a day; a story is one article, or a few on one subject
     interests: str = ""  # in the user's own words; given to the ranking model
+    learned: str = ""  # what their ratings have shown; kept by the pipeline (app/learn.py)
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ class Llm:
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
     check_extraction: bool = True  # ask the model whether each article looks complete; log only
+    learn: bool = True  # keep a note per reader of what their ratings show, for the prompts
     timeout: float = 60.0  # seconds
     # US dollars per million tokens for `model`, used only to show cost in `forenoon usage`.
     # The API does not report prices, so update these when the model or its price changes.
