@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Account · Forenoon{% endblock %}
 {% block header %}
-<p>Account <b>{{ user.id }}</b>, {{ user.role }}.</p>
-<div class="bar"><a href="/">Back to the newsstand</a>
-<div class="who"><form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+<p class="intro">Account <b>{{ user.id }}</b>, {{ user.role }}. What you want to read is on the <a href="/reading">Reading page</a>.</p>
 {% endblock %}
 {% block main %}
 {% let unconfirmed = user.unconfirmed_email() %}
@@ -18,20 +16,16 @@
 <p class="hint">A zone name such as America/New_York or Europe/London. Issue dates and times are shown in it.</p>
 <button class="primary">Save</button>
 </form>
-<form class="sheet wide" method="post" action="/account/reading">
-<h2>Reading</h2>
+<form class="sheet wide" method="post" action="/account/kindle">
+<h2>Kindle</h2>
 <input type="hidden" name="csrf" value="{{ csrf }}">
-<label>Interests <textarea name="interests" rows="10" maxlength="4000">{{ user.interests }}</textarea></label>
-<p class="hint">What you want to read, in your own words. The model that picks your articles is given this. It applies from the next run. It also keeps its own notes on what your ratings show: <a href="/learned">see what Forenoon has learned</a>.</p>
-<label>Stories a day <input name="daily_stories" type="number" min="1" max="50" value="{{ user.daily_stories }}" required></label>
-<p class="hint">A target, not a hard limit. A story is one article, or a few on one subject.</p>
 {% if user.is_admin() %}
 <label>Kindle addresses <textarea name="kindle_addresses" rows="2" maxlength="1300">{{ user.kindle_addresses }}</textarea></label>
 <p class="hint">One per line. Each must have this install's sender on its approved list at Amazon.</p>
+<button class="primary">Save</button>
 {% else %}
 <p class="hint">Sent to: {% if user.kindle_addresses.is_empty() %}no address yet{% else %}{{ user.kindle_addresses }}{% endif %}. An admin sets this.</p>
 {% endif %}
-<button class="primary">Save</button>
 </form>
 <form class="sheet" method="post" action="/account/email">
 <h2>Email</h2>
@@ -53,5 +47,11 @@
 <label>New password again <input name="again" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
 <p class="hint">At least 10 characters. Changing it signs out every other browser.</p>
 <button class="primary">Change password</button>
+</form>
+<form class="sheet" method="post" action="/logout">
+<h2>Sign out</h2>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="hint">Of this browser only. Other browsers stay signed in until the password changes.</p>
+<button>Sign out</button>
 </form>
 {% endblock %}

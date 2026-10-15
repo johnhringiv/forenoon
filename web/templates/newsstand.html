@@ -1,20 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Forenoon newsstand{% endblock %}
 {% block header %}
-<p>{{ summary }}</p>
-<div class="bar">
-{% for filter in filters %}{% if filter.current %}<b>{{ filter.label }}</b>{% else %}<a href="{{ filter.href }}">{{ filter.label }}</a>{% endif %}
-{% endfor %}
-<a href="/archive">Archive</a>
-<div class="who">{{ name }} {% if admin %}<a href="/sources">Sources</a> <a href="/settings">Settings</a> <a href="/problems">Problems{% if problems > 0 %} ({{ problems }}){% endif %}</a> {% endif %}<a href="/account">Account</a>
-<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div>
-</div>
+<p class="intro">{{ summary }}</p>
 {% endblock %}
 {% block main %}
 {% include "_confirm.html" %}
+<div class="views">
+{% for filter in filters %}{% if filter.current %}<b>{{ filter.label }}</b>{% else %}<a href="{{ filter.href }}">{{ filter.label }}</a>{% endif %}
+{% endfor %}{% if issues.len() > 1 %}<span class="sep"></span> <span>Jump to</span>
+{% for issue in issues %}<a href="#i-{{ loop.index }}">{{ issue.short }}</a>
+{% endfor %}{% endif %}</div>
 {% if issues.is_empty() %}<p class="empty">{{ empty }}</p>{% endif %}
 {% for issue in issues %}
-<section><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
+<section id="i-{{ loop.index }}"><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
 <div class="grid">
 {% for story in issue.stories %}
 <article{% if story.cards.len() > 1 %} class="story"{% else if story.cards[0].link_only %} class="link-only" title="Its page could not be had: open it on the site"{% endif %}>
@@ -66,7 +64,7 @@
 {% endfor %}
 </div></section>
 {% endfor %}
-{% if newest.is_some() || older.is_some() %}<nav>
+{% if newest.is_some() || older.is_some() %}<nav class="pager">
 {% if let Some(href) = newest %}<a href="{{ href }}">Newest</a>{% endif %}
 {% if let Some(href) = older %}<a href="{{ href }}">Older issues</a>{% endif %}
 </nav>{% endif %}
