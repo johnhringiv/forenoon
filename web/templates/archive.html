@@ -31,6 +31,7 @@
 <button class="primary">Apply filters</button>
 {% if filtered %}<a href="/archive">Clear</a>{% endif %}
 </div>
+{% if let Some(count) = count %}<p>{{ count }}</p>{% endif %}
 <p class="hint">Choose what to show, then press Apply filters. The address of a filtered view can be bookmarked.</p>
 </form>
 {% if !ready %}<p class="empty">The pipeline has not started keeping what it weighs yet. That begins with its next daily run.</p>
