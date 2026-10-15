@@ -166,8 +166,12 @@ The whole process for one reader's day, in order. The sections named give the de
    plus the exploration pick. Each gets a new score and reason, a completeness verdict, how
    long it lasts, and which of its links are its subject.
 7. **Round 3: choosing the issue** (section 7f). One call sees every read article at once
-   and returns the day's set, best first, for a varied issue rather than the highest scores
-   alone. The other read articles follow as backups, then the unread ones in round-1 order.
+   and returns exactly the open places' worth (the day's places less the hand-added and
+   pinned ones and the exploration pick), best first, for a varied issue rather than the
+   highest scores alone; then reserves in the order to use them, as many as the places held
+   by hand-added and pinned articles plus two, so a place freed late (one of those that
+   cannot be sent) still goes as the model would choose. The other read articles follow,
+   then the unread ones in round-1 order.
 8. **Filling the day** (`daily_stories`, default 8). Candidates are taken in that order
    until the day's places are used, each subject to:
    - **its source's places a day** (Sources page; 2 for a feed, none for a built-in source,
@@ -477,15 +481,20 @@ best candidates in full.
 - **Choosing the issue** (`llm.choose_issue`, on). One more call sees every read article
   at once: title, source, length, how long it lasts, the reading's score and reason, and a
   story id for those on one event; with the open places and each source's limit. It returns
-  the day's set, best first, preferring a varied issue (not several articles on one narrow
-  subject; news mixed with longer reads) unless an article is clearly better. Those are tried
-  first, then the other read articles in score order. The exploration pick still keeps the
-  last place and is not offered to it. A chosen article's propensity is 1; one left out keeps
-  only its chance of the exploration draw. A failed or unusable reply leaves the score order.
-  It is skipped when there are no more read articles than open places. The run's report
-  lists the choice, best first, with what became of each: sent, sent in another story, or
-  why not (its source had used its places, the day was full, the reading held it back, its
-  page could not be had).
+  exactly that many, best first, preferring a varied issue (not several articles on one
+  narrow subject; news mixed with longer reads) unless an article is clearly better, and
+  then reserves in the order to use them: as many as the places hand-added and pinned
+  articles hold, plus two. Any it names beyond the places become its first reserves. The
+  chosen are tried first, the reserves next (a hand-added or pinned article whose page
+  cannot be had frees its place late, and the reserve takes it rather than the next score),
+  then the other read articles in score order. The exploration pick still keeps the last
+  place and is not offered to it. A chosen article's propensity is 1; one left out, reserves
+  included, keeps only its chance of the exploration draw. A failed or unusable reply leaves
+  the score order. It is skipped when there are no more read articles than open places. The
+  run's report lists the choice and then the reserves, with what became of each: sent, sent
+  in another story, not needed (a reserve), or why not (its source had used its places, the
+  day was full, the reading held it back, its page could not be had); and "issue chosen (n
+  of m)" when the model named fewer than the places.
 - An article judged `bad` (a paywall notice, a teaser, an error page) is held back for the
   day and listed in the report. `suspect` is reported and does not change delivery.
 - Both prompts tell the model that news of major consequence scores at least 7 whatever the
