@@ -472,7 +472,10 @@ def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
     from app.discover import SITES
 
     cfg, store, fetcher = env
-    cfg = dataclasses.replace(_llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews", "lobsters")))
+    cfg = dataclasses.replace(
+        _llm_cfg(cfg, explore_slots=0),
+        discovery=Discovery(sites=("hackernews", "lobsters"), daily_max={"hackernews": 1}),
+    )
     user = dataclasses.replace(cfg.users[0], daily_cap=4)
     when = "2026-03-10T06:00:00Z"
     _listings(
@@ -518,18 +521,23 @@ def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
         titles = sorted(sent_titles.values())
         assert titles == ["Dull find", "Great find", "Post 1", "Post 2", "Post 5", "Second find"]
         prompt = backend.prompts[0][1]
-        assert "On Hacker News: 300 points, 80 comments. Site: found.example." in prompt
+        # Also on Lobsters: one candidate, with both sites' signals.
+        assert "On Hacker News: 300 points, 80 comments. Site: found.example. On Lobsters:" in prompt
         assert "Tags: rust." in prompt
 
         # Finds take places on their scores like any feed article: both that beat the feeds' 5s,
-        # and not the one that scored below them.
+        # and not the one that scored below them. Hacker News has one place; the find Lobsters
+        # also carries counts against Lobsters, so the second still has it.
         delivered = [store.get_article(i) for i in report.delivered]
         assert [a.title for a in delivered if a.source == "Hacker News"] == ["Great find", "Second find"]
         assert len(delivered) == 4 and not any(a.source == "Lobsters" for a in delivered)
         assert {s.name for s in report.sources} >= {"Hacker News", "Lobsters"}
         epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
         book = "".join(epub.read(n).decode() for n in epub.namelist() if n.endswith(".xhtml"))
-        assert "found.example via Hacker News" in book
+        assert "found.example via Hacker News and Lobsters" in book
+        great = next(a.id for a in delivered if a.title == "Great find")
+        routes = store.db.execute("SELECT via FROM article_routes WHERE article_id = ? ORDER BY via", (great,))
+        assert [r[0] for r in routes] == ["Hacker News", "Lobsters"]
         assert 'href="https://news.ycombinator.com/item?id=42"' in book and "javascript:" not in book
 
         # Without a working model nothing discovered is delivered, and listings are not read.

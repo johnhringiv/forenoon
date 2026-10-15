@@ -59,6 +59,8 @@ economic events, large security incidents. Routine news does not qualify.
 
 Some candidates were found on a link aggregator and have no abstract, only a title, the site
 and vote counts. Judge those on title and site; votes are weak evidence of quality, not of fit.
+A candidate picked up in several places (a feed and an aggregator, or two aggregators) is
+of wide interest, which counts in its favour, but not for more than its substance.
 
 Return one entry per candidate id, using only the ids given."""
 
@@ -154,7 +156,7 @@ def _listing(candidates: Sequence[Item]) -> str:
             "source": item.source.name,
             "author": item.author,
             "published": item.published.date().isoformat() if item.published else "",
-            "abstract": abstract(item),
+            "abstract": " ".join([abstract(item), *(other.summary for other in item.also)]),
         }
         for item in candidates
     ]
