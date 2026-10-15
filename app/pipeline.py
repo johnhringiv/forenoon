@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from . import archive, sessions, thumbs
+from .choose import Candidate, choose
 from .config import Config, Source, User
 from .deliver import (
     MESSAGE_OVERHEAD,
@@ -45,6 +46,8 @@ MAX_SUMMARY_CHARS = 1000  # of a feed entry's summary, kept for ranking it on a 
 # A feed post this short that is about a page it links to is a pointer: that page is
 # delivered in its place. A longer one that responds to a page is delivered along with it.
 POINTER_MAX_WORDS = 150
+FULL = "not sent: the day's places were taken"
+SPARE_CHOICES = 2  # reserves the model names beyond the places hand-added and pinned articles hold
 MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links matter
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
@@ -111,6 +114,8 @@ class RunReport:
     link_only: list[str] = field(default_factory=list)  # picked, but only the link could be had
     retried: list[str] = field(default_factory=list)  # earlier link-only picks delivered now
     sign_in_ends: dict[str, str] = field(default_factory=dict)  # site -> the day, when soon
+    # The model's choice of the day's set, best first: id, title, source, and what became of it.
+    chosen: list[dict[str, str | bool]] = field(default_factory=list)
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -131,6 +136,13 @@ class RunReport:
         if self.reviews:
             counts = ", ".join(f"{n} {verdict}" for verdict, n in sorted(self.reviews.items()))
             lines += [f"Extraction check by the model: {counts}.", ""]
+        if self.chosen:
+            lines += ["Chosen for the issue by the model, best first, then its reserves:", ""]
+            lines += [
+                f"{n}. {'(reserve) ' if c.get('reserve') else ''}{c['title']} ({c['source']}): {c['outcome']}"
+                for n, c in enumerate(self.chosen, 1)
+            ]
+            lines.append("")
         lines += [
             "| Source | Verdict | Clean | Degraded | Failed | Notes |",
             "|---|---|---|---|---|---|",
@@ -357,6 +369,58 @@ def _interleave(pools: list[list[Item]]) -> list[Item]:
     for rank in range(max((len(p) for p in pools), default=0)):
         out.extend(pool[rank] for pool in pools if rank < len(pool))
     return out
+
+
+def _chosen(
+    cfg: Config,
+    backend: Backend | None,
+    store: Store,
+    user: User,
+    read: list[Item],
+    verdicts: dict[str, Verdict],
+    ranking: Ranking,
+    grouped: dict[str, list[Item]],
+    words: dict[str, int],
+    places: int,
+    reserves: int,
+    today: str,
+    report: RunReport,
+) -> list[Item]:
+    """The read articles with the model's choice of the day's set first, best first, then its
+    reserves, for places freed late (a chosen, pinned or hand-added article that cannot be
+    sent); the rest follow in their order."""
+    story: dict[str, str] = {}
+    for lead, others in grouped.items():
+        for item in (lead, *(other.id for other in others)):
+            story.setdefault(item, lead)
+    candidates = [
+        Candidate(
+            item.id, item.title, item.source.name, words.get(item.id, 0), verdicts[item.id].score,
+            verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""),
+        )
+        for item in read
+    ]  # fmt: skip
+    limits = {s.name: s.daily_max for item in read for s in item.sources()}
+    picked = choose(cfg.llm, backend, store, user, candidates, places, reserves, limits, today)
+    if picked is None:
+        return read
+    ids, spare = picked
+    # Fewer than asked for: the rest of the places go by score, which the report should show.
+    report.ranking += ", issue chosen" if len(ids) >= places else f", issue chosen ({len(ids)} of {places})"
+    by_id = {item.id: item for item in read}
+    report.chosen = [
+        {"id": i, "title": by_id[i].title, "source": by_id[i].source.name, "outcome": "", "reserve": reserve}
+        for i, reserve in [*((i, False) for i in ids), *((i, True) for i in spare)]
+    ]
+    first = [by_id[i] for i in [*ids, *spare]]
+    for item in read:
+        # Chosen by the model, not by its rank: it was certain to be offered, and one left out
+        # could only have come by the exploration draw.
+        old = ranking.choices[item.id]
+        chosen = item.id in ids
+        propensity = 1.0 if chosen else (old.propensity if (old.propensity or 0) < 1.0 else 0.0)
+        ranking.choices[item.id] = replace(old, propensity=propensity)
+    return first + [item for item in read if item.id not in {*ids, *spare}]
 
 
 def _past_its_places(source: Source, places: dict[str, int]) -> bool:
@@ -631,6 +695,7 @@ def run(
     unreachable: set[str] = set()
     link_picks: list[str] = []  # picked, but only their links can be shown
     places: dict[str, int] = {}  # the day's places each source has taken
+    skipped: dict[str, str] = {}  # article id -> why it was passed over when its turn came
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
 
     def outbound(item: Item, body) -> list[_Link]:
@@ -649,7 +714,7 @@ def run(
     links_of: dict[str, list[_Link]] = {}
     verdicts: dict[str, Verdict] = {}
     if cfg.llm.enabled and backend is not None and ranking.choices and cfg.llm.read_candidates > 0:
-        pool = ranking.order[: cfg.llm.read_candidates]
+        pool = ranking.shortlist or ranking.order[: cfg.llm.read_candidates]
         readings = []
         for item in pool:
             if item.id in found_ids:
@@ -677,10 +742,19 @@ def run(
             read_first = sorted((i for i in pool if i.id in verdicts), key=lambda i: -verdicts[i.id].score)
             unread = [i for i in ranking.order if i.id not in verdicts]
             explored = next((i for i in read_first if ranking.choices[i.id].explore), None)
+            open_places = max(0, remaining - _pinned_places(pinned, by_hand))
+            if explored is not None:
+                read_first.remove(explored)
+            if cfg.llm.choose_issue:
+                words = {item.id: extracted[item.id].word_count for item in read_first}
+                read_first = _chosen(
+                    cfg, backend, store, user, read_first, verdicts, ranking, grouped, words,
+                    open_places - (explored is not None), _pinned_places(pinned, by_hand) + SPARE_CHOICES,
+                    today, report,
+                )  # fmt: skip
             if explored is not None:
                 # The exploration pick keeps the day's last slot whatever its score.
-                read_first.remove(explored)
-                read_first.insert(max(0, remaining - _pinned_places(pinned, by_hand) - 1), explored)
+                read_first.insert(max(0, open_places - 1), explored)
             ranking.order = read_first + unread
             for item_id, verdict in verdicts.items():
                 ranking.choices[item_id] = replace(ranking.choices[item_id], score=verdict.score, reason=verdict.reason)
@@ -773,6 +847,11 @@ def run(
         charged = item.source if item.id in by_hand or item.source.pinned else _charged_to(item, places)
         if remaining == 0 or (stories >= remaining and not free) or charged is None:
             leftover.add(item.source.name)
+            if charged is None:
+                names = " and ".join(s.name for s in item.sources())
+                skipped.setdefault(item.id, f"not sent: {names} had used its places a day")
+            else:
+                skipped.setdefault(item.id, FULL)
             continue
         if is_found:
             record_found(item)
@@ -786,6 +865,9 @@ def run(
             # is tried again on the next runs. The day's place goes to the next candidate.
             if item.id in unreachable and item.id not in by_hand and len(link_picks) < remaining:
                 link_picks.append(item.id)
+            held = next((e for e in reversed(reports[item.source.name].items) if e.url == item.url), None)
+            why = (held.reason or held.status) if held else "its page could not be had"
+            skipped[item.id] = f"shown as a link: {why}" if item.id in link_picks else f"not sent: {why}"
             continue
         story = _Story(item.id, [lead], reason)
         # Other candidates on the same event join this story instead of taking a slot each.
@@ -794,6 +876,7 @@ def run(
                 continue
             taken.add(other.id)
             if len(story.members) >= cfg.max_story_entries:
+                skipped[other.id] = f"not sent: its story ({lead.article.title}) was full"
                 continue  # still marked taken: the story has had its share of the day
             if other.id in found_ids:
                 record_found(other)
@@ -915,6 +998,18 @@ def run(
             for covered_id in (member.item.id, *also):
                 story_of[covered_id] = story.id
             checked.append((member.article, member.entry))
+    titles = {story.id: story.members[0].article.title for story in picked}
+    for chosen in report.chosen:
+        lead = story_of.get(chosen["id"])
+        if chosen["id"] in covered:
+            chosen["outcome"] = "sent as the articles it links to"
+        elif lead == chosen["id"]:
+            chosen["outcome"] = "sent"
+        elif lead is not None:
+            chosen["outcome"] = f"sent in the story {titles[lead]}"
+        else:
+            why = skipped.get(chosen["id"], FULL)
+            chosen["outcome"] = "not needed" if chosen["reserve"] and why == FULL else why
 
     if cfg.llm.enabled:
         # Articles the reading pass did not see (pinned ones, and pages brought in by a story).

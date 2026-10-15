@@ -11,6 +11,7 @@
   {"section": "Ranking", "key": "llm.daily_token_cap", "kind": "int", "default": 600000, "min": 0, "max": 100000000, "label": "Tokens a day, at most", "hint": "Input (cached input too) and output together, all readers. A call that would cross it is skipped."},
   {"section": "Ranking", "key": "llm.read_candidates", "kind": "int", "default": 40, "min": 0, "max": 200, "label": "Articles read in full before choosing", "hint": "The best-ranked candidates are fetched and read by the model; 0 judges on titles and openings only."},
   {"section": "Ranking", "key": "llm.explore_slots", "kind": "int", "default": 1, "min": 0, "max": 1, "label": "Places for a random lower-ranked article", "hint": "1 gives the day's last place to something the model ranked lower; 0 never does."},
+  {"section": "Ranking", "key": "llm.choose_issue", "kind": "bool", "default": true, "label": "Let Claude choose the day's set from what it read", "hint": "One more call: the articles read in full are weighed together, for a varied issue rather than just the highest scores. Off: the highest scores, in order."},
   {"section": "Ranking", "key": "llm.group_stories", "kind": "bool", "default": true, "label": "Group articles on the same event into one story"},
   {"section": "Ranking", "key": "llm.follow_links", "kind": "bool", "default": true, "label": "Deliver the page a short post is about"},
   {"section": "Ranking", "key": "llm.show_reasons", "kind": "bool", "default": true, "label": "Print the model's reason in the book"},

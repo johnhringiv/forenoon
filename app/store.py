@@ -297,8 +297,8 @@ class Store:
         if missing:
             with self.db:
                 self.db.executemany(
-                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at)"
-                    " VALUES (?, 'builtin', ?, 0, ?)",
+                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at, daily_max)"
+                    " VALUES (?, 'builtin', ?, 0, ?, 0)",
                     missing,
                 )
         return tuple(key for key in known if rows.get(key))

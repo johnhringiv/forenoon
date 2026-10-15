@@ -281,6 +281,8 @@ class FakeBackend:
         self.subjects = None  # article title -> the link numbers it is about
         self.readings = None  # articles as read -> verdicts
         self.read = []
+        self.choice = None  # candidates, places -> chosen ids; by default the order given
+        self.choosing = []
 
     def structured(self, system, user, schema, shared=""):
         from app.llm import LlmError, Reply
@@ -301,6 +303,13 @@ class FakeBackend:
             self.linking = listed
             answers = [{"id": a["id"], "links": (self.subjects or {}).get(a["title"], [])} for a in listed]
             return Reply({"articles": [*answers, {"id": "made-up", "links": [1]}]}, 300, 40)
+        if "<places>" in user:
+            places = int(user.split("<places>")[1].split("</places>")[0])
+            listed = __import__("json").loads(user.split("<candidates>\n")[1].split("\n</candidates>")[0])
+            self.choosing.append((listed, places, user))
+            chosen = self.choice(listed, places) if self.choice else [c["id"] for c in listed][:places]
+            reserves = [c["id"] for c in listed if c["id"] not in chosen]
+            return Reply({"chosen": [*chosen, "made-up"], "reserves": reserves}, 500, 30)
         if "<headlines>" in user:
             listed = __import__("json").loads(user.split("<headlines>\n")[1].split("\n</headlines>")[0])
             ids = {c["title"]: c["id"] for c in listed}
@@ -349,8 +358,8 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
     assert set(rows) == set(report.delivered)
     policies = sorted(r["policy"] for r in rows.values())
-    assert policies == ["claude-rank-v1", "claude-rank-v1", "pinned"]
-    ranked = [r for r in rows.values() if r["policy"] == "claude-rank-v1"]
+    assert policies == ["claude-rank-v2", "claude-rank-v2", "pinned"]
+    ranked = [r for r in rows.values() if r["policy"] == "claude-rank-v2"]
     # Two slots after the pinned article: the top score, and one exploration pick.
     assert min(r["rank"] for r in ranked) == 1 and sum(r["explore"] for r in ranked) == 1
     assert all(0 < r["propensity"] <= 1 and len(r["reason"]) <= 140 for r in ranked)
@@ -403,13 +412,18 @@ def test_batches_mix_feed_articles_and_finds(env):
 
     backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
     feed, found = items("feed", 12), items("find", 12)
-    ranking = rank(Llm(enabled=True, batch_size=6), backend, store, cfg.users[0], feed, 4, "2026-03-10", found=found)
+    llm = Llm(enabled=True, batch_size=6, read_candidates=6, explore_slots=0)
+    ranking = rank(llm, backend, store, cfg.users[0], feed, 4, "2026-03-10", found=found)
     batches = [
-        {c["id"][:4] for c in json.loads(p.split("<candidates>\n")[1].split("\n</candidates>")[0])}
+        [c["id"] for c in json.loads(p.split("<candidates>\n")[1].split("\n</candidates>")[0])]
         for _, p in backend.prompts
     ]
-    assert len(batches) == 4 and sum(b == {"feed", "find"} for b in batches) >= 3
+    assert len(batches) == 4 and sum({i[:4] for i in b} == {"feed", "find"} for b in batches) >= 3
     assert len(ranking.choices) == 24
+    # What is read in full is an equal share of every batch: 6 over 4 batches, the first two
+    # giving one more.
+    shares = [len([item for item in ranking.shortlist if item.id in b]) for b in batches]
+    assert shares == [2, 2, 1, 1]
 
 
 def test_ranking_is_batched_and_survives_one_failed_batch(env):
@@ -804,7 +818,7 @@ def test_candidates_on_the_same_event_are_delivered_as_one_story(env):
     assert store.delivered_on("john", "2000", "3000") == 2
     assert ("group", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
     rows = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
-    assert sorted(rows.values()) == ["claude-rank-v1", "claude-rank-v1", "pinned"]
+    assert sorted(rows.values()) == ["claude-rank-v2", "claude-rank-v2", "pinned"]
 
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     contents = epub.read("OEBPS/contents.xhtml").decode()
@@ -853,6 +867,53 @@ def test_model_picks_which_links_are_the_subject_and_responses_keep_both(env):
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     assert "More on: Post 4" in epub.read("OEBPS/a02.xhtml").decode()
     assert ("links", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+
+
+def test_the_model_chooses_the_issue_from_what_it_read(env):
+    from app.rank import POLICY
+
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, explore_slots=0)
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)  # the pinned article and one other
+    cfg = dataclasses.replace(cfg, users=(user,))
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "abstract"} for i in ids])
+    table = {"Post 1": 9, "Post 2": 8}
+    backend.readings = lambda listed: [
+        {"id": a["id"], "score": table.get(a["title"], 1), "reason": "read", "complete": "ok", "problem": "",
+         "lasting": "days", "links": []}
+        for a in listed
+    ]  # fmt: skip
+    # The model takes Post 2 over the higher-scored Post 1, for the issue as a whole, and names
+    # Post 1 too, for which there is no place: it becomes the first reserve.
+    order = {"Post 2": 0, "Post 1": 1}
+    backend.choice = lambda listed, places: sorted((c["id"] for c in listed), key=lambda i: order[
+        next(c["title"] for c in listed if c["id"] == i)])  # fmt: skip
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=backend)
+
+    assert "issue chosen" in report.ranking
+    assert [store.get_article(i).title for i in report.delivered] == ["Post 9", "Post 2"]
+    # What became of each choice is in the run's report.
+    assert [(c["title"], c["reserve"], c["outcome"]) for c in report.chosen] == [
+        ("Post 2", False, "sent"),
+        ("Post 1", True, "not needed"),
+    ]
+    assert "1. Post 2 (Blog): sent" in report.to_markdown() and "2. (reserve) Post 1" in report.to_markdown()
+    listed, places, prompt = backend.choosing[0]
+    assert "<reserves>3</reserves>" in prompt  # the pinned article's place, and two more
+    assert places == 1 and {c["title"] for c in listed} == {"Post 1", "Post 2"}
+    assert {c["title"]: c["score"] for c in listed}["Post 1"] == 9 and all(c["words"] > 0 for c in listed)
+    # Chosen, so certain to be offered; its score is still the reading's.
+    rows = {store.get_article(r["article_id"]).title: r for r in store.selection_rows(user.id)}
+    assert (rows["Post 2"]["propensity"], rows["Post 2"]["score"], rows["Post 2"]["policy"]) == (1.0, 8, POLICY)
+    assert ("choose", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+
+    # A reply naming nothing usable leaves the reading's order: the best read goes.
+    fresh = Store(cfg.data_dir / "second.sqlite3")
+    fetcher2 = Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(handler))
+    backend.choice = lambda listed, places: []
+    report = run(cfg, fresh, fetcher2, user, now=NOW, sender=lambda m, s: None, backend=backend)
+    assert "issue chosen" not in report.ranking
+    assert [fresh.get_article(i).title for i in report.delivered] == ["Post 9", "Post 1"]
 
 
 def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_article(env):

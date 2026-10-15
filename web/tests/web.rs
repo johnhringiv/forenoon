@@ -884,7 +884,7 @@ async fn built_in_sources_are_only_switched_on_or_off() {
         all.into_iter().find(|source| source.builtin == key).expect("a built-in source")
     };
     let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
-    assert!(hn.kind == "builtin" && hn.enabled && hn.daily_max == 2);
+    assert!(hn.kind == "builtin" && hn.enabled && hn.daily_max == 0); // many publishers: no limit
 
     let path = format!("/sources/{}/toggle", hn.id);
     let reply = admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "1"), ("daily_max", "x")]).await;
@@ -960,6 +960,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.daily_token_cap", "600000"),
         ("llm.read_candidates", "40"),
         ("llm.explore_slots", "1"),
+        ("llm.choose_issue", "1"),
         ("llm.group_stories", "1"),
         ("llm.follow_links", "1"),
         ("llm.show_reasons", "1"),

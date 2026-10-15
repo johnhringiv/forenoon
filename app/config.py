@@ -69,6 +69,7 @@ class Llm:
     # by the model, which gives the final scores. 0 turns it off.
     read_candidates: int = 40
     read_words: int = 2500  # of each article; the rest is not sent
+    choose_issue: bool = True  # the model chooses the day's set from the articles it read
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
     check_extraction: bool = True  # ask the model whether each article looks complete; log only
