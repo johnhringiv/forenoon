@@ -359,6 +359,24 @@ def _interleave(pools: list[list[Item]]) -> list[Item]:
     return out
 
 
+def _past_its_places(source: Source, places: dict[str, int]) -> bool:
+    """A pinned source that has used its places a day: what more it gives is free."""
+    return source.pinned and bool(source.daily_max) and places.get(source.name, 0) >= source.daily_max
+
+
+def _pinned_places(pinned: list[Item], by_hand: set[str]) -> int:
+    """How many of the day's places the hand-added and pinned articles will use."""
+    places = len([item for item in pinned if item.id in by_hand])
+    per_source: dict[str, int] = {}
+    for item in pinned:
+        if item.id not in by_hand:
+            per_source[item.source.name] = per_source.get(item.source.name, 0) + 1
+    sources = {item.source.name: item.source for item in pinned}
+    for name, n in per_source.items():
+        places += min(n, sources[name].daily_max) if sources[name].daily_max else n
+    return places
+
+
 def _charged_to(item: Item, places: dict[str, int]) -> Source | None:
     """Which of the sources carrying `item` its place counts against: the one with the most
     room left, any without a limit first. None when every one has used its places today."""
@@ -562,7 +580,7 @@ def run(
     grouped: dict[str, list[Item]] = {}  # candidate id -> the candidates covering the same event
     if cfg.llm.enabled:
         pool = others[: cfg.llm.max_candidates]
-        slots = max(0, remaining - len(pinned))
+        slots = max(0, remaining - _pinned_places(pinned, by_hand))
         if cfg.discovery.sites and backend is not None and slots:
             known = {item.id: item for item in [*pinned, *pool]}
             found = _discover(cfg, store, fetcher, user, report, reports, seen, known, cutoff, dry_run)
@@ -662,7 +680,7 @@ def run(
             if explored is not None:
                 # The exploration pick keeps the day's last slot whatever its score.
                 read_first.remove(explored)
-                read_first.insert(max(0, remaining - len(pinned) - 1), explored)
+                read_first.insert(max(0, remaining - _pinned_places(pinned, by_hand) - 1), explored)
             ranking.order = read_first + unread
             for item_id, verdict in verdicts.items():
                 ranking.choices[item_id] = replace(ranking.choices[item_id], score=verdict.score, reason=verdict.reason)
@@ -749,8 +767,11 @@ def run(
         if item.id in taken:
             continue  # already delivered today as part of another story
         is_found = item.id in found_ids
-        charged = _charged_to(item, places) if item.id not in by_hand else item.source
-        if stories >= remaining or charged is None:
+        # A pinned source's articles are all taken; past its places a day they do not use the
+        # day's places. Links added by hand are neither limited nor free.
+        free = item.id not in by_hand and _past_its_places(item.source, places)
+        charged = item.source if item.id in by_hand or item.source.pinned else _charged_to(item, places)
+        if remaining == 0 or (stories >= remaining and not free) or charged is None:
             leftover.add(item.source.name)
             continue
         if is_found:
@@ -784,7 +805,7 @@ def run(
         # The same links, in the same order, as the model was shown when it read the article.
         story.links = links_of[item.id] if item.id in links_of else outbound(item, lead.article.body)
         picked.append(story)
-        stories += 1
+        stories += not free
         places[charged.name] = places.get(charged.name, 0) + 1
 
     def record_selection(article_id: str) -> None:

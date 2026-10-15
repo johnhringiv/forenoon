@@ -38,7 +38,9 @@ what its own users configure and delivers only to the addresses its admin has se
 
   They live in the database. The pipeline reads them at the start of every run; with no
   feeds, nothing is delivered and an alert is sent. A feed has a name and:
-  - pinned: its articles are taken before all other sources.
+  - pinned: its articles are taken before all other sources, every one of them.
+  - places a day (default 2, 0 for no limit): the most of an issue it may take. For a pinned
+    source, how many of its articles use the day's places; the rest are extra.
   - where the text comes from: the page, falling back to the feed (default); always the
     page; only the feed, in which case the article page is never fetched; or nowhere
     (link-only), in which case its pages are never fetched and what the ranking picks from it
@@ -282,11 +284,14 @@ source).
   recent ratings (title, source, rating, finished).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
-  merged into one order.
+  merged into one order. With more than one batch the candidates are shuffled first (seeded by
+  the day), so feed articles and finds are judged side by side rather than each on its own
+  batch's scale.
 - **Output.** A score from 0 to 10 and a reason of at most 15 words per candidate, returned in
   a fixed structure. Entries for unknown or repeated ids and non-numeric scores are discarded;
   reasons are cut to 140 characters and escaped like any other text.
-- **Selection.** Pinned articles take slots first. The remaining slots go to the highest
+- **Selection.** Pinned articles take slots first (up to each pinned source's places a day;
+  the rest of them are extra). The remaining slots go to the highest
   scores, except that the day's last slot goes to one article chosen uniformly at random from
   those outside the top picks (exploration). If an article then fails extraction, the next in
   order takes its place.
