@@ -101,6 +101,8 @@ class Extracted:
     author: str = ""
     image_url: str = ""  # untrusted, like everything else from the page
     description: str = ""
+    # The first pictures anywhere on the page: a header image is often outside the article.
+    page_images: list[str] = field(default_factory=list)
     signed_out: str = ""  # why a subscriber's session needs signing in again; set by the pipeline
 
     @property
@@ -556,6 +558,29 @@ def _add_standfirst(body: lxml.html.HtmlElement, page_html: str, description: st
     lead.tail, body.text = body.text, None
 
 
+# Site furniture rather than the article's picture, by its class, id, address or alt text.
+NOT_A_PICTURE = re.compile(r"logo|avatar|icon|badge|sprite|gravatar|emoji", re.IGNORECASE)
+
+
+def _page_pictures(page_html: str, url: str, most: int = 6) -> list[str]:
+    """The first few picture addresses on the whole page, as absolute http(s) URLs; logos,
+    avatars and icons left out."""
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return []
+    found: list[str] = []
+    for img in page.iter("img"):
+        src = urljoin(url, (img.get("src") or "").strip())
+        if NOT_A_PICTURE.search(" ".join(img.get(name) or "" for name in ("class", "id", "src", "alt"))):
+            continue
+        if src.startswith(("http://", "https://")) and len(src) <= MAX_PREVIEW_URL and src not in found:
+            found.append(src)
+            if len(found) == most:
+                break
+    return found
+
+
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
     """Lead image and summary for listing an article; falls back to the body's own."""
     image = urljoin(url, image.strip()) if image.strip() else ""
@@ -580,6 +605,7 @@ def extract(
     candidates: dict[str, lxml.html.HtmlElement] = {}
     reference = 0
     title = author = image = description = ""
+    pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
     if page_html and mode != "feed":
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
@@ -589,6 +615,7 @@ def extract(
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
+        pictures = _page_pictures(page_html, url)
         kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
         # Long articles only: on a short post the page furniture outweighs the text.
         if reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
@@ -636,4 +663,4 @@ def extract(
         reasons.append("looks truncated")
     status = "degraded" if reasons else "clean"
     image, description = _preview(body, url, image, description)
-    return Extracted(body, status, reasons, words, method, title, author, image, description)
+    return Extracted(body, status, reasons, words, method, title, author, image, description, pictures)

@@ -222,12 +222,13 @@ def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> t
 
 
 def _pictures(result: Extracted) -> tuple[str, ...]:
-    """Where an article's thumbnail can come from: its lead image, else its first few pictures.
+    """Where an article's thumbnail can come from: its lead image, else its first few pictures,
+    else the first few on its page (a header image, say, outside the article itself).
 
     Taken before the article is assembled, which replaces picture addresses with embedded files.
     """
     body = [img.get("src", "") for img in result.body.iter("img")] if result.body is not None else []
-    return tuple(dict.fromkeys([result.image_url, *body[:THUMB_TRIES]]))
+    return tuple(dict.fromkeys([result.image_url, *body[:THUMB_TRIES], *result.page_images[:THUMB_TRIES]]))
 
 
 def _process(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> tuple[Extracted, Article | None, int]:

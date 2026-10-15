@@ -105,6 +105,17 @@ def test_preview_prefers_og_metadata_and_falls_back_to_the_body():
     hostile = page.replace("/img/lead.jpg", "javascript:alert(1)")
     assert extract("https://blog.example/post", hostile, "").image_url == ""
 
+    # A header picture outside the article is kept as a fallback for the thumbnail, for when the
+    # lead image is broken and the article itself has none (unquoted, as some themes write it).
+    header = (
+        '<html><head><meta property="og:image" content="/assets//img/gone.jpg"></head><body>'
+        '<img src="/avatar.jpg" class="avatar"><img class=page-image src=/img/header.jpg>'
+        f'<img src="javascript:x"><article><p>{words}</p></article></body></html>'
+    )
+    result = extract("https://blog.example/post", header, "")
+    assert result.page_images == ["https://blog.example/img/header.jpg"]  # not the site's avatar
+    assert not list(result.body.iter("img"))
+
 
 def test_standfirst_in_the_page_header_is_restored_once():
     words = " ".join(["word"] * 200)
