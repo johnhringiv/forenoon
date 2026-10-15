@@ -38,6 +38,9 @@ class Backend(Protocol):
         """
 
 
+ASK_FOR_TOOL = "Give your answer by calling the `answer` tool exactly once, and write nothing else."
+
+
 class ClaudeBackend:
     def __init__(self, cfg: Llm, api_key: str):
         import anthropic
@@ -45,6 +48,9 @@ class ClaudeBackend:
         self._anthropic = anthropic
         self._model = cfg.model
         self._client = anthropic.Anthropic(api_key=api_key, timeout=cfg.timeout, max_retries=1)
+        # Whether the model takes a forced tool call. Some (Sonnet 5.5, Opus 5.5) refuse one;
+        # they are asked in the system prompt instead, and the first refusal decides for the run.
+        self._forced = True
 
     def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "") -> Reply:
         # A single forced tool call is the answer format; the "tool" does nothing.
@@ -55,14 +61,15 @@ class ClaudeBackend:
             # API ignores the mark when the text is under the model's minimum cacheable size.
             content.insert(0, {"type": "text", "text": shared, "cache_control": {"type": "ephemeral"}})
         try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                system=system,
-                messages=[{"role": "user", "content": content}],
-                tools=[tool],
-                tool_choice={"type": "tool", "name": "answer"},
-            )
+            response = self._ask(system, content, tool)
+        except self._anthropic.BadRequestError as exc:
+            if not self._forced or "tool_choice" not in str(exc):
+                raise LlmError(f"{type(exc).__name__}: {exc}") from exc
+            self._forced = False
+            try:
+                response = self._ask(system, content, tool)
+            except self._anthropic.APIError as again:
+                raise LlmError(f"{type(again).__name__}: {again}") from again
         except self._anthropic.APIError as exc:
             raise LlmError(f"{type(exc).__name__}: {exc}") from exc
         usage = response.usage
@@ -72,6 +79,19 @@ class ClaudeBackend:
             if block.type == "tool_use" and isinstance(block.input, dict):
                 return Reply(block.input, usage.input_tokens, usage.output_tokens, written, read)
         raise LlmError(f"no structured answer (stop reason: {response.stop_reason})")
+
+    def _ask(self, system: str, content: list[dict[str, Any]], tool: dict[str, Any]) -> Any:
+        choice: dict[str, str] = {"type": "tool", "name": "answer"}
+        if not self._forced:
+            choice, system = {"type": "auto"}, f"{system}\n\n{ASK_FOR_TOOL}"
+        return self._client.messages.create(
+            model=self._model,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=system,
+            messages=[{"role": "user", "content": content}],
+            tools=[tool],
+            tool_choice=choice,
+        )
 
 
 def backend_from_env(cfg: Llm) -> Backend | None:

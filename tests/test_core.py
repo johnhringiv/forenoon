@@ -499,3 +499,35 @@ def test_a_call_is_priced_at_its_models_rates_with_cached_input_apart(tmp_path):
     db.commit()
     db.close()
     assert abs(Store(old).llm_usage_since("2000-01-01")["cost"] - 0.01) < 1e-12
+
+
+def test_a_model_that_refuses_a_forced_tool_call_is_asked_for_it_instead():
+    import anthropic
+    import httpx
+
+    from app.config import Llm
+    from app.llm import ASK_FOR_TOOL, ClaudeBackend
+
+    calls = []
+
+    class Messages:
+        def create(self, **kw):
+            calls.append(kw)
+            if kw["tool_choice"]["type"] == "tool":
+                response = httpx.Response(400, request=httpx.Request("POST", "https://api.example/v1/messages"))
+                raise anthropic.BadRequestError(
+                    'tool_choice: type "tool" and "any" are not supported for this model', response=response, body=None
+                )
+            block = type("Block", (), {"type": "tool_use", "input": {"ok": True}})()
+            usage = type("Usage", (), {"input_tokens": 10, "output_tokens": 2, "cache_creation_input_tokens": 0,
+                                       "cache_read_input_tokens": 0})()  # fmt: skip
+            return type("Response", (), {"content": [block], "usage": usage, "stop_reason": "tool_use"})()
+
+    backend = ClaudeBackend(Llm(model="claude-sonnet-5-5"), "test-key")
+    backend._client = type("Client", (), {"messages": Messages()})()
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    assert backend.structured("Judge.", "<x/>", schema).data == {"ok": True}
+    assert backend.structured("Judge.", "<y/>", schema).data == {"ok": True}
+    # Refused once, then asked in the prompt for the rest of the run: three calls, not four.
+    assert [c["tool_choice"]["type"] for c in calls] == ["tool", "auto", "auto"]
+    assert calls[1]["system"].endswith(ASK_FOR_TOOL) and calls[0]["system"] == "Judge."
