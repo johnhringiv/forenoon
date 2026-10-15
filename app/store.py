@@ -378,6 +378,23 @@ class Store:
                 (status, article_id, error, now_iso(), request_id),
             )
 
+    # articles to fetch again (queued by "Fetch again" on the web app's Archive page)
+
+    def refresh_requests(self) -> list[sqlite3.Row]:
+        """Articles waiting to be fetched again, oldest first; none until the web app has made its table."""
+        if not self._has_table("refresh_requests"):
+            return []
+        return self.db.execute(
+            "SELECT id, user_id, article_id FROM refresh_requests WHERE status = 'queued' ORDER BY id"
+        ).fetchall()
+
+    def finish_refresh(self, request_id: int, status: str, error: str = "") -> None:
+        with self.db:
+            self.db.execute(
+                "UPDATE refresh_requests SET status = ?, error = ?, done_at = ? WHERE id = ?",
+                (status, error, now_iso(), request_id),
+            )
+
     def added_by(self, user_id: str, article_id: str) -> bool:
         """Whether this reader added the article by hand."""
         if not self._has_table("add_requests"):

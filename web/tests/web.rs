@@ -1544,3 +1544,44 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
     assert_eq!(db::learned(pool, "john").await.unwrap().notes, "Finishes long <b>technical</b> pieces.");
     assert_eq!(db::learned(pool, "mary").await.unwrap().notes, "");
 }
+
+#[tokio::test]
+async fn an_article_in_the_archive_can_be_fetched_again() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Compilers today", "john", sent).await;
+    article(pool, "m1", "https://blog.example/m", "Blog", "Mary's own", "mary", sent).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    let page = browser.get(&site, "/archive").await;
+    assert!(page.text.contains(r#"<form class="send apart" method="post" action="/archive/refresh">"#));
+    assert!(page.text.contains("Fetch again") && !page.text.contains(r#"http-equiv="refresh""#));
+    let csrf = page.csrf();
+    let ask = [("csrf", csrf.as_str()), ("article", "a1"), ("back", "/archive?q=compilers")];
+    assert_eq!(browser.post(&site, "/archive/refresh", &ask).await.location, "/archive?q=compilers#a-a1");
+    // Asked twice while it waits: still one request.
+    browser.post(&site, "/archive/refresh", &ask).await;
+    let queued: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT user_id, article_id, status FROM refresh_requests").fetch_all(pool).await.unwrap();
+    assert_eq!(queued, [("john".to_owned(), "a1".to_owned(), "queued".to_owned())]);
+
+    // While it waits the button is gone and the page reloads itself.
+    let waiting = browser.get(&site, "/archive").await.text;
+    assert!(waiting.contains("Being fetched again") && !waiting.contains(">Fetch again<"));
+    assert!(waiting.contains(r#"http-equiv="refresh""#));
+    sqlx::query("UPDATE refresh_requests SET status = 'failed', error = 'HTTP 403', done_at = ?")
+        .bind(sent)
+        .execute(pool)
+        .await
+        .unwrap();
+    let failed = browser.get(&site, "/archive").await.text;
+    assert!(failed.contains("Could not be fetched again: HTTP 403") && failed.contains(">Fetch again<"));
+
+    // Not another reader's article, and not from elsewhere.
+    let other = [("csrf", csrf.as_str()), ("article", "m1")];
+    assert_eq!(browser.post(&site, "/archive/refresh", &other).await.status, StatusCode::NOT_FOUND);
+    let forged = [("csrf", "forged"), ("article", "a1")];
+    assert_eq!(browser.post(&site, "/archive/refresh", &forged).await.status, StatusCode::FORBIDDEN);
+}

@@ -725,6 +725,66 @@ pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str, story: boo
     Ok(Queued::Added)
 }
 
+// "Fetch again"; the pipeline's scheduler fetches and extracts the article again
+
+pub const REFRESHES_PER_DAY: i64 = 30;
+
+pub struct RefreshState {
+    pub article_id: String,
+    pub status: String,
+    pub error: String,
+    pub done_at: Option<String>,
+}
+
+/// Ask for an article in the reader's library to be fetched and extracted again.
+pub async fn queue_refresh(pool: &SqlitePool, user: &str, article: &str) -> Result<Queued, sqlx::Error> {
+    let (now, day_ago) = (now_iso(), iso_in(-24 * 3600));
+    let mut tx = pool.begin().await?;
+    let waiting = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM refresh_requests WHERE article_id = ? AND status = 'queued'",
+        article
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if waiting > 0 {
+        return Ok(Queued::Waiting);
+    }
+    let recent = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM refresh_requests WHERE user_id = ? AND requested_at > ?",
+        user,
+        day_ago
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if recent >= REFRESHES_PER_DAY {
+        return Ok(Queued::TooMany);
+    }
+    sqlx::query!(
+        "INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES (?, ?, ?)",
+        user,
+        article,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Queued::Added)
+}
+
+/// The reader's requests of the last day, oldest first, so a later one replaces an earlier.
+pub async fn refresh_states(pool: &SqlitePool, user: &str) -> Result<Vec<RefreshState>, sqlx::Error> {
+    let day_ago = iso_in(-24 * 3600);
+    sqlx::query_as!(
+        RefreshState,
+        "SELECT article_id, status, error, done_at FROM refresh_requests
+         WHERE user_id = ? AND requested_at > ? ORDER BY id",
+        user,
+        day_ago
+    )
+    .fetch_all(pool)
+    .await
+}
+
 // problem reports ("this article came out broken"): for the admin, apart from any rating
 
 /// Log the report and note it in the pipeline's extraction log, as the Kindle link does.

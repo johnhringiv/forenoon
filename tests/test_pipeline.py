@@ -1603,3 +1603,38 @@ def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(en
     assert asked == [("site-paywall.example", "https://www.paywall.example/story")]
     row = store.db.execute("SELECT status, error FROM add_requests").fetchone()
     assert (row["status"], row["error"]) == ("done", "")
+
+
+def test_an_article_fetched_again_gets_a_new_summary_and_keeps_the_old_when_it_cannot(env):
+    from app.adds import refresh_requested
+    from app.urls import article_id
+
+    cfg, store, fetcher = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    stale = "| Next | Section menu | Main menu | Previous | OilOutput rose"
+    ids = {}
+    for name, url in (("calibre", "https://found.example/post-80"), ("walled", "https://www.paywall.example/x")):
+        ids[name] = article_id(url)
+        # From a source since removed, as the Calibre recipes were.
+        store.upsert_article(ids[name], url, "Old recipe", "A title", "", None)
+        store.set_extraction(ids[name], "degraded", "short (90 words)", 90)
+        store.set_preview(ids[name], "", stale)
+    ask = "INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES (?, ?, 'x')"
+    for user, name in (("john", "calibre"), ("john", "walled"), ("stranger", "calibre")):
+        store.db.execute(ask, (user, ids[name]))
+    store.db.commit()
+
+    assert refresh_requested(cfg, store, fetcher) == 1 and store.refresh_requests() == []
+    rows = store.db.execute("SELECT status, error FROM refresh_requests ORDER BY id").fetchall()
+    assert [r["status"] for r in rows] == ["done", "failed", "failed"]
+    assert "save a session for it under Subscriber sessions" in rows[1]["error"]
+    assert rows[2]["error"] == "no such reader"
+    fresh = store.get_article(ids["calibre"])
+    assert fresh.status == "clean" and fresh.word_count == 350 and fresh.title == "A title"
+    assert fresh.description and not fresh.description.startswith("|")
+    assert (cfg.pages_dir / f"{ids['calibre']}.json.gz").exists()
+    # Nothing could be read: what was there stays.
+    kept = store.get_article(ids["walled"])
+    assert (kept.description, kept.status, kept.word_count) == (stale, "degraded", 90)

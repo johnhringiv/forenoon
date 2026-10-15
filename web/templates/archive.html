@@ -51,6 +51,11 @@
 {% if card.sendable %}<button class="kindle">Send to Kindle</button>{% endif %}
 {% if let Some(sent) = card.sent %}<span>{{ sent }}</span>{% endif %}
 </form>{% endif %}
+<form class="send apart" method="post" action="/archive/refresh">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
+{% if !card.refreshing %}<button class="link">Fetch again</button>{% endif %}
+{% if let Some(refreshed) = card.refreshed %}<span>{{ refreshed }}</span>{% endif %}
+</form>
 </div>
 {% endfor %}
 {% if newer.is_some() || older.is_some() %}<nav class="pager">

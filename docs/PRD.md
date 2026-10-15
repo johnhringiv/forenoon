@@ -587,6 +587,17 @@ the route `manual` and its site as the source.
 - A link that cannot be fetched or has no article in it is marked failed, with the reason
   shown on the Archive page for a day. At most 30 links a day per reader.
 
+### Fetching an article again
+
+Each row on the Archive page has **Fetch again**: after signing in to a site whose page was
+refused, or once the extraction has been improved, so an article read badly can be read
+again. The web program queues it and the scheduler works it with the added links, within a
+minute. The page is fetched again as the article's source would fetch it (from its page,
+with the feed's copy kept from the first time to fall back on, when the source is gone) and
+saved, and the summary, length, thumbnail and extraction verdict are replaced. Ratings and
+deliveries are not touched. When nothing can be read, what was there stays and the reason is
+shown on the row for a day. At most 30 a day per reader.
+
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
@@ -658,8 +669,8 @@ database with the pipeline.
   or read or everything, the feed or front page that brought it, how it arrived,
   the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
   length). Without a choice it shows what was delivered, added by hand or read by the
-  model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
-  form at the top adds a link by hand (section 7g). A reader sees only what was delivered
+  model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card, and
+  fetched again (section 7g). A form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
 - **Reading** (`/reading`). What the pipeline picks for: the reader's interests, in their
   own words, and their stories a day; below them, the notes the pipeline keeps on the
