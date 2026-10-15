@@ -145,6 +145,7 @@ def choose(
     subject; None when there was nothing to choose or the call failed."""
     if backend is None or places <= 0 or len(candidates) <= places:
         return None  # nothing to choose between: every candidate goes
+    model = cfg.choose_model or cfg.model
     estimate = TOKENS_OVERHEAD + TOKENS_PER_ARTICLE * len(candidates)
     used = store.llm_tokens_since(today_start)
     if used + estimate > cfg.daily_token_cap:
@@ -156,9 +157,10 @@ def choose(
             _listing(candidates, places, reserves, cfg.most_per_subject, limits, already),
             SCHEMA,
             shared=reader_profile(user, store),
+            model=model,
         )
     except LlmError as exc:
-        store.log_llm_call("choose", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_call("choose", model, 0, 0, "error", str(exc)[:300])
         log.warning("choosing the issue failed: %s", exc)
         return None
     wanted = {c.id for c in candidates}
@@ -177,5 +179,5 @@ def choose(
         for entry in (named if isinstance(named, list) else [])
         if isinstance(entry, dict) and entry.get("id") in wanted
     }
-    store.log_llm_reply("choose", cfg.model, reply, "ok" if chosen else "invalid")
+    store.log_llm_reply("choose", model, reply, "ok" if chosen else "invalid")
     return Choice(chosen, spare, subjects) if chosen else None
