@@ -80,6 +80,10 @@ pages and kept in the database.
 | `forenoon send-queue`                              | Fetches the links readers added and sends what they asked for on the web pages. The scheduler does this every minute.      |
 | `forenoon golden`                                  | Writes a test EPUB with code, tables, lists and an image.                                                                  |
 
+Checks on the device have two helpers in `tools/`, outside the container: `send_epub.py` emails
+one EPUB to a Kindle address with the mail settings from the environment, and
+`measure_screenshot.py` prints the left edge of each text row of a Kindle screenshot, in pixels.
+
 ## Deploy
 
 `deploy/docker-compose.yml` runs the pipeline, the feedback endpoint and (optionally) a

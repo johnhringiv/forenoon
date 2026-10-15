@@ -31,11 +31,31 @@ x<sup>2</sup>.</p>
     }
     // a deliberately long line: 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789
 }</code></pre>
-<p>Code must be monospaced, left-aligned and never hyphenated: the columns below line up, the
+<p>Code must be monospaced, left-aligned and never hyphenated: the tree's branches and the box
+line up at every font size, a wrapped line continues four characters past its own indent, the
 wrapped log line has no stretched spaces, and no hyphen appears that is not in the text.</p>
 <pre><code>src/
 ├── main.rs      0O 1lI
-└── lib.rs       -> != &gt;= &lt;-x&gt;
+└── net/         -> != &gt;= &lt;-x&gt;
+    ├── mod.rs
+    └── tls/
+        ├── mod.rs
+        └── handshake/
+            ├── client.rs
+            └── server.rs
+                └── (end)
+
+    +-------+        +-------+
+    | read  | -----> | rank  |
+    +-------+        +-------+
+        |                |
+        v                v
+    +-------+        +-------+
+    | store |        | book  |
+    +-------+        +-------+
+
+    let entity_mut = &amp;mut world.entities[entity_id]; // bounds check, possible panic
+    if a == b &amp;&amp; c =&gt; d::e { world.get_collision_for_entity(entity_read); }
 Jun 22 11:41:18 workstation mount[87790]: SSHFS version 3.7.1 executing &lt;-oServerAliveInterval=15&gt;</code></pre>
 <h2>Emoji</h2>
 <p>Each should show as one black-and-white glyph: 💩 🎉 ✅, a family 👨‍👩‍👧, a flag 🇺🇸, a keycap 1️⃣. These stay in the reading font: © ™.</p>
