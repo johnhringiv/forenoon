@@ -101,6 +101,8 @@ class Extracted:
     author: str = ""
     image_url: str = ""  # untrusted, like everything else from the page
     description: str = ""
+    # Pictures on the page above the article's text: a header image is often outside it.
+    page_images: list[str] = field(default_factory=list)
     signed_out: str = ""  # why a subscriber's session needs signing in again; set by the pipeline
 
     @property
@@ -556,6 +558,36 @@ def _add_standfirst(body: lxml.html.HtmlElement, page_html: str, description: st
     lead.tail, body.text = body.text, None
 
 
+# Site furniture rather than the article's picture, by its class, id, address or alt text.
+NOT_A_PICTURE = re.compile(r"logo|avatar|icon|badge|sprite|gravatar|emoji", re.IGNORECASE)
+
+
+def _page_pictures(page_html: str, url: str, body: lxml.html.HtmlElement, most: int = 6) -> list[str]:
+    """Picture addresses on the page above where the article's text begins, as absolute
+    http(s) URLs; logos, avatars and icons left out. Pictures below it (related posts, a
+    sidebar) may belong to something else, and none is better than a wrong one; so is none at
+    all when the text cannot be found on the page."""
+    opening = next((_norm(p.text_content()) for p in body.iter("p") if len(p.text_content().split()) >= 5), "")
+    if not opening:
+        return []
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return []
+    found: list[str] = []
+    for el in page.iter("img", "p"):
+        if el.tag == "p":
+            if _norm(el.text_content()).startswith(opening[:60]):
+                return found[:most]
+            continue
+        src = urljoin(url, (el.get("src") or "").strip())
+        if NOT_A_PICTURE.search(" ".join(el.get(name) or "" for name in ("class", "id", "src", "alt"))):
+            continue
+        if src.startswith(("http://", "https://")) and len(src) <= MAX_PREVIEW_URL and src not in found:
+            found.append(src)
+    return []
+
+
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
     """Lead image and summary for listing an article; falls back to the body's own."""
     image = urljoin(url, image.strip()) if image.strip() else ""
@@ -580,6 +612,7 @@ def extract(
     candidates: dict[str, lxml.html.HtmlElement] = {}
     reference = 0
     title = author = image = description = ""
+    pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
     if page_html and mode != "feed":
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
@@ -616,6 +649,8 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    if page_html:
+        pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
     if page_html and description:
         _add_standfirst(body, page_html, description)
     _attach_notes(body, notes.get(method), url)
@@ -636,4 +671,4 @@ def extract(
         reasons.append("looks truncated")
     status = "degraded" if reasons else "clean"
     image, description = _preview(body, url, image, description)
-    return Extracted(body, status, reasons, words, method, title, author, image, description)
+    return Extracted(body, status, reasons, words, method, title, author, image, description, pictures)
