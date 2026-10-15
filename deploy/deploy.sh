@@ -204,6 +204,22 @@ if [ -f "$DIR/forenoon.sqlite3" ] && [ ! -e "$DATA_DIR/forenoon.sqlite3" ]; then
 fi
 [ -n "$FORENOON_SMTP_HOST" ] || echo "FORENOON_SMTP_HOST is not set in $ENV_FILE: nothing can be delivered"
 
+# The web pages first: they apply the database migrations, and the pipeline reads the new
+# columns as soon as it starts. Healthy means migrated, since they serve only afterwards.
+start_web
+if [ "$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null)" = "true" ]; then
+    i=0
+    until docker exec forenoon-web forenoon-web health >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ $i -ge 60 ]; then
+            echo "web pages never became healthy; the database may not be migrated"
+            docker logs forenoon-web 2>&1 | tail -5
+            break
+        fi
+        sleep 1
+    done
+fi
+
 echo "$(date -u +%FT%TZ) recreating forenoon containers from $IMAGE"
 # cloudflared first: it lives in the feedback container's network namespace.
 for c in forenoon-cloudflared forenoon-feedback forenoon; do
@@ -245,7 +261,6 @@ done
 
 start_tunnel
 start_browser
-start_web
 
 sleep 5
 docker ps --filter name=forenoon --format '{{.Names}}: {{.Status}}'
