@@ -153,14 +153,26 @@ possible panic`), and tested with six books on the Oasis, measured in screenshot
   zero-width space (U+200B) works:** the line breaks there, with nothing added. The guidelines
   say only space, nbsp and zwnj are supported, and format characters "may cause problems"; the
   book with them opened and read fine.
+- **Leading spaces kept in the text of a line block never come out at character width**, so
+  they cannot carry a code line's indent at every font size. Tried after a zero-width space,
+  after a zero-width non-joiner, and inside an inline `span`, each with the hang in CSS: the
+  spaces were wider than a character (or narrower, in the `span`) and each indent level added
+  more error, so a tree fanned out. The indent in em, fixed pixels, was the only version that
+  lined up at both sizes tried. Do not try this again on the Oasis; see below for the numbers.
 - The font setting offers "Publisher Font" for a book whose stylesheet sets a font on `pre,
 code` for the whole book, not for one that sets it through a class. It changes nothing.
 
 So code is built (`_code_lines` in `app/render.py`) as one `span.ln` per source line, with the
 line's indent taken out of the text and set in em with the hang (`.iN`: `padding-left:
 (N + 4) × 0.9em; text-indent: -3.6em`), and a zero-width space after `. , ; : ( [ { / ? = & < >`.
-0.9 em per character matches a character at the reader's usual size on the Oasis; at other
-sizes indents are a little wider or narrower than the code's own spaces, still in proportion.
+One indent character (0.9 em) measured 25 px on the Oasis, between a code character at the
+usual size (23 px) and at the next larger one (26 px), so tree output and box diagrams line up
+at both: a 4-space step is 4.35 characters at the usual size and 3.85 at the larger. Keeping
+the spaces in the text instead does not work: after a zero-width space or non-joiner, or inside
+an inline `span`, leading spaces come out wider than a character and each level wider than the
+last (4, 8, 12, 16 spaces measured 123, 265, 425, 606 px at the usual size; inside a `span`,
+61, 132, 216, 313 px at both sizes). The CSS indent was the only one of the four that kept a
+tree's branches aligned.
 Highlighting elements that span lines are closed and reopened, tabs become four spaces, and an
 empty line keeps its height with a non-breaking space.
 
