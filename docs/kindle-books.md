@@ -120,6 +120,50 @@ samp {
 }
 ```
 
+One book contradicts the first finding: the Valen article built before 14 October, whose
+stylesheet named `font-family: monospace` and embedded no font, was drawn in the device's own
+Courier-like slab, not Bookerly. Every book that showed `monospace` as Bookerly embedded a
+font. Untested guess: naming `monospace` loses the monospace font only in a book that embeds
+one.
+
+### Wrapped code lines start at the left edge (14 October 2026)
+
+A code line too long for the screen wraps, and the wrapped part starts at the left edge of the
+block, where it reads as a new line of code; indentation stops showing structure. Found with
+the Valen article's Rust (`let entity_mut = &mut world.entities[entity_id]; // bounds check,
+possible panic`), and tested with six books on the Oasis, measured in screenshots.
+
+- **A hanging indent works, in em only.** Each source line as a block
+  (`span { display: block }`) with `padding-left: Xem; text-indent: -Xem` puts wrapped parts
+  X in. The same in `ch` does nothing: the guidelines list no `ch` for either property.
+- **An em in `padding-left` and `text-indent` is a fixed size, whatever the reader's font
+  size.** At two sizes the same rules put text at the same pixel (26 px per em), while a code
+  character went from 23 to 26 px. So nothing in CSS scales with the font setting; only text
+  does. (`font-size` in em does apply: code is smaller than body text.)
+- **Spaces at the start of a block are drawn 9 px wide, whatever the font size** (a code
+  character is 23 to 26 px). Non-breaking spaces too. Spaces later in a line, and at the start
+  of the second and later lines of a plain `pre`, are a full character. So a 2-space indent in
+  a line block showed as one character, and an 8-space one as three.
+- **A token longer than the room left is split with a hyphen** (`get_collision_for_entity(en-`
+  / `tity_read);`), whatever the CSS: `-webkit-hyphens: none` and `adobe-hyphenate: none`
+  (which do stop hyphenation between words), `hyphens: manual`, `word-wrap: normal` and
+  `overflow-wrap: normal` all leave it. `word-break: break-all` stops it, but then every line
+  breaks at the last character that fits, inside identifiers (`usi` / `ze`).
+- **`<wbr>` is ignored, and so is a zero-width non-joiner (U+200C)** as a break point. **A
+  zero-width space (U+200B) works:** the line breaks there, with nothing added. The guidelines
+  say only space, nbsp and zwnj are supported, and format characters "may cause problems"; the
+  book with them opened and read fine.
+- The font setting offers "Publisher Font" for a book whose stylesheet sets a font on `pre,
+code` for the whole book, not for one that sets it through a class. It changes nothing.
+
+So code is built (`_code_lines` in `app/render.py`) as one `span.ln` per source line, with the
+line's indent taken out of the text and set in em with the hang (`.iN`: `padding-left:
+(N + 4) × 0.9em; text-indent: -3.6em`), and a zero-width space after `. , ; : ( [ { / ? = & < >`.
+0.9 em per character matches a character at the reader's usual size on the Oasis; at other
+sizes indents are a little wider or narrower than the code's own spaces, still in proportion.
+Highlighting elements that span lines are closed and reopened, tabs become four spaces, and an
+empty line keeps its height with a non-breaking space.
+
 ## Rules that came from the device
 
 - Images are flattened onto white before conversion, so transparent diagrams stay readable.
@@ -152,8 +196,8 @@ Found by scanning the three issues sent so far (12 to 14 October):
 - **Box drawing and arrows in code** (`├─ │ └`, `→ ← ↑ ↓`, from `tree` output and diagrams).
   JetBrains Mono NL has all of those seen so far except `⇄`. The golden test book has a
   `tree`-style block to check them.
-- **Very long lines in code** (up to 255 characters). They should wrap, because `pre` is set to
-  `white-space: pre-wrap`.
+- **Very long lines in code** (up to 255 characters). An 86-character line wrapped (above);
+  longer ones should too.
 - Deep nesting (up to 21 levels in one chapter) has caused no trouble seen so far.
 
 ## How to check a book on the device

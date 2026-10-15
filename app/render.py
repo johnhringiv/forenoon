@@ -54,6 +54,23 @@ td, th { border: 1px solid #000; padding: 0.2em 0.4em; vertical-align: top; text
 .feedback .scale { font-size: 0.8em; }
 """
 
+# Each source line of a code block is its own block with a hanging indent, so a wrapped part
+# starts past its line's own indent instead of at the left edge, where it reads as a new line of
+# code. The indent is taken out of the text and set in em with the hang: on the Kindle an em in
+# padding and text-indent is a fixed size whatever the reader's font size, and spaces at the
+# start of a block are drawn narrower than a character (docs/kindle-books.md).
+CODE_CHAR = 0.9  # em per character of indent: one character at the reader's usual font size
+CODE_HANG = 4  # characters past the line's own indent, so a wrapped part is not read as nested
+CODE_INDENT_MAX = 24  # deeper lines share this indent, or nothing would be left for the code
+# A zero-width space after each of these, so a long token breaks there instead of being
+# hyphenated: the device adds a hyphen to any token longer than the room left, whatever the CSS.
+CODE_BREAK_AFTER = ".,;:([{/?=&<>"
+CODE_LINE_CSS = ".ln { display: block; }\n" + "".join(
+    f".i{n} {{ padding-left: {(n + CODE_HANG) * CODE_CHAR:.1f}em; text-indent: -{CODE_HANG * CODE_CHAR:.1f}em; }}\n"
+    for n in range(CODE_INDENT_MAX + 1)
+)
+CSS += CODE_LINE_CSS
+
 # Code is set in an embedded font: the Kindle draws `font-family: monospace` in its reading
 # font, while code that names no font gets the device's own monospace. So the stylesheet never
 # names `monospace`, and without the font file (local runs) code falls back to the device's.
@@ -149,7 +166,84 @@ def _no_self_closed(body: lxml.html.HtmlElement) -> None:
                 changed = True
 
 
+_BREAK_AFTER = re.compile(f"([{re.escape(CODE_BREAK_AFTER)}])")
+
+
+def _text_runs(el: lxml.html.HtmlElement, path: tuple, out: list[tuple[str, tuple]]) -> None:
+    """Each piece of text under `el`, with the elements it sits in; a <br> is a newline."""
+    for child in el:
+        if child.tag == "br":
+            out.append(("\n", path))
+        elif isinstance(child.tag, str):
+            if child.text:
+                out.append((child.text, path + (child,)))
+            _text_runs(child, path + (child,), out)
+        if child.tail:
+            out.append((child.tail, path))
+
+
+def _code_lines(body: lxml.html.HtmlElement) -> None:
+    """Make each source line of every code block a `span.ln` with its indent as a class.
+
+    Highlighting elements that span lines are closed and reopened. Tabs become four spaces and
+    non-breaking spaces plain ones, so every indent is counted; an empty line keeps its height
+    with a non-breaking space. Done once: a block already split is left alone.
+    """
+    for pre in body.iter("pre"):
+        host = pre
+        if len(pre) == 1 and pre[0].tag == "code" and not (pre.text or "").strip() and not (pre[0].tail or "").strip():
+            host = pre[0]
+        if any(c.tag == "span" and (c.get("class") or "").startswith("ln ") for c in host):
+            continue
+        runs: list[tuple[str, tuple]] = [(host.text, ())] if host.text else []
+        _text_runs(host, (), runs)
+        lines: list[list[tuple[str, tuple]]] = [[]]
+        for text, path in runs:
+            for i, piece in enumerate(text.replace("\t", "    ").replace("\xa0", " ").split("\n")):
+                if i:
+                    lines.append([])
+                if piece:
+                    lines[-1].append((piece, path))
+        if len(lines) > 1 and not lines[-1]:  # the newline before </code>
+            lines.pop()
+        host.text = None
+        for child in list(host):
+            host.remove(child)
+        for line in lines:
+            text = "".join(t for t, _ in line)
+            indent = len(text) - len(text.lstrip(" "))
+            span = etree.SubElement(host, "span", {"class": f"ln i{min(indent, CODE_INDENT_MAX)}"})
+            stack: list[tuple] = []  # (source element, its copy on this line), outermost first
+            left = indent
+            for t, path in line:
+                if left:
+                    k = min(left, len(t) - len(t.lstrip(" ")))
+                    t, left = t[k:], left - k
+                    if not t:
+                        continue
+                common = 0
+                while common < min(len(stack), len(path)) and stack[common][0] is path[common]:
+                    common += 1
+                del stack[common:]
+                for src in path[common:]:
+                    parent = stack[-1][1] if stack else span
+                    stack.append((src, etree.SubElement(parent, src.tag, dict(src.attrib))))
+                target = stack[-1][1] if stack else span
+                t = _BREAK_AFTER.sub("\\1\u200b", t)
+                if len(target):
+                    target[-1].tail = (target[-1].tail or "") + t
+                else:
+                    target.text = (target.text or "") + t
+            if not len(span) and not span.text:
+                span.text = "\xa0"
+            elif len(target):  # no break point is needed at the end of the line
+                target[-1].tail = target[-1].tail.rstrip("\u200b")
+            else:
+                target.text = target.text.rstrip("\u200b")
+
+
 def _body_xhtml(body: lxml.html.HtmlElement) -> str:
+    _code_lines(body)
     _no_self_closed(body)
     text = etree.tostring(body, method="xml", encoding="unicode", with_tail=False)
     # Marks footnotes for readers that show them as pop-ups. The classes are ours, set by the
