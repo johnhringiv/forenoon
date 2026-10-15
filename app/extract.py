@@ -101,7 +101,7 @@ class Extracted:
     author: str = ""
     image_url: str = ""  # untrusted, like everything else from the page
     description: str = ""
-    # The first pictures anywhere on the page: a header image is often outside the article.
+    # Pictures on the page above the article's text: a header image is often outside it.
     page_images: list[str] = field(default_factory=list)
     signed_out: str = ""  # why a subscriber's session needs signing in again; set by the pipeline
 
@@ -562,23 +562,30 @@ def _add_standfirst(body: lxml.html.HtmlElement, page_html: str, description: st
 NOT_A_PICTURE = re.compile(r"logo|avatar|icon|badge|sprite|gravatar|emoji", re.IGNORECASE)
 
 
-def _page_pictures(page_html: str, url: str, most: int = 6) -> list[str]:
-    """The first few picture addresses on the whole page, as absolute http(s) URLs; logos,
-    avatars and icons left out."""
+def _page_pictures(page_html: str, url: str, body: lxml.html.HtmlElement, most: int = 6) -> list[str]:
+    """Picture addresses on the page above where the article's text begins, as absolute
+    http(s) URLs; logos, avatars and icons left out. Pictures below it (related posts, a
+    sidebar) may belong to something else, and none is better than a wrong one; so is none at
+    all when the text cannot be found on the page."""
+    opening = next((_norm(p.text_content()) for p in body.iter("p") if len(p.text_content().split()) >= 5), "")
+    if not opening:
+        return []
     try:
         page = lxml.html.fromstring(page_html)
     except (etree.ParserError, ValueError):
         return []
     found: list[str] = []
-    for img in page.iter("img"):
-        src = urljoin(url, (img.get("src") or "").strip())
-        if NOT_A_PICTURE.search(" ".join(img.get(name) or "" for name in ("class", "id", "src", "alt"))):
+    for el in page.iter("img", "p"):
+        if el.tag == "p":
+            if _norm(el.text_content()).startswith(opening[:60]):
+                return found[:most]
+            continue
+        src = urljoin(url, (el.get("src") or "").strip())
+        if NOT_A_PICTURE.search(" ".join(el.get(name) or "" for name in ("class", "id", "src", "alt"))):
             continue
         if src.startswith(("http://", "https://")) and len(src) <= MAX_PREVIEW_URL and src not in found:
             found.append(src)
-            if len(found) == most:
-                break
-    return found
+    return []
 
 
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
@@ -615,7 +622,6 @@ def extract(
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
-        pictures = _page_pictures(page_html, url)
         kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
         # Long articles only: on a short post the page furniture outweighs the text.
         if reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
@@ -643,6 +649,8 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    if page_html:
+        pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
     if page_html and description:
         _add_standfirst(body, page_html, description)
     _attach_notes(body, notes.get(method), url)
