@@ -150,6 +150,23 @@ impl Browser {
     }
 }
 
+/// The page's inline script, named the way a Content-Security-Policy names it: its SHA-256 in base64.
+fn script_hash(page: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let (_, rest) = page.split_once("<script>").expect("the theme script");
+    let script = rest.split_once("</script>").unwrap().0;
+    let digest = Sha256::digest(script.as_bytes());
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in digest.chunks(3) {
+        let n = chunk.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b)) << (8 * (3 - chunk.len()));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char } else { '=' });
+        }
+    }
+    format!("sha256-{out}")
+}
+
 #[tokio::test]
 async fn pages_need_a_session_and_sign_in_is_limited() {
     let site = site(true).await;
@@ -167,7 +184,11 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
     }
     assert_eq!(browser.get(&site, "/healthz").await.text, "ok");
     let page = browser.get(&site, "/login").await;
-    assert!(page.status == StatusCode::OK && page.csp.contains("default-src 'none'") && !page.csp.contains("script"));
+    assert!(page.status == StatusCode::OK && page.csp.contains("default-src 'none'"));
+    // The only script is the light/dark switch, allowed by its hash alone.
+    assert_eq!(page.text.matches("<script").count(), 1);
+    assert!(page.csp.contains(&format!("script-src '{}';", script_hash(&page.text))), "{}", page.csp);
+    assert!(page.text.contains(r#"<button class="theme" type="button" hidden"#));
     assert!(browser.cookie.is_none(), "the sign-in page must not start a session");
 
     // Wrong password, unknown account, and a form posted from another site.
@@ -260,7 +281,8 @@ async fn newsstand_shows_only_the_readers_own_deliveries_as_untrusted_text() {
     let older = browser.get(&site, rest.split('"').next().unwrap()).await;
     let text = &older.text;
     assert!(text.contains("Saturday 10 October 2026") && text.contains("2 articles, sent 06:00"), "{text}"); // local time
-    assert!(text.contains("A &#60;script&#62;title&#60;/script&#62;") && !text.contains("<script"));
+    // One script on the page: the theme switch, never the title's.
+    assert!(text.contains("A &#60;script&#62;title&#60;/script&#62;") && text.matches("<script").count() == 1);
     assert!(
         text.contains(r#"href="https://blog.example/post""#) && text.contains(r#"src="https://blog.example/lead.jpg""#)
     );

@@ -674,8 +674,12 @@ database with the pipeline.
   issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
   Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
-  choices: ratings, reasons, finished. The pages use no scripts, so the Archive's filters
-  apply when "Apply filters" is pressed.
+  choices: ratings, reasons, finished. The pages work without scripts, so the Archive's
+  filters apply when "Apply filters" is pressed.
+- **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
+  of the masthead switches; the choice is kept in that browser, and choosing what the system
+  already shows goes back to following it. It is the pages' one script; without scripts the
+  button is not shown.
 - **Send to Kindle.** Each article has a button that sends it to the reader's own
   Kindle address, as a book of its own with fresh rating links. An article the daily run
   passed over can be sent from the Archive: it is then recorded as delivered and marked
@@ -700,7 +704,8 @@ database with the pipeline.
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
 - Article text is untrusted here as elsewhere: everything is escaped, links and images must
-  be plain `http(s)`, and the content security policy allows no scripts. Lead images are
+  be plain `http(s)`, and the content security policy allows no script but the light/dark
+  switch, named by its hash. Lead images are
   loaded by the browser from the article's own site, without a referrer.
 - **Pictures.** The pipeline makes a small thumbnail for each article it prepares, from the
   page's lead image or else the article's first few pictures, and keeps it in `thumbs/` in
