@@ -387,6 +387,31 @@ def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
     assert not store.selection_rows(user.id)  # dry runs record no selections
 
 
+def test_batches_mix_feed_articles_and_finds(env):
+    import json
+
+    from app.config import Llm
+    from app.rank import rank
+    from app.sources import Item
+
+    cfg, store, _ = env
+
+    def items(source, n):
+        return [
+            Item(f"{source}{k}", f"https://x.example/{source}{k}", Source(source), "t", "", None, "") for k in range(n)
+        ]
+
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
+    feed, found = items("feed", 12), items("find", 12)
+    ranking = rank(Llm(enabled=True, batch_size=6), backend, store, cfg.users[0], feed, 4, "2026-03-10", found=found)
+    batches = [
+        {c["id"][:4] for c in json.loads(p.split("<candidates>\n")[1].split("\n</candidates>")[0])}
+        for _, p in backend.prompts
+    ]
+    assert len(batches) == 4 and sum(b == {"feed", "find"} for b in batches) >= 3
+    assert len(ranking.choices) == 24
+
+
 def test_ranking_is_batched_and_survives_one_failed_batch(env):
     import json
 
@@ -441,6 +466,18 @@ def test_a_source_takes_no_more_than_its_places_a_day(env):
     report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
     delivered = [store.get_article(i).source for i in report.delivered]
     assert delivered == ["Pinned", "Blog"]  # the Blog's other posts wait, though places were left
+
+
+def test_a_pinned_source_gives_everything_but_uses_no_more_than_its_places(env):
+    cfg, store, fetcher = env
+    pin = {"Blog": {"pinned": True, "daily_max": 1}}
+    sources = tuple(dataclasses.replace(s, **pin[s.name]) if s.name in pin else s for s in cfg.sources)
+    cfg = dataclasses.replace(cfg, sources=sources)
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    delivered = sorted(store.get_article(i).source for i in report.delivered)
+    # Every Blog post, though only one uses a place; the other place is the other pinned source's.
+    assert delivered.count("Blog") >= 2 and delivered.count("Pinned") == 1 and "Teaser" not in delivered
 
 
 def test_a_built_in_source_takes_no_more_than_its_places_a_day(env):

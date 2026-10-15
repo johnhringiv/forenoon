@@ -13,6 +13,7 @@ import math
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
+from random import Random
 
 import lxml.html
 
@@ -207,8 +208,14 @@ def rank(
     size = max(1, cfg.batch_size)
     scores: dict[str, tuple[float, str]] = {}
     problem = ""
-    for start in range(0, len(candidates), size):
-        batch = candidates[start : start + size]
+    # Shuffled when there is more than one batch: in the order given, the finds (which come
+    # last) would be judged mostly among themselves, and feed articles among themselves, each
+    # on its own batch's scale. Its own generator, by day, so the exploration pick is unchanged.
+    mixed = list(candidates)
+    if len(mixed) > size:
+        Random(today_start).shuffle(mixed)
+    for start in range(0, len(mixed), size):
+        batch = mixed[start : start + size]
         used = store.llm_tokens_since(today_start)
         if used + TOKENS_OVERHEAD + TOKENS_PER_CANDIDATE * len(batch) > cfg.daily_token_cap:
             problem = f"daily token cap reached ({used} of {cfg.daily_token_cap} used)"
