@@ -882,12 +882,21 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
          "lasting": "days", "links": []}
         for a in listed
     ]  # fmt: skip
-    # The model takes Post 2 over the higher-scored Post 1, for the issue as a whole.
-    backend.choice = lambda listed, places: [c["id"] for c in listed if c["title"] == "Post 2"]
+    # The model takes Post 2 over the higher-scored Post 1, for the issue as a whole, and names
+    # Post 1 too, for which there is no place.
+    order = {"Post 2": 0, "Post 1": 1}
+    backend.choice = lambda listed, places: sorted((c["id"] for c in listed), key=lambda i: order[
+        next(c["title"] for c in listed if c["id"] == i)])  # fmt: skip
     report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=backend)
 
     assert "issue chosen" in report.ranking
     assert [store.get_article(i).title for i in report.delivered] == ["Post 9", "Post 2"]
+    # What became of each choice is in the run's report.
+    assert [(c["title"], c["outcome"]) for c in report.chosen] == [
+        ("Post 2", "sent"),
+        ("Post 1", "not sent: the day's places were taken"),
+    ]
+    assert "1. Post 2 (Blog): sent" in report.to_markdown()
     listed, places, _ = backend.choosing[0]
     assert places == 1 and {c["title"] for c in listed} == {"Post 1", "Post 2"}
     assert {c["title"]: c["score"] for c in listed}["Post 1"] == 9 and all(c["words"] > 0 for c in listed)
