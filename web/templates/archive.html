@@ -19,6 +19,7 @@
 </div>
 <p class="hint">The page is fetched and kept like any article. In your next issue it goes first and takes one of the day's places. Kept as read, it is never sent, and its rating counts when choosing what to send you.</p>
 {% for add in pending %}<p class="hint{% if add.failed %} failing{% endif %}">{{ add.url }}: {{ add.note }}</p>{% endfor %}
+{% if failed %}<p><button class="link" formaction="/archive/added/clear" formnovalidate>Clear the links that could not be added</button></p>{% endif %}
 </form>
 <form class="source" method="get" action="/archive">
 <div class="fields">

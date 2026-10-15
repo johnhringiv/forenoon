@@ -632,17 +632,29 @@ pub struct AddState {
 }
 
 /// The reader's links from the last day that are still being fetched or could not be, newest first.
+/// A failure is left out once it was cleared, or once the same link was added again.
 pub async fn unfinished_adds(pool: &SqlitePool, user: &str) -> Result<Vec<AddState>, sqlx::Error> {
     let day_ago = iso_in(-24 * 3600);
     sqlx::query_as!(
         AddState,
-        "SELECT url, status, error FROM add_requests
-         WHERE user_id = ? AND requested_at > ? AND status != 'done' ORDER BY id DESC LIMIT 20",
+        "SELECT url, status, error FROM add_requests r
+         WHERE user_id = ?1 AND requested_at > ?2 AND status != 'done'
+         AND NOT (status = 'failed' AND (dismissed = 1 OR EXISTS (
+             SELECT 1 FROM add_requests later WHERE later.user_id = r.user_id AND later.url = r.url AND later.id > r.id)))
+         ORDER BY id DESC LIMIT 20",
         user,
         day_ago
     )
     .fetch_all(pool)
     .await
+}
+
+/// Stop showing the reader's links that could not be added. They stay on record.
+pub async fn dismiss_failed_adds(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE add_requests SET dismissed = 1 WHERE user_id = ? AND status = 'failed'", user)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 // send requests ("Send to Kindle"); the pipeline's scheduler sends them and records the outcome

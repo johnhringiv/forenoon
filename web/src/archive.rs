@@ -131,6 +131,8 @@ struct ArchivePage {
     pending: Vec<Pending>,
     /// Reload while a link is being fetched, so its article appears without a click.
     fetching: bool,
+    /// Some links could not be added: offer to clear them.
+    failed: bool,
     rows: Vec<Row>,
     back: String,
     newer: Option<String>,
@@ -304,6 +306,7 @@ pub async fn page(
         },
         pending: Vec::new(),
         fetching: false,
+        failed: false,
         rows: Vec::new(),
         back: address(&parts, number),
         newer: (number > 1).then(|| address(&parts, number - 1)),
@@ -326,6 +329,7 @@ pub async fn page(
         })
         .collect();
     page.fetching = page.pending.iter().any(|add| !add.failed);
+    page.failed = page.pending.iter().any(|add| add.failed);
     if !ready {
         return html(StatusCode::OK, page);
     }
@@ -375,6 +379,27 @@ pub struct AddForm {
 
 /// Add a link by hand. This only queues it: the pipeline fetches the page, as it does every
 /// article, and the link is never opened from here.
+#[derive(Deserialize)]
+pub struct ClearForm {
+    csrf: String,
+}
+
+/// Clear the links that could not be added from the page.
+pub async fn clear_failed(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<ClearForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    db::dismiss_failed_adds(&state.pool, &user.id).await?;
+    Ok(Redirect::to("/archive?show=added").into_response())
+}
+
 pub async fn add(
     State(state): State<AppState>,
     auth: AuthSession,
