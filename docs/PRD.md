@@ -357,6 +357,11 @@ source).
   the reading pass and the choice of the issue (section 3a), except that the day's last slot
   goes to one article chosen uniformly at random from those outside the top picks
   (exploration). If an article then fails extraction, the next in order takes its place.
+- **Models.** Every call uses `llm.model` (Claude Haiku 5.5), except that the choosing of the
+  issue (section 7f) and the extraction check (section 7c) can each have their own
+  (`llm.choose_model`, `llm.check_model`). Every call is logged and priced under the model it
+  used. The answer is a forced call of one tool; a model that refuses a forced tool call
+  (Sonnet 5.5, Opus 5.5) is asked for it in the prompt instead, from its first refusal on.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page (`llm.show_reasons`).
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
@@ -417,6 +422,8 @@ source).
 - Verdicts are stored and shown in the run report; `forenoon checks` lists the articles it
   did not judge `ok`, beside the extractor's own verdict. **Delivery is never changed.**
 - The call counts against the daily token cap and is skipped when it would cross it.
+- `llm.check_model` (Settings page; empty for `llm.model`) runs it on another model, for
+  example Sonnet: one small call a day, so a stronger model costs cents.
   `llm.check_extraction: false` turns it off.
 
 ## 7d. The browser container (optional)
@@ -486,7 +493,9 @@ best candidates in full.
 - The read articles are tried first, best score first; candidates that were not read follow
   in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
   reading replace the ranking ones in the book and in what is recorded.
-- **Choosing the issue** (`llm.choose_issue`, on). One more call sees every read article
+- **Choosing the issue** (`llm.choose_issue`, on; on `llm.choose_model` when set, else
+  `llm.model`: one small call, so a stronger model here costs a few cents a day). One more
+  call sees every read article
   at once: title, source, length, how long it lasts, the reading's score and reason, and a
   story id for those on one event; with the open places and each source's limit. It returns
   exactly that many, best first, with each one's broad subject, keeping to at most

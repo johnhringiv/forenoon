@@ -30,11 +30,11 @@ class Reply:
 
 
 class Backend(Protocol):
-    def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "") -> Reply:
+    def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "", model: str = "") -> Reply:
         """One request whose answer must match `schema`. Raises LlmError.
 
         `shared` is text that comes before `user` and is the same across a run's calls; a
-        backend may cache it.
+        backend may cache it. `model`, when given, is used instead of the configured one.
         """
 
 
@@ -48,11 +48,11 @@ class ClaudeBackend:
         self._anthropic = anthropic
         self._model = cfg.model
         self._client = anthropic.Anthropic(api_key=api_key, timeout=cfg.timeout, max_retries=1)
-        # Whether the model takes a forced tool call. Some (Sonnet 5.5, Opus 5.5) refuse one;
-        # they are asked in the system prompt instead, and the first refusal decides for the run.
-        self._forced = True
+        # Models that refuse a forced tool call (Sonnet 5.5, Opus 5.5): they are asked in the
+        # system prompt instead, and the first refusal decides for the run.
+        self._unforced: set[str] = set()
 
-    def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "") -> Reply:
+    def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "", model: str = "") -> Reply:
         # A single forced tool call is the answer format; the "tool" does nothing.
         tool = {"name": "answer", "description": "Return the result.", "input_schema": schema}
         content: list[dict[str, Any]] = [{"type": "text", "text": user}]
@@ -60,14 +60,15 @@ class ClaudeBackend:
             # Marked for the prompt cache, so later batches of a run pay a tenth for it. The
             # API ignores the mark when the text is under the model's minimum cacheable size.
             content.insert(0, {"type": "text", "text": shared, "cache_control": {"type": "ephemeral"}})
+        model = model or self._model
         try:
-            response = self._ask(system, content, tool)
+            response = self._ask(model, system, content, tool)
         except self._anthropic.BadRequestError as exc:
-            if not self._forced or "tool_choice" not in str(exc):
+            if model in self._unforced or "tool_choice" not in str(exc):
                 raise LlmError(f"{type(exc).__name__}: {exc}") from exc
-            self._forced = False
+            self._unforced.add(model)
             try:
-                response = self._ask(system, content, tool)
+                response = self._ask(model, system, content, tool)
             except self._anthropic.APIError as again:
                 raise LlmError(f"{type(again).__name__}: {again}") from again
         except self._anthropic.APIError as exc:
@@ -80,12 +81,12 @@ class ClaudeBackend:
                 return Reply(block.input, usage.input_tokens, usage.output_tokens, written, read)
         raise LlmError(f"no structured answer (stop reason: {response.stop_reason})")
 
-    def _ask(self, system: str, content: list[dict[str, Any]], tool: dict[str, Any]) -> Any:
+    def _ask(self, model: str, system: str, content: list[dict[str, Any]], tool: dict[str, Any]) -> Any:
         choice: dict[str, str] = {"type": "tool", "name": "answer"}
-        if not self._forced:
+        if model in self._unforced:
             choice, system = {"type": "auto"}, f"{system}\n\n{ASK_FOR_TOOL}"
         return self._client.messages.create(
-            model=self._model,
+            model=model,
             max_tokens=MAX_OUTPUT_TOKENS,
             system=system,
             messages=[{"role": "user", "content": content}],
