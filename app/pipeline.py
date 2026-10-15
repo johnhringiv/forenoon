@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from . import archive, sessions, thumbs
+from .choose import Candidate, choose
 from .config import Config, Source, User
 from .deliver import (
     MESSAGE_OVERHEAD,
@@ -359,6 +360,50 @@ def _interleave(pools: list[list[Item]]) -> list[Item]:
     return out
 
 
+def _chosen(
+    cfg: Config,
+    backend: Backend | None,
+    store: Store,
+    user: User,
+    read: list[Item],
+    verdicts: dict[str, Verdict],
+    ranking: Ranking,
+    grouped: dict[str, list[Item]],
+    words: dict[str, int],
+    places: int,
+    today: str,
+    report: RunReport,
+) -> list[Item]:
+    """The read articles with the model's choice of the day's set first, best first; the rest
+    follow in their order, in line for a place one of the chosen cannot take."""
+    story: dict[str, str] = {}
+    for lead, others in grouped.items():
+        for item in (lead, *(other.id for other in others)):
+            story.setdefault(item, lead)
+    candidates = [
+        Candidate(
+            item.id, item.title, item.source.name, words.get(item.id, 0), verdicts[item.id].score,
+            verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""),
+        )
+        for item in read
+    ]  # fmt: skip
+    limits = {s.name: s.daily_max for item in read for s in item.sources()}
+    ids = choose(cfg.llm, backend, store, user, candidates, places, limits, today)
+    if ids is None:
+        return read
+    report.ranking += ", issue chosen"
+    by_id = {item.id: item for item in read}
+    first = [by_id[i] for i in ids]
+    for item in read:
+        # Chosen by the model, not by its rank: it was certain to be offered, and one left out
+        # could only have come by the exploration draw.
+        old = ranking.choices[item.id]
+        chosen = item.id in ids
+        propensity = 1.0 if chosen else (old.propensity if (old.propensity or 0) < 1.0 else 0.0)
+        ranking.choices[item.id] = replace(old, propensity=propensity)
+    return first + [item for item in read if item.id not in set(ids)]
+
+
 def _past_its_places(source: Source, places: dict[str, int]) -> bool:
     """A pinned source that has used its places a day: what more it gives is free."""
     return source.pinned and bool(source.daily_max) and places.get(source.name, 0) >= source.daily_max
@@ -649,7 +694,7 @@ def run(
     links_of: dict[str, list[_Link]] = {}
     verdicts: dict[str, Verdict] = {}
     if cfg.llm.enabled and backend is not None and ranking.choices and cfg.llm.read_candidates > 0:
-        pool = ranking.order[: cfg.llm.read_candidates]
+        pool = ranking.shortlist or ranking.order[: cfg.llm.read_candidates]
         readings = []
         for item in pool:
             if item.id in found_ids:
@@ -677,10 +722,18 @@ def run(
             read_first = sorted((i for i in pool if i.id in verdicts), key=lambda i: -verdicts[i.id].score)
             unread = [i for i in ranking.order if i.id not in verdicts]
             explored = next((i for i in read_first if ranking.choices[i.id].explore), None)
+            open_places = max(0, remaining - _pinned_places(pinned, by_hand))
+            if explored is not None:
+                read_first.remove(explored)
+            if cfg.llm.choose_issue:
+                words = {item.id: extracted[item.id].word_count for item in read_first}
+                read_first = _chosen(
+                    cfg, backend, store, user, read_first, verdicts, ranking, grouped, words,
+                    open_places - (explored is not None), today, report,
+                )  # fmt: skip
             if explored is not None:
                 # The exploration pick keeps the day's last slot whatever its score.
-                read_first.remove(explored)
-                read_first.insert(max(0, remaining - _pinned_places(pinned, by_hand) - 1), explored)
+                read_first.insert(max(0, open_places - 1), explored)
             ranking.order = read_first + unread
             for item_id, verdict in verdicts.items():
                 ranking.choices[item_id] = replace(ranking.choices[item_id], score=verdict.score, reason=verdict.reason)

@@ -412,7 +412,9 @@ a day's book is therefore a target, not a limit.
 Ranking judges a title and an opening. Before the day is chosen, the model also reads the
 best candidates in full.
 
-- The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted. Their
+- The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted, taken in
+  equal shares from every ranking batch (each batch's share by its own scores, since batches
+  score on slightly different scales); the exploration pick is always among them. Their
   text, up to `llm.read_words` (2,500) words each, goes to the model about ten articles to a
   call, with the reader's interests and ratings.
 - Per article the model returns a score from 0 to 10, a reason, whether the text is a
@@ -422,6 +424,14 @@ best candidates in full.
 - The read articles are tried first, best score first; candidates that were not read follow
   in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
   reading replace the ranking ones in the book and in what is recorded.
+- **Choosing the issue** (`llm.choose_issue`, on). One more call sees every read article
+  at once: title, source, length, how long it lasts, the reading's score and reason, and a
+  story id for those on one event; with the open places and each source's limit. It returns
+  the day's set, best first, preferring a varied issue (not several articles on one narrow
+  subject; news mixed with longer reads) unless an article is clearly better. Those are tried
+  first, then the other read articles in score order. The exploration pick still keeps the
+  last place and is not offered to it. A chosen article's propensity is 1; one left out keeps
+  only its chance of the exploration draw. A failed or unusable reply leaves the score order.
 - An article judged `bad` (a paywall notice, a teaser, an error page) is held back for the
   day and listed in the report. `suspect` is reported and does not change delivery.
 - Both prompts tell the model that news of major consequence scores at least 7 whatever the

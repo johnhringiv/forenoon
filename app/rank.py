@@ -12,7 +12,7 @@ import logging
 import math
 import random
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from random import Random
 
 import lxml.html
@@ -25,7 +25,7 @@ from .tokens import reason_labels
 
 log = logging.getLogger("forenoon")
 
-POLICY = "claude-rank-v1"
+POLICY = "claude-rank-v2"  # v2: shuffled batches, an equal share of each read, the issue chosen
 ABSTRACT_WORDS = 100
 MAX_REASON_CHARS = 140
 RECENT_RATINGS = 40
@@ -101,6 +101,9 @@ class Ranking:
     order: list[Item]  # every candidate, in the order to try them
     choices: dict[str, Choice]
     note: str = ""  # why the fallback order was used, when it was
+    # What to read in full: the best of every batch in equal shares, judged against their own
+    # batch rather than across batches on different scales; in `order`'s order.
+    shortlist: list[Item] = field(default_factory=list)
 
 
 def abstract(item: Item) -> str:
@@ -207,6 +210,7 @@ def rank(
     reader = reader_profile(user, store)
     size = max(1, cfg.batch_size)
     scores: dict[str, tuple[float, str]] = {}
+    batches: list[list[str]] = []  # the ids each batch scored
     problem = ""
     # Shuffled when there is more than one batch: in the order given, the finds (which come
     # last) would be judged mostly among themselves, and feed articles among themselves, each
@@ -231,6 +235,7 @@ def rank(
         store.log_llm_reply("rank", cfg.model, reply, "ok" if ok else "invalid")
         if ok:
             scores.update(got)
+            batches.append(list(got))
         else:
             problem = f"model scored only {len(got)} of {len(batch)} candidates in one batch"
     if len(scores) < max(1, len(candidates) // 2):
@@ -265,7 +270,22 @@ def rank(
         else:
             propensity = 1.0 / len(outside)
         choices[item.id] = Choice(score, reason, position[item.id], item is explored, propensity)
-    return Ranking(order, choices, note)
+    short = _shares(batches, scores, cfg.read_candidates)
+    if explored is not None:
+        short.add(explored.id)
+    return Ranking(order, choices, note, [item for item in order if item.id in short])
+
+
+def _shares(batches: list[list[str]], scores: dict[str, tuple[float, str]], wanted: int) -> set[str]:
+    """The best `wanted` ids taken in equal shares from every batch (the first get one more
+    when it does not divide), each batch's share by its own scores."""
+    if not batches or wanted <= 0:
+        return set()
+    base, extra = divmod(wanted, len(batches))
+    out: set[str] = set()
+    for n, ids in enumerate(batches):
+        out.update(sorted(ids, key=lambda i: -scores[i][0])[: base + (n < extra)])
+    return out
 
 
 # Stories: candidates that cover the same event are delivered together and count once.
