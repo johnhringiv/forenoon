@@ -961,6 +961,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.read_candidates", "40"),
         ("llm.explore_slots", "1"),
         ("llm.choose_issue", "1"),
+        ("llm.most_per_subject", "2"),
         ("llm.group_stories", "1"),
         ("llm.follow_links", "1"),
         ("llm.show_reasons", "1"),

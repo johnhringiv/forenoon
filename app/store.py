@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS assessments (
     reason TEXT NOT NULL DEFAULT '',
     read INTEGER NOT NULL DEFAULT 0,
     lasting TEXT NOT NULL DEFAULT '',
+    deferred_at TEXT NOT NULL DEFAULT '',  -- left out of an issue for variety, when
     PRIMARY KEY (user_id, article_id)
 );
 """
@@ -175,6 +176,9 @@ class Store:
         if "link_only" not in delivered:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN link_only INTEGER NOT NULL DEFAULT 0")
+        if "deferred_at" not in {row["name"] for row in self.db.execute("PRAGMA table_info(assessments)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE assessments ADD COLUMN deferred_at TEXT NOT NULL DEFAULT ''")
         calls = {row["name"] for row in self.db.execute("PRAGMA table_info(llm_calls)")}
         if "cost" not in calls:
             # Calls logged before cached tokens were kept apart: their input is priced as if
@@ -399,6 +403,18 @@ class Store:
         ).fetchall()
         return [row["article_id"] for row in rows]
 
+    def stale_adds(self, user_id: str, before: str) -> list[str]:
+        """Links added for the next issue, first asked for before `before`, still not sent."""
+        if not self._has_table("add_requests"):
+            return []
+        waiting = set(self.waiting_adds(user_id))
+        rows = self.db.execute(
+            "SELECT article_id FROM add_requests WHERE user_id = ? AND action = 'next' AND status = 'done'"
+            " GROUP BY article_id HAVING MIN(requested_at) < ?",
+            (user_id, before),
+        )
+        return [row["article_id"] for row in rows if row["article_id"] in waiting]
+
     def story_of(self, user_id: str, article_id: str) -> list[str]:
         """The articles delivered to this reader in the same story as this one, lead first.
 
@@ -451,15 +467,17 @@ class Store:
 
     def unoffered(self, user_id: str, source: str, since: datetime, dated_after: datetime) -> list[ArticleRow]:
         """A source's articles first seen since `since` (and not dated before `dated_after`) that
-        this reader has not had and the model has never weighed for them, newest first: what a
-        missed run, or a feed that has since moved on, would otherwise lose."""
+        this reader has not had and the model has never weighed for them, or left out of an
+        issue only for variety, newest first: what a missed run, or a feed that has since moved
+        on, would otherwise lose."""
         rows = self.db.execute(
             "SELECT id, url, source, title, author, published, status, reason, word_count, image_url, description,"
             " first_seen FROM articles a WHERE source = ?1 AND status != 'failed' AND first_seen >= ?3"
             " AND (published IS NULL OR published >= ?4)"
             " AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.user_id = ?2 AND d.article_id = a.id)"
             " AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?2 AND r.article_id = a.id)"
-            " AND NOT EXISTS (SELECT 1 FROM assessments s WHERE s.user_id = ?2 AND s.article_id = a.id)"
+            " AND NOT EXISTS (SELECT 1 FROM assessments s WHERE s.user_id = ?2 AND s.article_id = a.id"
+            " AND s.deferred_at = '')"
             " ORDER BY first_seen DESC, COALESCE(published, '') DESC",
             (source, user_id, _utc(since), _utc(dated_after)),
         ).fetchall()
@@ -531,6 +549,28 @@ class Store:
                 " WHERE excluded.read >= assessments.read",
                 [(user_id, a, stamp, score, reason, int(read), lasting) for a, score, reason, read, lasting in rows],
             )
+
+    def defer(self, user_id: str, article_ids: list[str]) -> None:
+        """Left out of today's issue only for variety: offered again while it is young enough,
+        even when its source no longer lists it, and marked as deferred to the model."""
+        stamp = now_iso()
+        with self.db:
+            self.db.executemany(
+                "UPDATE assessments SET deferred_at = ? WHERE user_id = ? AND article_id = ?",
+                [(stamp, user_id, a) for a in article_ids],
+            )
+
+    def deferred_before(self, user_id: str, article_ids: list[str], before: str) -> set[str]:
+        """Which of these were deferred by an earlier run (before `before`)."""
+        if not article_ids:
+            return set()
+        marks = ",".join("?" * len(article_ids))
+        rows = self.db.execute(
+            f"SELECT article_id FROM assessments WHERE user_id = ? AND deferred_at != '' AND deferred_at < ?"
+            f" AND article_id IN ({marks})",
+            (user_id, before, *article_ids),
+        )
+        return {row["article_id"] for row in rows}
 
     def assessment(self, user_id: str, article_id: str) -> sqlite3.Row | None:
         return self.db.execute(

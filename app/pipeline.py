@@ -116,6 +116,8 @@ class RunReport:
     sign_in_ends: dict[str, str] = field(default_factory=dict)  # site -> the day, when soon
     # The model's choice of the day's set, best first: id, title, source, and what became of it.
     chosen: list[dict[str, str | bool]] = field(default_factory=list)
+    deferred: list[str] = field(default_factory=list)  # left out of the issue only for variety
+    retired: list[str] = field(default_factory=list)  # added links never had: now shown as links
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -138,11 +140,17 @@ class RunReport:
             lines += [f"Extraction check by the model: {counts}.", ""]
         if self.chosen:
             lines += ["Chosen for the issue by the model, best first, then its reserves:", ""]
-            lines += [
-                f"{n}. {'(reserve) ' if c.get('reserve') else ''}{c['title']} ({c['source']}): {c['outcome']}"
-                for n, c in enumerate(self.chosen, 1)
-            ]
+            for n, c in enumerate(self.chosen, 1):
+                marks = "".join(
+                    [" (reserve)" if c.get("reserve") else "", " (deferred earlier)" if c.get("deferred") else ""]
+                )
+                subject = f" [{c['subject']}]" if c.get("subject") else ""
+                lines.append(f"{n}.{marks} {c['title']} ({c['source']}){subject}: {c['outcome']}")
             lines.append("")
+        if self.deferred:
+            lines += [f"Deferred for variety, offered again while young enough: {len(self.deferred)}.", ""]
+        if self.retired:
+            lines += [f"Links added by hand never had in time, now shown as links: {len(self.retired)}.", ""]
         lines += [
             "| Source | Verdict | Clean | Degraded | Failed | Notes |",
             "|---|---|---|---|---|---|",
@@ -385,6 +393,8 @@ def _chosen(
     reserves: int,
     today: str,
     report: RunReport,
+    dry_run: bool,
+    already: list[Item] = (),
 ) -> list[Item]:
     """The read articles with the model's choice of the day's set first, best first, then its
     reserves, for places freed late (a chosen, pinned or hand-added article that cannot be
@@ -393,23 +403,40 @@ def _chosen(
     for lead, others in grouped.items():
         for item in (lead, *(other.id for other in others)):
             story.setdefault(item, lead)
+    deferred = store.deferred_before(user.id, [item.id for item in read], today)
     candidates = [
         Candidate(
             item.id, item.title, item.source.name, words.get(item.id, 0), verdicts[item.id].score,
-            verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""),
+            verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""), item.id in deferred,
         )
         for item in read
     ]  # fmt: skip
     limits = {s.name: s.daily_max for item in read for s in item.sources()}
-    picked = choose(cfg.llm, backend, store, user, candidates, places, reserves, limits, today)
+    # What leads the issue whatever is chosen (added by hand, pinned): counted for the subjects.
+    ahead = [(item.title, item.source.name) for item in already if item.title]
+    picked = choose(cfg.llm, backend, store, user, candidates, places, reserves, limits, today, ahead)
     if picked is None:
         return read
-    ids, spare = picked
+    ids, spare = picked.chosen, picked.reserves
+    # Left out only for variety: an article the scores alone would have given a place, and one
+    # that keeps (news is judged on its day). It is offered again, marked, but not promised one.
+    passed = [item.id for item in read[:places] if item.id not in ids]
+    report.deferred = [i for i in passed if verdicts[i].lasting in ("months", "years")]
+    if report.deferred and not dry_run:
+        store.defer(user.id, report.deferred)
     # Fewer than asked for: the rest of the places go by score, which the report should show.
     report.ranking += ", issue chosen" if len(ids) >= places else f", issue chosen ({len(ids)} of {places})"
     by_id = {item.id: item for item in read}
     report.chosen = [
-        {"id": i, "title": by_id[i].title, "source": by_id[i].source.name, "outcome": "", "reserve": reserve}
+        {
+            "id": i,
+            "title": by_id[i].title,
+            "source": by_id[i].source.name,
+            "outcome": "",
+            "reserve": reserve,
+            "subject": picked.subjects.get(i, ""),
+            "deferred": i in deferred,
+        }
         for i, reserve in [*((i, False) for i in ids), *((i, True) for i in spare)]
     ]
     first = [by_id[i] for i in [*ids, *spare]]
@@ -502,6 +529,12 @@ def _discover(
             if (row and row.status == "failed") or store.has_had(user.id, item.id):
                 continue
             fresh[row is not None].append(item)
+        # Left out of an earlier issue only for variety: back while young enough, even when the
+        # listing no longer shows it.
+        for row in store.unoffered(user.id, source.name, cutoff, cutoff):
+            if row.id not in seen:
+                seen.add(row.id)
+                fresh[True].append(_stored_item(row, source))
         kept = fresh[False] + fresh[True]
         for item in kept[cfg.discovery.per_site :]:
             seen.discard(item.id)  # beyond this site's share, so another site may still offer it
@@ -626,6 +659,13 @@ def run(
     pinned, others = _interleave(pools[True]), _interleave(pools[False])
     # What the reader added by hand for their next issue leads it, ahead of pinned sources.
     added: list[Item] = []
+    # A link added by hand whose page still cannot be had once it is as old as the age limit is
+    # shown as a link, like any pick whose page cannot be had, and stops holding a place.
+    if not dry_run:
+        stale = store.stale_adds(user.id, cutoff.astimezone(UTC).isoformat(timespec="seconds"))
+        if stale:
+            store.mark_delivered(user.id, stale, now, link_only=True)
+            report.retired = stale
     for added_id in store.waiting_adds(user.id):
         row = store.get_article(added_id)
         if row is None or row.status == "failed":
@@ -750,7 +790,7 @@ def run(
                 read_first = _chosen(
                     cfg, backend, store, user, read_first, verdicts, ranking, grouped, words,
                     open_places - (explored is not None), _pinned_places(pinned, by_hand) + SPARE_CHOICES,
-                    today, report,
+                    today, report, dry_run, pinned,
                 )  # fmt: skip
             if explored is not None:
                 # The exploration pick keeps the day's last slot whatever its score.

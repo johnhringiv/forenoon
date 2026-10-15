@@ -283,6 +283,7 @@ class FakeBackend:
         self.read = []
         self.choice = None  # candidates, places -> chosen ids; by default the order given
         self.choosing = []
+        self.subjects = None  # candidates -> {id: subject}
 
     def structured(self, system, user, schema, shared=""):
         from app.llm import LlmError, Reply
@@ -309,7 +310,9 @@ class FakeBackend:
             self.choosing.append((listed, places, user))
             chosen = self.choice(listed, places) if self.choice else [c["id"] for c in listed][:places]
             reserves = [c["id"] for c in listed if c["id"] not in chosen]
-            return Reply({"chosen": [*chosen, "made-up"], "reserves": reserves}, 500, 30)
+            named = self.subjects(listed) if self.subjects else {}
+            subjects = [{"id": i, "subject": subject} for i, subject in named.items()]
+            return Reply({"chosen": [*chosen, "made-up"], "reserves": reserves, "subjects": subjects}, 500, 30)
         if "<headlines>" in user:
             listed = __import__("json").loads(user.split("<headlines>\n")[1].split("\n</headlines>")[0])
             ids = {c["title"]: c["id"] for c in listed}
@@ -880,9 +883,10 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
     table = {"Post 1": 9, "Post 2": 8}
     backend.readings = lambda listed: [
         {"id": a["id"], "score": table.get(a["title"], 1), "reason": "read", "complete": "ok", "problem": "",
-         "lasting": "days", "links": []}
+         "lasting": "years" if a["title"] == "Post 1" else "days", "links": []}
         for a in listed
     ]  # fmt: skip
+    backend.subjects = lambda listed: {c["id"]: "compilers" for c in listed}
     # The model takes Post 2 over the higher-scored Post 1, for the issue as a whole, and names
     # Post 1 too, for which there is no place: it becomes the first reserve.
     order = {"Post 2": 0, "Post 1": 1}
@@ -897,15 +901,32 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
         ("Post 2", False, "sent"),
         ("Post 1", True, "not needed"),
     ]
-    assert "1. Post 2 (Blog): sent" in report.to_markdown() and "2. (reserve) Post 1" in report.to_markdown()
+    assert "1. Post 2 (Blog) [compilers]: sent" in report.to_markdown()
+    assert "2. (reserve) Post 1 (Blog) [compilers]" in report.to_markdown()
+    # Post 1 would have had the place on its score, and it keeps: deferred, to be offered again.
+    post1 = next(c["id"] for c in report.chosen if c["title"] == "Post 1")
+    assert report.deferred == [post1] and store.assessment(user.id, post1)["score"] == 9
+    assert post1 in store.deferred_before(user.id, [post1], "9999")
     listed, places, prompt = backend.choosing[0]
     assert "<reserves>3</reserves>" in prompt  # the pinned article's place, and two more
+    # The pinned article leads the issue whatever is chosen: shown, so subjects count it.
+    assert '"title": "Post 9", "source": "Pinned"' in prompt.split("<already>")[1].split("</already>")[0]
     assert places == 1 and {c["title"] for c in listed} == {"Post 1", "Post 2"}
     assert {c["title"]: c["score"] for c in listed}["Post 1"] == 9 and all(c["words"] > 0 for c in listed)
     # Chosen, so certain to be offered; its score is still the reading's.
     rows = {store.get_article(r["article_id"]).title: r for r in store.selection_rows(user.id)}
     assert (rows["Post 2"]["propensity"], rows["Post 2"]["score"], rows["Post 2"]["policy"]) == (1.0, 8, POLICY)
     assert ("choose", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+    # The next day it is offered again, and with nothing better it has its place. To the model
+    # it is marked as deferred, with the day's rule on subjects.
+    weighed = store.unoffered(user.id, "Blog", NOW - timedelta(days=3), NOW - timedelta(days=30))
+    assert [r.id for r in weighed] == [post1]  # even were the feed to drop it
+    later = run(cfg, store, fetcher, user, now=NOW + timedelta(days=1), sender=lambda m, s: None, backend=backend)
+    assert post1 in later.delivered
+    from app.choose import Candidate, _listing
+
+    listing = _listing([Candidate(post1, "Post 1", "Blog", 350, 9, "read", "years", "", True)], 1, 2, 2, {})
+    assert '"deferred": true' in listing and "<most_per_subject>2</most_per_subject>" in listing
 
     # A reply naming nothing usable leaves the reading's order: the best read goes.
     fresh = Store(cfg.data_dir / "second.sqlite3")
@@ -1321,6 +1342,31 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     chosen = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
     assert (chosen[next_id], chosen[now_id]) == ("added", "requested")
     assert store.waiting_adds("john") == []
+
+
+def test_a_link_added_by_hand_that_is_never_had_ends_as_a_link(env):
+    from app.urls import article_id
+
+    cfg, store, fetcher = env
+    user = cfg.users[0]
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    old, new = "https://found.example/missing", "https://found.example/missing-too"
+    for url in (old, new):
+        store.upsert_article(article_id(url), url, "found.example", "", "", None)
+    ask = (
+        "INSERT INTO add_requests (user_id, url, action, requested_at, status, article_id)"
+        " VALUES ('john', ?, 'next', ?, 'done', ?)"
+    )
+    store.db.execute(ask, (old, (NOW - timedelta(days=4)).isoformat(timespec="seconds"), article_id(old)))
+    store.db.execute(ask, (new, NOW.isoformat(timespec="seconds"), article_id(new)))
+    store.db.commit()
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    # Older than the age limit and still not had: shown as a link, no longer holding a place.
+    assert report.retired == [article_id(old)] and store.waiting_adds("john") == [article_id(new)]
+    links = store.db.execute("SELECT article_id FROM deliveries WHERE link_only = 1").fetchall()
+    assert [r[0] for r in links] == [article_id(old)]
+    assert "Links added by hand never had in time, now shown as links: 1." in report.to_markdown()
 
 
 def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_given_to_the_model(env):
