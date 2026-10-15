@@ -443,6 +443,30 @@ def test_a_source_takes_no_more_than_its_places_a_day(env):
     assert delivered == ["Pinned", "Blog"]  # the Blog's other posts wait, though places were left
 
 
+def test_a_built_in_source_takes_no_more_than_its_places_a_day(env):
+    from app.config import Discovery
+
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(
+        _llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews",), daily_max={"hackernews": 1})
+    )
+    user = dataclasses.replace(cfg.users[0], daily_cap=8)
+    when = "2026-03-10T06:00:00Z"
+    _listings(
+        [{"title": f"Find {n}", "url": f"https://found.example/post-{n}", "created_at": when} for n in (1, 2)], []
+    )
+    try:
+        report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend(lambda ids: [
+            {"id": i, "score": 9, "reason": "r"} for i in ids]))  # fmt: skip
+        delivered = [store.get_article(i).source for i in report.delivered]
+        assert delivered.count("Hacker News") == 1 and len(delivered) < 8  # places were left
+    finally:
+        from app.discover import SITES
+
+        for site in SITES.values():
+            ROUTES.pop(site.url, None)
+
+
 def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
     from app.config import Discovery
     from app.discover import SITES

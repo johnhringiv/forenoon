@@ -377,7 +377,7 @@ def _discover(
         src = reports[source.name] = SourceReport(source.name)
         report.sources.append(src)
         try:
-            items = read_listing(key, fetcher, cutoff)
+            items = read_listing(key, fetcher, cutoff, source)
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: listing failed: %s", source.name, exc)
