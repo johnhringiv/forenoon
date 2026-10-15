@@ -151,8 +151,10 @@ The whole process for one reader's day, in order. The sections named give the de
    model sees each site's votes and comments together, it is credited to all of them, and
    its place counts against whichever of its sources has room.
 2. **Ahead of the rest, not judged.** Links the reader added for their next issue lead,
-   each taking a place. Then pinned sources: every article they have is taken; up to the
-   source's places a day they use the day's places, and the rest are extra.
+   each taking a place. One whose page still cannot be had once it is `max_age_days` old is
+   given up on: it becomes a link-only pick (shown as a link, holding no place). Then pinned
+   sources: every article they have is taken; up to the source's places a day they use the
+   day's places, and the rest are extra.
 3. **Round 1: abstracts** (section 7a). Every other candidate is scored 0 to 10 from its
    title, source and opening, by batches of 80, shuffled so feed articles and finds share
    batches. With the reader's interests, learned notes and recent ratings.
@@ -167,11 +169,17 @@ The whole process for one reader's day, in order. The sections named give the de
    long it lasts, and which of its links are its subject.
 7. **Round 3: choosing the issue** (section 7f). One call sees every read article at once
    and returns exactly the open places' worth (the day's places less the hand-added and
-   pinned ones and the exploration pick), best first, for a varied issue rather than the
-   highest scores alone; then reserves in the order to use them, as many as the places held
-   by hand-added and pinned articles plus two, so a place freed late (one of those that
-   cannot be sent) still goes as the model would choose. The other read articles follow,
-   then the unread ones in round-1 order.
+   pinned ones and the exploration pick), best first, under two rules: at most
+   `llm.most_per_subject` (2) on one broad subject, counting the hand-added and pinned
+   articles it is shown as already in the issue; and at least one news story of major
+   consequence when one scored 7 or more. Within them, better articles first. Then reserves
+   in the order to use them, as many as the places held by hand-added and pinned articles
+   plus two, so a place freed late (one of those that cannot be sent) still goes as the
+   model would choose. The other read articles follow, then the unread ones in round-1
+   order. An article left out that its score alone would have given a place, and that keeps
+   (judged to last months or years), is **deferred**: it is offered again for the rest of
+   its age window, even if its source no longer lists it, and marked as deferred to the
+   model, which prefers it over an equal candidate but not over a better one.
 8. **Filling the day** (`daily_stories`, default 8). Candidates are taken in that order
    until the day's places are used, each subject to:
    - **its source's places a day** (Sources page; 2 for a feed, none for a built-in source,
@@ -481,8 +489,10 @@ best candidates in full.
 - **Choosing the issue** (`llm.choose_issue`, on). One more call sees every read article
   at once: title, source, length, how long it lasts, the reading's score and reason, and a
   story id for those on one event; with the open places and each source's limit. It returns
-  exactly that many, best first, preferring a varied issue (not several articles on one
-  narrow subject; news mixed with longer reads) unless an article is clearly better, and
+  exactly that many, best first, with each one's broad subject, keeping to at most
+  `llm.most_per_subject` (2, 0 for no limit) on one subject (the hand-added and pinned
+  articles, listed as already in the issue, count) and including a news story of major
+  consequence when one scored 7 or more; within those, better articles first; and
   then reserves in the order to use them: as many as the places hand-added and pinned
   articles hold, plus two. Any it names beyond the places become its first reserves. The
   chosen are tried first, the reserves next (a hand-added or pinned article whose page
@@ -491,7 +501,8 @@ best candidates in full.
   place and is not offered to it. A chosen article's propensity is 1; one left out, reserves
   included, keeps only its chance of the exploration draw. A failed or unusable reply leaves
   the score order. It is skipped when there are no more read articles than open places. The
-  run's report lists the choice and then the reserves, with what became of each: sent, sent
+  run's report lists the choice and then the reserves, each with its subject and whether it
+  was deferred earlier, and what became of each: sent, sent
   in another story, not needed (a reserve), or why not (its source had used its places, the
   day was full, the reading held it back, its page could not be had); and "issue chosen (n
   of m)" when the model named fewer than the places.

@@ -98,5 +98,6 @@ CREATE TABLE IF NOT EXISTS assessments (
     reason TEXT NOT NULL DEFAULT '',
     read INTEGER NOT NULL DEFAULT 0,
     lasting TEXT NOT NULL DEFAULT '',
+    deferred_at TEXT NOT NULL DEFAULT '',  -- left out of an issue for variety, when
     PRIMARY KEY (user_id, article_id)
 );
