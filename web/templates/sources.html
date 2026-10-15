@@ -12,12 +12,14 @@
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
 <h2>Built in <span>front pages Forenoon knows how to read</span></h2>
-<p class="hint">Their stories join the day's candidates only when ranking is on, and take a limited number of the day's places (see <a href="/settings">Settings</a>).</p>
+<p class="hint">Their stories join the day's candidates only when ranking is on, and compete for the day's places on the model's score like any feed's articles. "Places a day" is the most of an issue any one source may take, so a busy one cannot fill it; 0 for no limit.</p>
 {% for row in builtins %}
 <form class="source{% if !row.enabled %} paused{% endif %}" method="post" action="/sources/{{ row.id }}/toggle">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
 <b class="wide">{{ row.name }}</b>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
+<button class="primary" name="enabled" value="{% if row.enabled %}1{% else %}0{% endif %}">Save</button>
 {% if row.enabled %}<button name="enabled" value="0">Turn off</button>{% else %}<button name="enabled" value="1">Turn on</button>{% endif %}
 </div>
 <p class="hint">{{ row.about }}</p>
@@ -32,10 +34,11 @@
 <label>Name <input name="name" maxlength="80" required></label>
 <label class="wide">Feed or site address <input name="address" maxlength="2000" placeholder="https://example.com/" required></label>
 <label>Take the text from <select name="extract"><option value="auto">Best of page and feed</option><option value="page">Web page only</option><option value="feed">Feed only</option><option value="link">Nowhere: show picks as links</option></select></label>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="2"></label>
 <label class="tick"><input type="checkbox" name="pinned" value="1"> Pinned</label>
 <button class="primary">Add</button>
 </div>
-<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. A pinned source's articles are taken before all others. Changes apply from the next run.</p>
+<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. A pinned source's articles are taken before all others. "Places a day" is the most of an issue the source may take (0 for no limit); links you add by hand do not count. Changes apply from the next run.</p>
 </form>
 {% if feeds.is_empty() %}<p class="empty">No feeds yet.</p>{% endif %}
 {% for row in feeds %}
@@ -47,6 +50,7 @@
 <label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
 <label class="wide">Feed address <input name="address" value="{{ row.address }}" maxlength="2000" required></label>
 <label>Take the text from <select name="extract">{% for choice in row.extract %}<option value="{{ choice.key }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
 <label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>
 <label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>
 <button class="primary">Save</button>

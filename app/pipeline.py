@@ -373,11 +373,11 @@ def _discover(
     """New articles from the configured front pages that no feed already supplied."""
     found: list[Item] = []
     for key in cfg.discovery.sites:
-        source = site_source(key)
+        source = site_source(key, cfg.discovery.daily_max.get(key, 0))
         src = reports[source.name] = SourceReport(source.name)
         report.sources.append(src)
         try:
-            items = read_listing(key, fetcher, cutoff)
+            items = read_listing(key, fetcher, cutoff, source)
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: listing failed: %s", source.name, exc)
@@ -543,8 +543,6 @@ def run(
             slots,
             day_start.astimezone(UTC).isoformat(timespec="seconds"),
             found=found,
-            found_slots=cfg.discovery.slots,
-            found_min_score=cfg.discovery.min_score,
         )
         ranking.order += others[cfg.llm.max_candidates :]
         if ranking.choices and not dry_run:
@@ -576,10 +574,10 @@ def run(
     leftover: set[str] = set()
     checked: list[tuple[Article, ItemReport]] = []
     found_ids = {item.id for item in found}
-    found_ready = 0
     taken: set[str] = set()
     unreachable: set[str] = set()
     link_picks: list[str] = []  # picked, but only their links can be shown
+    places: dict[str, int] = {}  # the day's places each source has taken
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
 
     def outbound(item: Item, body) -> list[_Link]:
@@ -716,7 +714,8 @@ def run(
         if item.id in taken:
             continue  # already delivered today as part of another story
         is_found = item.id in found_ids
-        if stories >= remaining or (is_found and found_ready >= ranking.found_slots):
+        limit = item.source.daily_max if item.id not in by_hand else 0
+        if stories >= remaining or (limit and places.get(item.source.name, 0) >= limit):
             leftover.add(item.source.name)
             continue
         if is_found:
@@ -751,7 +750,7 @@ def run(
         story.links = links_of[item.id] if item.id in links_of else outbound(item, lead.article.body)
         picked.append(story)
         stories += 1
-        found_ready += is_found
+        places[item.source.name] = places.get(item.source.name, 0) + 1
 
     def record_selection(article_id: str) -> None:
         # An article brought in by a story is recorded with that story's choice.

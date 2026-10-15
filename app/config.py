@@ -78,12 +78,13 @@ class Llm:
 
 @dataclass(frozen=True)
 class Discovery:
-    """Front pages of link aggregators as extra candidates. Only used when ranking is on."""
+    """Front pages of link aggregators as extra candidates, ranked with the feeds' articles on
+    their score alone. Only used when ranking is on."""
 
     # The built-in sources switched on on the Sources page; filled in from the database.
     sites: tuple[str, ...] = ()
-    slots: int = 2  # at most this many of the day's articles, and never more than half
-    min_score: float = 6.0  # a found article needs at least this score to take a slot
+    # The most of a day's places each may take, by key, as set there; 0 or missing, no limit.
+    daily_max: dict[str, int] = field(default_factory=dict)
     per_site: int = 100  # candidates sent to the model per site
 
 
@@ -103,6 +104,7 @@ class Source:
     url: str = ""
     tier: str = "clean"
     pinned: bool = False
+    daily_max: int = 0  # at most this many of a day's places; 0 for no limit
     # auto: extract from the page, fall back to feed content. page / feed force one.
     extract: str = "auto"
     users: tuple[str, ...] = ()
