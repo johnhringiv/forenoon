@@ -321,8 +321,13 @@ source).
   run; if a further page fails, the rest are still used.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
-  anything already in a feed read this run, already delivered, or previously failed. At most
-  `discovery.per_site` (100) per site.
+  anything already delivered or previously failed. At most `discovery.per_site` (100) per site.
+- **Sightings.** An article a feed or another front page already gave this run is not a second
+  candidate: it is added to the first one's sightings. The model is shown every site's votes
+  and comments together, and told that being picked up in several places counts in its favour
+  (not a fixed bonus). Its place counts against whichever of its sources has the most room,
+  so it is held back only when all of them have used their places. A find is credited "site
+  via Hacker News and Lobsters", and every route is recorded.
 - **Scoring.** Found articles go into the same ranking call as feed articles. The model sees
   the title, the site, points, comment count and (Lobsters) tags and description, since there
   is no abstract.

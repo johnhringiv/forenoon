@@ -210,13 +210,13 @@ def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> t
         id=item.id,
         url=item.url,
         title=item.title or result.title or item.url,
-        source=f"{item.site} via {item.source.name}" if item.site else item.source.name,
+        source=f"{item.site} via {' and '.join(s.name for s in item.sources())}" if item.site else item.source.name,
         body=result.body,
         author=item.author or result.author,
         published=item.published,
         reading_minutes=result.reading_minutes,
         assets=assets,
-        discussion_url=item.discussion_url,
+        discussion_url=item.discussion_url or next((o.discussion_url for o in item.also if o.discussion_url), ""),
     )
     return article, dropped
 
@@ -359,6 +359,16 @@ def _interleave(pools: list[list[Item]]) -> list[Item]:
     return out
 
 
+def _charged_to(item: Item, places: dict[str, int]) -> Source | None:
+    """Which of the sources carrying `item` its place counts against: the one with the most
+    room left, any without a limit first. None when every one has used its places today."""
+    room = {
+        s.name: (s, float("inf") if not s.daily_max else s.daily_max - places.get(s.name, 0)) for s in item.sources()
+    }
+    best, left = max(room.values(), key=lambda entry: entry[1])
+    return best if left > 0 else None
+
+
 def _discover(
     cfg: Config,
     store: Store,
@@ -367,10 +377,16 @@ def _discover(
     report: RunReport,
     reports: dict[str, SourceReport],
     seen: set[str],
+    known: dict[str, Item],
     cutoff: datetime,
     dry_run: bool,
 ) -> list[Item]:
-    """New articles from the configured front pages that no feed already supplied."""
+    """New articles from the configured front pages that no feed already supplied.
+
+    One a feed or an earlier front page already gave is not a candidate again: it is added to
+    that candidate's `also`, so the model sees every sighting and any source with room may
+    take it.
+    """
     found: list[Item] = []
     for key in cfg.discovery.sites:
         source = site_source(key, cfg.discovery.daily_max.get(key, 0))
@@ -393,13 +409,23 @@ def _discover(
             row = store.get_article(item.id)
             if row is not None:
                 store.add_route(item.id, "found", source.name)  # a feed's article can be here too
+            first = known.get(item.id)
+            if first is not None:
+                if all(s.name != source.name for s in first.sources()):
+                    first.also.append(item)
+                continue
             if item.id in seen or (item.published and item.published < cutoff):
                 continue
             seen.add(item.id)
             if (row and row.status == "failed") or store.has_had(user.id, item.id):
                 continue
             fresh[row is not None].append(item)
-        found += (fresh[False] + fresh[True])[: cfg.discovery.per_site]
+        kept = fresh[False] + fresh[True]
+        for item in kept[cfg.discovery.per_site :]:
+            seen.discard(item.id)  # beyond this site's share, so another site may still offer it
+        for item in kept[: cfg.discovery.per_site]:
+            known[item.id] = item
+            found.append(item)
     return found
 
 
@@ -504,6 +530,11 @@ def run(
         published = item.published.isoformat() if item.published else None
         store.upsert_article(item.id, item.url, item.source.name, item.title, item.author, published)
         store.add_route(item.id, "found", item.source.name)
+        record_sightings(item)
+
+    def record_sightings(item: Item) -> None:
+        for other in item.also:
+            store.add_route(item.id, "found", other.source.name)
 
     for site in cfg.sessions:
         ends = sessions.sign_in_ends(cfg.sessions_dir, sessions.name(site))
@@ -533,7 +564,8 @@ def run(
         pool = others[: cfg.llm.max_candidates]
         slots = max(0, remaining - len(pinned))
         if cfg.discovery.sites and backend is not None and slots:
-            found = _discover(cfg, store, fetcher, user, report, reports, seen, cutoff, dry_run)
+            known = {item.id: item for item in [*pinned, *pool]}
+            found = _discover(cfg, store, fetcher, user, report, reports, seen, known, cutoff, dry_run)
         ranking = rank_candidates(
             cfg.llm,
             backend,
@@ -551,6 +583,9 @@ def run(
             for item in found:
                 if item.id in ranking.choices:
                     record_found(item)
+            for item in pool:
+                if item.id in ranking.choices:
+                    record_sightings(item)
             store.record_assessments(user.id, [(i, c.score, c.reason, False, "") for i, c in ranking.choices.items()])
         if ranking.choices:
             report.ranking = f"model ({ranking.note})" if ranking.note else "model"
@@ -714,8 +749,8 @@ def run(
         if item.id in taken:
             continue  # already delivered today as part of another story
         is_found = item.id in found_ids
-        limit = item.source.daily_max if item.id not in by_hand else 0
-        if stories >= remaining or (limit and places.get(item.source.name, 0) >= limit):
+        charged = _charged_to(item, places) if item.id not in by_hand else item.source
+        if stories >= remaining or charged is None:
             leftover.add(item.source.name)
             continue
         if is_found:
@@ -750,7 +785,7 @@ def run(
         story.links = links_of[item.id] if item.id in links_of else outbound(item, lead.article.body)
         picked.append(story)
         stories += 1
-        places[item.source.name] = places.get(item.source.name, 0) + 1
+        places[charged.name] = places.get(charged.name, 0) + 1
 
     def record_selection(article_id: str) -> None:
         # An article brought in by a story is recorded with that story's choice.
