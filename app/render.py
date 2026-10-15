@@ -62,8 +62,9 @@ td, th { border: 1px solid #000; padding: 0.2em 0.4em; vertical-align: top; text
 CODE_CHAR = 0.9  # em per character of indent: one character at the reader's usual font size
 CODE_HANG = 4  # characters past the line's own indent, so a wrapped part is not read as nested
 CODE_INDENT_MAX = 24  # deeper lines share this indent, or nothing would be left for the code
-# A zero-width space after each of these, so a long token breaks there instead of being
+# A zero-width space after each run of these, so a long token breaks there instead of being
 # hyphenated: the device adds a hyphen to any token longer than the room left, whatever the CSS.
+# After a run, not each character, so `==`, `//`, `::` and `=>` stay whole.
 CODE_BREAK_AFTER = ".,;:([{/?=&<>"
 CODE_LINE_CSS = ".ln { display: block; }\n" + "".join(
     f".i{n} {{ padding-left: {(n + CODE_HANG) * CODE_CHAR:.1f}em; text-indent: -{CODE_HANG * CODE_CHAR:.1f}em; }}\n"
@@ -166,17 +167,20 @@ def _no_self_closed(body: lxml.html.HtmlElement) -> None:
                 changed = True
 
 
-_BREAK_AFTER = re.compile(f"([{re.escape(CODE_BREAK_AFTER)}])")
+_BREAK_AFTER = re.compile(f"([{re.escape(CODE_BREAK_AFTER)}]+)")
 
 
 def _text_runs(el: lxml.html.HtmlElement, path: tuple, out: list[tuple[str, tuple]]) -> None:
-    """Each piece of text under `el`, with the elements it sits in; a <br> is a newline."""
+    """Each piece of text under `el`, with the elements it sits in; a <br> is a newline.
+
+    An element with nothing in it is an empty run, so an anchor (`<a id>`) is kept.
+    """
     for child in el:
         if child.tag == "br":
             out.append(("\n", path))
         elif isinstance(child.tag, str):
-            if child.text:
-                out.append((child.text, path + (child,)))
+            if child.text or not len(child):
+                out.append((child.text or "", path + (child,)))
             _text_runs(child, path + (child,), out)
         if child.tail:
             out.append((child.tail, path))
@@ -202,7 +206,7 @@ def _code_lines(body: lxml.html.HtmlElement) -> None:
             for i, piece in enumerate(text.replace("\t", "    ").replace("\xa0", " ").split("\n")):
                 if i:
                     lines.append([])
-                if piece:
+                if piece or not text:
                     lines[-1].append((piece, path))
         if len(lines) > 1 and not lines[-1]:  # the newline before </code>
             lines.pop()
@@ -216,7 +220,7 @@ def _code_lines(body: lxml.html.HtmlElement) -> None:
             stack: list[tuple] = []  # (source element, its copy on this line), outermost first
             left = indent
             for t, path in line:
-                if left:
+                if left and t:
                     k = min(left, len(t) - len(t.lstrip(" ")))
                     t, left = t[k:], left - k
                     if not t:

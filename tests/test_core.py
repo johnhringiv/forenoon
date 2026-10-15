@@ -514,6 +514,7 @@ def test_code_lines_are_blocks_with_a_hanging_indent():
         "",
         "\tlet x = foo.bar(baz);",  # a tab
         "\xa0\xa0done();",  # non-breaking spaces as indent
+        '    <a id="l7"></a>if a == b &amp;&amp; c =&gt; d::e { x[0] }',  # an anchor; two-character operators
         "}",
     ]
     body = lxml.html.fragment_fromstring(
@@ -533,6 +534,7 @@ def test_code_lines_are_blocks_with_a_hanging_indent():
         "\xa0",
         "let x = foo.bar(baz);",
         "done();",
+        "if a == b && c => d::e { x[0] }",
         "}",
         "a",
         "b",
@@ -544,12 +546,16 @@ def test_code_lines_are_blocks_with_a_hanging_indent():
         "ln i0",
         "ln i4",
         "ln i2",
+        "ln i4",
         "ln i0",
         "ln i0",
         "ln i2",
     ]
     assert chapter.count("<i>") == 2, "the comment's highlighting is closed and reopened on the next line"
     assert "foo.\u200bbar(\u200bbaz);</span>" in chapter, "break points after punctuation, none at the line end"
+    assert '<a id="l7"></a>if a ==\u200b b &amp;&amp;\u200b c =&gt;\u200b d::\u200be {\u200b x[\u200b0] }' in chapter, (
+        "an anchor is kept; a run of break characters breaks after the run, so operators stay whole"
+    )
     assert "\n" not in chapter[chapter.index("<pre>") : chapter.index("</pre>")]
     css = book.read("OEBPS/style.css").decode()
     assert ".ln { display: block; }" in css
