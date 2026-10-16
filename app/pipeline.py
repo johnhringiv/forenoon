@@ -980,7 +980,7 @@ def run(
             retried.add(row.id)
 
     # Articles that are about another page bring that page into their story. The model says
-    # which links those are; without it, only short posts are followed, through every link.
+    # which links those are; when it cannot be asked, no link is followed.
     asked = [
         {
             "id": story.id,

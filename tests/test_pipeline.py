@@ -804,13 +804,20 @@ def test_pointer_post_is_replaced_by_the_articles_it_links_to_as_one_story(env, 
     again = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: pytest.fail("cap reached"))
     assert again.cap_reached and not again.delivered
 
-    # When nothing it links to can be fetched, the short post goes out as before. (Its own data
-    # folder: the page saved above would otherwise be reused instead of fetched.)
+    # With no model to say which links matter, none is followed, though the page is there: the
+    # short post goes out as it is. (Its own data folder: the page saved above would otherwise
+    # be reused instead of fetched.)
+    bare = Store(tmp_path / "bare.sqlite3")
+    fetcher = Fetcher("test", bare, min_host_interval=0, transport=httpx.MockTransport(routed))
+    unasked = run(dataclasses.replace(cfg, data_dir=tmp_path / "bare"), bare, fetcher, user, now=NOW, dry_run=True)
+    assert [bare.get_article(i).title for i in unasked.delivered] == ["Post 4", "Post 1"]
+
+    # When nothing it links to can be fetched, the short post goes out as before.
     routes.pop("https://orig.example/post-7")
     cfg = dataclasses.replace(cfg, data_dir=tmp_path / "second")
     fresh = Store(tmp_path / "second.sqlite3")
     fetcher = Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(routed))
-    alone = run(cfg, fresh, fetcher, user, now=NOW, dry_run=True)
+    alone = run(cfg, fresh, fetcher, user, now=NOW, dry_run=True, backend=backend)
     assert [fresh.get_article(i).title for i in alone.delivered] == ["Post 4", "Post 1"]
 
 
