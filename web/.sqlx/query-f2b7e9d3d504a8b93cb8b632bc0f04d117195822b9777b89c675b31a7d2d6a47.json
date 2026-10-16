@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET name = ?, password_hash = ?, timezone = ?, kindle_addresses = ?, email_verified_at = ?,\n         invited_at = NULL WHERE id = ? AND invited_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "f2b7e9d3d504a8b93cb8b632bc0f04d117195822b9777b89c675b31a7d2d6a47"
+}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Join · Forenoon{% endblock %}
+{% block header %}<p>You are invited to Forenoon. Choose a password to finish setting up your account.</p>{% endblock %}
+{% block main %}
+{% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+<form class="sheet" method="post" action="/join/{{ token }}">
+<p class="hint">You will sign in as <b>{{ email }}</b>.</p>
+<label>Display name <input name="name" value="{{ name }}" maxlength="80" required autofocus></label>
+<label>Password <input name="password" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
+<label>Password again <input name="again" type="password" minlength="10" maxlength="256" autocomplete="new-password" required></label>
+<p class="hint">At least 10 characters.</p>
+<label>Time zone <input name="timezone" value="{{ timezone }}" maxlength="64" required></label>
+<p class="hint">A zone name such as America/New_York or Europe/London. Issue dates and times are shown in it.</p>
+<label>Kindle addresses <textarea name="kindle_addresses" rows="2" maxlength="1300">{{ kindle }}</textarea></label>
+{% include "_kindle_hint.html" %}
+<p class="hint">Without one, nothing can be sent to you; an admin can add it later.</p>
+<button class="primary">Join</button>
+</form>
+{% endblock %}

@@ -86,6 +86,7 @@ async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
         logins_dir: Some(folder.path().join("logins")),
         proxy: forenoon_web::proxy::Proxy::default(),
         feedback_secret: Some(FEEDBACK_SECRET.to_vec()),
+        sender: Some("issues@example.com".to_owned()),
     };
     let router = app(pool.clone(), options).await.unwrap();
     Site { router, pool, mail, folder }
@@ -108,6 +109,12 @@ async fn article(pool: &SqlitePool, id: &str, url: &str, source: &str, title: &s
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// Post the Accounts page's invite form.
+async fn invite_post(site: &Site, browser: &mut Browser, form: &[(&str, String)]) -> Reply {
+    let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    browser.post(site, "/accounts", &form).await
 }
 
 impl Browser {
@@ -613,6 +620,147 @@ async fn email_is_confirmed_softly_and_restores_a_forgotten_password() {
     assert_eq!(old.status, StatusCode::UNAUTHORIZED);
     let now = fresh.post(&site, "/login", &[("email", "new@example.com"), ("password", new)]).await;
     assert_eq!(now.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn an_admin_invites_a_reader_by_email_and_the_link_lets_them_join_once() {
+    let site = site(false).await;
+    let mut john = Browser::default();
+    john.sign_in(&site, "john").await;
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+
+    // Admins only, from the nav; a reader is refused and does not see the page.
+    assert_eq!(mary.get(&site, "/accounts").await.status, StatusCode::FORBIDDEN);
+    assert!(!mary.get(&site, "/").await.text.contains(r#"href="/accounts""#));
+    let page = john.get(&site, "/accounts").await;
+    assert!(page.status == StatusCode::OK && page.text.contains("Mary") && page.text.contains("Joined "));
+    let csrf = page.csrf();
+    let invite = |email: &'static str, id: &'static str, role: &'static str| {
+        vec![
+            ("csrf", csrf.clone()),
+            ("email", email.to_owned()),
+            ("id", id.to_owned()),
+            ("name", String::new()),
+            ("role", role.to_owned()),
+        ]
+    };
+
+    // Refused: not an address, an address in use, an id in use, and the wrong role.
+    for (form, said) in [
+        (invite("not an address", "", "reader"), "not an email address"),
+        (invite("mary@example.com", "mary2", "reader"), "already uses that address"),
+        (invite("jane@example.com", "mary", "reader"), "already an account mary"),
+        (invite("jane@example.com", "", "owner"), "Choose a role"),
+    ] {
+        let reply = invite_post(&site, &mut john, &form).await;
+        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(said), "{said}: {}", reply.text);
+    }
+    assert!(site.emails() == 0 && auth::find_user(&site.pool, "jane").await.unwrap().is_none());
+    assert_eq!(
+        invite_post(&site, &mut mary, &invite("jane@example.com", "", "reader")).await.status,
+        StatusCode::FORBIDDEN
+    );
+
+    // Sent: the account exists at once, invited, with the id taken from the address.
+    let sent = invite_post(&site, &mut john, &invite("Jane.Doe@Example.com", "", "reader")).await;
+    assert!(
+        sent.status == StatusCode::OK && sent.text.contains("Invitation sent to jane.doe@example.com"),
+        "{}",
+        sent.text
+    );
+    let mail = site.mail.lock().unwrap().last().cloned().unwrap();
+    assert!(mail.to == "jane.doe@example.com" && mail.body.contains("John has invited you"));
+    assert!(mail.body.contains("issues@example.com"), "the sender every Kindle must approve is in the email");
+    let link = site.emailed_link();
+    assert!(link.starts_with("/join/") && sent.text.contains(&link), "the admin is shown the link too");
+    let jane = auth::find_user(&site.pool, "jane.doe").await.unwrap().unwrap();
+    assert!(jane.is_invited() && jane.email.as_deref() == Some("jane.doe@example.com") && jane.role == "reader");
+    assert_eq!(jane.timezone, "America/New_York", "the admin's zone, to start with");
+    let listed = john.get(&site, "/accounts").await.text;
+    assert!(listed.contains("jane.doe") && listed.contains("Invited; the link works until"));
+
+    // Until she joins: no sign-in with any password, no reset email, no password change by hand.
+    let mut jane_browser = Browser::default();
+    let tried = jane_browser.post(&site, "/login", &[("email", "jane.doe@example.com"), ("password", "")]).await;
+    assert_eq!(tried.status, StatusCode::UNAUTHORIZED);
+    jane_browser.post(&site, "/forgot", &[("email", "jane.doe@example.com")]).await;
+    assert_eq!(site.emails(), 1);
+
+    // The link opens the join page, which names the address and the sender to approve.
+    assert_eq!(jane_browser.get(&site, "/join/not-a-token").await.status, StatusCode::BAD_REQUEST);
+    let form = jane_browser.get(&site, &link).await;
+    assert!(form.status == StatusCode::OK && form.text.contains("<b>jane.doe@example.com</b>"), "{}", form.text);
+    assert!(form.text.contains("<b>issues@example.com</b>") && form.text.contains("amazon.com/hz/mycd"));
+    let join =
+        |name: &'static str, password: &'static str, again: &'static str, zone: &'static str, kindle: &'static str| {
+            [("name", name), ("password", password), ("again", again), ("timezone", zone), ("kindle_addresses", kindle)]
+        };
+    for (form, said) in [
+        (join("Jane", "short", "short", "Europe/London", ""), "at least 10 characters"),
+        (join("Jane", PASSWORD, "something else", "Europe/London", ""), "not the same"),
+        (join("Jane", PASSWORD, PASSWORD, "Mars/Olympus", ""), "not a time zone"),
+        (join("Jane", PASSWORD, PASSWORD, "Europe/London", "jane at kindle"), "not an email address"),
+        (join("", PASSWORD, PASSWORD, "Europe/London", ""), "display name"),
+    ] {
+        let reply = jane_browser.post(&site, &link, &form).await;
+        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(said), "{said}: {}", reply.text);
+    }
+    assert!(auth::find_user(&site.pool, "jane.doe").await.unwrap().unwrap().is_invited());
+    let foreign = jane_browser
+        .post_from(&site, &link, &join("Jane", PASSWORD, PASSWORD, "Europe/London", ""), Some("https://evil.example"))
+        .await;
+    assert_eq!(foreign.status, StatusCode::FORBIDDEN);
+
+    // Joined: signed in at once, taken to the Reading page, and the account is hers.
+    let done =
+        jane_browser.post(&site, &link, &join("Jane", PASSWORD, PASSWORD, "Europe/London", "jane@kindle.com\n")).await;
+    assert_eq!(done.location, "/reading?saved=joined", "{}", done.text);
+    let reading = jane_browser.get(&site, &done.location).await;
+    assert!(reading.status == StatusCode::OK && reading.text.contains("Welcome."), "{}", reading.text);
+    let jane = auth::find_user(&site.pool, "jane.doe").await.unwrap().unwrap();
+    assert!(!jane.is_invited() && jane.email_verified_at.is_some(), "the link reached the address: confirmed");
+    assert!(jane.name == "Jane" && jane.timezone == "Europe/London" && jane.kindle_addresses == "jane@kindle.com");
+    let follows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM follows WHERE user_id = 'jane.doe'")
+        .fetch_one(&site.pool)
+        .await
+        .unwrap();
+    assert!(follows > 0, "she follows what the household shares: the built-in sources");
+    // The link is used up; the password signs her in elsewhere.
+    assert_eq!(jane_browser.get(&site, &link).await.status, StatusCode::BAD_REQUEST);
+    let mut phone = Browser::default();
+    let signed = phone.post(&site, "/login", &[("email", "jane.doe@example.com"), ("password", PASSWORD)]).await;
+    assert_eq!(signed.status, StatusCode::SEE_OTHER);
+    let listed = john.get(&site, "/accounts").await.text;
+    assert!(listed.contains("Jane") && listed.contains("jane@kindle.com") && !listed.contains("Invited;"));
+    // Joined accounts cannot be resent or revoked.
+    let csrf = john.get(&site, "/accounts").await.csrf();
+    assert_eq!(john.post(&site, "/accounts/jane.doe/resend", &[("csrf", &csrf)]).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(john.post(&site, "/accounts/jane.doe/revoke", &[("csrf", &csrf)]).await.status, StatusCode::NOT_FOUND);
+    assert!(auth::find_user(&site.pool, "jane.doe").await.unwrap().is_some());
+
+    // A second invitation: a fresh link replaces the old; taking it back removes the account.
+    invite_post(&site, &mut john, &invite("bob@example.com", "bob", "admin")).await;
+    let first = site.emailed_link();
+    let csrf = john.get(&site, "/accounts").await.csrf();
+    let again = john.post(&site, "/accounts/bob/resend", &[("csrf", &csrf)]).await;
+    assert!(again.status == StatusCode::OK && again.text.contains("A new link was sent to bob@example.com"));
+    let second = site.emailed_link();
+    assert!(first != second && site.emails() == 3);
+    assert_eq!(phone.get(&site, &first).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(phone.get(&site, &second).await.status, StatusCode::OK);
+    assert_eq!(mary.post(&site, "/accounts/bob/revoke", &[("csrf", &csrf)]).await.status, StatusCode::FORBIDDEN);
+    let revoked = john.post(&site, "/accounts/bob/revoke", &[("csrf", &csrf)]).await;
+    assert_eq!(revoked.location, "/accounts?saved=revoked");
+    assert!(john.get(&site, &revoked.location).await.text.contains("Invitation taken back"));
+    assert!(auth::find_user(&site.pool, "bob").await.unwrap().is_none());
+    assert_eq!(phone.get(&site, &second).await.status, StatusCode::BAD_REQUEST);
+    let tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM email_tokens").fetch_one(&site.pool).await.unwrap();
+    assert_eq!(tokens, 0);
+
+    // The account page's Kindle hint names the sender too.
+    let account = john.get(&site, "/account").await.text;
+    assert!(account.contains("<b>issues@example.com</b>") && account.contains("amazon.com/hz/mycd"));
 }
 
 #[tokio::test]

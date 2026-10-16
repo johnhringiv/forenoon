@@ -25,6 +25,12 @@ impl User {
         self.role == "admin"
     }
 
+    /// Invited by an admin and yet to choose a password: it cannot sign in, and the pipeline
+    /// delivers nothing to it.
+    pub fn is_invited(&self) -> bool {
+        self.invited_at.is_some()
+    }
+
     /// The address still waiting to be confirmed, if any: a requested change, else an
     /// unconfirmed current one.
     pub fn unconfirmed_email(&self) -> Option<&str> {
@@ -81,6 +87,8 @@ pub struct User {
     pub email_verified_at: Option<String>,
     /// A requested change of address, until the link sent to it is opened.
     pub pending_email: Option<String>,
+    /// When an admin invited this reader; `None` once they have joined (or were never invited).
+    pub invited_at: Option<String>,
 }
 
 // Written by hand so that a logged user never includes the password hash.
@@ -189,7 +197,7 @@ pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx
     sqlx::query_as!(
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
-           email, email_verified_at, pending_email
+           email, email_verified_at, pending_email, invited_at
            FROM users WHERE id = ?"#,
         id
     )
@@ -202,7 +210,7 @@ pub async fn find_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option
     sqlx::query_as!(
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
-           email, email_verified_at, pending_email
+           email, email_verified_at, pending_email, invited_at
            FROM users WHERE email = ?"#,
         email
     )
@@ -225,7 +233,8 @@ impl AuthnBackend for Backend {
         };
         let stored = user.as_ref().map_or_else(|| self.decoy_hash.clone(), |u| u.password_hash.clone());
         let matches = verify_password(creds.password, stored).await?;
-        Ok(user.filter(|_| matches))
+        // An invited account has no password yet; its hash is empty and matches nothing.
+        Ok(user.filter(|user| matches && !user.is_invited()))
     }
 
     async fn get_user(&self, id: &UserId<Self>) -> Result<Option<User>, AuthError> {

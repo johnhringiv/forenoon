@@ -38,7 +38,7 @@ use crate::{
 const ISSUES_PER_PAGE: usize = 14;
 pub(crate) const MAX_DESCRIPTION_CHARS: usize = 260;
 const WORDS_PER_MINUTE: f64 = 230.0;
-const MAX_NAME: usize = 80;
+pub(crate) const MAX_NAME: usize = 80;
 pub(crate) const MAX_INTERESTS: usize = 4000;
 pub(crate) const MAX_DAILY_STORIES: i64 = 50;
 const CSRF_KEY: &str = "csrf";
@@ -78,6 +78,8 @@ pub struct AppState {
     pub feedback_secret: Option<Arc<[u8]>>,
     /// Counts rating taps, per minute.
     pub taps: Arc<Limiter>,
+    /// The address issues are sent from, for the Kindle hints; see `Options::sender`.
+    pub sender: Option<String>,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -167,7 +169,7 @@ pub async fn https_only(request: Request, next: Next) -> Response {
 // requests that change something
 
 /// Whether a form post came from one of our own pages, as far as the browser says.
-fn same_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
     let text = |name| headers.get(name).and_then(|value: &HeaderValue| value.to_str().ok());
     // The browser's own verdict, when it gives one (it does on https and localhost).
     if let Some(site) = text(header::HeaderName::from_static("sec-fetch-site")) {
@@ -182,7 +184,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
-fn random_token() -> Result<String, AppError> {
+pub(crate) fn random_token() -> Result<String, AppError> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)?;
     Ok(hex::encode(&bytes))
@@ -327,7 +329,7 @@ struct MessagePage {
     text: String,
 }
 
-fn message(status: StatusCode, heading: &'static str, text: impl Into<String>) -> Page {
+pub(crate) fn message(status: StatusCode, heading: &'static str, text: impl Into<String>) -> Page {
     html(status, MessagePage { nav: None, heading, text: text.into() })
 }
 
@@ -1101,6 +1103,8 @@ struct AccountPage {
     csrf: String,
     error: Option<String>,
     notice: Option<&'static str>,
+    /// For the Kindle hint; see `AppState::sender`.
+    sender: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1124,7 +1128,10 @@ pub async fn account(
     };
     let user = reader(&auth)?;
     let nav = Nav::new(&state, &user, "account").await?;
-    html(StatusCode::OK, AccountPage { nav, user, csrf: csrf_token(&session).await?, error: None, notice })
+    html(
+        StatusCode::OK,
+        AccountPage { nav, user, csrf: csrf_token(&session).await?, error: None, notice, sender: state.sender.clone() },
+    )
 }
 
 #[derive(Deserialize)]
@@ -1163,6 +1170,7 @@ pub async fn set_profile(
                 csrf,
                 error: Some(error),
                 notice: None,
+                sender: state.sender.clone(),
             },
         );
     }
@@ -1227,6 +1235,7 @@ pub async fn set_email(
         csrf: form.csrf,
         error: problem.map(str::to_owned),
         notice: None,
+        sender: state.sender.clone(),
     };
     html(StatusCode::BAD_REQUEST, page)
 }
@@ -1318,7 +1327,14 @@ pub async fn set_kindle(
             let nav = Nav::new(&state, &user, "account").await?;
             html(
                 StatusCode::BAD_REQUEST,
-                AccountPage { nav, user, csrf: form.csrf, error: Some(problem), notice: None },
+                AccountPage {
+                    nav,
+                    user,
+                    csrf: form.csrf,
+                    error: Some(problem),
+                    notice: None,
+                    sender: state.sender.clone(),
+                },
             )
         }
     }
@@ -1365,6 +1381,7 @@ pub async fn set_password(
                 csrf,
                 error: Some(error),
                 notice: None,
+                sender: state.sender.clone(),
             },
         );
     }

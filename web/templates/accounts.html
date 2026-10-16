@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Accounts · Forenoon{% endblock %}
+{% block header %}
+<p class="intro">Who can sign in. A reader is invited by email and chooses their own password; there is no sign-up page.</p>
+{% endblock %}
+{% block main %}
+{% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
+{% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
+{% if let Some(link) = link %}<p class="hint">If the email does not arrive, give them this link yourself: <a href="{{ link }}">{{ link }}</a>. It works for 7 days, once.</p>{% endif %}
+<details class="add"{% if error.is_some() %} open{% endif %}>
+<summary>Invite a reader</summary>
+<form class="source" method="post" action="/accounts">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="fields">
+<label class="wide">Email <input name="email" type="email" maxlength="254" value="{{ email }}" autocomplete="off" required></label>
+<label>Account id <input name="id" maxlength="64" value="{{ id }}" placeholder="from the email" autocomplete="off"></label>
+<label>Name <input name="name" maxlength="80" value="{{ name }}" autocomplete="off"></label>
+<label>Role <select name="role"><option value="reader"{% if role == "reader" %} selected{% endif %}>Reader</option><option value="admin"{% if role == "admin" %} selected{% endif %}>Admin</option></select></label>
+<button class="primary">Send the invitation</button>
+</div>
+<p class="hint">They get a link that works for 7 days, choose a password and a Kindle address, and start by following every source shared with the household. The id names them in the pipeline's records and never changes; left blank, it is taken from the email.</p>
+</form>
+</details>
+{% for row in rows %}
+<div class="source">
+<div class="fields"><b class="wide">{{ row.name }} <span class="tag">{{ row.role }}</span>{% if row.invited %} <span class="tag">invited</span>{% endif %}</b>
+{% if row.invited %}
+<form method="post" action="/accounts/{{ row.id }}/resend"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Send the link again</button></form>
+<form method="post" action="/accounts/{{ row.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Take the invitation back</button></form>
+{% endif %}</div>
+<p class="hint">{{ row.id }} · {{ row.email }}{% if !row.kindle.is_empty() %} · Kindle: {{ row.kindle }}{% endif %} · {{ row.state }}</p>
+</div>
+{% endfor %}
+{% endblock %}

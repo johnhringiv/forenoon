@@ -107,6 +107,9 @@ pub async fn page(
         Some("reading") => Some("Saved. It applies from the next run."),
         Some("notes") => Some("Saved. It applies from the next run."),
         Some("restored") => Some("Restored. It applies from the next run."),
+        Some("joined") => {
+            Some("Welcome. Say what you want to read: your issues are chosen from it and the sources you follow.")
+        }
         _ => None,
     };
     let error =

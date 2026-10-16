@@ -207,9 +207,11 @@ class Store:
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
             return ()
         learned = "learned" if self.can_learn() else "''"  # older web app: no such column
+        # An account an admin has invited is nobody's until its reader joins: no issue for it.
+        joined = "WHERE invited_at IS NULL" if self._has_column("users", "invited_at") else ""
         rows = self.db.execute(
             f"SELECT id, name, kindle_addresses, daily_stories, interests, {learned} AS learned"
-            " FROM users ORDER BY created_at, id"
+            f" FROM users {joined} ORDER BY created_at, id"
         ).fetchall()
         return tuple(
             User(
@@ -280,6 +282,9 @@ class Store:
         if not self._has_table("sessions"):
             return ()
         return tuple(row["domain"] for row in self.db.execute("SELECT domain FROM sessions ORDER BY domain"))
+
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(row["name"] == column for row in self.db.execute(f"PRAGMA table_info({table})"))
 
     def _has_table(self, name: str) -> bool:
         return bool(

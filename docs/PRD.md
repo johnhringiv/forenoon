@@ -25,8 +25,8 @@ what its own users configure and delivers only to the addresses its admin has se
 - An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
   addresses, a daily target of stories (default 8; section 7e) and an interests text. They
   live in the database: a reader is an account of the web pages
-  (section 9a), created with `forenoon-web add-user` and edited on its Reading and account
-  pages. The
+  (section 9a), made by an admin's invitation (or `forenoon-web add-user`) and edited on its
+  Reading and account pages. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
 - **Sources** belong to the household and are read for the readers who **follow** them: a
@@ -658,10 +658,20 @@ database with the pipeline.
 
 - **Accounts.** Every page except sign-in and the health check needs a session. An account
   is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
-  reader sees and changes only their own deliveries, ratings, settings and sources (section 2). Accounts are created from the command line
-  (`forenoon-web add-user <id> --email <address>`); there is no sign-up page. The first account is an admin,
-  later ones readers. An admin has the Settings and Problems pages, sets Kindle addresses,
-  sees every source and session, and pauses sources for everyone.
+  reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
+  created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
+  admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
+  sets Kindle addresses, sees every source and session, and pauses sources for everyone.
+- **Invitations.** On the Accounts page an admin invites a reader by email address, with an
+  id (taken from the address when none is given), a name and a role. The account exists from
+  then on, invited: no password, no sign-in, no reset email, and the pipeline delivers nothing
+  to it. The address gets a link that works for seven days, once; the admin is shown the link
+  too, for when the email does not arrive, and can send a fresh one (the old stops working)
+  or take the invitation back, which removes the account. The join page shows the address,
+  asks for a name, password, time zone and Kindle addresses, and signs the reader in; the
+  address counts as confirmed, the account follows every shared source, and the reader lands
+  on the Reading page. Kindle hints name the install's sender address (`FORENOON_SMTP_SENDER`)
+  and link to Amazon's Personal Document Settings, where every Kindle must approve it.
 - **Sign-in is by email address**, stored lowercase so casing and stray spaces cannot make
   two accounts of one address. The account id is separate and never changes: it names the
   reader in the pipeline's records.
@@ -800,7 +810,7 @@ The web pages have their own program:
 | `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]`   | Serve the pages and answer rating links    |
 | `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone] [--follow-nothing]` | Create an account; asks for the password   |
 | `forenoon-web set-password ID`                                                                            | Change a password, signing the account out |
-| `forenoon-web users`                                                                                      | List the accounts                          |
+| `forenoon-web users`                                                                                      | List the accounts, invited ones marked     |
 | `forenoon-web health`                                                                                     | Exit 0 when the local server answers       |
 
 ## 11. Storage
@@ -835,7 +845,8 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 ## 13. Security properties
 
 - Fetched content cannot choose recipients, run code, or reach private network addresses.
-- Rating links accept only signed, expiring tokens and write only ratings.
+- Rating links accept only signed, expiring tokens and write only ratings. Emailed links
+  (confirm, reset, invite) are stored only as hashes, expire, and work once.
 - The web pages need a login and show each reader only their own data. Admin pages are
   public too, behind the same login and an admin role.
 - Secrets are never read from or written to config files, reports or logs.
