@@ -789,13 +789,13 @@ database with the pipeline.
 
 The web pages have their own program:
 
-| Command                                                                                                 | Purpose                                    |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]` | Serve the pages and answer rating links    |
+| Command                                                                                                   | Purpose                                    |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]`   | Serve the pages and answer rating links    |
 | `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone] [--follow-nothing]` | Create an account; asks for the password   |
-| `forenoon-web set-password ID`                                                                          | Change a password, signing the account out |
-| `forenoon-web users`                                                                                    | List the accounts                          |
-| `forenoon-web health`                                                                                   | Exit 0 when the local server answers       |
+| `forenoon-web set-password ID`                                                                            | Change a password, signing the account out |
+| `forenoon-web users`                                                                                      | List the accounts                          |
+| `forenoon-web health`                                                                                     | Exit 0 when the local server answers       |
 
 ## 11. Storage
 

@@ -244,12 +244,16 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
         Source("Zed", "https://zed.example/feed", extract="page", daily_max=2),
     )
     # Each reader's own: the feeds and built-in front pages they follow, pinned as they pinned them.
-    follow = "INSERT INTO follows (user_id, source_id, pinned, created_at) SELECT ?, id, ?, 'x' FROM sources WHERE name = ?"
+    follow = (
+        "INSERT INTO follows (user_id, source_id, pinned, created_at) SELECT ?, id, ?, 'x' FROM sources WHERE name = ?"
+    )
     store.db.execute(follow, ("john", 1, "Zed"))
     store.db.execute(follow, ("john", 0, "Paused"))
     store.db.execute(follow, ("john", 0, "Lobsters"))
     store.db.execute(follow, ("mary", 0, "blog"))
-    assert store.sources("john") == (Source("Zed", "https://zed.example/feed", pinned=True, extract="page", daily_max=2),)
+    assert store.sources("john") == (
+        Source("Zed", "https://zed.example/feed", pinned=True, extract="page", daily_max=2),
+    )
     assert store.sources("mary") == (Source("blog", "https://blog.example/feed", daily_max=2),)
     assert store.sources("nobody") == ()
     assert store.followed_builtins("john", ("hackernews", "lobsters")) == ("lobsters",)
