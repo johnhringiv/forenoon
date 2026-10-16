@@ -73,8 +73,19 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
                     notify(cfg, "nothing delivered", [f"Reader {user.id} has no Kindle address."])
                 failed += 1
                 continue
+            # Each reader's own: the feeds and built-in front pages they follow.
+            sites = store.followed_builtins(user.id, cfg.discovery.sites)
+            own = dataclasses.replace(
+                cfg, sources=store.sources(user.id), discovery=dataclasses.replace(cfg.discovery, sites=sites)
+            )
+            if not own.sources and not sites:
+                log.error("%s follows no sources; follow some on the Sources page", user.id)
+                if not args.dry_run:
+                    notify(cfg, "nothing delivered", [f"Reader {user.id} follows no sources."])
+                failed += 1
+                continue
             try:
-                report = run(cfg, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out, backend=backend)
+                report = run(own, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out, backend=backend)
             except Exception as exc:
                 log.exception("run crashed for %s", user.id)
                 if not args.dry_run:

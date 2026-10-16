@@ -243,15 +243,27 @@ class Store:
                     (user_id, notes, stamp),
                 )
 
-    def sources(self) -> tuple[Source, ...]:
-        """The sources to read, as set on the web app's sources page; paused ones are left out."""
-        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
-            return ()
-        rows = self.db.execute(
-            "SELECT id, name, url, extract, pinned, daily_max FROM sources"
-            " WHERE enabled = 1 AND kind = 'rss'"
-            " ORDER BY pinned DESC, name COLLATE NOCASE"
-        ).fetchall()
+    def sources(self, user_id: str | None = None) -> tuple[Source, ...]:
+        """The feeds to read, as set on the web app's Sources page; paused ones are left out.
+
+        For a reader, the feeds they follow, pinned as they pinned them. With no reader, every
+        feed, none pinned: for the reports and the links added by hand.
+        """
+        if not self._has_table("follows"):
+            return ()  # the web app has not run yet
+        if user_id is None:
+            rows = self.db.execute(
+                "SELECT name, url, extract, 0 AS pinned, daily_max FROM sources"
+                " WHERE enabled = 1 AND kind = 'rss' ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        else:
+            rows = self.db.execute(
+                "SELECT s.name, s.url, s.extract, f.pinned, s.daily_max FROM sources s"
+                " JOIN follows f ON f.source_id = s.id AND f.user_id = ?"
+                " WHERE s.enabled = 1 AND s.kind = 'rss'"
+                " ORDER BY f.pinned DESC, s.name COLLATE NOCASE",
+                (user_id,),
+            ).fetchall()
         return tuple(
             Source(
                 name=row["name"],
@@ -292,11 +304,23 @@ class Store:
         if missing:
             with self.db:
                 self.db.executemany(
-                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at, daily_max)"
-                    " VALUES (?, 'builtin', ?, 0, ?, 0)",
+                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at, daily_max, shared)"
+                    " VALUES (?, 'builtin', ?, 0, ?, 0, 1)",
                     missing,
                 )
         return tuple(key for key in known if rows.get(key))
+
+    def followed_builtins(self, user_id: str, sites: tuple[str, ...]) -> tuple[str, ...]:
+        """Of the built-in sources switched on (`sites`, by key), the ones this reader follows."""
+        if not self._has_table("follows"):
+            return ()
+        rows = self.db.execute(
+            "SELECT s.builtin FROM sources s JOIN follows f ON f.source_id = s.id AND f.user_id = ?"
+            " WHERE s.kind = 'builtin'",
+            (user_id,),
+        )
+        followed = {row["builtin"] for row in rows}
+        return tuple(key for key in sites if key in followed)
 
     def builtin_daily_max(self) -> dict[str, int]:
         """The most of a day's places each built-in source may take, by key; 0 for no limit."""

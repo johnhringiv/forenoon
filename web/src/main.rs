@@ -85,6 +85,10 @@ enum Command {
         /// A Send to Kindle address the reader's books go to; may be given more than once.
         #[arg(long)]
         kindle: Vec<String>,
+        /// Start with no sources; by default the account follows every source shared with
+        /// the household.
+        #[arg(long)]
+        follow_nothing: bool,
     },
     /// Change an account's password, signing it out everywhere.
     SetPassword { id: String },
@@ -202,7 +206,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 })
                 .await?;
         }
-        Command::AddUser { id, email, name, role, timezone, kindle } => {
+        Command::AddUser { id, email, name, role, timezone, kindle, follow_nothing } => {
             if !auth::valid_id(&id) {
                 return Err("the id must be 1 to 64 letters, digits, '_', '.' or '-'".into());
             }
@@ -229,6 +233,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
             let hash = auth::hash_password(read_password()?).await?;
             db::add_user(&pool, &id, &email, name.as_deref().unwrap_or(&id), &hash, &role, &timezone).await?;
             db::set_kindle_addresses(&pool, &id, &kindle.join("\n")).await?;
+            if !follow_nothing {
+                db::follow_shared(&pool, &id).await?;
+            }
             println!("Created {role} account {id} ({timezone}). Sign in with {email}.");
             if kindle.is_empty() {
                 println!("It has no Kindle address, so nothing will be sent to it; set one on the account page.");

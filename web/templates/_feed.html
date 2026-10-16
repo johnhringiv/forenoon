@@ -1,21 +1,26 @@
-<details class="row{% if !row.enabled %} paused{% endif %}" id="s-{{ row.id }}"{% if row.open %} open{% endif %}>
+<details class="row{% if !row.enabled %} paused{% endif %}{% if !row.followed %} unfollowed{% endif %}" id="s-{{ row.id }}"{% if row.open %} open{% endif %}>
 <summary><span class="dot {{ row.state }}" aria-hidden="true"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.address }}</span>
-<span class="tags">{% if row.new %}<span class="tag">Just added</span>{% endif %}{% if row.pinned %}<span class="tag">Pinned</span>{% endif %}{% if !row.enabled %}<span class="tag">Paused</span>{% endif %}<span class="tag">{{ row.limit }}</span>{% if !row.mode.is_empty() %}<span class="tag">{{ row.mode }}</span>{% endif %}{% if let Some(site) = row.session %}<span class="tag">{{ site }} session</span>{% endif %}</span>
+<span class="tags">{% if row.new %}<span class="tag">Just added</span>{% endif %}{% if row.followed && row.pinned %}<span class="tag">Pinned</span>{% endif %}{% if !row.followed %}<span class="tag">Not followed</span>{% endif %}{% if !row.enabled %}<span class="tag">Paused</span>{% endif %}<span class="tag">{{ row.limit }}</span>{% if !row.mode.is_empty() %}<span class="tag">{{ row.mode }}</span>{% endif %}{% if row.shared %}<span class="tag">Shared</span>{% else %}<span class="tag">Private{% if !row.added_by.is_empty() %}: {{ row.added_by }}{% endif %}</span>{% endif %}{% if let Some(site) = row.session %}<span class="tag">{{ site }} session</span>{% endif %}</span>
 {% if let Some(check) = row.check %}<p class="state{% if row.check_failed %} failing{% endif %}">{{ check }}</p>{% endif %}
 <p class="state{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %}</p>
 </summary>
 <form class="source" method="post" action="/sources/{{ row.id }}">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
+{% if row.can_edit %}
 <label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
 <label class="wide">Feed address <input name="address" value="{{ row.address }}" maxlength="2000" required></label>
 <label>Take the text from <select name="extract">{% for choice in row.extract %}<option value="{{ choice.key }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>
 <label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
-<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>
-<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>
-<button class="primary">Save</button>
-<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>
+{% endif %}
+{% if row.followed %}<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>{% endif %}
+{% if row.can_edit && admin %}<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>{% endif %}
+{% if row.can_edit && row.can_share %}<label class="tick"><input type="checkbox" name="shared" value="1"{% if row.shared %} checked{% endif %}> Shared with the household</label>{% endif %}
+{% if row.can_edit || row.followed %}<button class="primary">Save</button>{% endif %}
+{% if row.followed %}<button name="follow" value="0" formaction="/sources/{{ row.id }}/follow">Unfollow</button>{% else %}<button class="primary" name="follow" value="1" formaction="/sources/{{ row.id }}/follow">Follow</button>{% endif %}
+{% if row.can_edit %}<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>{% endif %}
 </div>
-{% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with your {{ site }} session.</p>{% endif %}
+{% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with the household's {{ site }} session.</p>{% endif %}
+{% if !row.can_edit && row.followed %}<p class="hint">Only the reader who added this feed, or an admin, can change its address and settings. Pinning is yours.</p>{% endif %}
 </form>
 </details>

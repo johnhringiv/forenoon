@@ -93,6 +93,21 @@ pub async fn add_user(
     Ok(())
 }
 
+/// Follow every source shared with the household, as a new account does so that its first
+/// issue has something in it.
+pub async fn follow_shared(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    sqlx::query!(
+        "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at)
+         SELECT ?, id, 0, ? FROM sources WHERE shared = 1",
+        user,
+        now
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// True when the account exists. Changing the hash signs out every session made with the old one.
 pub async fn set_password(pool: &SqlitePool, id: &str, password_hash: &str) -> Result<bool, sqlx::Error> {
     let done = sqlx::query!("UPDATE users SET password_hash = ? WHERE id = ?", password_hash, id).execute(pool).await?;

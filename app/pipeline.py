@@ -589,7 +589,7 @@ def run(
     reports: dict[str, SourceReport] = {}
     by_source: dict[str, Source] = {}
     seen: set[str] = set()
-    for source in cfg.sources_for(user):
+    for source in cfg.sources:
         src = reports[source.name] = SourceReport(source.name)
         by_source[source.name] = source
         report.sources.append(src)
