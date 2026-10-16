@@ -64,12 +64,6 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
                 notify(cfg, "nothing delivered", ["There are no readers. Create an account in the web pages."])
             return 1
         for user in users:
-            if not user.kindle_addresses:
-                log.error("%s has no Kindle address; set one on the account page", user.id)
-                if not args.dry_run:
-                    notify(cfg, "nothing delivered", [f"Reader {user.id} has no Kindle address."])
-                failed += 1
-                continue
             # Each reader's own: the feeds and built-in front pages they follow.
             sites = store.followed_builtins(user.id, cfg.discovery.sites)
             own = dataclasses.replace(

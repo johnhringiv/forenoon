@@ -111,6 +111,7 @@ class RunReport:
     delivered: list[str] = field(default_factory=list)
     stories: int = 0  # what the daily cap counts; several delivered articles can share one
     messages: int = 0
+    web_only: bool = False  # the reader has no Kindle address: the issue is read on the web pages
     delivery_error: str = ""
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
@@ -132,6 +133,8 @@ class RunReport:
             if self.stories and self.stories != len(self.delivered):
                 count = f"{self.stories} stories delivered ({len(self.delivered)} articles)"
             lines += [f"User `{self.user}`: {count}{mode}.", ""]
+        if self.web_only:
+            lines += ["No Kindle address: the issue is on the web pages, and nothing was emailed.", ""]
         if self.delivery_error:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
         if self.ranking:
@@ -1099,10 +1102,13 @@ def run(
         if by_source[name].url:
             store.set_validators(by_source[name].url, None, None)
 
+    # A reader with no Kindle address reads on the web pages: the issue is built and recorded
+    # as for anyone, so it is on their newsstand and their ratings count, and nothing is emailed.
+    report.web_only = not user.kindle_addresses
     if attachments:
         try:
-            messages = build_messages(user, attachments, cfg.smtp)
-            report.messages = len(messages)
+            messages = [(None, attachments)] if report.web_only else build_messages(user, attachments, cfg.smtp)
+            report.messages = 0 if report.web_only else len(messages)
             if out_dir:
                 out_dir.mkdir(parents=True, exist_ok=True)
                 for attachment in attachments:
@@ -1111,7 +1117,8 @@ def run(
             for message, group in messages:
                 ids = [i for attachment in group for i in attachment.article_ids]
                 if not dry_run:
-                    sender([message], cfg.smtp)
+                    if message is not None:
+                        sender([message], cfg.smtp)
                     store.mark_delivered(user.id, ids, now, story_of)
                     if cfg.keep_issues_days != 0:
                         # A copy of what was sent, for checking a book without the device.
