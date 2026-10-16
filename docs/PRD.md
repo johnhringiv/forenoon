@@ -634,7 +634,7 @@ shown on the row for a day. At most 30 a day per reader.
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
-Send to Kindle addresses. Recipients come only from the reader's account, where an admin sets them;
+Send to Kindle addresses. Recipients come only from the reader's own account page;
 nothing in a feed or article can add or change a recipient. The sender address must be on
 the Amazon account's approved sender list.
 
@@ -661,7 +661,8 @@ database with the pipeline.
   reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
   created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
   admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
-  sets Kindle addresses, sees every source and session, and pauses sources for everyone.
+  sees every source and session, and pauses sources for everyone. Each reader sets their own
+  Kindle addresses.
 - **Invitations.** On the Accounts page an admin invites a reader by email address, with an
   id (taken from the address when none is given), a name and a role. The account exists from
   then on, invited: no password, no sign-in, no reset email, and the pipeline delivers nothing
@@ -753,8 +754,8 @@ database with the pipeline.
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
 - **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
-  out. Only an admin can change Kindle addresses, because they decide where content is
-  emailed. Interests and stories a day are on the Reading page.
+  out. A reader changes only their own row, so the only addresses an account can send to are
+  the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
@@ -873,7 +874,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 - The whole archive of a followed blog; full-text search of stored articles; expiring
   articles past their shelf life; a "throwback" section of older pieces worth a second look.
 - A search agent, or an MCP server, over the library.
-- Editing the prompts in the browser; editing a reader's Kindle address or role from the Accounts
-  page (a public sign-up page is not wanted).
+- Editing the prompts in the browser; changing a reader's role from the Accounts page (a
+  public sign-up page is not wanted).
 - Newsletters by email as a source.
 - E-readers other than Kindle.

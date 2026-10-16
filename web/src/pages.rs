@@ -1302,8 +1302,8 @@ pub struct KindleForm {
     kindle_addresses: String,
 }
 
-/// Where this reader's books are emailed. Only an admin may change it, because it decides
-/// where content goes; anyone else's form is ignored.
+/// Where this reader's books are emailed. Theirs to set: only the signed-in reader's own
+/// row changes, and only to addresses shaped like email.
 pub async fn set_kindle(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -1314,9 +1314,6 @@ pub async fn set_kindle(
     let user = reader(&auth)?;
     if !allowed(&headers, &session, &form.csrf).await? {
         return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
-    }
-    if !user.is_admin() {
-        return Ok(Redirect::to("/account").into_response());
     }
     match auth::kindle_addresses(&form.kindle_addresses) {
         Ok(addresses) => {

@@ -231,9 +231,13 @@ impl AuthnBackend for Backend {
             Some(email) => find_user_by_email(&self.pool, &email).await?,
             None => None,
         };
-        let stored = user.as_ref().map_or_else(|| self.decoy_hash.clone(), |u| u.password_hash.clone());
+        // An invited account has no password yet. It is checked against the decoy like an
+        // account that does not exist, so the time taken does not say which it is.
+        let stored = match user.as_ref().filter(|user| !user.is_invited()) {
+            Some(user) => user.password_hash.clone(),
+            None => self.decoy_hash.clone(),
+        };
         let matches = verify_password(creds.password, stored).await?;
-        // An invited account has no password yet; its hash is empty and matches nothing.
         Ok(user.filter(|user| matches && !user.is_invited()))
     }
 

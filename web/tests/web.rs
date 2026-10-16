@@ -475,14 +475,22 @@ async fn account_page_changes_the_profile_and_the_password() {
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
     let page = mary.get(&site, "/account").await;
-    assert!(page.text.contains("An admin sets this.") && !page.text.contains(r#"name="kindle_addresses""#));
+    assert!(page.text.contains(r#"name="kindle_addresses""#), "a reader sets their own Kindle addresses");
     let token = page.csrf();
     let form = [("csrf", token.as_str()), ("interests", "Sailing."), ("daily_stories", "5")];
     assert_eq!(mary.post(&site, "/account/reading", &form).await.status, StatusCode::SEE_OTHER);
-    let form = [("csrf", token.as_str()), ("kindle_addresses", "evil@example.com")];
-    assert_eq!(mary.post(&site, "/account/kindle", &form).await.status, StatusCode::SEE_OTHER);
+    let form = [("csrf", token.as_str()), ("kindle_addresses", "mary@kindle.com")];
+    assert_eq!(mary.post(&site, "/account/kindle", &form).await.location, "/account?saved=kindle");
     let user = auth::find_user(&site.pool, "mary").await.unwrap().unwrap();
-    assert_eq!((user.interests.as_str(), user.daily_stories, user.kindle_addresses.as_str()), ("Sailing.", 5, ""));
+    assert_eq!(
+        (user.interests.as_str(), user.daily_stories, user.kindle_addresses.as_str()),
+        ("Sailing.", 5, "mary@kindle.com")
+    );
+    // Only their own row: the admin's addresses are untouched.
+    assert_eq!(
+        auth::find_user(&site.pool, "john").await.unwrap().unwrap().kindle_addresses,
+        "a@kindle.com\nb@kindle.com"
+    );
 
     let no_token = [("csrf", "wrong"), ("name", "X"), ("timezone", "UTC")];
     assert_eq!(browser.post(&site, "/account/profile", &no_token).await.status, StatusCode::FORBIDDEN);
