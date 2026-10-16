@@ -219,8 +219,9 @@ struct FeedRow {
     name: String,
     address: String,
     extract: Vec<Choice>,
-    /// Where its text is taken from, in a word or two; "" for the usual way.
-    mode: &'static str,
+    /// Where its text is taken from, in a word or two, and in a sentence for its tooltip; "" for
+    /// the usual way.
+    mode: (&'static str, &'static str),
     /// This reader follows it, and pinned it.
     followed: bool,
     pinned: bool,
@@ -426,10 +427,10 @@ async fn render(
                     address: source.url.clone(),
                     extract: choices(&source.extract),
                     mode: match source.extract.as_str() {
-                        "page" => "Page only",
-                        "feed" => "Feed only",
-                        "link" => "Links only",
-                        _ => "",
+                        "page" => ("Page text", "The text is always taken from the article's web page, not the feed"),
+                        "feed" => ("Feed text", "The text is taken from the feed; the article's page is never fetched"),
+                        "link" => ("Links only", "Never fetched: its picks are shown as links to the site"),
+                        _ => ("", ""),
                     },
                     followed: source.followed,
                     pinned: source.pinned,

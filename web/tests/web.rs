@@ -1030,7 +1030,7 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     assert!(added.starts_with("/sources?saved=added") && mine.followed && mine.added_by == "mary" && !mine.shared);
     let text = mary.get(&site, "/sources").await.text;
     assert!(
-        text.contains("Following 3 of 3 sources") && text.contains(r#"<span class="tag">Private</span>"#),
+        text.contains("Following 3 of 3 sources") && text.contains(r#"until they share it">Private</span>"#),
         "{text}"
     );
     assert!(!text.contains("Private: "), "the adder is not told their own name");
@@ -1070,7 +1070,7 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     // The admin sees Mary's, with whose it is, and shares it with the household.
     let text = admin.get(&site, "/sources").await.text;
     assert!(
-        text.contains(r#"<span class="tag">Private: Mary</span>"#) && text.contains("Not followed by you"),
+        text.contains(r#"until they share it">Private: Mary</span>"#) && text.contains("Not followed by you"),
         "{text}"
     );
     assert!(text.contains("3 sources, 0 paused, 0 failing."));
@@ -1084,7 +1084,8 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     assert_eq!(admin.post(&site, &format!("/sources/{}", mine.id), &share).await.location, "/sources?saved=saved");
     let text = carl.get(&site, "/sources").await.text;
     assert!(
-        text.contains("Shared with the household, not followed") && text.contains(r#"<span class="tag">Shared</span>"#),
+        text.contains("Shared with the household, not followed")
+            && text.contains(r#"any reader can follow it">Shared</span>"#),
         "{text}"
     );
     assert!(text.contains("Following 2 of 3 sources"));
