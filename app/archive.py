@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .extract import extract
@@ -45,9 +46,32 @@ def load(directory: Path, article_id: str) -> dict | None:
     try:
         with gzip.open(directory / f"{article_id}.json.gz", "rt", encoding="utf-8") as src:
             record = json.load(src)
-        return {"page_html": record["page_html"], "feed_html": record["feed_html"] or "", "mode": record["mode"]}
+        return {
+            "page_html": record["page_html"],
+            "feed_html": record["feed_html"] or "",
+            "mode": record["mode"],
+            "fetched_at": record.get("fetched_at", ""),
+        }
     except (OSError, ValueError, KeyError, EOFError):
         return None
+
+
+def recent_page(directory: Path, article_id: str, within: float) -> str | None:
+    """The page saved for an article in the last `within` seconds, or None.
+
+    Another reader's run that picked the same article fetched it minutes ago: one fetch serves
+    the household. A record without a page (the fetch failed) is not reused, so it is retried.
+    """
+    saved = load(directory, article_id)
+    if not saved or not saved["page_html"]:
+        return None
+    try:
+        fetched = datetime.fromisoformat(saved["fetched_at"])
+    except ValueError:
+        return None
+    if fetched.tzinfo is None or (datetime.now(UTC) - fetched).total_seconds() > within:
+        return None
+    return saved["page_html"]
 
 
 def prune(directory: Path, keep_days: int, pattern: str = "*.json.gz") -> int:

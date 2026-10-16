@@ -289,7 +289,9 @@ folder, for good by default (`keep_pages_days`: a number of days prunes older on
 none). They are the only copy of what was read: for re-sending, and for learning from later. `forenoon replay` runs the current
 extractor over every saved page and lists those whose verdict or word count differs from what
 was recorded, so a change to extraction can be checked against real pages. Dry runs and
-`forenoon report` save nothing.
+`forenoon report` save nothing. A page saved in the last six hours is not fetched again by
+another reader's run that picks the same article: two readers of one paywalled feed cost the
+site one page. "Fetch again" and links added by hand always fetch.
 
 ## 5. Images
 
