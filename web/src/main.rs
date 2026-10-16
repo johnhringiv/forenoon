@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 use forenoon_web::{
     Error, Options, app, auth, db,
     mail::{Mailer, Smtp},
+    proxy::Proxy,
 };
 
 #[derive(Parser)]
@@ -32,9 +33,18 @@ enum Command {
     Serve {
         #[arg(long, env = "FORENOON_WEB_LISTEN", default_value = "0.0.0.0:8081")]
         listen: SocketAddr,
-        /// Send the session cookie only over https.
+        /// The pages are reached over https (through a tunnel or a reverse proxy): send the
+        /// session cookie only that way, and tell browsers to use nothing else.
         #[arg(long, env = "FORENOON_WEB_SECURE_COOKIES")]
         secure_cookies: bool,
+        /// The header a proxy in front puts the client's address in: CF-Connecting-IP for a
+        /// Cloudflare tunnel, X-Forwarded-For or X-Real-IP for most reverse proxies.
+        #[arg(long, env = "FORENOON_WEB_CLIENT_IP_HEADER", default_value = "")]
+        client_ip_header: String,
+        /// Addresses and networks that header is believed from, comma-separated. The default
+        /// fits a tunnel sharing this container's network.
+        #[arg(long, env = "FORENOON_WEB_TRUSTED_PROXIES", default_value = "127.0.0.1,::1")]
+        trusted_proxies: String,
         /// Where readers reach the pages, for the links in emails: http://nas.lan:8081
         #[arg(long, env = "FORENOON_WEB_URL")]
         url: Option<String>,
@@ -128,6 +138,8 @@ async fn run(cli: Cli) -> Result<(), Error> {
         Command::Serve {
             listen,
             secure_cookies,
+            client_ip_header,
+            trusted_proxies,
             url,
             smtp_host,
             smtp_port,
@@ -159,7 +171,21 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 format!("http://{listen}")
             });
             let data_dir = cli.db.parent().map(PathBuf::from).unwrap_or_default();
-            let router = app(pool, Options { secure_cookies, mailer, base_url, data_dir, logins_dir }).await?;
+            let proxy = Proxy::new(&client_ip_header, &trusted_proxies)?;
+            // Only ever from the environment, like the mail password. Without it the rating
+            // links in books are not answered.
+            let feedback_secret = match std::env::var("FORENOON_FEEDBACK_SECRET").unwrap_or_default() {
+                secret if secret.is_empty() => {
+                    eprintln!("FORENOON_FEEDBACK_SECRET is not set: rating links in books will not work.");
+                    None
+                }
+                secret if secret.len() < 32 => {
+                    return Err("FORENOON_FEEDBACK_SECRET must be at least 32 characters".into());
+                }
+                secret => Some(secret.into_bytes()),
+            };
+            let options = Options { secure_cookies, mailer, base_url, data_dir, logins_dir, proxy, feedback_secret };
+            let router = app(pool, options).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");
             axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())

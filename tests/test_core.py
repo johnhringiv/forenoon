@@ -4,7 +4,6 @@ import zipfile
 
 import pytest
 from lxml import etree
-from starlette.testclient import TestClient
 
 from app.config import Smtp, User
 from app.deliver import Attachment, batch, build_messages, safe_filename
@@ -12,7 +11,6 @@ from app.golden import golden_epub
 from app.store import Rating, Store
 from app.tokens import TokenError, make_token, verify_token
 from app.urls import article_id, canonical_url
-from feedback.server import create_app
 
 SECRET = b"s" * 32
 
@@ -38,32 +36,25 @@ def test_token_round_trip_and_rejections():
         verify_token(SECRET, "garbage")
     with pytest.raises(TokenError):
         make_token(SECRET, "john", "abc", "delete-everything", expires)
+    with pytest.raises(TokenError):  # no longer a reason
+        make_token(SECRET, "john", "abc", "why-broken", expires)
 
 
-def test_feedback_endpoint_latest_tap_sets_rating_and_keeps_history(tmp_path):
-    db = tmp_path / "me.sqlite3"
-    client = TestClient(create_app(db, SECRET))
-    expires = int(time.time()) + 60
-
-    def tap(signal):
-        return client.get(f"/f/{make_token(SECRET, 'john', 'abc', signal, expires)}")
-
-    first = tap("r2")
-    assert first.status_code == 200 and "Rated 2 of 5, not finished." in first.text
-    # The page offers every other choice, signed for the same article.
-    change = first.text.split('href="/f/')[1].split('"')[0]
-    assert verify_token(SECRET, change).article_id == "abc"
-    assert "Rated 4 of 5, finished." in tap("f4").text
-    assert "Rated 3 of 5, not finished." in tap("r3").text
-    # Links from articles delivered before ratings existed still work.
-    assert "Rated 3 of 5, finished." in tap("done").text
-    assert "Rated 5 of 5, finished." in tap("up").text
-
-    store = Store(db)
-    assert [r["signal"] for r in store.feedback_rows()] == ["r2", "f4", "r3", "done", "up"]
-    assert [(r["rating"], r["finished"]) for r in store.rating_rows()] == [(5, 1)]
-    assert client.get("/f/not-a-token").status_code == 400
-    assert len(store.feedback_rows()) == 5
+def test_tokens_are_the_ones_the_web_app_checks():
+    # The same strings are verified in web/src/feedback.rs, which answers the links.
+    secret = b"k" * 32
+    assert (
+        make_token(secret, "john", "a1", "f4", 2_000_000_000)
+        == "MXxqb2hufGExfGY0fDIwMDAwMDAwMDA.1VbsTqAK0ZRimXeA3yOaUg"
+    )
+    assert (
+        make_token(secret, "john", "a1", "why-depth", 2_000_000_000)
+        == "MXxqb2hufGExfHdoeS1kZXB0aHwyMDAwMDAwMDAw.wm1E7cJSqcEcRvNc0OMZ6w"
+    )
+    assert (
+        make_token(secret, "john", "a1", "problem", 2_000_000_000)
+        == "MXxqb2hufGExfHByb2JsZW18MjAwMDAwMDAwMA.21UPHi4dtcYgvhV0QRpvjA"
+    )
 
 
 def test_store_replays_feedback_from_the_first_schema(tmp_path):
@@ -89,12 +80,6 @@ def test_store_replays_feedback_from_the_first_schema(tmp_path):
         "2026-10-11T18:26",
     ]
     assert Store(path).get_rating("john", "abc") == Rating(5, True)  # second open: no replay
-
-
-def test_feedback_endpoint_rate_limits(tmp_path):
-    client = TestClient(create_app(tmp_path / "me.sqlite3", SECRET))
-    codes = [client.get("/f/x").status_code for _ in range(40)]
-    assert codes[0] == 400 and codes[-1] == 429
 
 
 def test_batching_respects_size_and_count():
@@ -216,52 +201,6 @@ def test_store_adds_preview_columns_to_an_existing_database(tmp_path):
     assert store.get_article("a").image_url == ""
     store.set_preview("a", "https://cdn.example/x.jpg", "Summary")
     assert store.get_article("a").description == "Summary"
-
-
-def test_reason_tap_is_optional_and_follows_the_rating(tmp_path):
-    db = tmp_path / "forenoon.sqlite3"
-    client = TestClient(create_app(db, SECRET))
-    store = Store(db)
-    store.upsert_article("abc", "https://x.example/a", "Blog", "A post", "", None)
-    expires = int(time.time()) + 3600
-
-    def tap(signal):
-        return client.get("/f/" + make_token(SECRET, "john", "abc", signal, expires))
-
-    page = tap("r2").text
-    # The reasons for a low rating are always offered; the rating counts without one.
-    assert "Why? (optional)" in page and "Too thin, nothing in it" in page and "More on this topic" not in page
-    assert store.get_rating("john", "abc") == Rating(2, False, "")
-
-    assert "Rated 2 of 5, not finished. Too thin, nothing in it." in tap("why-thin").text
-    assert store.get_rating("john", "abc") == Rating(2, False, "thin")
-    # What was wrong is one thing: another choice replaces it, and tapping it again takes it back.
-    tap("why-long")
-    assert store.get_rating("john", "abc").reason == "long"
-    tap("why-long")
-    assert store.get_rating("john", "abc").reason == ""
-    tap("why-thin")
-    # A fault in the delivery is reported apart from the rating, which it leaves as it was.
-    assert "came out broken or incomplete" in page and "Broken" not in tap("r2").text.split("Change it")[0]
-    assert "Reported. Thank you." in tap("problem").text
-    assert [(r["verdict"], r["problem"]) for r in store.review_rows()] == [("bad", "reader: broken or incomplete")]
-    assert store.get_rating("john", "abc") == Rating(2, False, "thin")
-    with pytest.raises(TokenError):  # no longer a reason
-        make_token(SECRET, "john", "abc", "why-broken", expires)
-
-    # Re-rating high drops a reason that no longer fits and offers the other list.
-    page = tap("f5").text
-    assert "More from this source" in page and "Too thin" not in page
-    assert store.get_rating("john", "abc") == Rating(5, True, "")
-    tap("why-depth")
-    # What was liked can be several things; tapping one again takes it back.
-    assert "Tap all that apply" in tap("why-more-topic").text
-    assert store.get_rating("john", "abc").reason == "more-topic,depth"
-    assert "More on this topic. Liked the depth." in tap("f5").text
-    tap("why-more-topic")
-    assert store.get_rating("john", "abc").reason == "depth"
-    row = store.rating_rows("john")[-1]
-    assert (row["rating"], row["reason"], row["word_count"]) == (5, "depth", 0)
 
 
 def test_web_app_schema_copy_matches_the_store():

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Poll the deploy image tag and redeploy when its digest changes, and
 # self-heal: an unchanged tag with a container not running (typical after a
-# host reboot, where cloudflared can start before the feedback container and
+# host reboot, where cloudflared can start before the web container and
 # fail to join its network namespace) also triggers a redeploy.
 #
 # Runs from a scheduler on the host (Synology DSM Task Scheduler, every 5
@@ -30,7 +30,7 @@ env_get() {
 
 IMAGE="${IMAGE:-$(env_get IMAGE)}"
 [ -n "$IMAGE" ] || { echo "IMAGE not set in $ENV_FILE"; exit 1; }
-# The feedback service's public address, health-checked through the tunnel.
+# The public address of the web pages, health-checked through the tunnel.
 PUBLIC_URL="${PUBLIC_URL:-$(env_get FORENOON_PUBLIC_URL)}"
 TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
@@ -38,10 +38,10 @@ CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 
 BROWSER_IMAGE="${BROWSER_IMAGE:-$(env_get BROWSER_IMAGE)}"
 
-CONTAINERS="forenoon forenoon-feedback"
-[ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
-WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
+[ -n "$WEB_IMAGE" ] || { echo "WEB_IMAGE not set in $ENV_FILE"; exit 1; }
+CONTAINERS="forenoon forenoon-web"
+[ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
 # The browser container is healed on its own below: its trouble must never bounce the app.
 
 all_running() {
@@ -91,27 +91,28 @@ if [ -n "$BROWSER_IMAGE" ] && docker pull -q "$BROWSER_IMAGE" >/dev/null 2>&1; t
     fi
 fi
 
-# The web pages image, the same way. A failed pull is logged: a newly published package is
-# private until made public, and the container is then neither updated nor restarted.
+# The web pages image, the same way; replacing it replaces the tunnel inside it too. A failed
+# pull is logged: a newly published package is private until made public, and the container
+# is then not updated.
 web_changed=false
-if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ]; then
-    if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
-        web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
-        web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
-        web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
-        if [ "$web_latest" != "$web_running" ] || [ "$web_up" != "true" ]; then
-            web_changed=true
-        fi
-    else
-        echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); web container left as it is"
-    fi
+if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
+    web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
+    web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
+    [ "$web_latest" = "$web_running" ] || web_changed=true
+else
+    echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); web container left as it is"
 fi
 
 if [ "$latest" = "$running" ]; then
     if all_running; then
         if [ "$web_changed" = true ]; then
-            echo "$(date -u +%FT%TZ) web container is stale or stopped; replacing it only"
-            ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) web container did not start"
+            echo "$(date -u +%FT%TZ) new image for $WEB_IMAGE; replacing the web and tunnel containers"
+            if ! ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE"; then
+                echo "$(date -u +%FT%TZ) WEB UNHEALTHY after update"
+                exit 1
+            fi
+            tunnel_changed=false # just replaced
+            sleep 10
             docker image prune -f >/dev/null
         fi
         if [ "$browser_changed" = true ]; then
@@ -142,7 +143,7 @@ else
     echo "$(date -u +%FT%TZ) new image for $IMAGE (running=$running -> $latest); deploying"
 fi
 
-# deploy.sh health-gates the feedback service from inside its container.
+# deploy.sh health-gates the web pages from inside their container.
 sh "$DIR/deploy.sh" "$ENV_FILE"
 
 if [ -n "$PUBLIC_URL" ]; then

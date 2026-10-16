@@ -95,7 +95,7 @@ what its own users configure and delivers only to the addresses its admin has se
   reaches installs that never touched it. The pipeline reads them before every run. A stored
   value it cannot use is logged and skipped, never fatal.
 - **The deploy's own settings** come only from the environment (the `.env` file): the data
-  folder, the time zone (`TZ`), the mail server (`FORENOON_SMTP_*`), the feedback service's
+  folder, the time zone (`TZ`), the mail server (`FORENOON_SMTP_*`), the web pages'
   public address (`FORENOON_PUBLIC_URL`) and the secrets (`FORENOON_FEEDBACK_SECRET`,
   `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`). There is no configuration file.
 - Ranking is on by default and used whenever an API key is set. Alerts are on by default and
@@ -317,10 +317,10 @@ part-way never causes a resend.
 
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
   article, signal and expiry (default 60 days after delivery).
-- The **feedback service** is the only part exposed to the internet. It accepts
-  `GET /f/<token>`, verifies the token, records the tap and returns a small page stating what
-  is now stored ("Rated 4 of 5, finished.") with links to change it. It has no login and takes
-  no other input. `GET /healthz` returns `ok`.
+- The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
+  small page stating what is now stored ("Rated 4 of 5, finished.") with links to change it.
+  It is the only page besides sign-in and `GET /healthz` that needs no login, and it takes no
+  other input.
 - **Why (optional).** After a rating, the page always offers one more tap for the reason.
   For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
   misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
@@ -333,10 +333,8 @@ part-way never causes a resend.
   listed for admins on the web pages' Problems page. The rating is left as it was.
 - **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
   log.
-- Links in articles delivered before ratings existed still work: "more like this" counts as
-  5, "less like this" as 1, "finished" sets the finished flag only.
-- Requests are rate limited to 30 per minute per client address, taken from Cloudflare's
-  `CF-Connecting-IP` header.
+- Taps are rate limited to 30 per minute per client address (see §12 for how the address
+  is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery only when model ranking is on. The model is given the 40 most
@@ -737,12 +735,16 @@ database with the pipeline.
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
   pipeline needs cannot be dropped unnoticed. Of the pipeline's tables the web program writes only ratings and the
-  tap log, by the same rules as the feedback service. Its queries are checked at build time
+  tap log, by the same rules as the pipeline's `record_feedback`. Its queries are checked at build time
   against a copy of the pipeline's schema (`web/pipeline-schema.sql`), and a test fails when
   the copy and `app/store.py` differ.
-- It is still meant for a trusted network only. Before it is exposed publicly it needs: the
-  secure-cookie setting behind https, and the client address taken from the proxy for the
-  sign-in limit.
+- They are served publicly over https, through a Cloudflare Tunnel or the operator's own
+  reverse proxy. With `FORENOON_WEB_SECURE_COOKIES` the session cookie is
+  `__Host-forenoon_session`, marked Secure, and responses carry `Strict-Transport-Security`.
+  The client address for the sign-in and tap limits comes from the proxy's header
+  (`FORENOON_WEB_CLIENT_IP_HEADER`) only when the request came from a trusted address
+  (`FORENOON_WEB_TRUSTED_PROXIES`, default loopback, which is where a tunnel sharing the
+  container's network connects from); for a list such as `X-Forwarded-For`, the last entry.
 
 ## 10. Commands
 
@@ -751,7 +753,6 @@ database with the pipeline.
 | `forenoon run [--dry-run] [--out DIR] [--user]` | One delivery now; `--dry-run` builds files and sends nothing  |
 | `forenoon schedule`                             | Run every day at `delivery_time`                              |
 | `forenoon report [--per-source N] [--source X]` | Triage sources, or only those whose name contains X           |
-| `forenoon feedback [--host] [--port]`           | Serve the feedback endpoint                                   |
 | `forenoon thumbs`                               | Make the web pages' thumbnails for articles delivered earlier |
 | `forenoon send-queue`                           | Fetch the links readers added and send what they asked for    |
 | `forenoon feedback-log`                         | Print taps and current ratings                                |
@@ -762,21 +763,20 @@ database with the pipeline.
 
 The web pages have their own program:
 
-| Command                                                                                | Purpose                                    |
-| -------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `forenoon-web serve [--listen ADDR] [--secure-cookies]`                                | Serve the pages                            |
-| `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone]` | Create an account; asks for the password   |
-| `forenoon-web set-password ID`                                                         | Change a password, signing the account out |
-| `forenoon-web users`                                                                   | List the accounts                          |
-| `forenoon-web health`                                                                  | Exit 0 when the local server answers       |
+| Command                                                                                                 | Purpose                                    |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]` | Serve the pages and answer rating links    |
+| `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone]`                  | Create an account; asks for the password   |
+| `forenoon-web set-password ID`                                                                          | Change a password, signing the account out |
+| `forenoon-web users`                                                                                    | List the accounts                          |
+| `forenoon-web health`                                                                                   | Exit 0 when the local server answers       |
 
 ## 11. Storage
 
 A copy of each book sent is kept in `issues/`, for good by default (`keep_issues_days`, as
 for saved pages).
 
-One SQLite database in the data folder, shared by the pipeline, the feedback service and the
-web pages: articles (with extraction verdict and preview data), the routes they arrived by,
+One SQLite database in the data folder, shared by the pipeline and the web pages: articles (with extraction verdict and preview data), the routes they arrived by,
 the model's judgements per reader, deliveries, the tap event
 log, current ratings, per-source failure counts, feed cache validators, and the web pages'
 accounts and sessions. Older databases are upgraded in
@@ -787,25 +787,25 @@ place on start-up. Backing up the data folder backs up everything.
 - Images are published to GHCR by CI on every push to `main`: the app, the browser and the
   web pages. Containers run as UID 1000 with a read-only root filesystem and no
   added capabilities.
-- Three containers: the scheduler, the feedback service, and a `cloudflared` tunnel that
-  shares the feedback container's network namespace. No host port is published. An optional
-  fourth runs the browser for subscriber sessions from its own image (`BROWSER_IMAGE`), and
-  an optional fifth serves the web pages
-  from theirs (`WEB_IMAGE`) on a host port chosen with `WEB_LISTEN`.
+- Containers: the scheduler, the web pages (`WEB_IMAGE`), and optionally a `cloudflared`
+  tunnel that shares the web container's network namespace and the browser for subscriber
+  sessions (`BROWSER_IMAGE`). The web pages are published on a host port only with
+  `WEB_LISTEN`, for an operator's own proxy.
 - `deploy/docker-compose.yml`, or `deploy/deploy.sh` with plain `docker run`.
-  `deploy/poll-deploy.sh` redeploys when the app image changes, replaces only the tunnel
-  when just its image changed, and restarts the stack after a reboot.
-- The Kindle browser needs TLS 1.2, so the feedback hostname's zone must not require 1.3.
+  `deploy/poll-deploy.sh` redeploys when the app image changes, replaces the web container
+  and its tunnel when the web image changed, only the tunnel when just its image changed,
+  and restarts the stack after a reboot.
+- The Kindle browser needs TLS 1.2, so the public hostname's zone must not require 1.3, and
+  `/f/*` must not sit behind a bot challenge or an access login.
 
 See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 
 ## 13. Security properties
 
 - Fetched content cannot choose recipients, run code, or reach private network addresses.
-- The public endpoint accepts only signed, expiring tokens and writes only ratings.
-- The web pages need a login and show each reader only their own data. They have not been
-  hardened for the public internet yet; keeping them on a trusted network is still the
-  operator's job.
+- Rating links accept only signed, expiring tokens and write only ratings.
+- The web pages need a login and show each reader only their own data. Admin pages are
+  public too, behind the same login and an admin role.
 - Secrets are never read from or written to config files, reports or logs.
 - The address check on fetches resolves names separately from the connection, so it does not
   stop DNS rebinding; the containers should not sit on a network with sensitive services.

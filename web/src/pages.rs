@@ -29,6 +29,7 @@ use crate::{
     db::{self, Delivered},
     limit::Limiter,
     mail::{Mailer, Message},
+    proxy::Proxy,
     ratings::{self, Signal},
     reading,
 };
@@ -70,6 +71,12 @@ pub struct AppState {
     pub sessions_dir: std::path::PathBuf,
     /// Subscriber session cookies, one file per site; see `Options::logins_dir`.
     pub logins_dir: Option<std::path::PathBuf>,
+    /// Who a request is from, behind a proxy.
+    pub proxy: Arc<Proxy>,
+    /// Signs the rating links in books; `None`: they are not answered.
+    pub feedback_secret: Option<Arc<[u8]>>,
+    /// Counts rating taps, per minute.
+    pub taps: Arc<Limiter>,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -144,6 +151,13 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
+/// Served over https: browsers are told to keep to it for this host.
+pub async fn https_only(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000"));
+    response
+}
+
 // requests that change something
 
 /// Whether a form post came from one of our own pages, as far as the browser says.
@@ -187,14 +201,15 @@ pub(crate) async fn allowed(headers: &HeaderMap, session: &Session, sent: &str) 
 
 pub(crate) const NOT_FROM_HERE: &str = "This page is out of date. Go back, reload it and try again.";
 
-/// The client's address, for limiting sign-in attempts.
-pub struct Client(String);
+/// The client's address, for limiting sign-in attempts and rating taps; see `proxy`.
+pub struct Client(pub(crate) String);
 
-impl<S: Sync> FromRequestParts<S> for Client {
+impl FromRequestParts<AppState> for Client {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let address = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip().to_string());
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
+        let address = peer.map(|peer| state.proxy.client(peer, &parts.headers).to_string());
         Ok(Client(address.unwrap_or_else(|| "unknown".to_owned())))
     }
 }
@@ -898,7 +913,7 @@ pub async fn report(
         return refused(StatusCode::NOT_FOUND, "No such delivered article.");
     }
     if !db::reported(&state.pool, &user.id).await?.contains(&form.article) {
-        db::report_problem(&state.pool, &user.id, &form.article).await?;
+        db::report_problem(&state.pool, &user.id, &form.article, "web").await?;
     }
     back_to(&form.back, &form.article)
 }
@@ -1042,7 +1057,7 @@ pub async fn rate(
         return back_to(&form.back, &form.article);
     };
     match signal {
-        Some(signal) => db::record_feedback(pool, &user.id, &form.article, &signal).await?,
+        Some(signal) => db::record_feedback(pool, &user.id, &form.article, &signal, "web").await?,
         None => db::clear_rating(pool, &user.id, &form.article).await?,
     }
     back_to(&form.back, &form.article)

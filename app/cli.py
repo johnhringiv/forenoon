@@ -1,4 +1,4 @@
-"""Command line entry point: `forenoon run`, `forenoon report`, `forenoon schedule`, `forenoon feedback`, `forenoon golden`."""
+"""Command line entry point: `forenoon run`, `forenoon report`, `forenoon schedule`, `forenoon golden`."""
 
 from __future__ import annotations
 
@@ -218,16 +218,6 @@ def _report(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
-def _feedback(args: argparse.Namespace) -> int:
-    import uvicorn
-
-    uvicorn.run(
-        "feedback.server:app_from_env", factory=True, host=args.host, port=args.port,
-        proxy_headers=False,
-    )  # fmt: skip
-    return 0
-
-
 def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     for row in store.feedback_rows():
@@ -358,9 +348,6 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("report", help="extraction report for every source; delivers nothing")
     p.add_argument("--per-source", type=int, default=3)
     p.add_argument("--source", default="", help="only sources whose name contains this")
-    p = sub.add_parser("feedback", help="serve the feedback endpoint")
-    p.add_argument("--host", default="0.0.0.0")
-    p.add_argument("--port", type=int, default=8080)
     sub.add_parser("send-queue", help="send the articles readers asked for on the web pages, now")
     sub.add_parser("feedback-log", help="print logged feedback")
     sub.add_parser("usage", help="print recent model calls and today's token use")
@@ -381,8 +368,6 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("readability").setLevel(logging.ERROR)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
-        if args.command == "feedback":
-            return _feedback(args)
         if args.command == "golden":
             return _golden(args)
         cfg = load()

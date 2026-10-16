@@ -6,7 +6,6 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/opt/venv
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
-COPY feedback ./feedback
 RUN uv sync --frozen --no-dev --no-editable
 
 # Fonts set in the books (see docs/kindle-books.md), each from a pinned source checked against

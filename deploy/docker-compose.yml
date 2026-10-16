@@ -1,4 +1,4 @@
-# Forenoon, Phase 0. Copy .env.example to .env and fill it in first.
+# Forenoon. Copy .env.example to .env and fill it in first.
 # The data folder (FORENOON_HOST_DATA) must be writable by UID 1000 (or by PUID:PGID if you
 # set them). Everything else is set on the web pages.
 name: forenoon
@@ -26,7 +26,7 @@ services:
       TZ: ${TZ:-UTC}
       FORENOON_FEEDBACK_SECRET: ${FORENOON_FEEDBACK_SECRET:?set in .env}
       FORENOON_ANTHROPIC_API_KEY: ${FORENOON_ANTHROPIC_API_KEY:-}
-      # Where rating links point: the feedback service's public address.
+      # Where rating links point: the web pages' public address.
       FORENOON_PUBLIC_URL: ${FORENOON_PUBLIC_URL:-}
       # The mail server books and alerts are sent through; see docs/setup-email.md.
       FORENOON_SMTP_HOST: ${FORENOON_SMTP_HOST:-}
@@ -36,23 +36,12 @@ services:
       FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
       FORENOON_SMTP_MAX_MESSAGE_BYTES: ${FORENOON_SMTP_MAX_MESSAGE_BYTES:-}
 
-  feedback:
-    <<: *app
-    command: ["feedback", "--port", "8080"]
-    environment:
-      TZ: ${TZ:-UTC}
-      FORENOON_FEEDBACK_SECRET: ${FORENOON_FEEDBACK_SECRET:?set in .env}
-    # No published port: the tunnel below is the only way in. For your own reverse proxy
-    # instead, add  ports: ["127.0.0.1:8080:8080"]
-
-  # Enabled by adding "web" to COMPOSE_PROFILES in .env. The newsstand pages, behind a login;
-  # create the first account with:
+  # The pages, behind a login, and the answer to the rating links in each book. Create the
+  # first account with:
   #   docker compose exec web forenoon-web add-user <id> --email <address>
-  # Publish them only on a trusted network for now, never through the tunnel.
   web:
     build: ../web
     image: ${WEB_IMAGE:-forenoon-web:local}
-    profiles: [web]
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     read_only: true
@@ -64,9 +53,19 @@ services:
       - ${FORENOON_HOST_DATA}:/data
       # Session cookies: written here, read by the browser container, seen by nothing else.
       - logins:/logins
+    # For your own reverse proxy, or the LAN. With the tunnel alone this can stay on 127.0.0.1.
     ports: ["${WEB_LISTEN:-127.0.0.1:8081}:8081"]
     environment:
       TZ: ${TZ:-UTC}
+      # Checks the rating links the pipeline signs.
+      FORENOON_FEEDBACK_SECRET: ${FORENOON_FEEDBACK_SECRET:?set in .env}
+      # Served over https (the tunnel, or a proxy of your own): the session cookie is sent
+      # only that way. Signing in over plain http then does not work.
+      FORENOON_WEB_SECURE_COOKIES: ${FORENOON_WEB_SECURE_COOKIES:-false}
+      # The header a proxy in front gives the client's address in, and the addresses it is
+      # believed from. For the tunnel: CF-Connecting-IP from 127.0.0.1 (the default).
+      FORENOON_WEB_CLIENT_IP_HEADER: ${FORENOON_WEB_CLIENT_IP_HEADER:-}
+      FORENOON_WEB_TRUSTED_PROXIES: ${FORENOON_WEB_TRUSTED_PROXIES:-127.0.0.1,::1}
       # For the links in account emails. They go through the same mail server as the books;
       # without a host they are written to this container's log instead.
       FORENOON_WEB_URL: ${FORENOON_WEB_URL:-}
@@ -99,14 +98,14 @@ services:
       TZ: ${TZ:-UTC}
 
   # Enabled by COMPOSE_PROFILES=cloudflared in .env.
-  # In the Cloudflare dashboard, route the public hostname to http://localhost:8080
+  # In the Cloudflare dashboard, route the public hostname to http://localhost:8081
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
     profiles: [cloudflared]
     restart: unless-stopped
-    # Shares the feedback container's network namespace, so localhost:8080 is the service.
-    network_mode: "service:feedback"
-    depends_on: [feedback]
+    # Shares the web container's network namespace, so localhost:8081 is the pages.
+    network_mode: "service:web"
+    depends_on: [web]
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       # :- not :? because compose interpolates this file even when the profile is off

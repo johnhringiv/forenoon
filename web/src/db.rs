@@ -810,13 +810,15 @@ pub async fn refresh_states(pool: &SqlitePool, user: &str) -> Result<Vec<Refresh
 // problem reports ("this article came out broken"): for the admin, apart from any rating
 
 /// Log the report and note it in the pipeline's extraction log, as the Kindle link does.
-pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str) -> Result<(), sqlx::Error> {
+/// `source` is where it came from: `web`, or `kindle-footer` for a link in a book.
+pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str, source: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
     sqlx::query!(
-        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, 'problem', 'web', ?)",
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, 'problem', ?, ?)",
         user,
         article,
+        source,
         now
     )
     .execute(&mut *tx)
@@ -830,6 +832,11 @@ pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str) -> Res
     .execute(&mut *tx)
     .await?;
     tx.commit().await
+}
+
+/// An article's title, for the page a rating link answers with.
+pub async fn article_title(pool: &SqlitePool, article: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar!("SELECT title FROM articles WHERE id = ?", article).fetch_optional(pool).await
 }
 
 /// The articles this reader has reported.
@@ -899,17 +906,24 @@ pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<
 /// Log the signal and apply it: the latest one decides the stored rating and finished flag.
 ///
 /// A reason sets only the reason. A new rating drops a stored reason that no longer fits it
-/// (a "too thin" on an article now rated 5).
-pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signal: &Signal) -> Result<(), sqlx::Error> {
+/// (a "too thin" on an article now rated 5). `source` is as for `report_problem`.
+pub async fn record_feedback(
+    pool: &SqlitePool,
+    user: &str,
+    article: &str,
+    signal: &Signal,
+    source: &str,
+) -> Result<(), sqlx::Error> {
     let now = now_iso();
     let text = signal.to_string();
     let (rating, finished) = signal.meaning();
     let mut tx = pool.begin().await?;
     sqlx::query!(
-        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, 'web', ?)",
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
         user,
         article,
         text,
+        source,
         now
     )
     .execute(&mut *tx)

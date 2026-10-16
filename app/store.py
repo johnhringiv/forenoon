@@ -1,4 +1,4 @@
-"""SQLite store behind a small repository interface, shared by the pipeline and feedback.
+"""SQLite store behind a small repository interface. The web pages (in Rust) share the database.
 
 The web pages (`web/`, in Rust) read the same database. `web/pipeline-schema.sql` is a copy of
 SCHEMA that their queries are checked against; a test keeps the two equal, so after changing

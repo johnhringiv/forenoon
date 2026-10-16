@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forenoon</title>
+{#- Opened from a link in a book, in the Kindle's browser: one plain page, black on white. -#}
+<style>body{font-family:serif;font-size:1.6em;margin:2em 1em;text-align:center;color:#000;
+background:#fff}p.small{font-size:.7em}p.rate a{display:inline-block;border:1px solid #000;
+padding:0 .5em;margin:0 .1em;color:#000;text-decoration:none;font-weight:bold}
+div.change{margin-top:2.5em;font-size:.8em}div.why{margin-top:1.5em;font-size:.8em}
+p.why a{display:block;border:1px solid #000;padding:.3em .5em;margin:.4em auto;max-width:16em;
+color:#000;text-decoration:none}</style></head>
+<body><p>{{ message }}</p><p class="small">{{ detail }}</p>
+{%- if !reasons.is_empty() %}
+<div class="why"><p>Why? (optional){% if several %} Tap all that apply.{% endif %}</p><p class="why">
+{%- for (token, label) in reasons %}<a href="/f/{{ token }}">{{ label }}</a>{% endfor -%}
+</p></div>
+{%- endif %}
+{%- if !change.is_empty() %}
+<div class="change"><p>Change it:</p>
+{%- for (label, links) in change %}<p>{{ label }}</p><p class="rate">
+{%- for (token, n) in links %}{% if !loop.first %} {% endif %}<a href="/f/{{ token }}">{{ n }}</a>{% endfor -%}
+</p>{% endfor -%}
+<p class="small"><a href="/f/{{ report }}">This article came out broken or incomplete</a></p></div>
+{%- endif %}
+</body></html>
