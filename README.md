@@ -17,6 +17,11 @@ to your Kindle as one book with a contents page. Each article ends with rating l
 you can say what you thought without leaving your e-reader, and your ratings shape the next
 day's choices.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/newsstand-dark.webp">
+  <img src="docs/images/newsstand-light.webp" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and 1 to 5 rating buttons">
+</picture>
+
 ## What it does
 
 - **Chooses by reading, not by headline.** Every candidate is ranked from its title and
@@ -46,6 +51,30 @@ day's choices.
 Everything is set up in the browser: sources, interests, delivery time and the rest.
 
 What it does today is described in full in [docs/PRD.md](docs/PRD.md).
+
+## Screens
+
+What you want to read, in your own words, and how your issue is made:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/reading-dark.webp">
+  <img src="docs/images/reading-light.webp" alt="The Reading page: interests in plain English, stories a day, one book or one per article, and room for a surprise">
+</picture>
+
+Sources: feeds the household shares or keeps private, Hacker News and Lobsters built in,
+and where each article's text comes from:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/sources-dark.webp">
+  <img src="docs/images/sources-light.webp" alt="The Sources page: built-in front pages, feed rows with their follow state and tags">
+</picture>
+
+On a phone:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/phone-dark.webp">
+  <img src="docs/images/phone-light.webp" alt="The Newsstand on a phone" width="300">
+</picture>
 
 ## Run it locally
 
