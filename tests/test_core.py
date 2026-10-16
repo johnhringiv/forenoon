@@ -523,3 +523,37 @@ def test_the_shipped_models_are_complete():
         assert models.split(name)[0] == "anthropic" and profile.label
         assert profile.tool_choice in ("forced", "auto")
         assert profile.rates.output > profile.rates.input > profile.rates.cache_read
+
+
+def test_covers_are_in_colour_only_when_images_are():
+    from datetime import datetime
+
+    from PIL import Image
+
+    from app.cover import article_cover, cover_image
+
+    def mode(jpeg: bytes) -> str:
+        return Image.open(io.BytesIO(jpeg)).mode
+
+    day = datetime(2026, 10, 16)
+    assert mode(cover_image(day, "3 articles", ["One", "Two"], grayscale=True)) == "L"
+    assert mode(cover_image(day, "3 articles", ["One", "Two"], grayscale=False)) == "RGB"
+    assert mode(article_cover("A title", "A source", grayscale=True)) == "L"
+    colour = Image.open(io.BytesIO(article_cover("A title", "A source", grayscale=False)))
+    # The mark's gold shows: some pixel is far from gray.
+    assert any(max(p) - min(p) > 80 for p in colour.get_flattened_data())
+
+
+def test_generated_icons_match_the_mark():
+    """web/icons/make.py's outputs are committed; after a change to app/mark.py it must be run."""
+    import importlib.util
+    from pathlib import Path
+
+    from app import mark
+
+    root = Path(__file__).parent.parent
+    spec = importlib.util.spec_from_file_location("make_icons", root / "web/icons/make.py")
+    make = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(make)
+    assert (root / "web/templates/_mark.html").read_text() == make.header_html()
+    assert (root / "web/icons/icon.svg").read_text() == mark.svg_tile()

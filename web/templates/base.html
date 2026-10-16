@@ -32,17 +32,27 @@
 })();
 </script>
 <title>{% block title %}Forenoon{% endblock %}</title>
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161513" media="(prefers-color-scheme: dark)">
 {% block head %}{% endblock %}
 <style>
 :root { color-scheme:light; --bg:#f6f4ef; --card:#fff; --ink:#1c1b19; --soft:#6b675f; --line:#dedad0; --accent:#8a3b12;
-  --ok:#2e7d4f; --warn:#a8711c; --bad:#b3261e }
+  --ok:#2e7d4f; --warn:#a8711c; --bad:#b3261e;
+  /* The mark in the header (_mark.html, written by web/icons/make.py): its sun, rays and hatching. */
+  --mk-sun1:#f7c75a; --mk-sun2:#e58a34; --mk-sun3:#b5531c; --mk-ray1:#b5531c; --mk-ray2:#1c1b19; --mk-hatch:#6e2a0a }
 /* Dark when chosen, or when the system is dark and nothing was chosen. The same values twice: a media query
    cannot be part of a selector. */
 :root[data-theme=dark] { color-scheme:dark; --bg:#161513; --card:#201f1c; --ink:#ece8df; --soft:#a39e93; --line:#35332e;
-  --accent:#e0a074; --ok:#7cc497; --warn:#e2b35e; --bad:#f28b82 }
+  --accent:#e0a074; --ok:#7cc497; --warn:#e2b35e; --bad:#f28b82;
+  --mk-sun1:#ffd877; --mk-sun2:#f0a04a; --mk-sun3:#d06a2c; --mk-ray1:#f0b56a; --mk-ray2:#c4622d; --mk-hatch:#2a1508 }
 @media (prefers-color-scheme:dark) {
   :root:not([data-theme=light]) { color-scheme:dark; --bg:#161513; --card:#201f1c; --ink:#ece8df; --soft:#a39e93; --line:#35332e;
-    --accent:#e0a074; --ok:#7cc497; --warn:#e2b35e; --bad:#f28b82 }
+    --accent:#e0a074; --ok:#7cc497; --warn:#e2b35e; --bad:#f28b82;
+    --mk-sun1:#ffd877; --mk-sun2:#f0a04a; --mk-sun3:#d06a2c; --mk-ray1:#f0b56a; --mk-ray2:#c4622d; --mk-hatch:#2a1508 }
   :root:not([data-theme=light]) button.theme .sun { display:block }
   :root:not([data-theme=light]) button.theme .moon { display:none }
 }
@@ -54,9 +64,11 @@ header, main { max-width:1180px; margin:0 auto; padding:0 16px }
 header { padding-top:22px; padding-bottom:10px; border-bottom:3px double var(--line) }
 /* The masthead: the name on the left, the same row of pages on the right of every page. */
 .masthead { display:flex; flex-wrap:wrap; align-items:baseline; gap:.4rem 1.5rem }
-h1 { font:700 2.1rem/1.1 Georgia,serif; margin:0; letter-spacing:.01em; display:flex; align-items:center; gap:.6rem }
-h1 a { color:inherit; text-decoration:none }
-h1 svg { color:var(--accent) }
+/* The name as a nameplate: spaced capitals between a rule and a double rule, beside the engraved sun. */
+h1 { font:700 1.6rem/1.1 Georgia,serif; margin:0; display:flex; align-items:center; gap:.7rem }
+h1 a { color:inherit; text-decoration:none; text-transform:uppercase; letter-spacing:.16em;
+  border-top:1.5px solid; border-bottom:4px double; padding:.12em 0 .1em .16em }
+h1 svg.mark { flex:none }
 nav.site { margin-left:auto; display:flex; flex-wrap:wrap; align-items:baseline; gap:.2rem 1.1rem; font-size:.95rem }
 nav.site a { color:var(--ink); text-decoration:none; padding:.15rem 0; border-bottom:2px solid transparent }
 nav.site a:hover { border-bottom-color:var(--line) }
@@ -232,7 +244,7 @@ form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--acc
 <body>
 <header>
 <div class="masthead">
-<h1><svg viewBox="0 0 48 32" width="48" height="32" aria-hidden="true"><path d="M10 24a14 14 0 0 1 28 0z" fill="currentColor"/><path d="M2 28h44" stroke="currentColor" stroke-width="2.5"/><path d="M24 2v5M6 10l4 3M42 10l-4 3" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><a href="/">Forenoon</a></h1>
+<h1>{% include "_mark.html" %}<a href="/">Forenoon</a></h1>
 {% if let Some(nav) = nav %}<nav class="site" aria-label="Pages">
 <a href="/"{% if nav.current == "newsstand" %} aria-current="page"{% endif %}>Newsstand</a>
 <a href="/archive"{% if nav.current == "archive" %} aria-current="page"{% endif %}>Archive</a>

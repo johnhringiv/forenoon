@@ -136,8 +136,8 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
             // The one script allowed is the light/dark switch in base.html, by its hash; the test
             // `pages_need_a_session_and_sign_in_is_limited` recomputes it from the page.
             "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
-             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; base-uri 'none'; form-action 'self'; \
-             frame-ancestors 'none'",
+             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; manifest-src 'self'; base-uri 'none'; \
+             form-action 'self'; frame-ancestors 'none'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
         // Links and images to article sites opt out of the referrer one by one.

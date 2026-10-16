@@ -1077,7 +1077,7 @@ def run(
         attachments.append(
             Attachment(
                 safe_filename(issue_title(now, label)),
-                render_issue(part, now, label),
+                render_issue(part, now, label, grayscale=cfg.images.grayscale),
                 tuple(i for e in part for i in (e.article.id, *e.covers)),
             )
         )
