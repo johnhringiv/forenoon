@@ -1944,6 +1944,10 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
     assert_eq!(now.learned_at.as_deref(), Some("2026-10-12T11:00:00+00:00"));
     let text = browser.get(&site, "/reading?saved=notes").await.text;
     assert!(text.contains("Edited by you · in use") && text.contains("Restore this version"));
+    // Shown to read; the form to correct them is tucked away, not the page's main action.
+    assert!(text.contains("<p class=\"notes\">Skips market reports.\nLikes long pieces.</p>"));
+    let tucked = text.find("<summary>Correct these notes</summary>").unwrap();
+    assert!(text.find("name=\"notes\"").unwrap() > tucked);
     let long = "x".repeat(2001);
     let too_long = [("csrf", csrf.as_str()), ("notes", long.as_str())];
     assert_eq!(browser.post(&site, "/learned", &too_long).await.location, "/reading?saved=long");
