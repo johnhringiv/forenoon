@@ -4,7 +4,10 @@
 //!
 //! Sources belong to the household and are read for the readers who follow them. One a reader
 //! adds is theirs alone until they share it: nobody else sees it, except an admin, who sees
-//! everything. A session is the household's: every page on its site is fetched with it,
+//! everything. Shared, it is followed for every reader who has not turned that off, as it is
+//! for a new account; such a follow is made for them, not chosen, until they click Follow or
+//! pin it. A feed another reader chose to follow is not removed, and only an admin changes
+//! it. A session is the household's: every page on its site is fetched with it,
 //! whoever follows the feed.
 
 use std::{
@@ -67,18 +70,29 @@ pub struct Source {
     pub added_by_name: String,
     /// Listed for the rest of the household to follow.
     pub shared: bool,
-    /// Whether the reader it was listed for follows it, and pinned it.
+    /// When it was last shared; `None` when it never was, or was shared before this was kept.
+    pub shared_at: Option<String>,
+    /// Whether the reader it was listed for follows it, chose to rather than had it made for
+    /// them, and pinned it.
     pub followed: bool,
+    pub chosen: bool,
     pub pinned: bool,
-    /// How many readers follow it.
+    /// How many readers follow it, and how many others than this one chose to.
     pub followers: i64,
+    pub chosen_by_others: i64,
 }
 
 impl Source {
-    /// Whether this reader may change or remove it: an admin, or the one who added it while
-    /// nobody else follows it.
+    /// Whether this reader may change it: an admin, or the one who added it while no other
+    /// reader chose to follow it. A follow made for a reader does not hold it.
     fn editable_by(&self, user: &User) -> bool {
-        user.is_admin() || (self.added_by == user.id && self.followers <= i64::from(self.followed))
+        user.is_admin() || (self.added_by == user.id && self.chosen_by_others == 0)
+    }
+
+    /// Whether this reader may remove it: an admin or the one who added it, and only while no
+    /// other reader chose to follow it. Pausing it is how an admin stops it for them too.
+    fn removable_by(&self, user: &User) -> bool {
+        (user.is_admin() || self.added_by == user.id) && self.chosen_by_others == 0
     }
 
     /// Whether this reader may share it with the household, or take that back.
@@ -96,13 +110,17 @@ pub async fn list(pool: &SqlitePool, user: &User) -> Result<Vec<Source>, sqlx::E
         r#"SELECT s.id AS "id!", s.name, s.kind, s.url, s.builtin, s.extract, s.daily_max,
            s.enabled AS "enabled: bool", s.check_state, s.check_note, s.added_by,
            COALESCE(u.name, s.added_by) AS "added_by_name!: String", s.shared AS "shared: bool",
-           f.user_id IS NOT NULL AS "followed!: bool", COALESCE(f.pinned, 0) AS "pinned!: bool",
-           (SELECT COUNT(*) FROM follows WHERE source_id = s.id) AS "followers!: i64"
+           s.shared_at, f.user_id IS NOT NULL AS "followed!: bool", COALESCE(f.chosen, 0) AS "chosen!: bool",
+           COALESCE(f.pinned, 0) AS "pinned!: bool",
+           (SELECT COUNT(*) FROM follows WHERE source_id = s.id) AS "followers!: i64",
+           (SELECT COUNT(*) FROM follows WHERE source_id = s.id AND chosen = 1 AND user_id != ?)
+             AS "chosen_by_others!: i64"
            FROM sources s
            LEFT JOIN follows f ON f.source_id = s.id AND f.user_id = ?
            LEFT JOIN users u ON u.id = s.added_by
            WHERE ? OR s.shared = 1 OR s.added_by = ? OR f.user_id IS NOT NULL
            ORDER BY COALESCE(f.pinned, 0) DESC, s.name COLLATE NOCASE"#,
+        user.id,
         user.id,
         admin,
         user.id
@@ -225,12 +243,20 @@ struct FeedRow {
     /// This reader follows it, and pinned it.
     followed: bool,
     pinned: bool,
+    /// The button before its name: "none" (not followed), "made" (followed for them when it was
+    /// shared, or when their account was made) or "chosen".
+    follow: &'static str,
     shared: bool,
+    /// Shared lately and not followed by this reader: marked new.
+    fresh: bool,
     /// Who added it, for an admin's eyes; "" when that is this reader or nobody in particular.
     added_by: String,
-    /// This reader may change or remove it, or share it.
+    /// This reader may change it, remove it, or share it.
     can_edit: bool,
+    can_remove: bool,
     can_share: bool,
+    /// Another reader chose to follow it: it is kept, whoever added it.
+    kept: bool,
     daily_max: i64,
     limit: String,
     enabled: bool,
@@ -273,6 +299,8 @@ struct SourcesPage {
     nav: Option<Nav>,
     csrf: String,
     admin: bool,
+    /// This reader has feeds followed for them when they are shared.
+    follow_new: bool,
     builtins: Vec<BuiltinRow>,
     sessions: Vec<SessionRow>,
     /// The feeds that need attention, then the rest this reader follows, then the ones they
@@ -380,6 +408,9 @@ async fn render(
     let followed_count = sources.iter().filter(|source| source.followed).count();
     let (mut builtins, mut feeds) = (Vec::new(), Vec::new());
     let mut failing_count = 0;
+    // Stamps are written as now_iso writes them, so they compare as text.
+    let lately =
+        (chrono::Utc::now() - chrono::Duration::days(FRESH_DAYS)).format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
     let site_names: Vec<String> = sites.iter().map(|(site, _)| site.clone()).collect();
     // The sites this reader has a feed on: the sessions they see, and may save or replace.
     let mut own_sites = Vec::new();
@@ -434,14 +465,24 @@ async fn render(
                     },
                     followed: source.followed,
                     pinned: source.pinned,
+                    follow: match (source.followed, source.chosen) {
+                        (false, _) => "none",
+                        (true, false) => "made",
+                        (true, true) => "chosen",
+                    },
                     shared: source.shared,
+                    fresh: source.shared
+                        && !source.followed
+                        && source.shared_at.as_deref().is_some_and(|at| at >= lately.as_str()),
                     added_by: if admin && source.added_by != user.id {
                         source.added_by_name.clone()
                     } else {
                         String::new()
                     },
                     can_edit: source.editable_by(&user),
+                    can_remove: source.removable_by(&user),
                     can_share: source.shareable_by(&user),
+                    kept: source.chosen_by_others > 0,
                     daily_max: source.daily_max,
                     limit: limit(source.daily_max),
                     enabled: source.enabled,
@@ -515,6 +556,7 @@ async fn render(
         nav: Nav::new(state, &user, "sources").await?,
         csrf: csrf_token(session).await?,
         admin,
+        follow_new: db::follows_new(&state.pool, &user.id).await?,
         builtins,
         sessions,
         adding: error.is_some() || feed_count == 0,
@@ -536,6 +578,8 @@ async fn render(
 }
 
 const ADMINS_ONLY: &str = "That is for an admin.";
+/// How long a feed shared with the household is marked new for a reader who does not follow it.
+const FRESH_DAYS: i64 = 14;
 const NOT_YOURS: &str = "That source is not yours to change.";
 const NO_SUCH: &str = "No such source.";
 
@@ -558,6 +602,7 @@ pub async fn page(
         Some("added") => Some("Source added. Its address is being checked; it is read from the next run."),
         Some("followed") => Some("Followed. It is read for you from the next run."),
         Some("unfollowed") => Some("Unfollowed. It is kept for whoever else follows it."),
+        Some("follownew") => Some("Saved. It applies to feeds shared from now on."),
         Some("session") => Some("Session saved. Pages from that site are fetched with it from the next run."),
         Some("nosession") => Some("Session removed."),
         Some("saved") => Some("Saved."),
@@ -650,15 +695,35 @@ async fn finish(
     render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
 }
 
-async fn follow(pool: &SqlitePool, user: &str, source: i64, pinned: bool) -> Result<(), sqlx::Error> {
+/// A feed just shared with the household: it is followed, unpinned and not chosen, for every
+/// reader who has that on. Only on sharing, so an unfollow stands through later edits.
+async fn shared_now(pool: &SqlitePool, source: i64) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    sqlx::query!("UPDATE sources SET shared_at = ? WHERE id = ?", now, source).execute(pool).await?;
+    sqlx::query!(
+        "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at, chosen)
+         SELECT id, ?, 0, ?, 0 FROM users WHERE follow_new = 1",
+        source,
+        now
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Follow it for this reader, pinned or not. `chosen` when the reader asked for it (Follow,
+/// adding its address, pinning it); a follow once chosen stays so.
+async fn follow(pool: &SqlitePool, user: &str, source: i64, pinned: bool, chosen: bool) -> Result<(), sqlx::Error> {
     let now = now_iso();
     sqlx::query!(
-        "INSERT INTO follows (user_id, source_id, pinned, created_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT (user_id, source_id) DO UPDATE SET pinned = excluded.pinned",
+        "INSERT INTO follows (user_id, source_id, pinned, created_at, chosen) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, source_id) DO UPDATE SET pinned = excluded.pinned,
+         chosen = MAX(chosen, excluded.chosen)",
         user,
         source,
         pinned,
-        now
+        now,
+        chosen
     )
     .execute(pool)
     .await?;
@@ -697,7 +762,7 @@ pub async fn add(
     let wanted = same_feed(&url);
     let existing = list(pool, &user).await?.into_iter().find(|s| s.kind == "rss" && same_feed(&s.url) == wanted);
     if let Some(source) = existing {
-        follow(pool, &user.id, source.id, pinned).await?;
+        follow(pool, &user.id, source.id, pinned, true).await?;
         return saved(&format!("followed&new={0}#s-{0}", source.id));
     }
     let done = sqlx::query!(
@@ -717,7 +782,10 @@ pub async fn add(
         Ok(row) => row.last_insert_rowid(),
         Err(error) => return finish(&state, &auth, &session, Err(error), &name).await,
     };
-    follow(pool, &user.id, id, pinned).await?;
+    follow(pool, &user.id, id, pinned, true).await?;
+    if shared {
+        shared_now(pool, id).await?;
+    }
     saved(&format!("added&new={id}#s-{id}"))
 }
 
@@ -754,11 +822,14 @@ pub async fn update(
             );
         }
         if source.followed {
-            follow(pool, &user.id, id, pinned).await?;
+            follow(pool, &user.id, id, pinned, pinned).await?;
         }
         if source.shareable_by(&user) {
             let shared = form.shared.is_some();
             sqlx::query!("UPDATE sources SET shared = ? WHERE id = ?", shared, id).execute(pool).await?;
+            if shared && !source.shared {
+                shared_now(pool, id).await?;
+            }
         }
         return saved("saved");
     }
@@ -787,7 +858,10 @@ pub async fn update(
         return finish(&state, &auth, &session, Err(error), &name).await;
     }
     if source.followed {
-        follow(pool, &user.id, id, pinned).await?;
+        follow(pool, &user.id, id, pinned, pinned).await?;
+    }
+    if shared && !source.shared {
+        shared_now(pool, id).await?;
     }
     saved("saved")
 }
@@ -818,10 +892,11 @@ pub async fn set_follow(
         sqlx::query!("DELETE FROM follows WHERE user_id = ? AND source_id = ?", user.id, id).execute(pool).await?;
         return saved("unfollowed");
     }
-    if visible(pool, &user, id).await?.is_none() {
+    let Some(source) = visible(pool, &user, id).await? else {
         return refused(StatusCode::NOT_FOUND, NO_SUCH);
-    }
-    follow(pool, &user.id, id, form.pinned.is_some()).await?;
+    };
+    // Following is choosing it; a follow made for them keeps its pin.
+    follow(pool, &user.id, id, form.pinned.is_some() || source.pinned, true).await?;
     saved("followed")
 }
 
@@ -831,6 +906,28 @@ pub struct ToggleForm {
     /// "1" to read it, anything else to stop.
     enabled: String,
     daily_max: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct FollowNewForm {
+    csrf: String,
+    follow_new: Option<String>,
+}
+
+/// Whether feeds are followed for this reader when they are shared with the household.
+pub async fn set_follow_new(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<FollowNewForm>,
+) -> Page {
+    if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
+        return Ok(response);
+    }
+    let user = reader(&auth)?;
+    db::set_follows_new(&state.pool, &user.id, form.follow_new.is_some()).await?;
+    saved("follownew")
 }
 
 /// Switch a built-in source on or off, for everyone; admins only.
@@ -886,7 +983,13 @@ pub async fn delete(
     let Some(source) = visible(pool, &user, id).await?.filter(|source| source.kind != "builtin") else {
         return refused(StatusCode::NOT_FOUND, NO_SUCH);
     };
-    if !source.editable_by(&user) {
+    if source.chosen_by_others > 0 {
+        return refused(
+            StatusCode::FORBIDDEN,
+            "Another reader follows this feed, so it is kept. You can unfollow it, or an admin can pause it.",
+        );
+    }
+    if !source.removable_by(&user) {
         return refused(StatusCode::FORBIDDEN, NOT_YOURS);
     }
     let mut tx = pool.begin().await?;

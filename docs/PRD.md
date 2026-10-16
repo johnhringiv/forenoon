@@ -33,8 +33,17 @@ what its own users configure and delivers only to the addresses its readers have
   reader's issue is built from the sources they follow, and nothing else. Each reader has
   their own pin on a source. A feed is added **shared** unless the adder unticks it; a
   private feed is the adder's alone until they share it: nobody else sees it anywhere,
-  except an admin, who sees every source and may share or unshare any. A shared source is listed for the rest of the household to follow.
-  A new account follows every shared source (`add-user --follow-nothing` for none). A feed
+  except an admin, who sees every source and may share or unshare any. A source is followed for every reader when it is shared (added shared, or shared later),
+  as it is for a new account, unless the reader has unticked "Follow feeds when they are
+  shared with the household" on the Sources page; a reader who does not want one unfollows
+  it, and later edits leave that alone. Unsharing it leaves its followers following. A
+  shared feed a reader does not follow is tagged New for two weeks after it was shared.
+  A new account follows every shared source (`add-user --follow-nothing` for none).
+  A follow is **chosen** or **made**: made for the reader (a new account's, or a feed being
+  shared) until they click its "Added for you" button, follow it by its address, or pin it;
+  chosen from then on, and when they follow it themselves. Each feed row starts with that
+  state: "+ Follow", "Added for you" or "✓ Following"; unfollowing is in the opened row.
+  Follows from before this distinction count as chosen. A feed
   added by an address the reader can already see (shared, their own or followed; case, the
   scheme, `www.` and a trailing slash aside) is followed, not added again. Another reader's
   private feed is never matched, whatever its address, so nobody learns of one by guessing;
@@ -44,13 +53,16 @@ what its own users configure and delivers only to the addresses its readers have
   a taken name is told so, and an article two such feeds carry is named for whichever
   reader's run saw it first. Both are accepted as the one small leak.
   - Who may do what: anyone adds feeds, follows, unfollows and pins; the reader who added
-    a feed changes, shares or removes it while nobody else follows it, and shares or
-    unshares it at any time; an admin does all of that to any source; pausing a source,
-    which stops it for everyone, and switching a built-in source on or off are an admin's.
+    a feed changes or removes it while no other reader has chosen to follow it (a follow
+    made for someone holds nothing), and shares or unshares it at any time; an admin
+    changes, shares and unshares any source; nobody, admin included, removes a feed another
+    reader chose to follow: an admin pauses it instead ("Fetch it for the household" in the
+    opened row), which stops it for everyone, and switching a built-in source on or off is
+    an admin's too.
 
   Sources come in two kinds, each with its own section on the web pages' Sources page,
   which also shows how each source's last runs went. A source is one compact row (a
-  coloured dot for its state, name, address, and tags for pinned, not followed, paused,
+  coloured dot for its state, name, address, and tags for new, pinned, paused,
   places a day, where its text comes from, and shared or private, with the adder's name
   for an admin), opened to change it; feeds that are failing or whose address could not be
   checked are listed first under "Needs attention" (for a reader, only the ones they

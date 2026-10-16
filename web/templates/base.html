@@ -213,6 +213,15 @@ details.row[open] > summary { border-bottom:1px solid var(--line) }
 details.row > form, details.row > div { padding:.8rem .9rem }
 details.row.paused > summary { opacity:.6 }
 details.row.unfollowed > summary .name { color:var(--soft) }
+/* The follow state before a feed's name: a button to follow, a faint one for a follow made for
+   the reader, plain text once they chose it. Pressing the button does not open the row. */
+details.row > summary form.follow { margin:0 }
+.follow { font-size:.75rem; min-width:6.5rem; text-align:center; padding:.1rem .45rem; border-radius:3px }
+button.follow.none { border:1.5px solid var(--accent); color:var(--accent); font-weight:600 }
+button.follow.made { border:1px dashed var(--line); color:var(--soft) }
+span.follow.chosen { color:var(--ink); font-weight:600 }
+.tag.new { border-color:var(--accent); color:var(--accent) }
+form.follow-new { display:flex; flex-wrap:wrap; gap:.4rem .8rem; align-items:center; margin:.6rem 0; font-size:.85rem }
 details.row .name { font:700 1.02rem Georgia,serif }
 details.row .addr { color:var(--soft); font-size:.82rem; min-width:0; max-width:30rem; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap }

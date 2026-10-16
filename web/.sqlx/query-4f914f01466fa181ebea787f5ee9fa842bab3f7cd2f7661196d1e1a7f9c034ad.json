@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at, chosen)\n         SELECT ?, id, 0, ?, 0 FROM sources WHERE shared = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4f914f01466fa181ebea787f5ee9fa842bab3f7cd2f7661196d1e1a7f9c034ad"
+}

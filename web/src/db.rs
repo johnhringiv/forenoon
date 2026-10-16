@@ -168,7 +168,7 @@ pub async fn revoke_invite(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Er
 }
 
 /// Follow every source shared with the household, as a new account does so that its first
-/// issue has something in it.
+/// issue has something in it. Made for the reader, not chosen: it holds no feed in place.
 pub async fn follow_shared(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     follow_shared_with(&mut tx, user).await?;
@@ -178,13 +178,26 @@ pub async fn follow_shared(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Er
 async fn follow_shared_with(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     sqlx::query!(
-        "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at)
-         SELECT ?, id, 0, ? FROM sources WHERE shared = 1",
+        "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at, chosen)
+         SELECT ?, id, 0, ?, 0 FROM sources WHERE shared = 1",
         user,
         now
     )
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+/// Whether feeds are followed for this reader when they are shared with the household.
+pub async fn follows_new(pool: &SqlitePool, user: &str) -> Result<bool, sqlx::Error> {
+    let on = sqlx::query_scalar!(r#"SELECT follow_new AS "on: bool" FROM users WHERE id = ?"#, user)
+        .fetch_optional(pool)
+        .await?;
+    Ok(on.unwrap_or(true))
+}
+
+pub async fn set_follows_new(pool: &SqlitePool, user: &str, on: bool) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE users SET follow_new = ? WHERE id = ?", on, user).execute(pool).await?;
     Ok(())
 }
 
