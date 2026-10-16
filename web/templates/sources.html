@@ -2,10 +2,7 @@
 {% block title %}Sources · Forenoon{% endblock %}
 {% block head %}{% if checking %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
 {% block header %}
-<p>{{ summary }}</p>
-<div class="bar"><a href="/">Back to the newsstand</a>
-<div class="who">{{ name }} <a href="/settings">Settings</a> <a href="/account">Account</a>
-<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+<p class="intro">{{ summary }}</p>
 {% endblock %}
 {% block main %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
@@ -14,21 +11,26 @@
 <h2>Built in <span>front pages Forenoon knows how to read</span></h2>
 <p class="hint">Their stories join the day's candidates only when ranking is on, and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0); set one to cap it.</p>
 {% for row in builtins %}
-<form class="source{% if !row.enabled %} paused{% endif %}" method="post" action="/sources/{{ row.id }}/toggle">
+<details class="row{% if !row.enabled %} paused{% endif %}">
+<summary><span class="dot {{ row.state }}" aria-hidden="true"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.about }}</span>
+<span class="tags">{% if !row.enabled %}<span class="tag">Off</span>{% endif %}<span class="tag">{{ row.limit }}</span></span>
+<p class="state{% if row.failing && row.enabled %} failing{% endif %}">{% if !row.enabled %}Off.{% else if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}</p>
+</summary>
+<form class="source" method="post" action="/sources/{{ row.id }}/toggle">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
-<b class="wide">{{ row.name }}</b>
 <label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
 <button class="primary" name="enabled" value="{% if row.enabled %}1{% else %}0{% endif %}">Save</button>
 {% if row.enabled %}<button name="enabled" value="0">Turn off</button>{% else %}<button name="enabled" value="1">Turn on</button>{% endif %}
 </div>
-<p class="hint">{{ row.about }}</p>
-<p class="hint{% if row.failing && row.enabled %} failing{% endif %}">{% if !row.enabled %}Off.{% else if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}</p>
 </form>
+</details>
 {% endfor %}
 
 <h2>Feeds <span>blogs and sites, by address</span></h2>
-<form class="source add" method="post" action="/sources">
+<details class="add"{% if adding %} open{% endif %}>
+<summary>Add a feed</summary>
+<form class="source" method="post" action="/sources">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
 <label>Name <input name="name" maxlength="80" required></label>
@@ -40,28 +42,27 @@
 </div>
 <p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. "Places a day" is the most of an issue the source may take (0 for no limit); links you add by hand do not count. A pinned source's articles are all taken, before all others, and past its places a day they are extra: they do not use the day's places. Changes apply from the next run.</p>
 </form>
-{% if feeds.is_empty() %}<p class="empty">No feeds yet.</p>{% endif %}
-{% for row in feeds %}
-<div class="source{% if !row.enabled %} paused{% endif %}{% if row.new %} new{% endif %}" id="s-{{ row.id }}">
-{% if row.new %}<p class="tag">Just added</p>{% endif %}
-<form method="post" action="/sources/{{ row.id }}">
-<input type="hidden" name="csrf" value="{{ csrf }}">
+</details>
+{% if total > 0 %}
+<form class="source filters" method="get" action="/sources">
 <div class="fields">
-<label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
-<label class="wide">Feed address <input name="address" value="{{ row.address }}" maxlength="2000" required></label>
-<label>Take the text from <select name="extract">{% for choice in row.extract %}<option value="{{ choice.key }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>
-<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
-<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>
-<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>
-<button class="primary">Save</button>
-<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>
+<label class="wide">Name or address contains <input name="q" value="{{ search }}" maxlength="100"></label>
+{% if !show.is_empty() %}<input type="hidden" name="show" value="{{ show }}">{% endif %}
+<button class="primary">Filter</button>
+{% if filtered %}<a href="/sources">Clear</a>{% endif %}
 </div>
-{% if let Some(check) = row.check %}<p class="hint{% if row.check_failed %} failing{% endif %}">{{ check }}</p>{% endif %}
-<p class="hint{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %}</p>
 </form>
-{% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with your {{ site }} session.</p>{% endif %}
-</div>
-{% endfor %}
+<div class="views">
+{% for view in views %}{% if view.current %}<b>{{ view.label }} ({{ view.count }})</b>{% else %}<a href="{{ view.href }}">{{ view.label }} ({{ view.count }})</a>{% endif %}
+{% endfor %}<span class="sep"></span> <span>Open a feed to change it.</span></div>
+{% endif %}
+{% if total == 0 %}<p class="empty">No feeds yet.</p>
+{% else if attention.is_empty() && feeds.is_empty() %}<p class="empty">No feeds match.</p>{% endif %}
+{% if !attention.is_empty() %}<p class="more-title">Needs attention</p>
+{% for row in attention %}{% include "_feed.html" %}{% endfor %}
+{% if !feeds.is_empty() %}<p class="more-title">The others</p>{% endif %}
+{% endif %}
+{% for row in feeds %}{% include "_feed.html" %}{% endfor %}
 
 <h2>Subscriber sessions <span>sites you subscribe to, signed in as you</span></h2>
 {% for row in sessions %}
@@ -75,15 +76,21 @@
 </form>
 {% endfor %}
 {% if logins %}
-<form class="source add" method="post" action="/sources/sessions">
+<details class="add">
+<summary>Add a session</summary>
+<form class="source" method="post" action="/sources/sessions">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
 <label>Site <input name="site" maxlength="253" placeholder="nytimes.com" autocomplete="off" required></label>
 <label class="wide">Cookie <input name="cookie" type="password" maxlength="16384" autocomplete="off" required></label>
 <button class="primary">Save session</button>
 </div>
-<p class="hint">Every page on the site and its subdomains is then fetched with it: articles from any of its feeds, and links you add by hand. Feeds are read as usual; only the articles the ranking wants read are fetched, one at a time and at least 20 seconds apart, by Chrome signed in as you. To get the cookie, sign in to the site in your browser and either export its cookies as a header string with an extension such as Cookie-Editor, or open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. Saving a site again replaces its cookie. It is kept where only the browser container can read it, never shown again, and sent to that site only. If it stops working, or the site asks for a CAPTCHA, it says so here and by email, and picks from the site are shown as links until it is replaced. Use it only for what your subscription lets you read.</p>
+<p class="hint">Every page on the site and its subdomains is then fetched with it: articles from any of its feeds, and links you add by hand. Feeds are read as usual; only the articles the ranking wants read are fetched, one at a time and at least 20 seconds apart, by Chrome signed in as you. Use it only for what your subscription lets you read.</p>
+<details class="help"><summary>How to get the cookie, and what is done with it</summary>
+<p>Sign in to the site in your browser and either export its cookies as a header string with an extension such as Cookie-Editor, or open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. Saving a site again replaces its cookie. It is kept where only the browser container can read it, never shown again, and sent to that site only. If it stops working, or the site asks for a CAPTCHA, it says so here and by email, and picks from the site are shown as links until it is replaced.</p>
+</details>
 </form>
+</details>
 {% else %}
 <p class="hint">This install has no logins folder (<code>FORENOON_LOGINS_DIR</code>), so a session cannot be saved.</p>
 {% endif %}

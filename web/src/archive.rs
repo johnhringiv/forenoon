@@ -24,8 +24,8 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Page, ReasonOption, Star, allowed, csrf_token, html, length,
-        local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, allowed, csrf_token, html,
+        length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
     },
     ratings,
 };
@@ -116,8 +116,7 @@ struct Row {
 #[derive(Template)]
 #[template(path = "archive.html")]
 struct ArchivePage {
-    name: String,
-    admin: bool,
+    nav: Option<Nav>,
     csrf: String,
     /// False until the pipeline keeps what it weighs: only then is there more than deliveries.
     ready: bool,
@@ -286,8 +285,7 @@ pub async fn page(
         ("sort", sort),
     ];
     let mut page = ArchivePage {
-        name: user.name.clone(),
-        admin: user.is_admin(),
+        nav: Nav::new(&state, &user, "archive").await?,
         csrf: csrf_token(&session).await?,
         ready,
         filtered: parts.iter().any(|(_, value)| !value.is_empty()),

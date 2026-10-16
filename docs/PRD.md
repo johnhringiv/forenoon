@@ -25,11 +25,18 @@ what its own users configure and delivers only to the addresses its admin has se
 - An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
   addresses, a daily target of stories (default 8; section 7e) and an interests text. They
   live in the database: a reader is an account of the web pages
-  (section 9a), created with `forenoon-web add-user` and edited on its account page. The
+  (section 9a), created with `forenoon-web add-user` and edited on its Reading and account
+  pages. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
 - **Sources** come in two kinds, each with its own section on the web pages' Sources page
-  (admins only), which also shows how each source's last runs went:
+  (admins only), which also shows how each source's last runs went. A source is one compact
+  row (a coloured dot for its state, name, address, and tags for pinned, paused, places a day
+  and where its text comes from), opened to change it; feeds that are failing or whose
+  address could not be checked are listed first under "Needs attention". The list is
+  narrowed by a text filter on name and address and by views with a count each (all,
+  failing, paused, pinned), both plain GET parameters; adding a feed or a session is a
+  panel opened from a button, apart from the list.
   - **Built in**: front pages the pipeline knows how to read (Hacker News and Lobsters;
     section 7b). They can only be switched on or off. The list comes from the pipeline: one
     that a new version adds appears switched off, so an upgrade never changes what is
@@ -663,14 +670,25 @@ database with the pipeline.
   model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
   form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
-- **What Forenoon has learned** (`/learned`, linked from the account page). The notes the
-  pipeline keeps on the reader's taste (section 7h): when they were last rewritten, a box to
-  edit them (2,000 characters at most), and the last 10 versions with who wrote each and a
-  button to restore it.
+- **Reading** (`/reading`). What the pipeline picks for: the reader's interests, in their
+  own words, and their stories a day; below them, the notes the pipeline keeps on the
+  reader's taste (section 7h): when they were last rewritten, a box to edit them (2,000
+  characters at most), and the last 10 versions with who wrote each and a button to restore
+  it. `/learned`, the notes' old address, leads here.
+- **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
+  name: Newsstand, Archive, Reading, then for an admin Sources, Settings and Problems (with
+  the count of reports), then the reader's name, which opens the account page. The current
+  page is marked. Sign out is on the account page. Below the row each page has its own
+  controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
+  issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
   Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
-  choices: ratings, reasons, finished. The pages use no scripts, so the Archive's filters
-  apply when "Apply filters" is pressed.
+  choices: ratings, reasons, finished. The pages work without scripts, so the Archive's
+  filters apply when "Apply filters" is pressed.
+- **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
+  of the masthead switches; the choice is kept in that browser, and choosing what the system
+  already shows goes back to following it. It is the pages' one script; without scripts the
+  button is not shown.
 - **Send to Kindle.** Each article has a button that sends it to the reader's own
   Kindle address, as a book of its own with fresh rating links. An article the daily run
   passed over can be sent from the Archive: it is then recorded as delivered and marked
@@ -688,14 +706,15 @@ database with the pipeline.
   **Send story to Kindle**: every article delivered in the story as one book with a contents
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
-- **Account page.** Display name, time zone, password, and the reading settings the
-  pipeline uses: interests, stories a day, and Kindle addresses. Only an admin can change
-  Kindle addresses, because they decide where content is emailed.
+- **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
+  out. Only an admin can change Kindle addresses, because they decide where content is
+  emailed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
 - Article text is untrusted here as elsewhere: everything is escaped, links and images must
-  be plain `http(s)`, and the content security policy allows no scripts. Lead images are
+  be plain `http(s)`, and the content security policy allows no script but the light/dark
+  switch, named by its hash. Lead images are
   loaded by the browser from the article's own site, without a referrer.
 - **Pictures.** The pipeline makes a small thumbnail for each article it prepares, from the
   page's lead image or else the article's first few pictures, and keeps it in `thumbs/` in

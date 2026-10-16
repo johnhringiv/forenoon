@@ -16,6 +16,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect},
 };
+use chrono::NaiveDate;
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, de::DeserializeOwned};
 use sqlx::SqlitePool;
 use tower_sessions::Session;
@@ -23,7 +25,7 @@ use tower_sessions::Session;
 use crate::{
     auth::AuthSession,
     db::{self, now_iso},
-    pages::{AppError, AppState, NOT_FROM_HERE, Page, allowed, csrf_token, html, reader, refused, web_url},
+    pages::{AppError, AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, web_url},
 };
 
 const MAX_NAME: usize = 80;
@@ -32,6 +34,9 @@ const DEFAULT_DAILY_MAX: i64 = 2;
 const MAX_DAILY_MAX: i64 = 50;
 const MAX_COOKIE: usize = 16 * 1024;
 const MAX_FILE: u64 = 4 * 1024 * 1024;
+const MAX_SEARCH: usize = 100;
+/// The views of the feeds, as links with a count each.
+const SHOW: [(&str, &str); 4] = [("", "All"), ("failing", "Failing"), ("paused", "Paused"), ("pinned", "Pinned")];
 const EXTRACT: [(&str, &str); 4] = [
     ("auto", "Best of page and feed"),
     ("page", "Web page only"),
@@ -155,9 +160,13 @@ struct BuiltinRow {
     name: String,
     about: &'static str,
     daily_max: i64,
+    /// "2 a day", or "No limit".
+    limit: String,
     enabled: bool,
     status: Option<String>,
     failing: bool,
+    /// The colour of the dot before its name: ok, bad, wait, off or none.
+    state: &'static str,
 }
 
 struct FeedRow {
@@ -165,9 +174,17 @@ struct FeedRow {
     name: String,
     address: String,
     extract: Vec<Choice>,
+    /// Where its text is taken from, in a word or two; "" for the usual way.
+    mode: &'static str,
     pinned: bool,
     daily_max: i64,
+    limit: String,
     enabled: bool,
+    state: &'static str,
+    /// Failing, or its address could not be checked: listed first.
+    attention: bool,
+    /// Shown with its form open.
+    open: bool,
     /// How its last run went, in words; `None` before it has been read.
     status: Option<String>,
     failing: bool,
@@ -187,20 +204,71 @@ struct SessionRow {
     failed: bool,
 }
 
+struct View {
+    label: &'static str,
+    count: usize,
+    current: bool,
+    href: String,
+}
+
 #[derive(Template)]
 #[template(path = "sources.html")]
 struct SourcesPage {
-    name: String,
+    nav: Option<Nav>,
     csrf: String,
     builtins: Vec<BuiltinRow>,
     sessions: Vec<SessionRow>,
+    /// The feeds that need attention, then the rest, both as filtered.
+    attention: Vec<FeedRow>,
     feeds: Vec<FeedRow>,
+    /// How many feeds there are in all.
+    total: usize,
+    search: String,
+    show: &'static str,
+    filtered: bool,
+    views: Vec<View>,
+    /// The add form open: nothing to list yet, or a form came back with a problem.
+    adding: bool,
     logins: bool,
     summary: String,
     error: Option<String>,
     notice: Option<&'static str>,
     /// An address is still being checked: the page reloads itself until it is done.
     checking: bool,
+}
+
+fn limit(daily_max: i64) -> String {
+    if daily_max == 0 { "No limit".to_owned() } else { format!("{daily_max} a day") }
+}
+
+/// "14 October 2026" from the pipeline's timestamp.
+fn day(stamp: &str) -> String {
+    NaiveDate::parse_from_str(stamp.get(..10).unwrap_or(stamp), "%Y-%m-%d")
+        .map_or_else(|_| stamp.to_owned(), |day| day.format("%-d %B %Y").to_string())
+}
+
+fn matches(row: &FeedRow, search: &str, show: &str) -> bool {
+    let text = search.to_lowercase();
+    let named =
+        text.is_empty() || row.name.to_lowercase().contains(&text) || row.address.to_lowercase().contains(&text);
+    named
+        && match show {
+            "failing" => row.attention,
+            "paused" => !row.enabled,
+            "pinned" => row.pinned,
+            _ => true,
+        }
+}
+
+fn view_url(show: &str, search: &str) -> String {
+    let mut parts = Vec::new();
+    if !show.is_empty() {
+        parts.push(format!("show={show}"));
+    }
+    if !search.is_empty() {
+        parts.push(format!("q={}", utf8_percent_encode(search, NON_ALPHANUMERIC)));
+    }
+    if parts.is_empty() { "/sources".to_owned() } else { format!("/sources?{}", parts.join("&")) }
 }
 
 fn choices(current: &str) -> Vec<Choice> {
@@ -219,6 +287,20 @@ fn when(stamp: &str) -> String {
     stamp.get(..16).unwrap_or(stamp).replace('T', " ")
 }
 
+/// The list as the reader asked to see it: `search` in a name or address, one of SHOW, and
+/// the source just added, shown first with its form open.
+struct Sieve {
+    search: String,
+    show: &'static str,
+    new: Option<i64>,
+}
+
+impl Sieve {
+    fn all() -> Sieve {
+        Sieve { search: String::new(), show: "", new: None }
+    }
+}
+
 async fn render(
     state: &AppState,
     auth: &AuthSession,
@@ -226,7 +308,7 @@ async fn render(
     status: StatusCode,
     error: Option<String>,
     notice: Option<&'static str>,
-    new: Option<i64>,
+    sieve: Sieve,
 ) -> Page {
     let user = reader(auth)?;
     let health = health(&state.pool).await?;
@@ -240,44 +322,84 @@ async fn render(
     for source in sources {
         let seen = health.iter().find(|entry| entry.source == source.name);
         let status = seen.map(|entry| match entry.failures {
-            0 => format!("Read without trouble, {}", entry.updated_at.get(..10).unwrap_or("")),
+            0 => format!("Read without trouble, {}", day(&entry.updated_at)),
             n => format!("Failed {n} run{} in a row: {}", if n == 1 { "" } else { "s" }, entry.last_error),
         });
         let failing = seen.is_some_and(|entry| entry.failures > 0);
         failing_count += usize::from(failing && source.enabled);
+        let state = match (source.enabled, failing, &status) {
+            (false, _, _) => "off",
+            (_, true, _) => "bad",
+            (_, _, None) => "none",
+            _ => "ok",
+        };
         match source.kind.as_str() {
             "builtin" => builtins.push(BuiltinRow {
                 id: source.id,
                 about: about(&source.builtin),
                 name: source.name,
                 daily_max: source.daily_max,
+                limit: limit(source.daily_max),
                 enabled: source.enabled,
                 status,
                 failing,
+                state,
             }),
-            _ => feeds.push(FeedRow {
-                id: source.id,
-                session: covering(&sites, &source.url),
-                new: new == Some(source.id),
-                address: source.url,
-                extract: choices(&source.extract),
-                pinned: source.pinned,
-                daily_max: source.daily_max,
-                enabled: source.enabled,
-                failing,
-                status,
-                check: match source.check_state.as_str() {
-                    "pending" => Some("Checking this address; it takes up to a minute.".to_owned()),
-                    "ok" | "failed" => Some(source.check_note),
-                    _ => None,
-                },
-                check_failed: source.check_state == "failed",
-                name: source.name,
-            }),
+            _ => {
+                let check_failed = source.check_state == "failed";
+                let checking = source.check_state == "pending";
+                feeds.push(FeedRow {
+                    id: source.id,
+                    session: covering(&sites, &source.url),
+                    new: sieve.new == Some(source.id),
+                    open: sieve.new == Some(source.id),
+                    address: source.url,
+                    extract: choices(&source.extract),
+                    mode: match source.extract.as_str() {
+                        "page" => "Page only",
+                        "feed" => "Feed only",
+                        "link" => "Links only",
+                        _ => "",
+                    },
+                    pinned: source.pinned,
+                    daily_max: source.daily_max,
+                    limit: limit(source.daily_max),
+                    enabled: source.enabled,
+                    attention: source.enabled && (failing || check_failed),
+                    state: match state {
+                        "off" => "off",
+                        _ if check_failed => "bad",
+                        _ if checking => "wait",
+                        state => state,
+                    },
+                    failing,
+                    status,
+                    check: match source.check_state.as_str() {
+                        "pending" => Some("Checking this address; it takes up to a minute.".to_owned()),
+                        "ok" | "failed" => Some(source.check_note),
+                        _ => None,
+                    },
+                    check_failed,
+                    name: source.name,
+                });
+            }
         }
     }
     // What was just added stays first until the page is loaded afresh, beside its check.
     feeds.sort_by_key(|row| !row.new);
+    let feed_count = feeds.len();
+    let named: Vec<FeedRow> = feeds.into_iter().filter(|row| matches(row, &sieve.search, "")).collect();
+    let views = SHOW
+        .iter()
+        .map(|(key, label)| View {
+            label,
+            count: named.iter().filter(|row| matches(row, "", key)).count(),
+            current: *key == sieve.show,
+            href: view_url(key, &sieve.search),
+        })
+        .collect();
+    let (attention, feeds): (Vec<FeedRow>, Vec<FeedRow>) =
+        named.into_iter().filter(|row| matches(row, "", sieve.show)).partition(|row| row.attention);
     let sessions = sites
         .into_iter()
         .map(|site| {
@@ -299,13 +421,20 @@ async fn render(
         .collect();
     let summary =
         format!("{total} source{}, {paused} paused, {failing_count} failing.", if total == 1 { "" } else { "s" });
-    let checking = feeds.iter().any(|row| row.check.as_deref().is_some_and(|note| note.starts_with("Checking")));
+    let checking = attention.iter().chain(&feeds).any(|row| row.state == "wait");
     let page = SourcesPage {
-        name: user.name,
+        nav: Nav::new(state, &user, "sources").await?,
         csrf: csrf_token(session).await?,
         builtins,
         sessions,
+        adding: error.is_some() || feed_count == 0,
+        attention,
         feeds,
+        total: feed_count,
+        filtered: !sieve.search.is_empty() || !sieve.show.is_empty(),
+        search: sieve.search,
+        show: sieve.show,
+        views,
         logins: state.logins_dir.is_some(),
         summary,
         error,
@@ -327,6 +456,8 @@ pub struct PageQuery {
     saved: Option<String>,
     /// The source just added, shown first.
     new: Option<i64>,
+    q: Option<String>,
+    show: Option<String>,
 }
 
 pub async fn page(
@@ -346,7 +477,12 @@ pub async fn page(
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
         _ => None,
     };
-    render(&state, &auth, &session, StatusCode::OK, None, notice, query.new).await
+    let sieve = Sieve {
+        search: query.q.as_deref().unwrap_or_default().trim().chars().take(MAX_SEARCH).collect(),
+        show: SHOW.iter().map(|(key, _)| *key).find(|key| Some(*key) == query.show.as_deref()).unwrap_or(""),
+        new: query.new,
+    };
+    render(&state, &auth, &session, StatusCode::OK, None, notice, sieve).await
 }
 
 /// `None` when the form may be acted on; otherwise the response that refuses it.
@@ -418,7 +554,7 @@ async fn finish(
         Err(error) if name_taken(&error) => format!("There is already a source named {name}."),
         Err(error) => return Err(error.into()),
     };
-    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, None).await
+    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
 }
 
 pub async fn add(

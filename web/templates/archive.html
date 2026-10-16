@@ -2,14 +2,13 @@
 {% block title %}Archive · Forenoon{% endblock %}
 {% block head %}{% if fetching %}<meta http-equiv="refresh" content="20">{% endif %}{% endblock %}
 {% block header %}
-<p>Everything delivered to you, and what the model weighed for you and passed over.</p>
-<div class="bar"><a href="/">Back to the newsstand</a>
-<div class="who">{{ name }} {% if admin %}<a href="/sources">Sources</a> <a href="/settings">Settings</a> {% endif %}<a href="/account">Account</a>
-<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form></div></div>
+<p class="intro">Everything delivered to you, and what the model weighed for you and passed over.</p>
 {% endblock %}
 {% block main %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
-<form class="source add" method="post" action="/archive">
+<details class="add"{% if error.is_some() || !pending.is_empty() %} open{% endif %}>
+<summary>Add a link</summary>
+<form class="source" method="post" action="/archive">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
 <label class="wide">Add a link <input name="link" type="url" maxlength="2000" placeholder="https://example.com/an-article" required></label>
@@ -21,7 +20,8 @@
 {% for add in pending %}<p class="hint{% if add.failed %} failing{% endif %}">{{ add.url }}: {{ add.note }}</p>{% endfor %}
 {% if failed %}<p><button class="link" formaction="/archive/added/clear" formnovalidate>Clear the links that could not be added</button></p>{% endif %}
 </form>
-<form class="source" method="get" action="/archive">
+</details>
+<form class="source filters" method="get" action="/archive">
 <div class="fields">
 <label class="wide">Title contains <input name="q" value="{{ search }}" maxlength="100"></label>
 {% for select in selects %}<label>{{ select.label }} <select name="{{ select.name }}">{% for choice in select.choices %}<option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>
@@ -53,7 +53,7 @@
 </form>{% endif %}
 </div>
 {% endfor %}
-{% if newer.is_some() || older.is_some() %}<nav>
+{% if newer.is_some() || older.is_some() %}<nav class="pager">
 {% if let Some(href) = newer %}<a href="{{ href }}">Newer</a>{% endif %}
 {% if let Some(href) = older %}<a href="{{ href }}">Older</a>{% endif %}
 </nav>{% endif %}
