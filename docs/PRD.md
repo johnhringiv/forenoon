@@ -861,8 +861,5 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
   articles past their shelf life; a "throwback" section of older pieces worth a second look.
 - A search agent, or an MCP server, over the library.
 - Editing the prompts in the browser; sign-up and admin pages for accounts.
-- A reader's own cookie for a site that already has a household session: they would see
-  that one is set and save their own over it for their fetches only, leaving the household's
-  in place for everyone else. Today saving replaces the household's for all.
 - Newsletters by email as a source.
 - E-readers other than Kindle.
