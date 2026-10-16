@@ -57,20 +57,6 @@ jobs:
             'forenoon golden --out /tmp/out >/dev/null && python -c "import glob, zipfile; \
             names = zipfile.ZipFile(glob.glob(\"/tmp/out/*.epub\")[0]).namelist(); \
             assert {\"OEBPS/fonts/code.ttf\", \"OEBPS/fonts/emoji.ttf\"} <= set(names), names"'
-      - name: Feedback service answers its health check
-        run: |
-          docker run -d --name feedback --read-only --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
-            --cap-drop ALL -e FORENOON_FEEDBACK_SECRET="$(openssl rand -hex 32)" \
-            forenoon:ci feedback --port 8080
-          for i in $(seq 1 20); do
-            if docker exec feedback python -c \
-              "import urllib.request as u; u.urlopen('http://localhost:8080/healthz', timeout=3)"; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs feedback
-          exit 1
 
   browser:
     name: Browser image build and smoke test

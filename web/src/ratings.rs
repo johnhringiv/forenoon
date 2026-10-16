@@ -1,6 +1,6 @@
 //! Rating signals and the reasons a reader can give, matching `app/tokens.py`.
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 /// Offered after a rating of 1 to 3.
 pub const LOW_REASONS: [(&str, &str); 5] = [
@@ -100,6 +100,48 @@ impl fmt::Display for Signal {
             Signal::Rated { rating, finished } => write!(f, "{}{rating}", if *finished { 'f' } else { 'r' }),
             Signal::Done => f.write_str("done"),
             Signal::Why(reason) => write!(f, "why-{reason}"),
+        }
+    }
+}
+
+/// The signals a rating link carries, in the words `Display` writes, and nothing more: `f+3`
+/// and `f03` are not signals, nor is a reason nobody can give. `Done` is not read: only the
+/// web pages record it.
+impl FromStr for Signal {
+    type Err = ();
+
+    fn from_str(text: &str) -> Result<Signal, ()> {
+        if let Some(reason) = text.strip_prefix("why-") {
+            return label(reason).map(|_| Signal::Why(reason.to_owned())).ok_or(());
+        }
+        let (kind, digit) = text.split_at_checked(1).ok_or(())?;
+        let finished = match kind {
+            "f" => true,
+            "r" => false,
+            _ => return Err(()),
+        };
+        let rating = match digit {
+            "1" | "2" | "3" | "4" | "5" => digit.parse().expect("a digit"),
+            _ => return Err(()),
+        };
+        Ok(Signal::Rated { rating, finished })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signal_reads_back_as_it_was_written() {
+        let all = [Signal::Rated { rating: 1, finished: true }, Signal::Rated { rating: 5, finished: false }];
+        for signal in all.into_iter().chain([Signal::Why("thin".into()), Signal::Why("depth".into())]) {
+            assert_eq!(signal.to_string().parse::<Signal>(), Ok(signal.clone()), "{signal}");
+        }
+        assert_eq!("f4".parse::<Signal>(), Ok(Signal::Rated { rating: 4, finished: true }));
+        assert_eq!("r2".parse::<Signal>(), Ok(Signal::Rated { rating: 2, finished: false }));
+        for text in ["", "f", "f0", "f6", "f+3", "f03", "x3", "up", "down", "done", "why-", "why-broken", "problem"] {
+            assert_eq!(text.parse::<Signal>(), Err(()), "{text}");
         }
     }
 }

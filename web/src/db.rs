@@ -12,7 +12,10 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 
-use crate::ratings::{self, Signal};
+use crate::{
+    hex,
+    ratings::{self, Signal},
+};
 
 pub async fn open(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::from_str("sqlite:")?
@@ -143,7 +146,7 @@ pub const RESET: &str = "reset";
 
 fn token_hash(token: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(token.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+    hex::encode(&Sha256::digest(token.as_bytes()))
 }
 
 fn iso_in(seconds: i64) -> String {
@@ -810,13 +813,15 @@ pub async fn refresh_states(pool: &SqlitePool, user: &str) -> Result<Vec<Refresh
 // problem reports ("this article came out broken"): for the admin, apart from any rating
 
 /// Log the report and note it in the pipeline's extraction log, as the Kindle link does.
-pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str) -> Result<(), sqlx::Error> {
+/// `source` is where it came from: `web`, or `kindle-footer` for a link in a book.
+pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str, source: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
     sqlx::query!(
-        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, 'problem', 'web', ?)",
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, 'problem', ?, ?)",
         user,
         article,
+        source,
         now
     )
     .execute(&mut *tx)
@@ -830,6 +835,11 @@ pub async fn report_problem(pool: &SqlitePool, user: &str, article: &str) -> Res
     .execute(&mut *tx)
     .await?;
     tx.commit().await
+}
+
+/// An article's title, for the page a rating link answers with.
+pub async fn article_title(pool: &SqlitePool, article: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar!("SELECT title FROM articles WHERE id = ?", article).fetch_optional(pool).await
 }
 
 /// The articles this reader has reported.
@@ -897,19 +907,27 @@ pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<
 }
 
 /// Log the signal and apply it: the latest one decides the stored rating and finished flag.
+/// Returns the rating as it now stands.
 ///
 /// A reason sets only the reason. A new rating drops a stored reason that no longer fits it
-/// (a "too thin" on an article now rated 5).
-pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signal: &Signal) -> Result<(), sqlx::Error> {
+/// (a "too thin" on an article now rated 5). `source` is as for `report_problem`.
+pub async fn record_feedback(
+    pool: &SqlitePool,
+    user: &str,
+    article: &str,
+    signal: &Signal,
+    source: &str,
+) -> Result<Rating, sqlx::Error> {
     let now = now_iso();
     let text = signal.to_string();
     let (rating, finished) = signal.meaning();
     let mut tx = pool.begin().await?;
     sqlx::query!(
-        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, 'web', ?)",
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
         user,
         article,
         text,
+        source,
         now
     )
     .execute(&mut *tx)
@@ -929,7 +947,8 @@ pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signa
     .execute(&mut *tx)
     .await?;
     let stored = sqlx::query!(
-        r#"SELECT rating AS "rating?: i64", reason FROM ratings WHERE user_id = ? AND article_id = ?"#,
+        r#"SELECT rating AS "rating?: i64", finished AS "finished!: bool", reason
+           FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
         article
     )
@@ -944,7 +963,8 @@ pub async fn record_feedback(pool: &SqlitePool, user: &str, article: &str, signa
             .execute(&mut *tx)
             .await?;
     }
-    tx.commit().await
+    tx.commit().await?;
+    Ok(Rating { rating: stored.rating, finished: stored.finished, reason: kept })
 }
 
 /// Forget an article's rating, finished flag and reason; the event log keeps the history.

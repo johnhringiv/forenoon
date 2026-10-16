@@ -179,7 +179,7 @@ empty line keeps its height with a non-breaking space.
 ## Rules that came from the device
 
 - Images are flattened onto white before conversion, so transparent diagrams stay readable.
-- The Kindle's browser needs TLS 1.2, so the feedback hostname's zone must not require 1.3.
+- The Kindle's browser needs TLS 1.2, so the public hostname's zone must not require 1.3.
 - Send to Kindle takes EPUB by email up to the relay's size limit (see
   [setup-email.md](setup-email.md)).
 

@@ -16,6 +16,7 @@ use sqlx::SqlitePool;
 use tower::ServiceExt;
 
 const PASSWORD: &str = "correct horse battery";
+const FEEDBACK_SECRET: &[u8] = b"a secret of at least thirty-two bytes";
 
 struct Site {
     router: Router,
@@ -62,6 +63,10 @@ impl Reply {
 }
 
 async fn site(with_pipeline: bool) -> Site {
+    site_with(with_pipeline, false).await
+}
+
+async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
     let folder = tempfile::tempdir().unwrap();
     let pool = db::open(&folder.path().join("forenoon.sqlite3")).await.unwrap();
     if with_pipeline {
@@ -73,11 +78,13 @@ async fn site(with_pipeline: bool) -> Site {
     }
     let mail = Arc::new(Mutex::new(Vec::new()));
     let options = Options {
-        secure_cookies: false,
+        secure_cookies,
         mailer: Mailer::Memory(mail.clone()),
         base_url: "http://nas:8787/".to_owned(),
         data_dir: folder.path().to_owned(),
         logins_dir: Some(folder.path().join("logins")),
+        proxy: forenoon_web::proxy::Proxy::default(),
+        feedback_secret: Some(FEEDBACK_SECRET.to_vec()),
     };
     let router = app(pool.clone(), options).await.unwrap();
     Site { router, pool, mail, folder }
@@ -1607,4 +1614,142 @@ async fn an_article_in_the_archive_can_be_fetched_again() {
     assert_eq!(browser.post(&site, "/archive/refresh", &other).await.status, StatusCode::NOT_FOUND);
     let forged = [("csrf", "forged"), ("article", "a1")];
     assert_eq!(browser.post(&site, "/archive/refresh", &forged).await.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
+    use forenoon_web::feedback::{make, verify};
+    let site = site(true).await;
+    let pool = &site.pool;
+    article(pool, "a1", "https://blog.example/1", "Blog", "A post", "john", "2026-10-10T10:00:00+00:00").await;
+    let mut kindle = Browser::default();
+    let later = 4_000_000_000;
+    let link = |signal: &str| format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", signal, later));
+
+    let page = kindle.get(&site, &link("r2")).await;
+    assert!(page.status == StatusCode::OK && page.text.contains("Rated 2 of 5, not finished."), "{}", page.text);
+    assert!(page.text.contains("<p class=\"small\">A post</p>"));
+    assert!(kindle.cookie.is_none() && page.set_cookie.is_empty(), "no session for a tap");
+    // The reasons for a low rating are offered; the rating counts without one.
+    assert!(page.text.contains("Why? (optional)") && page.text.contains("Too thin, nothing in it"));
+    assert!(!page.text.contains("More on this topic") && !page.text.contains("Tap all that apply"));
+    // Every other choice is signed for the same reader, article and expiry.
+    let other = page.text.split("href=\"/f/").nth(1).unwrap().split('"').next().unwrap();
+    let claim = verify(FEEDBACK_SECRET, other, 0).unwrap();
+    assert!(claim.user == "john" && claim.article == "a1" && claim.expires == later);
+    assert_eq!(page.text.matches("href=\"/f/").count(), 5 + 10 + 1, "reasons, both rows and the report");
+
+    let why = kindle.get(&site, &link("why-thin")).await.text;
+    assert!(why.contains("Rated 2 of 5, not finished. Too thin, nothing in it."), "{why}");
+    let high = kindle.get(&site, &link("f5")).await.text;
+    assert!(high.contains("Rated 5 of 5, finished.") && high.contains("Tap all that apply."));
+    assert!(high.contains("More from this source") && !high.contains("Too thin"));
+    kindle.get(&site, &link("why-depth")).await;
+    assert!(kindle.get(&site, &link("why-more-topic")).await.text.contains("More on this topic. Liked the depth."));
+    // A fault in the delivery is reported apart from the rating, which it leaves as it was.
+    let reported = kindle.get(&site, &link("problem")).await.text;
+    assert!(reported.contains("Reported. Thank you.") && !reported.contains("Change it"));
+    // Opened again (the Kindle's browser retries on its own), it is still one report.
+    assert!(kindle.get(&site, &link("problem")).await.text.contains("Reported. Thank you."));
+
+    let rating = db::get_rating(pool, "john", "a1").await.unwrap().unwrap();
+    assert_eq!((rating.rating, rating.finished, rating.reason.as_str()), (Some(5), true, "more-topic,depth"));
+    let events: Vec<(String, String)> =
+        sqlx::query_as("SELECT signal, source FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
+    let signals: Vec<&str> = events.iter().map(|(signal, _)| signal.as_str()).collect();
+    assert_eq!(signals, ["r2", "why-thin", "f5", "why-depth", "why-more-topic", "problem"]);
+    assert!(events.iter().all(|(_, source)| source == "kindle-footer"));
+    let review: String = sqlx::query_scalar("SELECT problem FROM extraction_reviews").fetch_one(pool).await.unwrap();
+    assert_eq!(review, "reader: broken or incomplete");
+
+    // Expired, forged and malformed links change nothing.
+    let expired = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "r1", 1000))).await;
+    assert!(expired.status == StatusCode::BAD_REQUEST && expired.text.contains("This link has expired."));
+    let forged = kindle
+        .get(&site, &format!("/f/{}", make(b"not the install's secret, but long", "john", "a1", "r1", later)))
+        .await;
+    assert!(forged.status == StatusCode::BAD_REQUEST && forged.text.contains("Link not valid."));
+    assert_eq!(kindle.get(&site, "/f/garbage").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(db::get_rating(pool, "john", "a1").await.unwrap().unwrap().rating, Some(5));
+
+    // Taps are limited per client.
+    let mut codes = Vec::new();
+    for _ in 0..30 {
+        codes.push(kindle.get(&site, "/f/garbage").await.status);
+    }
+    assert_eq!(codes.last(), Some(&StatusCode::TOO_MANY_REQUESTS));
+}
+
+#[tokio::test]
+async fn over_https_the_cookie_is_host_only_and_browsers_are_told_to_stay() {
+    let site = site_with(true, true).await;
+    let form = format!("email=john%40example.com&password={}", PASSWORD.replace(' ', "+"));
+    let request = Request::post("/login")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::HOST, "nas:8787")
+        .body(Body::from(form))
+        .unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(cookie.starts_with("__Host-forenoon_session=") && cookie.contains("Secure") && cookie.contains("Path=/"));
+    assert!(!cookie.contains("Domain"), "{cookie}");
+    assert_eq!(response.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
+    let plain = site_with(true, false).await;
+    let response = plain.router.clone().oneshot(Request::get("/login").body(Body::empty()).unwrap()).await.unwrap();
+    assert!(!response.headers().contains_key(header::STRICT_TRANSPORT_SECURITY));
+}
+
+#[tokio::test]
+async fn a_rating_link_before_the_pipeline_has_run_is_not_an_error() {
+    let site = site(false).await;
+    let link = format!("/f/{}", forenoon_web::feedback::make(FEEDBACK_SECRET, "john", "a1", "f4", 4_000_000_000));
+    assert_eq!(Browser::default().get(&site, &link).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn pages_are_compressed_and_the_form_token_never_reads_the_same_twice() {
+    let site = site(true).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let first = browser.get(&site, "/account").await;
+    let second = browser.get(&site, "/account").await;
+    // Masked afresh on every page, so compression cannot reveal it; each one still works.
+    assert_ne!(first.csrf(), second.csrf());
+    let profile =
+        |token: &str| [("csrf", token.to_owned()), ("name", "John".to_owned()), ("timezone", "UTC".to_owned())];
+    for token in [first.csrf(), second.csrf()] {
+        let form = profile(&token);
+        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let reply = browser.post(&site, "/account/profile", &form).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.text);
+    }
+    // Half a token (the mask alone), a token of the wrong length and junk are refused.
+    let half = first.csrf()[..first.csrf().len() / 2].to_owned();
+    for token in [half.as_str(), "", "zz", &"ab".repeat(64)] {
+        let form = profile(token);
+        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        assert_eq!(browser.post(&site, "/account/profile", &form).await.status, StatusCode::FORBIDDEN, "{token}");
+    }
+
+    let request = Request::get("/login").header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(response.headers()["cross-origin-opener-policy"], "same-origin");
+    assert_eq!(response.headers()["cross-origin-resource-policy"], "same-origin");
+    let csp = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.ends_with("frame-ancestors 'none'"), "{csp}");
+}
+
+#[tokio::test]
+async fn an_address_that_is_not_a_page_says_so_signed_in_or_not() {
+    let site = site(true).await;
+    let mut browser = Browser::default();
+    for _ in 0..2 {
+        let reply = browser.get(&site, "/no-such-page").await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert!(reply.text.contains("There is no page at this address.") && reply.text.contains(r#"<a href="/">"#));
+        assert!(reply.csp.contains("default-src 'none'"));
+        browser.sign_in(&site, "john").await;
+    }
 }

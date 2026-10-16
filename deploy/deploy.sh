@@ -9,9 +9,10 @@
 #
 #   sudo ONLY=tunnel sh deploy.sh [env-file]      # replace just the cloudflared container
 #   sudo ONLY=browser sh deploy.sh [env-file]     # replace just the browser container
-#   sudo ONLY=web sh deploy.sh [env-file]         # replace just the web pages container
+#   sudo ONLY=web sh deploy.sh [env-file]         # replace the web container (and the tunnel in it)
 #
-# IMAGE comes from the environment, then the env file, then forenoon:local.
+# IMAGE comes from the environment, then the env file, then forenoon:local. WEB_IMAGE likewise,
+# with no default.
 # CLOUDFLARED_IMAGE likewise, defaulting to cloudflare/cloudflared:latest.
 # Roll back with:  sudo IMAGE=ghcr.io/<owner>/<repo>:sha-abc123 sh deploy.sh
 #
@@ -20,22 +21,23 @@
 # It exchanges requests and answers with the pipeline in <data>/sessions; the cookies are
 # kept in the Docker volume forenoon-logins, which only it and the web pages mount.
 #
-# Web pages (optional): with WEB_IMAGE and WEB_LISTEN (a port, or address:port) set, a
-# container serves the newsstand there (what was delivered; ratings can be changed), behind
-# a login. Create the first account once it is up:
+# Web pages: the forenoon-web container serves the pages, behind a login, and answers the
+# rating links in each book, which need none. Create the first account once it is up:
 #   sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <address>
-# Publish it only on a trusted network for now, and never route the tunnel to it. With
-# FORENOON_WEB_URL set it emails links to confirm an address and reset a password; the mail
-# password is the only secret it is given.
+# With WEB_LISTEN (a port, or address:port) it is also published on the host, for a reverse
+# proxy of your own or the LAN. With FORENOON_WEB_URL set it emails links to confirm an address
+# and reset a password.
 #
 # The env file is .env.example filled in: the data folder, the mail server, the public
 # address and the keys. Everything else is set on the web pages. FORENOON_HOST_DATA is the
 # data folder; if forenoon.sqlite3 sits next to this script and the data folder does not
 # have one yet, it is copied in. An existing file is never overwritten.
 #
-# Network layout: both app containers run on Docker's default bridge;
-# cloudflared joins the feedback container's network namespace and reaches it
-# as localhost:8080, so the tunnel ingress must target http://localhost:8080.
+# Network layout: the containers run on Docker's default bridge; cloudflared joins the web
+# container's network namespace and reaches it as localhost:8081, so the tunnel's public
+# hostname must target http://localhost:8081. With a tunnel, the web pages default to secure
+# cookies and take the client's address from CF-Connecting-IP (FORENOON_WEB_SECURE_COOKIES,
+# FORENOON_WEB_CLIENT_IP_HEADER and FORENOON_WEB_TRUSTED_PROXIES override that).
 # Custom bridge networks are avoided deliberately: Synology's DSM firewall
 # silently drops their egress.
 #
@@ -58,6 +60,7 @@ CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 BROWSER_IMAGE="${BROWSER_IMAGE:-$(env_get BROWSER_IMAGE)}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
+[ -n "$WEB_IMAGE" ] || { echo "WEB_IMAGE is not set in $ENV_FILE"; exit 1; }
 WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 # Where the web pages are opened, for the links in their account emails.
 FORENOON_WEB_URL=$(env_get FORENOON_WEB_URL)
@@ -77,9 +80,23 @@ TZ=$(env_get TZ)
 export TZ="${TZ:-UTC}"
 FORENOON_FEEDBACK_SECRET=$(env_get FORENOON_FEEDBACK_SECRET)
 [ -n "$FORENOON_FEEDBACK_SECRET" ] || { echo "FORENOON_FEEDBACK_SECRET is not set in $ENV_FILE"; exit 1; }
+# Checked before anything is replaced: the pipeline refuses a short one, and the pages would
+# answer no rating link, so a bad value must not take a working install down.
+[ "${#FORENOON_FEEDBACK_SECRET}" -ge 32 ] ||
+    { echo "FORENOON_FEEDBACK_SECRET must be at least 32 characters (openssl rand -hex 32)"; exit 1; }
 FORENOON_SMTP_PASSWORD=$(env_get FORENOON_SMTP_PASSWORD)
 FORENOON_ANTHROPIC_API_KEY=$(env_get FORENOON_ANTHROPIC_API_KEY)
 TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
+# Behind the tunnel the pages are https and every request arrives from cloudflared.
+FORENOON_WEB_SECURE_COOKIES=$(env_get FORENOON_WEB_SECURE_COOKIES)
+FORENOON_WEB_CLIENT_IP_HEADER=$(env_get FORENOON_WEB_CLIENT_IP_HEADER)
+FORENOON_WEB_TRUSTED_PROXIES=$(env_get FORENOON_WEB_TRUSTED_PROXIES)
+if [ -n "$TUNNEL_TOKEN" ]; then
+    FORENOON_WEB_SECURE_COOKIES="${FORENOON_WEB_SECURE_COOKIES:-true}"
+    FORENOON_WEB_CLIENT_IP_HEADER="${FORENOON_WEB_CLIENT_IP_HEADER:-CF-Connecting-IP}"
+fi
+export FORENOON_WEB_SECURE_COOKIES="${FORENOON_WEB_SECURE_COOKIES:-false}"
+export FORENOON_WEB_CLIENT_IP_HEADER FORENOON_WEB_TRUSTED_PROXIES="${FORENOON_WEB_TRUSTED_PROXIES:-127.0.0.1,::1}"
 # Exported so `docker run -e NAME` can pass them without the values appearing in `ps`.
 export FORENOON_FEEDBACK_SECRET FORENOON_SMTP_PASSWORD FORENOON_ANTHROPIC_API_KEY TUNNEL_TOKEN
 
@@ -93,7 +110,7 @@ start_tunnel() {
     docker pull -q "$CLOUDFLARED_IMAGE" >/dev/null ||
         echo "pull failed; will use local image $CLOUDFLARED_IMAGE if present"
     docker run -d --name forenoon-cloudflared --restart unless-stopped \
-        --network container:forenoon-feedback \
+        --network container:forenoon-web \
         -e TUNNEL_TOKEN \
         "$CLOUDFLARED_IMAGE" tunnel --no-autoupdate run >/dev/null
 }
@@ -127,45 +144,63 @@ start_browser() {
 }
 
 start_web() {
-    docker stop -t 30 forenoon-web >/dev/null 2>&1 || true
-    docker rm -f forenoon-web >/dev/null 2>&1 || true
-    [ -n "$WEB_LISTEN" ] || return 0
-    if [ -z "$WEB_IMAGE" ]; then
-        echo "WEB_LISTEN is set but WEB_IMAGE is not: not starting the web pages"
-        return 0
-    fi
+    # The image first, and the old pair only once there is one to run: with none (the package
+    # still private, a mistyped tag) they keep serving.
     docker pull -q "$WEB_IMAGE" >/dev/null ||
         echo "pull failed; will use local image $WEB_IMAGE if present"
+    docker image inspect "$WEB_IMAGE" >/dev/null 2>&1 ||
+        { echo "no image $WEB_IMAGE; the web and tunnel containers are left as they are"; return 1; }
+    # cloudflared lives in this container's network namespace, so it goes too.
+    for c in forenoon-cloudflared forenoon-web; do
+        docker stop -t 30 "$c" >/dev/null 2>&1 || true
+        docker rm -f "$c" >/dev/null 2>&1 || true
+    done
     # It shares the data folder for the database: it reads what was delivered, and writes
-    # accounts, sessions, sources, settings and rating changes. Its one secret from here is
-    # the mail password, for the account emails; without FORENOON_SMTP_HOST those are
-    # written to its log instead. Session cookies pasted into it go to the logins volume.
+    # accounts, sessions, sources, settings and ratings. Its secrets from here are the mail
+    # password, for the account emails (without FORENOON_SMTP_HOST those are written to its
+    # log instead), and the feedback secret, to check rating links. Session cookies pasted
+    # into it go to the logins volume.
+    set --
+    [ -z "$WEB_LISTEN" ] || set -- -p "$WEB_LISTEN:8081"
     docker run -d --name forenoon-web --restart unless-stopped \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true \
         -v "$DATA_DIR:/data" \
         -v forenoon-logins:/logins \
-        -p "$WEB_LISTEN:8081" \
-        -e TZ -e FORENOON_WEB_URL \
+        "$@" \
+        -e TZ -e FORENOON_WEB_URL -e FORENOON_FEEDBACK_SECRET \
+        -e FORENOON_WEB_SECURE_COOKIES -e FORENOON_WEB_CLIENT_IP_HEADER -e FORENOON_WEB_TRUSTED_PROXIES \
         -e FORENOON_SMTP_HOST -e FORENOON_SMTP_PORT -e FORENOON_SMTP_USERNAME -e FORENOON_SMTP_SENDER \
         -e FORENOON_SMTP_PASSWORD \
-        "$WEB_IMAGE" serve >/dev/null ||
-        echo "web container did not start; the rest of the deploy is unaffected"
+        "$WEB_IMAGE" serve >/dev/null
+}
+
+# Healthy means migrated too: the pages serve only after applying the database migrations.
+wait_web() {
+    i=0
+    until docker exec forenoon-web forenoon-web health >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ $i -ge 60 ]; then
+            echo "web pages never became healthy; the database may not be migrated"
+            docker logs forenoon-web 2>&1 | tail -20
+            return 1
+        fi
+        sleep 1
+    done
 }
 
 if [ "${ONLY:-}" = "web" ]; then
-    echo "$(date -u +%FT%TZ) recreating forenoon-web from ${WEB_IMAGE:-(WEB_IMAGE not set)} on ${WEB_LISTEN:-(WEB_LISTEN not set)}"
+    echo "$(date -u +%FT%TZ) recreating forenoon-web from $WEB_IMAGE"
     start_web
-    sleep 3
-    docker ps --filter name=forenoon-web --format '{{.Names}}: {{.Status}}'
-    # Fail loudly when it should be up and is not, so a scheduler's failure notice fires.
-    if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ] &&
-        [ "$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
-        echo "forenoon-web is not running"
-        docker logs forenoon-web 2>&1 | tail -5
-        exit 1
-    fi
+    # The tunnel went with the old web container and comes back whether or not the new one is
+    # healthy: the public hostname must not stay dark over a bad web image.
+    web_healthy=true
+    wait_web || web_healthy=false
+    start_tunnel
+    docker ps --filter name=forenoon-web --filter name=forenoon-cloudflared --format '{{.Names}}: {{.Status}}'
+    # Fail loudly when the pages did not come up, so a scheduler's failure notice fires.
+    [ "$web_healthy" = true ] || exit 1
     exit 0
 fi
 
@@ -205,27 +240,18 @@ fi
 [ -n "$FORENOON_SMTP_HOST" ] || echo "FORENOON_SMTP_HOST is not set in $ENV_FILE: nothing can be delivered"
 
 # The web pages first: they apply the database migrations, and the pipeline reads the new
-# columns as soon as it starts. Healthy means migrated, since they serve only afterwards.
+# columns as soon as it starts.
+echo "$(date -u +%FT%TZ) recreating forenoon-web from $WEB_IMAGE"
 start_web
-if [ "$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null)" = "true" ]; then
-    i=0
-    until docker exec forenoon-web forenoon-web health >/dev/null 2>&1; do
-        i=$((i + 1))
-        if [ $i -ge 60 ]; then
-            echo "web pages never became healthy; the database may not be migrated"
-            docker logs forenoon-web 2>&1 | tail -5
-            break
-        fi
-        sleep 1
-    done
-fi
+web_healthy=true
+wait_web || web_healthy=false
+# The tunnel next, before the pipeline is touched: a pipeline image that does not run must
+# not leave the public hostname dark.
+start_tunnel
 
-echo "$(date -u +%FT%TZ) recreating forenoon containers from $IMAGE"
-# cloudflared first: it lives in the feedback container's network namespace.
-for c in forenoon-cloudflared forenoon-feedback forenoon; do
-    docker stop -t 30 "$c" >/dev/null 2>&1 || true
-    docker rm -f "$c" >/dev/null 2>&1 || true
-done
+echo "$(date -u +%FT%TZ) recreating forenoon from $IMAGE"
+docker stop -t 30 forenoon >/dev/null 2>&1 || true
+docker rm -f forenoon >/dev/null 2>&1 || true
 
 run_app() {
     name="$1"
@@ -239,30 +265,16 @@ run_app() {
         -e TZ -e FORENOON_FEEDBACK_SECRET "$@" >/dev/null
 }
 
+# The pipeline signs the rating links with the feedback secret; the web pages check them.
 run_app forenoon -e FORENOON_SMTP_PASSWORD -e FORENOON_ANTHROPIC_API_KEY -e FORENOON_PUBLIC_URL \
     -e FORENOON_SMTP_HOST -e FORENOON_SMTP_PORT -e FORENOON_SMTP_USERNAME -e FORENOON_SMTP_SENDER \
     -e FORENOON_SMTP_MAX_MESSAGE_BYTES \
     "$IMAGE" schedule
-run_app forenoon-feedback "$IMAGE" feedback --port 8080
 
-# Health-gate the feedback service from inside its own container (no host port).
-i=0
-until docker exec forenoon-feedback python -c \
-    "import urllib.request as u; u.urlopen('http://localhost:8080/healthz', timeout=3)" \
-    >/dev/null 2>&1; do
-    i=$((i + 1))
-    if [ $i -ge 20 ]; then
-        echo "feedback service never became healthy"
-        docker logs forenoon-feedback 2>&1 | tail -20
-        exit 1
-    fi
-    sleep 1
-done
-
-start_tunnel
 start_browser
 
 sleep 5
 docker ps --filter name=forenoon --format '{{.Names}}: {{.Status}}'
 docker logs forenoon 2>&1 | tail -3
-echo "verify: curl ${FORENOON_PUBLIC_URL:-https://your-feedback-hostname}/healthz"
+[ "$web_healthy" = true ] || exit 1
+echo "verify: curl ${FORENOON_PUBLIC_URL:-https://your-public-hostname}/healthz"

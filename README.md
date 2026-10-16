@@ -75,7 +75,6 @@ pages and kept in the database.
 | `forenoon report`                                  | Extracts the latest items of every source and prints clean / degraded / failed with reasons. Delivers and records nothing. |
 | `forenoon run [--dry-run] [--out DIR] [--user ID]` | One delivery now. Safe to rerun: nothing is sent twice and the daily cap holds.                                            |
 | `forenoon schedule`                                | Runs `forenoon run` every day at the delivery time. This is the container's default command.                               |
-| `forenoon feedback`                                | Serves the public feedback endpoint (`/f/<token>`, `/healthz`).                                                            |
 | `forenoon feedback-log`                            | Prints the logged feedback.                                                                                                |
 | `forenoon send-queue`                              | Fetches the links readers added and sends what they asked for on the web pages. The scheduler does this every minute.      |
 | `forenoon golden`                                  | Writes a test EPUB with code, tables, lists and an image.                                                                  |
@@ -86,13 +85,13 @@ one EPUB to a Kindle address with the mail settings from the environment, and
 
 ## Deploy
 
-`deploy/docker-compose.yml` runs the pipeline, the feedback endpoint and (optionally) a
-Cloudflare Tunnel, the browser for subscriber sessions and the web pages. The web pages are a separate Rust
-program in `web/`, behind a login: the newsstand, the archive, sources, settings and your
-account. Setup guides:
+`deploy/docker-compose.yml` runs the pipeline, the web pages and (optionally) a Cloudflare
+Tunnel and the browser for subscriber sessions. The web pages are a separate Rust program in
+`web/`, served over https behind a login: the newsstand, the archive, sources, settings and
+your account. They also answer the rating links in each book, which need no login. Setup guides:
 
 - [docs/setup-email.md](docs/setup-email.md): SMTP relay and Amazon's approved sender list
-- [docs/setup-deploy.md](docs/setup-deploy.md): compose on a NAS, Cloudflare Tunnel, backups
+- [docs/setup-deploy.md](docs/setup-deploy.md): compose on a NAS, Cloudflare Tunnel or your own proxy, backups
 - [docs/setup-sessions.md](docs/setup-sessions.md): sites you subscribe to, read signed in as you (optional)
 
 What has gone wrong with books on the Kindle, and the rules that came from it:
@@ -107,11 +106,13 @@ What has gone wrong with books on the Kindle, and the rules that came from it:
   article can choose one.
 - The fetcher refuses non-public addresses, on redirects too. This check does not stop DNS
   rebinding, so do not give the container network access to anything sensitive.
-- Feedback links carry an HMAC-signed, expiring token. The endpoint needs no login, is
-  idempotent and is rate limited.
+- Rating links carry an HMAC-signed, expiring token. They need no login, are idempotent and
+  are rate limited.
 - The web pages need a login by email address (Argon2id password hashes, limited sign-in
   attempts) and show each reader only their own articles. A forgotten password is reset
-  through a link emailed to a confirmed address. Keep them on a trusted network for now.
+  through a link emailed to a confirmed address. Behind https the session cookie is secure
+  and host-only, and the sign-in limits use the client address the proxy reports, believed
+  only from the proxy.
 
 ## Development
 

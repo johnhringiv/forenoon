@@ -11,7 +11,6 @@ from dataclasses import dataclass
 RATINGS = (1, 2, 3, 4, 5)
 # r<n>: rated n, not finished. f<n>: rated n and finished. One tap carries both facts.
 LINK_SIGNALS = tuple(f"{kind}{n}" for kind in ("f", "r") for n in RATINGS)
-LEGACY_SIGNALS = ("up", "down", "done")  # links in articles delivered before ratings
 # The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
 # not in SIGNALS; anything replaying feedback_events must handle it.
 # Why a rating was given: one optional tap after rating. Offered by how the article was rated.
@@ -32,7 +31,7 @@ REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
 # "This article came out broken or incomplete": a report to whoever runs the install, about the
 # delivery. It is not a rating and not a reason for one.
 PROBLEM = "problem"
-SIGNALS = LINK_SIGNALS + LEGACY_SIGNALS + REASON_SIGNALS + (PROBLEM,)
+SIGNALS = LINK_SIGNALS + REASON_SIGNALS + (PROBLEM,)
 
 
 def chosen(reason: str) -> list[str]:
@@ -73,7 +72,9 @@ def meaning(signal: str) -> tuple[int | None, bool | None]:
         return int(signal[1]), signal[0] == "f"
     if signal in REASON_SIGNALS or signal == PROBLEM:
         return None, None  # a reason or a problem report changes neither
-    return {"up": (5, None), "down": (1, None), "done": (None, True)}[signal]
+    if signal == "done":  # finished, with no rating: only ever from the web pages
+        return None, True
+    raise ValueError(f"unknown signal: {signal}")
 
 
 class TokenError(ValueError):

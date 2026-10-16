@@ -1,11 +1,15 @@
 //! Forenoon's web pages: sign in, then a newsstand of what was delivered and how it was rated.
+//! Also the answer to the rating links in delivered books, which need no sign-in.
 
 pub mod archive;
 pub mod auth;
 pub mod db;
+pub mod feedback;
+mod hex;
 pub mod limit;
 pub mod mail;
 pub mod pages;
+pub mod proxy;
 pub mod ratings;
 pub mod reading;
 pub mod settings;
@@ -21,6 +25,7 @@ use axum::{
 };
 use axum_login::AuthManagerLayerBuilder;
 use sqlx::SqlitePool;
+use tower_http::compression::CompressionLayer;
 use tower_sessions::{
     ExpiredDeletion, Expiry, SessionManagerLayer,
     cookie::{SameSite, time},
@@ -34,8 +39,9 @@ const MAX_FORM_BYTES: usize = 32 * 1024; // room for the interests text, percent
 const SIGN_IN_WINDOW: Duration = Duration::from_secs(300);
 
 pub struct Options {
-    /// Send the session cookie only over https. Needed once the pages are served that way;
-    /// with it on, signing in over plain http does not work.
+    /// The pages are served over https: the session cookie is sent only that way (as
+    /// `__Host-forenoon_session`), and browsers are told to use nothing else. With it on,
+    /// signing in over plain http does not work.
     pub secure_cookies: bool,
     pub mailer: mail::Mailer,
     /// Where the pages are reached, for links in emails.
@@ -45,6 +51,10 @@ pub struct Options {
     /// Where subscriber session cookies are kept, apart from the data folder so that the
     /// pipeline, which reads untrusted pages, never has them. `None`: sessions cannot be saved.
     pub logins_dir: Option<std::path::PathBuf>,
+    /// Who a request is from, when the pages are behind a proxy or a tunnel.
+    pub proxy: proxy::Proxy,
+    /// The secret the pipeline signs rating links with (`FORENOON_FEEDBACK_SECRET`).
+    pub feedback_secret: Option<Vec<u8>>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -53,8 +63,11 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     let store = SqliteStore::new(pool.clone());
     store.migrate().await?;
     tokio::spawn(store.clone().continuously_delete_expired(Duration::from_secs(3600)));
+    // The __Host- prefix makes browsers refuse the cookie unless it is secure, set by this
+    // host for every path, and has no Domain: another site under the same domain cannot plant one.
+    let name = if options.secure_cookies { "__Host-forenoon_session" } else { "forenoon_session" };
     let sessions = SessionManagerLayer::new(store)
-        .with_name("forenoon_session")
+        .with_name(name)
         .with_secure(options.secure_cookies)
         .with_same_site(SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(SESSION_DAYS)));
@@ -68,8 +81,12 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         thumbs_dir: options.data_dir.join("thumbs"),
         sessions_dir: options.data_dir.join("sessions"),
         logins_dir: options.logins_dir,
+        proxy: Arc::new(options.proxy),
+        feedback_secret: options.feedback_secret.map(Arc::from),
+        // Evicting: these links are public, and a flood of addresses must not stop a Kindle.
+        taps: Arc::new(Limiter::evicting(Duration::from_secs(60))),
     };
-    Ok(Router::new()
+    let router = Router::new()
         .route("/", get(pages::newsstand))
         .route("/archive", get(archive::page).post(archive::add))
         .route("/archive/added/clear", post(archive::clear_failed))
@@ -105,8 +122,14 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/reset/{token}", get(pages::reset_page).post(pages::reset))
         .route("/verify/{token}", get(pages::verify))
         .route("/healthz", get(pages::health))
+        .route("/f/{token}", get(feedback::tap))
+        // Signed in or not: it names no page, so it gives nothing away.
+        .fallback(pages::not_found)
         .layer(auth)
         .layer(DefaultBodyLimit::max(MAX_FORM_BYTES))
         .layer(middleware::from_fn(pages::security_headers))
-        .with_state(state))
+        // Text only: images are already compressed, and tiny answers are not worth it.
+        .layer(CompressionLayer::new());
+    let router = if options.secure_cookies { router.layer(middleware::from_fn(pages::https_only)) } else { router };
+    Ok(router.with_state(state))
 }

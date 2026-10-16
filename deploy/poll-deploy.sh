@@ -1,8 +1,11 @@
 #!/bin/sh
 # Poll the deploy image tag and redeploy when its digest changes, and
-# self-heal: an unchanged tag with a container not running (typical after a
-# host reboot, where cloudflared can start before the feedback container and
-# fail to join its network namespace) also triggers a redeploy.
+# self-heal: an unchanged tag with the pipeline container not running (a host
+# reboot) also triggers a redeploy. The web and tunnel containers are healed
+# on their own, without bouncing the pipeline: a web container that exited
+# must not interrupt a daily run, and a tunnel that did not come up (after a
+# reboot cloudflared can start before the web container and fail to join its
+# network namespace) is replaced without touching the web container.
 #
 # Runs from a scheduler on the host (Synology DSM Task Scheduler, every 5
 # minutes, as root; elsewhere: cron). Deploys are pull-based: CI publishes to
@@ -14,9 +17,10 @@
 #   sh poll-deploy.sh [env-file]
 #
 # Exit codes: 0 = no-op or successful deploy; 1 = unhealthy (a deploy ran but
-# the edge never came up, or the containers are running yet the edge is
-# unreachable: tunnel/DNS trouble a redeploy would not fix). Configure the
-# scheduler to notify on abnormal termination.
+# the edge never came up, the web container did not come up after its image
+# changed, the tunnel container did not start, or the containers are running
+# yet the edge is unreachable: tunnel/DNS trouble a redeploy would not fix).
+# Configure the scheduler to notify on abnormal termination.
 set -e
 
 ENV_FILE="${1:-.env}"
@@ -30,7 +34,7 @@ env_get() {
 
 IMAGE="${IMAGE:-$(env_get IMAGE)}"
 [ -n "$IMAGE" ] || { echo "IMAGE not set in $ENV_FILE"; exit 1; }
-# The feedback service's public address, health-checked through the tunnel.
+# The public address of the web pages, health-checked through the tunnel.
 PUBLIC_URL="${PUBLIC_URL:-$(env_get FORENOON_PUBLIC_URL)}"
 TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
 CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-$(env_get CLOUDFLARED_IMAGE)}"
@@ -38,11 +42,11 @@ CLOUDFLARED_IMAGE="${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
 
 BROWSER_IMAGE="${BROWSER_IMAGE:-$(env_get BROWSER_IMAGE)}"
 
-CONTAINERS="forenoon forenoon-feedback"
-[ -z "$TUNNEL_TOKEN" ] || CONTAINERS="$CONTAINERS forenoon-cloudflared"
-WEB_LISTEN="${WEB_LISTEN:-$(env_get WEB_LISTEN)}"
 WEB_IMAGE="${WEB_IMAGE:-$(env_get WEB_IMAGE)}"
-# The browser container is healed on its own below: its trouble must never bounce the app.
+[ -n "$WEB_IMAGE" ] || { echo "WEB_IMAGE not set in $ENV_FILE"; exit 1; }
+# Only the pipeline: the web and tunnel pair and the browser container are healed on their own
+# below, since their trouble must never bounce the app.
+CONTAINERS="forenoon"
 
 all_running() {
     for c in $CONTAINERS; do
@@ -71,8 +75,14 @@ fi
 latest=$(docker image inspect "$IMAGE" --format '{{.Id}}')
 running=$(docker inspect forenoon --format '{{.Image}}' 2>/dev/null || echo none)
 
-# The tunnel image: a failed pull here is not fatal, the running one keeps working.
+# The tunnel image: a failed pull here is not fatal, the running one keeps working. The tunnel
+# container not running (after a reboot it can start before the web container and fail to join
+# its network namespace) means replacing it alone, since the web container stays as it is.
 tunnel_changed=false
+if [ -n "$TUNNEL_TOKEN" ]; then
+    tunnel_up=$(docker inspect forenoon-cloudflared --format '{{.State.Running}}' 2>/dev/null || echo false)
+    [ "$tunnel_up" = true ] || tunnel_changed=true
+fi
 if [ -n "$TUNNEL_TOKEN" ] && docker pull -q "$CLOUDFLARED_IMAGE" >/dev/null 2>&1; then
     tunnel_latest=$(docker image inspect "$CLOUDFLARED_IMAGE" --format '{{.Id}}')
     tunnel_running=$(docker inspect forenoon-cloudflared --format '{{.Image}}' 2>/dev/null || echo none)
@@ -91,27 +101,30 @@ if [ -n "$BROWSER_IMAGE" ] && docker pull -q "$BROWSER_IMAGE" >/dev/null 2>&1; t
     fi
 fi
 
-# The web pages image, the same way. A failed pull is logged: a newly published package is
-# private until made public, and the container is then neither updated nor restarted.
+# The web pages image, the same way; replacing it replaces the tunnel inside it too, and the
+# web container not running means replacing those two as well. A failed pull is logged: a
+# newly published package is private until made public, and the container is then not updated.
 web_changed=false
-if [ -n "$WEB_LISTEN" ] && [ -n "$WEB_IMAGE" ]; then
-    if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
-        web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
-        web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
-        web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
-        if [ "$web_latest" != "$web_running" ] || [ "$web_up" != "true" ]; then
-            web_changed=true
-        fi
-    else
-        echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); web container left as it is"
-    fi
+web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
+[ "$web_up" = true ] || web_changed=true
+if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
+    web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
+    web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
+    [ "$web_latest" = "$web_running" ] || web_changed=true
+else
+    echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); not updating the web container"
 fi
 
 if [ "$latest" = "$running" ]; then
     if all_running; then
         if [ "$web_changed" = true ]; then
-            echo "$(date -u +%FT%TZ) web container is stale or stopped; replacing it only"
-            ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE" || echo "$(date -u +%FT%TZ) web container did not start"
+            echo "$(date -u +%FT%TZ) new image for $WEB_IMAGE, or its container stopped; replacing the web and tunnel containers"
+            if ! ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE"; then
+                echo "$(date -u +%FT%TZ) WEB UNHEALTHY after update"
+                exit 1
+            fi
+            tunnel_changed=false # just replaced
+            sleep 10
             docker image prune -f >/dev/null
         fi
         if [ "$browser_changed" = true ]; then
@@ -120,8 +133,11 @@ if [ "$latest" = "$running" ]; then
             docker image prune -f >/dev/null
         fi
         if [ "$tunnel_changed" = true ]; then
-            echo "$(date -u +%FT%TZ) new image for $CLOUDFLARED_IMAGE; replacing the tunnel container only"
-            ONLY=tunnel sh "$DIR/deploy.sh" "$ENV_FILE"
+            echo "$(date -u +%FT%TZ) new image for $CLOUDFLARED_IMAGE, or its container stopped; replacing the tunnel container only"
+            if ! ONLY=tunnel sh "$DIR/deploy.sh" "$ENV_FILE"; then
+                echo "$(date -u +%FT%TZ) TUNNEL container did not start"
+                exit 1
+            fi
             sleep 10
             if edge_healthy; then
                 echo "$(date -u +%FT%TZ) tunnel healthy at edge"
@@ -137,12 +153,12 @@ if [ "$latest" = "$running" ]; then
         echo "$(date -u +%FT%TZ) UNHEALTHY: containers running but $PUBLIC_URL/healthz unreachable (tunnel/DNS?); not redeploying"
         exit 1
     fi
-    echo "$(date -u +%FT%TZ) containers not running on unchanged image (host rebooted?); redeploying"
+    echo "$(date -u +%FT%TZ) pipeline container not running on unchanged image (host rebooted?); redeploying"
 else
     echo "$(date -u +%FT%TZ) new image for $IMAGE (running=$running -> $latest); deploying"
 fi
 
-# deploy.sh health-gates the feedback service from inside its container.
+# deploy.sh health-gates the web pages from inside their container.
 sh "$DIR/deploy.sh" "$ENV_FILE"
 
 if [ -n "$PUBLIC_URL" ]; then

@@ -27,8 +27,10 @@ use tower_sessions::Session;
 use crate::{
     auth::{self, AuthSession, Credentials, User},
     db::{self, Delivered},
+    hex,
     limit::Limiter,
     mail::{Mailer, Message},
+    proxy::Proxy,
     ratings::{self, Signal},
     reading,
 };
@@ -70,6 +72,12 @@ pub struct AppState {
     pub sessions_dir: std::path::PathBuf,
     /// Subscriber session cookies, one file per site; see `Options::logins_dir`.
     pub logins_dir: Option<std::path::PathBuf>,
+    /// Who a request is from, behind a proxy.
+    pub proxy: Arc<Proxy>,
+    /// Signs the rating links in books; `None`: they are not answered.
+    pub feedback_secret: Option<Arc<[u8]>>,
+    /// Counts rating taps, per minute.
+    pub taps: Arc<Limiter>,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -128,19 +136,31 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
             // The one script allowed is the light/dark switch in base.html, by its hash; the test
             // `pages_need_a_session_and_sign_in_is_limited` recomputes it from the page.
             "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
-             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; base-uri 'none'; form-action 'self'",
+             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; base-uri 'none'; form-action 'self'; \
+             frame-ancestors 'none'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
         // Links and images to article sites opt out of the referrer one by one.
         (header::REFERRER_POLICY, "same-origin"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
+        // No other site's window keeps a handle on ours, and none can load our responses
+        // (thumbnails included) into its own pages.
+        (header::HeaderName::from_static("cross-origin-opener-policy"), "same-origin"),
+        (header::HeaderName::from_static("cross-origin-resource-policy"), "same-origin"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
     // Pages are never stored; a thumbnail sets its own, so it is not fetched again on every visit.
     headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
+    response
+}
+
+/// Served over https: browsers are told to keep to it for this host.
+pub async fn https_only(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000"));
     response
 }
 
@@ -165,11 +185,11 @@ fn same_origin(headers: &HeaderMap) -> bool {
 fn random_token() -> Result<String, AppError> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(hex::encode(&bytes))
 }
 
-/// The token every form on this session's pages must send back.
-pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
+/// The session's own token, kept in the session.
+async fn session_token(session: &Session) -> Result<String, AppError> {
     if let Some(token) = session.get::<String>(CSRF_KEY).await? {
         return Ok(token);
     }
@@ -178,23 +198,39 @@ pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
     Ok(token)
 }
 
+/// The token every form on this session's pages must send back: the session's token under
+/// a fresh random mask, so it reads differently on every page. Pages are compressed (here or
+/// by a proxy) and show text the visitor chose, such as a search; a secret that stayed the
+/// same could be guessed from the compressed sizes (BREACH).
+pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
+    let token = session_token(session).await?;
+    let mut mask = vec![0u8; token.len()];
+    getrandom::fill(&mut mask)?;
+    let masked: Vec<u8> = token.bytes().zip(&mask).map(|(byte, pad)| byte ^ pad).collect();
+    Ok(hex::encode(&mask) + &hex::encode(&masked))
+}
+
 /// Only our own pages may ask for a change: a form on another site has neither the token
 /// nor our origin.
 pub(crate) async fn allowed(headers: &HeaderMap, session: &Session, sent: &str) -> Result<bool, AppError> {
-    let token = csrf_token(session).await?;
-    Ok(same_origin(headers) && bool::from(token.as_bytes().ct_eq(sent.as_bytes())))
+    let token = session_token(session).await?;
+    let Some(sent) = hex::decode(sent).filter(|bytes| bytes.len() == 2 * token.len()) else { return Ok(false) };
+    let (mask, masked) = sent.split_at(token.len());
+    let unmasked: Vec<u8> = masked.iter().zip(mask).map(|(byte, pad)| byte ^ pad).collect();
+    Ok(same_origin(headers) && bool::from(token.as_bytes().ct_eq(&unmasked)))
 }
 
 pub(crate) const NOT_FROM_HERE: &str = "This page is out of date. Go back, reload it and try again.";
 
-/// The client's address, for limiting sign-in attempts.
-pub struct Client(String);
+/// The client's address, for limiting sign-in attempts and rating taps; see `proxy`.
+pub struct Client(pub(crate) String);
 
-impl<S: Sync> FromRequestParts<S> for Client {
+impl FromRequestParts<AppState> for Client {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let address = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip().to_string());
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
+        let address = peer.map(|peer| state.proxy.client(peer, &parts.headers).to_string());
         Ok(Client(address.unwrap_or_else(|| "unknown".to_owned())))
     }
 }
@@ -898,7 +934,7 @@ pub async fn report(
         return refused(StatusCode::NOT_FOUND, "No such delivered article.");
     }
     if !db::reported(&state.pool, &user.id).await?.contains(&form.article) {
-        db::report_problem(&state.pool, &user.id, &form.article).await?;
+        db::report_problem(&state.pool, &user.id, &form.article, "web").await?;
     }
     back_to(&form.back, &form.article)
 }
@@ -1042,7 +1078,9 @@ pub async fn rate(
         return back_to(&form.back, &form.article);
     };
     match signal {
-        Some(signal) => db::record_feedback(pool, &user.id, &form.article, &signal).await?,
+        Some(signal) => {
+            db::record_feedback(pool, &user.id, &form.article, &signal, "web").await?;
+        }
         None => db::clear_rating(pool, &user.id, &form.article).await?,
     }
     back_to(&form.back, &form.article)
@@ -1336,6 +1374,11 @@ pub async fn set_password(
     let user = User { password_hash: hash, ..user };
     auth.login(&user).await?;
     Ok(Redirect::to("/account?saved=password").into_response())
+}
+
+/// Any address that is not a page.
+pub async fn not_found() -> Page {
+    message(StatusCode::NOT_FOUND, "Page not found", "There is no page at this address.")
 }
 
 pub async fn health() -> &'static str {

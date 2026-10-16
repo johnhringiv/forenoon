@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, 'problem', ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "92525560fe0de1f3d3a9c62352e2c42022bcf067a1cb6cc753661ef2194b78f1"
+}

@@ -1,6 +1,6 @@
-"""SQLite store behind a small repository interface, shared by the pipeline and feedback.
+"""SQLite store behind a small repository interface.
 
-The web pages (`web/`, in Rust) read the same database. `web/pipeline-schema.sql` is a copy of
+The web pages (`web/`, in Rust) share the database. `web/pipeline-schema.sql` is a copy of
 SCHEMA that their queries are checked against; a test keeps the two equal, so after changing
 SCHEMA regenerate the copy and run `web/dev-db.sh`.
 """
@@ -196,15 +196,6 @@ class Store:
             if column not in have:
                 with self.db:
                     self.db.execute(f"ALTER TABLE articles ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
-        # The first schema kept one row per signal; replay it into the event log and ratings.
-        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'feedback'").fetchone():
-            old = self.db.execute(
-                "SELECT user_id, article_id, signal, source, created_at FROM feedback ORDER BY created_at"
-            ).fetchall()
-            for row in old:
-                self.record_feedback(*row)
-            with self.db:
-                self.db.execute("DROP TABLE feedback")
 
     def close(self) -> None:
         self.db.close()

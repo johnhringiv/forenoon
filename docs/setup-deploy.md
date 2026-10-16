@@ -31,7 +31,7 @@ Fill in `FORENOON_HOST_DATA`, `TZ`, the mail server (`FORENOON_SMTP_HOST`,
 `FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`; see
 [setup-email.md](setup-email.md)) and, for ranking, `FORENOON_ANTHROPIC_API_KEY`. Never
 commit `.env`.
-Changing `FORENOON_FEEDBACK_SECRET` invalidates every feedback link already delivered.
+Changing `FORENOON_FEEDBACK_SECRET` invalidates every rating link already delivered.
 
 ## 3. First run
 
@@ -55,44 +55,64 @@ commands above still work over SSH.
 Each run writes a report to
 `<folder>/reports/`.
 
-## 4. Public feedback endpoint (Cloudflare Tunnel)
+## 4. Public address (Cloudflare Tunnel or your own proxy)
 
-The Kindle browser must reach the feedback service from the internet. Only that service is
-exposed, and no inbound port is opened.
+The web pages are served from the internet over https: the Kindle's browser opens the rating
+links in each book there, and you sign in to the pages from anywhere. Everything except the
+rating links and `/healthz` needs a sign-in.
+
+### Cloudflare Tunnel
+
+No inbound port is opened.
 
 1. Cloudflare Zero Trust → Networks → Tunnels → create a tunnel (type _Cloudflared_) and copy
-   its token into `.env` as `TUNNEL_TOKEN`. Use a tunnel of its own rather than adding a
-   hostname to one that serves something else.
-2. Add a public hostname (for example `feedback.your-domain.example`) with service
-   `http://localhost:8080`.
-3. Set `FORENOON_PUBLIC_URL=https://feedback.your-domain.example` in `.env`.
+   its token into `.env` as `TUNNEL_TOKEN`.
+2. Add a public hostname (for example `forenoon.your-domain.example`) with service
+   `http://localhost:8081`.
+3. In `.env`, set `FORENOON_PUBLIC_URL` and `FORENOON_WEB_URL` to
+   `https://forenoon.your-domain.example`. For docker compose, also set
+   `FORENOON_WEB_SECURE_COOKIES=true`; `deploy.sh` sets it itself when `TUNNEL_TOKEN` is set.
+   Both already take the client's address from the tunnel's `CF-Connecting-IP` header.
 4. Keep `COMPOSE_PROFILES=cloudflared` in `.env` and run `docker compose up -d`.
-5. Check: `curl https://feedback.your-domain.example/healthz` prints `ok`. A 530 / error 1033
+5. Check: `curl https://forenoon.your-domain.example/healthz` prints `ok`. A 530 / error 1033
    means the tunnel has no connector: check `docker logs` for the cloudflared container.
 
 **Minimum TLS version.** Set the zone's minimum TLS version to 1.2 or lower (SSL/TLS → Edge
 Certificates → Minimum TLS Version). With a minimum of 1.3 the Kindle browser cannot connect
 and footer links fail with "website inaccessible", while phones and computers work. Seen on
-a Kindle Oasis in October 2026.
+a Kindle Oasis in October 2026. For the same reason, do not put a bot challenge or a
+Cloudflare Access login in front of `/f/*`: the Kindle's browser cannot pass them. On the
+rest of the hostname, Access is an optional extra layer.
 
-**Network layout.** The app containers use Docker's default bridge, and `cloudflared` joins
-the `feedback` container's network namespace, reaching it as `localhost:8080`. No host port
-is published. There is deliberately no compose-created network: Synology's DSM firewall
+**Network layout.** The containers use Docker's default bridge, and `cloudflared` joins the
+`web` container's network namespace, reaching it as `localhost:8081`. Requests from it arrive
+from 127.0.0.1, which is why the web pages believe its `CF-Connecting-IP` header from there
+and nowhere else. There is deliberately no compose-created network: Synology's DSM firewall
 silently drops egress from custom bridge networks, which would break feed fetching and the
 tunnel. On DSM, run docker with `sudo`; the binary is at `/usr/local/bin/docker`.
 
-After a host reboot `cloudflared` can start before `feedback` and fail to join its
-namespace. If the health check above fails after a reboot, run `docker compose up -d` again.
+After a host reboot `cloudflared` can start before `web` and fail to join its namespace. If
+the health check above fails after a reboot, run `docker compose up -d` again. (The deploy
+script's poller, below, does this by itself; docker compose has nothing watching.)
 
-Tailscale Funnel or your own reverse proxy is an alternative: publish the `feedback` port on
-loopback (see the comment in `docker-compose.yml`) and use that URL as `FORENOON_PUBLIC_URL`.
+### Your own reverse proxy
 
-The endpoint rate limits by the `CF-Connecting-IP` header, which is only trustworthy behind
-Cloudflare. Do not publish port 8080 beyond loopback.
+Publish the pages on a host port with `WEB_LISTEN` and point the proxy at it, terminating
+https there. Then set, in `.env`:
+
+- `FORENOON_PUBLIC_URL` and `FORENOON_WEB_URL` to the proxy's https address;
+- `FORENOON_WEB_SECURE_COOKIES=true`;
+- `FORENOON_WEB_CLIENT_IP_HEADER` to the header your proxy puts the client's address in
+  (`X-Forwarded-For` or `X-Real-IP`), and `FORENOON_WEB_TRUSTED_PROXIES` to the address the
+  proxy connects from (as Docker sees it), so that no one else can set it. Without these the
+  sign-in limits count every visitor as the proxy.
+
+With secure cookies on, signing in over plain http (`http://<host>:8081`) does not work; use
+the https address.
 
 ## Alternative: deploy script and continuous deploy
 
-`deploy/deploy.sh` starts the same three containers with plain `docker run`, for hosts where
+`deploy/deploy.sh` starts the same containers with plain `docker run`, for hosts where
 a script is handier than a compose project (it was written for Synology DSM). It reads the
 same `.env` file:
 
@@ -121,8 +141,8 @@ push to main ──► CI (lint, tests, docker smoke test) ──► GHCR :lates
    (and set the same `IMAGE` in `.env`, or the poller moves you forward again).
 
 The poller follows the `cloudflared` image too (`CLOUDFLARED_IMAGE`, default `:latest`): when
-only that changed it replaces just the tunnel container, and feedback links are unreachable
-for a few seconds. The poller also restarts the stack after a reboot if a container failed to come up. A deploy
+only that changed it replaces just the tunnel container, and the pages are unreachable for a
+few seconds. A new web image replaces the web container and the tunnel inside it. The poller also restarts the stack after a reboot if a container failed to come up. A deploy
 that lands while the daily run is in progress interrupts it; articles already emailed are
 recorded and not resent, and the rest go out with the next run.
 
@@ -135,26 +155,20 @@ delivered, why each article was picked and how you rated it, where ratings can b
 Everything is behind a login, and each account sees only its own reader's articles. They run
 from their own image. Without at least one reader the daily run delivers nothing.
 
-Keep the pages on your LAN or a VPN such as Tailscale for now, and do not point the
-Cloudflare Tunnel at them: they have a login, but have not been hardened for the public
-internet.
-
-1. In `.env`, set `WEB_IMAGE=ghcr.io/<owner>/<repo>-web:latest` and `WEB_LISTEN` to a port
-   (`8081`) or, to limit it to one of the host's addresses, `address:port`
-   (`192.168.1.20:8081`). For docker compose, also add `web` to `COMPOSE_PROFILES`. The GHCR
-   package must be public, like the others.
-2. Start it: `sudo ONLY=web sh deploy.sh .env` (a full deploy starts it too), or
-   `docker compose up -d web`.
+1. In `.env`, set `WEB_IMAGE=ghcr.io/<owner>/<repo>-web:latest` (the GHCR package must be
+   public, like the others). `deploy.sh` requires it; docker compose builds it otherwise.
+2. A full deploy or `docker compose up -d` starts it; `sudo ONLY=web sh deploy.sh .env`
+   replaces just it and the tunnel.
 3. So the pages can email you (to confirm your address and to reset a forgotten password),
-   also set `FORENOON_WEB_URL` in `.env` to the address you open the pages at. They go
-   through the mail server already set there. Without one these emails are written to the container's log (`docker logs forenoon-web`), which
-   is enough on a one-person install.
+   `FORENOON_WEB_URL` in `.env` is the address you open the pages at. They go through the
+   mail server already set there. Without one these emails are written to the container's
+   log (`docker logs forenoon-web`), which is enough on a one-person install.
 4. Create your reader. You sign in with the email address; the id names you in the
    pipeline's records. You are asked for a password of at least 10 characters:
    `sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <you>@example.com --kindle <you>@kindle.com`
    The first account is an admin. Dates are shown in the container's `TZ` unless you pass
    `--timezone`.
-5. Open `http://<host>:8081/` and sign in. A banner asks you to confirm your address: press
+5. Open the public address and sign in. A banner asks you to confirm your address: press
    **Send it again** and open the link in the email. Everything works before you do, but a
    forgotten password can only be reset through a confirmed address.
 6. On **Account**, write your interests and set the stories a day. Changes apply from the
@@ -170,9 +184,9 @@ Other account commands, run the same way: `set-password <id>` (also signs the ac
 everywhere) and `users`, which lists each account's email. `set-password` is the way back in
 if the email route fails.
 
-The mail password is the only secret the container is given by the deploy. Session cookies
-pasted into the Sources page are written to the `forenoon-logins` Docker volume. Check that your router does not
-forward the port from the internet.
+The deploy gives the container two secrets: the mail password and the feedback secret, which
+checks the rating links. Session cookies pasted into the Sources page are written to the
+`forenoon-logins` Docker volume.
 
 ## Backups
 
