@@ -7,6 +7,7 @@ pub mod auth;
 pub mod db;
 pub mod feedback;
 mod hex;
+pub mod icons;
 pub mod limit;
 pub mod mail;
 pub mod pages;
@@ -134,7 +135,11 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/verify/{token}", get(pages::verify))
         .route("/join/{token}", get(accounts::join_page).post(accounts::join))
         .route("/healthz", get(pages::health))
-        .route("/f/{token}", get(feedback::tap))
+        .route("/f/{token}", get(feedback::tap));
+    let router = icons::FILES.iter().fold(router, |router, &(path, media_type, body)| {
+        router.route(path, get(move || async move { icons::serve(media_type, body) }))
+    });
+    let router = router
         // Signed in or not: it names no page, so it gives nothing away.
         .fallback(pages::not_found)
         .layer(auth)

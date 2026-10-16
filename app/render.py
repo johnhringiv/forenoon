@@ -500,11 +500,13 @@ def render_issue(
     rating_style: str = "numbers",
     title: str | None = None,
     cover: bytes | None = None,
+    grayscale: bool = True,
 ) -> bytes:
     """One book: a contents page, then a chapter per article with its own rating links.
 
     Deterministic for the same entries, day and part. `title` and `cover` replace the daily
-    issue's own, for a book that is one story sent on request.
+    issue's own, for a book that is one story sent on request. `grayscale` is the images setting;
+    the daily cover follows it.
     """
     title = title or issue_title(day, part)
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, "forenoon:" + ",".join(e.article.id for e in entries)).urn
@@ -593,7 +595,11 @@ def render_issue(
         add("OEBPS/style.css", CSS + ISSUE_CSS + font_css + extra_css)
         # The library thumbnail: the mark, the date and the day's lead headlines.
         leads = [e.article.title for e in entries if not e.article.continues]
-        add("OEBPS/cover.jpg", cover or cover_image(day, _issue_summary(entries), leads, part), zipfile.ZIP_STORED)
+        add(
+            "OEBPS/cover.jpg",
+            cover or cover_image(day, _issue_summary(entries), leads, part, grayscale),
+            zipfile.ZIP_STORED,
+        )
         add("OEBPS/contents.xhtml", contents)
         for name, _, page in chapters:
             add(f"OEBPS/{name}.xhtml", page)

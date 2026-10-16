@@ -2179,3 +2179,58 @@ async fn an_address_that_is_not_a_page_says_so_signed_in_or_not() {
         browser.sign_in(&site, "john").await;
     }
 }
+
+#[tokio::test]
+async fn icons_and_the_manifest_need_no_session() {
+    let site = site(false).await;
+    for (path, media_type) in [
+        ("/favicon.ico", "image/x-icon"),
+        ("/icon.svg", "image/svg+xml"),
+        ("/apple-touch-icon.png", "image/png"),
+        ("/icon-192.png", "image/png"),
+        ("/icon-512.png", "image/png"),
+        ("/icon-maskable-512.png", "image/png"),
+        ("/og.png", "image/png"),
+        ("/manifest.webmanifest", "application/manifest+json"),
+    ] {
+        let response = site.router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        let header = |name| response.headers().get(name).unwrap().to_str().unwrap().to_owned();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(header(header::CONTENT_TYPE), media_type, "{path}");
+        assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400", "{path}");
+    }
+    // Every icon the manifest names is served, and the page lets the browser load the manifest.
+    let manifest = Browser::default().get(&site, "/manifest.webmanifest").await.text;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    for icon in manifest["icons"].as_array().unwrap() {
+        let reply = Browser::default().get(&site, icon["src"].as_str().unwrap()).await;
+        assert_eq!(reply.status, StatusCode::OK, "{icon}");
+    }
+    let page = Browser::default().get(&site, "/login").await;
+    assert!(page.csp.contains("manifest-src 'self'"), "{}", page.csp);
+    for link in [
+        r#"href="/favicon.ico""#,
+        r#"href="/icon.svg""#,
+        r#"href="/apple-touch-icon.png""#,
+        r#"href="/manifest.webmanifest""#,
+    ] {
+        assert!(page.text.contains(link), "{link}");
+    }
+}
+
+#[tokio::test]
+async fn a_shared_link_previews_with_the_sites_card() {
+    let site = site(false).await;
+    // A chat app fetching a link's preview has no session, so it lands on the sign-in page.
+    let home = Browser::default().get(&site, "/").await;
+    assert_eq!(home.location, "/login");
+    let page = Browser::default().get(&site, "/login").await;
+    for tag in [
+        r#"<meta property="og:title" content="Forenoon">"#,
+        r#"<meta property="og:url" content="http://nas:8787/login">"#,
+        r#"<meta property="og:image" content="http://nas:8787/og.png">"#,
+        r#"<meta name="twitter:card" content="summary_large_image">"#,
+    ] {
+        assert!(page.text.contains(tag), "{tag}");
+    }
+}
