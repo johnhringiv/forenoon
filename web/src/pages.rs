@@ -135,13 +135,18 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
             // The one script allowed is the light/dark switch in base.html, by its hash; the test
             // `pages_need_a_session_and_sign_in_is_limited` recomputes it from the page.
             "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
-             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; base-uri 'none'; form-action 'self'",
+             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; base-uri 'none'; form-action 'self'; \
+             frame-ancestors 'none'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
         // Links and images to article sites opt out of the referrer one by one.
         (header::REFERRER_POLICY, "same-origin"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
+        // No other site's window keeps a handle on ours, and none can load our responses
+        // (thumbnails included) into its own pages.
+        (header::HeaderName::from_static("cross-origin-opener-policy"), "same-origin"),
+        (header::HeaderName::from_static("cross-origin-resource-policy"), "same-origin"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
@@ -176,14 +181,26 @@ fn same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    let digits = text.as_bytes();
+    if !digits.len().is_multiple_of(2) {
+        return None;
+    }
+    digits.chunks(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()).collect()
+}
+
 fn random_token() -> Result<String, AppError> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(hex(&bytes))
 }
 
-/// The token every form on this session's pages must send back.
-pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
+/// The session's own token, kept in the session.
+async fn session_token(session: &Session) -> Result<String, AppError> {
     if let Some(token) = session.get::<String>(CSRF_KEY).await? {
         return Ok(token);
     }
@@ -192,11 +209,26 @@ pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
     Ok(token)
 }
 
+/// The token every form on this session's pages must send back: the session's token under
+/// a fresh random mask, so it reads differently on every page. Pages are compressed (here or
+/// by a proxy) and show text the visitor chose, such as a search; a secret that stayed the
+/// same could be guessed from the compressed sizes (BREACH).
+pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
+    let token = session_token(session).await?;
+    let mut mask = vec![0u8; token.len()];
+    getrandom::fill(&mut mask)?;
+    let masked: Vec<u8> = token.bytes().zip(&mask).map(|(byte, pad)| byte ^ pad).collect();
+    Ok(hex(&mask) + &hex(&masked))
+}
+
 /// Only our own pages may ask for a change: a form on another site has neither the token
 /// nor our origin.
 pub(crate) async fn allowed(headers: &HeaderMap, session: &Session, sent: &str) -> Result<bool, AppError> {
-    let token = csrf_token(session).await?;
-    Ok(same_origin(headers) && bool::from(token.as_bytes().ct_eq(sent.as_bytes())))
+    let token = session_token(session).await?;
+    let Some(sent) = unhex(sent).filter(|bytes| bytes.len() == 2 * token.len()) else { return Ok(false) };
+    let (mask, masked) = sent.split_at(token.len());
+    let unmasked: Vec<u8> = masked.iter().zip(mask).map(|(byte, pad)| byte ^ pad).collect();
+    Ok(same_origin(headers) && bool::from(token.as_bytes().ct_eq(&unmasked)))
 }
 
 pub(crate) const NOT_FROM_HERE: &str = "This page is out of date. Go back, reload it and try again.";

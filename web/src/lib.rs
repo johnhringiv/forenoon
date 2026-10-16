@@ -24,6 +24,7 @@ use axum::{
 };
 use axum_login::AuthManagerLayerBuilder;
 use sqlx::SqlitePool;
+use tower_http::compression::CompressionLayer;
 use tower_sessions::{
     ExpiredDeletion, Expiry, SessionManagerLayer,
     cookie::{SameSite, time},
@@ -122,7 +123,9 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/f/{token}", get(feedback::tap))
         .layer(auth)
         .layer(DefaultBodyLimit::max(MAX_FORM_BYTES))
-        .layer(middleware::from_fn(pages::security_headers));
+        .layer(middleware::from_fn(pages::security_headers))
+        // Text only: images are already compressed, and tiny answers are not worth it.
+        .layer(CompressionLayer::new());
     let router = if options.secure_cookies { router.layer(middleware::from_fn(pages::https_only)) } else { router };
     Ok(router.with_state(state))
 }

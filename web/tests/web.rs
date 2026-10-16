@@ -1704,3 +1704,37 @@ async fn a_rating_link_before_the_pipeline_has_run_is_not_an_error() {
     let link = format!("/f/{}", forenoon_web::feedback::make(FEEDBACK_SECRET, "john", "a1", "f4", 4_000_000_000));
     assert_eq!(Browser::default().get(&site, &link).await.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn pages_are_compressed_and_the_form_token_never_reads_the_same_twice() {
+    let site = site(true).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let first = browser.get(&site, "/account").await;
+    let second = browser.get(&site, "/account").await;
+    // Masked afresh on every page, so compression cannot reveal it; each one still works.
+    assert_ne!(first.csrf(), second.csrf());
+    let profile =
+        |token: &str| [("csrf", token.to_owned()), ("name", "John".to_owned()), ("timezone", "UTC".to_owned())];
+    for token in [first.csrf(), second.csrf()] {
+        let form = profile(&token);
+        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let reply = browser.post(&site, "/account/profile", &form).await;
+        assert_eq!(reply.status, StatusCode::SEE_OTHER, "{}", reply.text);
+    }
+    // Half a token (the mask alone), a token of the wrong length and junk are refused.
+    let half = first.csrf()[..first.csrf().len() / 2].to_owned();
+    for token in [half.as_str(), "", "zz", &"ab".repeat(64)] {
+        let form = profile(token);
+        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        assert_eq!(browser.post(&site, "/account/profile", &form).await.status, StatusCode::FORBIDDEN, "{token}");
+    }
+
+    let request = Request::get("/login").header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(response.headers()["cross-origin-opener-policy"], "same-origin");
+    assert_eq!(response.headers()["cross-origin-resource-policy"], "same-origin");
+    let csp = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.ends_with("frame-ancestors 'none'"), "{csp}");
+}
