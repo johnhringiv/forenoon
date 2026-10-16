@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import time
 import zipfile
@@ -142,6 +143,11 @@ def test_send_logs_in_and_sends_each_message(monkeypatch):
         ("send", "a@kindle.com"),
         ("quit",),
     ]
+    # TLS from the start: no upgrade, and never a plain connection.
+    calls.clear()
+    monkeypatch.setattr(deliver.smtplib, "SMTP_SSL", FakeSMTP)
+    deliver.send(messages, dataclasses.replace(smtp, port=465, implicit_tls=True))
+    assert calls[0] == ("connect", "smtp.example", 465) and ("starttls",) not in calls
     with pytest.raises(ValueError):
         deliver.send(messages, Smtp())
 
