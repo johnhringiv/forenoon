@@ -873,6 +873,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 - The whole archive of a followed blog; full-text search of stored articles; expiring
   articles past their shelf life; a "throwback" section of older pieces worth a second look.
 - A search agent, or an MCP server, over the library.
-- Editing the prompts in the browser; sign-up and admin pages for accounts.
+- Editing the prompts in the browser; editing a reader's Kindle address or role from the Accounts
+  page (a public sign-up page is not wanted).
 - Newsletters by email as a source.
 - E-readers other than Kindle.

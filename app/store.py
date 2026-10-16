@@ -341,9 +341,13 @@ class Store:
         return {row["key"]: row["value"] for row in self.db.execute("SELECT key, value FROM settings")}
 
     def admin_emails(self) -> tuple[str, ...]:
+        """Where alerts go when no address is set: the admins who have joined, not ones only invited."""
         if not self._has_table("users"):
             return ()
-        rows = self.db.execute("SELECT email FROM users WHERE role = 'admin' AND email != '' ORDER BY created_at, id")
+        joined = "AND invited_at IS NULL" if self._has_column("users", "invited_at") else ""
+        rows = self.db.execute(
+            f"SELECT email FROM users WHERE role = 'admin' AND email != '' {joined} ORDER BY created_at, id"
+        )
         return tuple(row["email"] for row in rows)
 
     def pending_source_checks(self) -> list[sqlite3.Row]:
