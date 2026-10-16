@@ -38,7 +38,9 @@ class User:
 class Smtp:
     host: str = ""
     port: int = 587
-    starttls: bool = True
+    # TLS from the start (port 465) instead of upgrading with STARTTLS (587); never plain text.
+    # The web app reads the same FORENOON_SMTP_IMPLICIT_TLS.
+    implicit_tls: bool = False
     username: str = ""
     sender: str = ""
     # Send to Kindle limits; see docs/setup-email.md.
@@ -229,7 +231,7 @@ def from_env() -> Config:
     smtp = Smtp(
         host=os.environ.get("FORENOON_SMTP_HOST", ""),
         port=_env_int("FORENOON_SMTP_PORT", defaults.port),
-        starttls=os.environ.get("FORENOON_SMTP_STARTTLS", "true").strip().lower() not in ("0", "false", "no"),
+        implicit_tls=os.environ.get("FORENOON_SMTP_IMPLICIT_TLS", "").strip().lower() in ("1", "true", "yes", "on"),
         username=os.environ.get("FORENOON_SMTP_USERNAME", ""),
         sender=os.environ.get("FORENOON_SMTP_SENDER", ""),
         max_message_bytes=_env_int("FORENOON_SMTP_MAX_MESSAGE_BYTES", defaults.max_message_bytes),

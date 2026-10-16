@@ -22,8 +22,8 @@ what its own users configure and delivers only to the addresses its readers have
 
 ## 2. Users and configuration
 
-- An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
-  addresses, a daily target of stories (default 8; section 7e) and an interests text. They
+- An install has one or more **readers**, each with an id, a name, zero or more Send to Kindle
+  addresses (none: they read on the web pages), a daily target of stories (default 8; section 7e) and an interests text. They
   live in the database: a reader is an account of the web pages
   (section 9a), made by an admin's invitation (or `forenoon-web add-user`) and edited on its
   Reading and account pages. The
@@ -145,11 +145,14 @@ what its own users configure and delivers only to the addresses its readers have
   reaches installs that never touched it. The pipeline reads them before every run. A stored
   value it cannot use is logged and skipped, never fatal.
 - **The deploy's own settings** come only from the environment (the `.env` file): the data
-  folder, the time zone (`TZ`), the mail server (`FORENOON_SMTP_*`), the web pages'
-  public address (`FORENOON_PUBLIC_URL`) and the secrets (`FORENOON_FEEDBACK_SECRET`,
+  folder, the time zone (`TZ`), the mail server (`FORENOON_SMTP_*`: host, port, username,
+  sender, the largest message in bytes, and `FORENOON_SMTP_IMPLICIT_TLS` for TLS from the
+  start on port 465 instead of STARTTLS; both programs read the same variables), the web
+  pages' public address (`FORENOON_PUBLIC_URL`), the shipped model list
+  (`FORENOON_MODELS`, set by the image) and the secrets (`FORENOON_FEEDBACK_SECRET`,
   `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`). There is no configuration file.
-- Ranking is on by default and used whenever an API key is set. Alerts are on by default and
-  go to every admin's sign-in address unless another address is set.
+- The API key is required: the model chooses the articles. Alerts are on by default and go
+  to every admin's sign-in address unless another address is set.
 
 ## 3. The daily run
 
@@ -245,7 +248,7 @@ The whole process for one reader's day, in order. The sections named give the de
      most room and is passed over only when all of them have used theirs; links added by
      hand are not counted;
    - **being deliverable**: not judged "not the article" by the reading, under
-     `max_article_words`, and within the message size. Otherwise the place goes to the next.
+     45,000 words, and within the message size. Otherwise the place goes to the next.
    - A candidate whose page cannot be had is a link-only pick (section 3, step 4) and takes
      no place.
 9. **Following links** (section 7e). A short pointer post is replaced by the pages it is
@@ -255,7 +258,7 @@ The whole process for one reader's day, in order. The sections named give the de
     whether it was the exploration pick and the probability it was put forward (1 when the
     model chose it); and in the run's report, the model's choice with what became of each.
 
-Without the model (no key, off, failing, or over the token cap), steps 3 to 7 are skipped:
+Without the model (no key, a failing call, or over the token cap), steps 3 to 7 are skipped:
 hand-added links and pinned sources first, then newest first round-robin, still subject to
 each source's places a day; no built-in source is read.
 
@@ -353,8 +356,8 @@ are dropped and counted in the report.
 
 ### Size limits
 
-Email size is capped by `smtp.max_message_bytes` (default 45 MiB) and
-`smtp.max_attachments` (25). If one article alone would exceed the limit its images are
+Email size is capped at 45 MiB (`FORENOON_SMTP_MAX_MESSAGE_BYTES` in the env file changes
+it) and 25 attachments a message (fixed). If one article alone would exceed the limit its images are
 dropped and it is marked degraded; if it still does not fit it is skipped and marked failed.
 A day's issue that would exceed the limit is split into parts (`· part 1`, `· part 2`).
 Emails are sent one at a time and their articles recorded as each succeeds, so a failure
@@ -397,11 +400,11 @@ reader's reason when there is one, and is told to work out what a rating is abou
 learning from it (a low rating on a short post is a verdict on thin posts, not on its
 source).
 
-## 7a. Ranking with a model (on by default; needs an API key)
+## 7a. Ranking with a model (needs the API key)
 
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
-  article page is fetched for ranking. Also the user's `interests` text and their 30 most
+  article page is fetched for ranking. Also the user's `interests` text and their 40 most
   recent ratings (title, source, rating, finished).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
@@ -471,10 +474,10 @@ source).
   is no abstract.
 - **Selection.** Found articles are ranked with feed articles on their score alone, with no
   places kept for them. Like every source, each built-in one takes at most its "places a day"
-  (2 unless changed on the Sources page; 0 for no limit). One that fails extraction gives its
+  (no limit unless set on the Sources page). One that fails extraction gives its
   place to the next candidate, whichever kind it is.
 - **In the book.** The source reads "site via Hacker News", with a link to the discussion.
-- **Without the model** (off, failing or over its cap) no found article is delivered.
+- **Without the model** (no key, failing or over its cap) no found article is delivered.
 - A listing that fails is reported and alerted like a failed feed.
 
 ## 7c. Extraction check by the model (log only)
@@ -668,7 +671,8 @@ shown on the row for a day. At most 30 a day per reader.
 
 ## 8. Delivery
 
-Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
+Books are emailed as attachments through an SMTP relay (STARTTLS, or TLS from the start with
+`FORENOON_SMTP_IMPLICIT_TLS`; never plain text; with login) to the user's
 Send to Kindle addresses. Recipients come only from the reader's own account page;
 nothing in a feed or article can add or change a recipient. The sender address must be on
 the Amazon account's approved sender list.
@@ -681,18 +685,22 @@ the Amazon account's approved sender list.
 - **Triage.** `forenoon report` extracts the latest items of every source without delivering
   or recording anything. It fetches every feed and page again, so `--source` limits it to the
   sources whose name contains the given text.
-- **Alerts.** When `alerts.to` is set, the operator is emailed if a delivery fails, a run
+- **Alerts.** When alerts are on (`alerts.enabled`), the operator (`alerts.to`, else every
+  admin) is emailed if a delivery fails, a run
   crashes, a run has nothing new to deliver (unless the day's cap was already used), or a
   source has failed a set number of runs in a row (default 3, repeated at each multiple).
   Alerts use the same relay; a failure to send one is logged and does not affect the run.
 
-## 9a. Web pages (optional)
+## 9a. Web pages
 
 A separate program, `forenoon-web` (Rust, in `web/`), with its own image. It shares the
 database with the pipeline.
 
-- **Accounts.** Every page except sign-in and the health check needs a session. An account
-  is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
+- **Accounts.** Every page needs a session except sign-in, password reset (`/forgot`,
+  `/reset`), email confirmation (`/verify`), joining by invitation (`/join`), rating links
+  (`/f/`) and the health check. An account is a reader: the pipeline makes an issue for each
+  account that has joined, emailed to its Kindle addresses or, with none, read on the web
+  pages. A signed-in
   reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
   created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
   admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
@@ -753,10 +761,12 @@ database with the pipeline.
   fetched again (section 7g). A form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
 - **Reading** (`/reading`). What the pipeline picks for: the reader's interests, in their
-  own words, and their stories a day; below them, the notes the pipeline keeps on the
-  reader's taste (section 7h): when they were last rewritten, a box to edit them (2,000
-  characters at most), and the last 10 versions with who wrote each and a button to restore
-  it. `/learned`, the notes' old address, leads here.
+  own words, and their stories a day; how their issue is made (one book or one per article,
+  the most on one broad subject, room for a surprise, the model's reason printed; section
+  2); below them, the notes the pipeline keeps on the reader's taste (section 7h), shown as
+  text to read with when they were last rewritten, a switch to keep them or not, a
+  "Correct these notes" toggle that opens a box to edit them (2,000 characters at most),
+  and the last 10 versions with who wrote each and a button to restore it. `/learned`, the notes' old address, leads here.
 - **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
   name: Newsstand, Archive, Reading, Sources, then for an admin Settings, Accounts and
   Problems (with the count of reports), then the reader's name, which opens the account page. The current
@@ -788,8 +798,8 @@ database with the pipeline.
   **Send story to Kindle**: every article delivered in the story as one book with a contents
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
-- **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
-  out. A reader changes only their own row, so the only addresses an account can send to are
+- **Account page.** Display name, time zone, Kindle addresses with "My Kindle has a colour
+  screen", email, password, and sign out. A reader changes only their own row, so the only addresses an account can send to are
   the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same

@@ -83,8 +83,9 @@ def build_messages(
 def send(messages: list[EmailMessage], smtp: Smtp) -> None:
     if not smtp.host or not smtp.sender:
         raise ValueError("smtp.host and smtp.sender must be configured")
-    with smtplib.SMTP(smtp.host, smtp.port, timeout=120) as client:
-        if smtp.starttls:
+    connect = smtplib.SMTP_SSL if smtp.implicit_tls else smtplib.SMTP
+    with connect(smtp.host, smtp.port, timeout=120) as client:
+        if not smtp.implicit_tls:
             client.starttls()
         if smtp.username:
             client.login(smtp.username, smtp.password)

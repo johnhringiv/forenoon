@@ -40,8 +40,8 @@ day's choices.
   two cents** of Claude Haiku. If the model is unreachable or the day's tokens are spent it
   still delivers: pinned sources first, then the newest articles in turn across sources.
 - **No one else's incentives.** No ads, no engagement metrics, no account with anybody. One
-  SQLite file and a folder on your own machine. The only public endpoint accepts signed
-  rating links and nothing else.
+  SQLite file and a folder on your own machine. The web pages are public behind a login;
+  only the signed rating links in each book work without one.
 
 Everything is set up in the browser: sources, interests, delivery time and the rest.
 
@@ -53,6 +53,7 @@ What it does today is described in full in [docs/PRD.md](docs/PRD.md).
 uv sync
 mkdir -p run/data
 export FORENOON_DATA_DIR=run/data FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
+export FORENOON_ANTHROPIC_API_KEY=sk-ant-...  # required: the model chooses the articles
 
 # a reader to deliver to; asks for a password for the web pages
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)
