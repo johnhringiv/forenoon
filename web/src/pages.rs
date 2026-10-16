@@ -1385,6 +1385,11 @@ pub async fn set_password(
     Ok(Redirect::to("/account?saved=password").into_response())
 }
 
+/// Any address that is not a page.
+pub async fn not_found() -> Page {
+    message(StatusCode::NOT_FOUND, "Page not found", "There is no page at this address.")
+}
+
 pub async fn health() -> &'static str {
     "ok"
 }

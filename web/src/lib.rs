@@ -121,6 +121,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/verify/{token}", get(pages::verify))
         .route("/healthz", get(pages::health))
         .route("/f/{token}", get(feedback::tap))
+        // Signed in or not: it names no page, so it gives nothing away.
+        .fallback(pages::not_found)
         .layer(auth)
         .layer(DefaultBodyLimit::max(MAX_FORM_BYTES))
         .layer(middleware::from_fn(pages::security_headers))

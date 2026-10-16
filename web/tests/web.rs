@@ -1738,3 +1738,16 @@ async fn pages_are_compressed_and_the_form_token_never_reads_the_same_twice() {
     let csp = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
     assert!(csp.ends_with("frame-ancestors 'none'"), "{csp}");
 }
+
+#[tokio::test]
+async fn an_address_that_is_not_a_page_says_so_signed_in_or_not() {
+    let site = site(true).await;
+    let mut browser = Browser::default();
+    for _ in 0..2 {
+        let reply = browser.get(&site, "/no-such-page").await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND);
+        assert!(reply.text.contains("There is no page at this address.") && reply.text.contains(r#"<a href="/">"#));
+        assert!(reply.csp.contains("default-src 'none'"));
+        browser.sign_in(&site, "john").await;
+    }
+}
