@@ -105,8 +105,9 @@ class Router:
 
 
 def backend_from_env(cfg: Llm) -> Backend | None:
-    """The connections there are keys for, or None when the model is off or there are none."""
+    """The connections there are keys for, or None when there are none: then the run falls back
+    to newest first and says so in its alert."""
     key = os.environ.get(API_KEY_ENV, "")
-    if not cfg.enabled or not key:
+    if not key:
         return None
     return Router({"anthropic": AnthropicBackend(cfg, key)})

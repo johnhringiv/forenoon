@@ -62,9 +62,10 @@ class Images:
 
 @dataclass(frozen=True)
 class Llm:
-    """Ranking with a model. Only used when there is a key for its connection (FORENOON_ANTHROPIC_API_KEY)."""
+    """Ranking with a model, through the connection its name starts with; that connection's key
+    (FORENOON_ANTHROPIC_API_KEY) is required. Without one, or when a call fails or the day's
+    tokens are spent, the run falls back to newest first and the alert says why."""
 
-    enabled: bool = True
     # Named with its connection (app/models.py). It does all the routine work: ranking, the
     # reading pass, grouping stories, following links, the notes, and the extraction check.
     model: str = "anthropic/claude-haiku-5-5"
@@ -87,7 +88,7 @@ class Llm:
 @dataclass(frozen=True)
 class Discovery:
     """Front pages of link aggregators as extra candidates, ranked with the feeds' articles on
-    their score alone. Only used when ranking is on."""
+    their score alone. Skipped when there is no model to rank them."""
 
     # The built-in sources switched on on the Sources page; filled in from the database.
     sites: tuple[str, ...] = ()

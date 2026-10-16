@@ -37,8 +37,8 @@ day's choices.
   kept readable on e-ink. No scripts, trackers or remote content reach the device.
 - **Cheap to run.** One measured day: 23 sources including a whole Financial Times, about
   165 candidates ranked, 40 read in full, 16 stories delivered in 80 seconds, for **about
-  two cents** of Claude Haiku. With no API key it still delivers: pinned sources first, then
-  the newest articles in turn across sources.
+  two cents** of Claude Haiku. If the model is unreachable or the day's tokens are spent it
+  still delivers: pinned sources first, then the newest articles in turn across sources.
 - **No one else's incentives.** No ads, no engagement metrics, no account with anybody. One
   SQLite file and a folder on your own machine. The only public endpoint accepts signed
   rating links and nothing else.

@@ -27,7 +27,7 @@ from .discover import is_article, read_listing, site_host, site_source
 from .extract import Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
-from .llm import Backend
+from .llm import API_KEY_ENV, Backend
 from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
 from .read import Reading, Verdict
@@ -48,7 +48,6 @@ MAX_SUMMARY_CHARS = 1000  # of a feed entry's summary, kept for ranking it on a 
 POINTER_MAX_WORDS = 150
 FULL = "not sent: the day's places were taken"
 SPARE_CHOICES = 2  # reserves the model names beyond the places hand-added and pinned articles hold
-MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links matter
 # A failsafe, not the main control (the model choosing articles is): anything longer is a
 # manual or a book and is not delivered (the whole NixOS manual once arrived as one chapter).
 MAX_ARTICLE_WORDS = 45_000
@@ -696,42 +695,41 @@ def run(
     ranking = Ranking(others, {})
     found: list[Item] = []
     grouped: dict[str, list[Item]] = {}  # candidate id -> the candidates covering the same event
-    if cfg.llm.enabled:
-        pool = others[: cfg.llm.max_candidates]
-        slots = max(0, remaining - _pinned_places(pinned, by_hand))
-        if cfg.discovery.sites and backend is not None and slots:
-            known = {item.id: item for item in [*pinned, *pool]}
-            found = _discover(cfg, store, fetcher, user, report, reports, seen, known, cutoff, dry_run)
-        ranking = rank_candidates(
-            cfg.llm,
-            backend,
-            store,
-            user,
-            pool,
-            slots,
-            day_start.astimezone(UTC).isoformat(timespec="seconds"),
-            found=found,
+    pool = others[: cfg.llm.max_candidates]
+    slots = max(0, remaining - _pinned_places(pinned, by_hand))
+    if cfg.discovery.sites and backend is not None and slots:
+        known = {item.id: item for item in [*pinned, *pool]}
+        found = _discover(cfg, store, fetcher, user, report, reports, seen, known, cutoff, dry_run)
+    ranking = rank_candidates(
+        cfg.llm,
+        backend,
+        store,
+        user,
+        pool,
+        slots,
+        day_start.astimezone(UTC).isoformat(timespec="seconds"),
+        found=found,
+    )
+    ranking.order += others[cfg.llm.max_candidates :]
+    if ranking.choices and not dry_run:
+        # Every judgement is kept, not only the winners': the archive shows what was passed
+        # over and why, and a find is on record from the day it was first weighed.
+        for item in found:
+            if item.id in ranking.choices:
+                record_found(item)
+        for item in pool:
+            if item.id in ranking.choices:
+                record_sightings(item)
+        store.record_assessments(user.id, [(i, c.score, c.reason, False, "") for i, c in ranking.choices.items()])
+    if ranking.choices:
+        report.ranking = f"model ({ranking.note})" if ranking.note else "model"
+        grouped = group_stories(
+            cfg.llm, backend, store, ranking.order, day_start.astimezone(UTC).isoformat(timespec="seconds")
         )
-        ranking.order += others[cfg.llm.max_candidates :]
-        if ranking.choices and not dry_run:
-            # Every judgement is kept, not only the winners': the archive shows what was passed
-            # over and why, and a find is on record from the day it was first weighed.
-            for item in found:
-                if item.id in ranking.choices:
-                    record_found(item)
-            for item in pool:
-                if item.id in ranking.choices:
-                    record_sightings(item)
-            store.record_assessments(user.id, [(i, c.score, c.reason, False, "") for i, c in ranking.choices.items()])
-        if ranking.choices:
-            report.ranking = f"model ({ranking.note})" if ranking.note else "model"
-            grouped = group_stories(
-                cfg.llm, backend, store, ranking.order, day_start.astimezone(UTC).isoformat(timespec="seconds")
-            )
-        elif backend is None:
-            report.ranking = "fallback: no API key"
-        elif ranking.note:
-            report.ranking = f"fallback: {ranking.note}"
+    elif backend is None:
+        report.ranking = f"fallback: no API key; set {API_KEY_ENV} in the deploy's env file"
+    elif ranking.note:
+        report.ranking = f"fallback: {ranking.note}"
     queue = pinned + ranking.order
     if cfg.format not in ("issue", "articles"):
         raise ValueError(f"format must be 'issue' or 'articles', not {cfg.format!r}")
@@ -767,7 +765,7 @@ def run(
             extracted[item.id] = extract(item.url, saved["page_html"], saved["feed_html"], saved["mode"])
     links_of: dict[str, list[_Link]] = {}
     verdicts: dict[str, Verdict] = {}
-    if cfg.llm.enabled and backend is not None and ranking.choices and cfg.llm.read_candidates > 0:
+    if backend is not None and ranking.choices and cfg.llm.read_candidates > 0:
         pool = ranking.shortlist or ranking.order[: cfg.llm.read_candidates]
         readings = []
         for item in pool:
@@ -982,7 +980,7 @@ def run(
             retried.add(row.id)
 
     # Articles that are about another page bring that page into their story. The model says
-    # which links those are; without it, only short posts are followed, through every link.
+    # which links those are; when it cannot be asked, no link is followed.
     asked = [
         {
             "id": story.id,
@@ -994,7 +992,7 @@ def run(
         for story in picked
         if story.links and story.id not in verdicts
     ]
-    subjects = subject_links(cfg.llm, backend, store, asked, today) if cfg.llm.enabled else None
+    subjects = subject_links(cfg.llm, backend, store, asked, today)
     for story in picked:
         if not story.links:
             continue
@@ -1004,10 +1002,8 @@ def run(
             wanted = [story.links[n - 1].item for n in verdicts[story.id].links]
         elif subjects is not None:
             wanted = [story.links[n - 1].item for n in subjects.get(story.id, [])]
-        elif pointer:
-            wanted = [link.item for link in story.links[:MAX_LINKS_TRIED]]
         else:
-            continue
+            continue  # no model to say which links matter: the article goes out as it is
         room = MAX_STORY_ENTRIES - (0 if pointer else len(story.members))
         originals: list[_Prepared] = []
         for linked in wanted:
@@ -1064,15 +1060,14 @@ def run(
             why = skipped.get(chosen["id"], FULL)
             chosen["outcome"] = "not needed" if chosen["reserve"] and why == FULL else why
 
-    if cfg.llm.enabled:
-        # Articles the reading pass did not see (pinned ones, and pages brought in by a story).
-        unread = [(article, entry) for article, entry in checked if article.id not in verdicts]
-        reviews = review_extractions(cfg.llm, backend, store, [a for a, _ in unread], today)
-        for article, entry in unread:
-            verdict = reviews.get(article.id)
-            if verdict:
-                entry.review = ": ".join(filter(None, [verdict.verdict, verdict.problem]))
-                report.reviews[verdict.verdict] = report.reviews.get(verdict.verdict, 0) + 1
+    # Articles the reading pass did not see (pinned ones, and pages brought in by a story).
+    unread = [(article, entry) for article, entry in checked if article.id not in verdicts]
+    reviews = review_extractions(cfg.llm, backend, store, [a for a, _ in unread], today)
+    for article, entry in unread:
+        verdict = reviews.get(article.id)
+        if verdict:
+            entry.review = ": ".join(filter(None, [verdict.verdict, verdict.problem]))
+            report.reviews[verdict.verdict] = report.reviews.get(verdict.verdict, 0) + 1
 
     # One book for the day; more parts only when a message could not hold it all. Sizes as
     # separate books overestimate a shared one, so a part always fits.

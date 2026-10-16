@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import logging
-import os
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -16,7 +15,7 @@ from .alerts import notify, notify_run
 from .config import Config, ConfigError, for_reader, from_env, with_settings
 from .discover import SITES
 from .fetch import Fetcher
-from .llm import API_KEY_ENV, backend_from_env
+from .llm import backend_from_env
 from .pipeline import run, triage
 from .store import Store
 
@@ -36,8 +35,6 @@ def load(store: Store | None = None) -> Config:
         to = cfg.alerts.to or ", ".join(store.admin_emails())
         return dataclasses.replace(
             cfg,
-            # Without a key there is nothing to rank with; that is a choice, not a failure.
-            llm=dataclasses.replace(cfg.llm, enabled=cfg.llm.enabled and bool(os.environ.get(API_KEY_ENV))),
             discovery=dataclasses.replace(cfg.discovery, sites=sites, daily_max=store.builtin_daily_max()),
             sessions=store.session_sites(),
             alerts=dataclasses.replace(cfg.alerts, to=to if cfg.alerts.enabled else ""),

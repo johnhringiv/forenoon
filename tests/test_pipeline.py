@@ -88,7 +88,7 @@ def env(tmp_path: Path, monkeypatch):
         data_dir=tmp_path,
         public_base_url="https://fb.example",
         format="articles",
-        llm=Llm(enabled=False),
+        llm=Llm(),
         users=(User("john", "John", ("john@kindle.com",), daily_cap=2),),
         smtp=Smtp(host="smtp.example", sender="digest@example.com"),
         sources=(
@@ -252,8 +252,12 @@ def test_alerts_report_failed_delivery_and_a_source_that_keeps_failing(env):
     def boom(messages, smtp):
         raise ConnectionError("relay down")
 
+    def problems_besides_the_key(report):
+        # These runs have no model, which is alerted too (test_ranking_falls_back_on_failure_bad_output_and_token_cap).
+        return [p for p in problems(report, cfg) if not p.startswith("Ranking was skipped (no API key")]
+
     first = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=boom)
-    assert problems(first, cfg) == ["Delivery failed: ConnectionError: relay down"]
+    assert problems_besides_the_key(first) == ["Delivery failed: ConnectionError: relay down"]
     assert notify_run(cfg, first, sender=lambda m, s: outbox.extend(m))
     assert outbox[0]["To"] == "me@example.com" and "delivery failed" in outbox[0]["Subject"]
     assert "relay down" in outbox[0].get_content()
@@ -261,11 +265,11 @@ def test_alerts_report_failed_delivery_and_a_source_that_keeps_failing(env):
     # Second run: "Down" has now failed twice in a row and is named; the delivery itself is fine.
     second = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None)
     assert second.delivered
-    assert problems(second, cfg) == ["Source 'Down' has failed 2 runs in a row: HTTP 404"]
+    assert problems_besides_the_key(second) == ["Source 'Down' has failed 2 runs in a row: HTTP 404"]
 
     # A good run with a healthy relay sends nothing; alerts are off without an address.
     quiet = dataclasses.replace(second, sources=[s for s in second.sources if not s.feed_error])
-    assert problems(quiet, cfg) == []
+    assert problems_besides_the_key(quiet) == []
     assert not notify_run(dataclasses.replace(cfg, alerts=Alerts()), first, sender=boom)
     # A relay that is down must not take the run with it.
     assert not notify_run(cfg, first, sender=boom)
@@ -329,7 +333,7 @@ def _llm_cfg(cfg, **kw):
     from app.config import Llm
 
     user = dataclasses.replace(cfg.users[0], daily_cap=3, interests="Compilers. Not watches.")
-    return dataclasses.replace(cfg, users=(user,), format="issue", llm=Llm(enabled=True, **kw))
+    return dataclasses.replace(cfg, users=(user,), format="issue", llm=Llm(**kw))
 
 
 def test_model_ranking_orders_delivery_and_records_why(env):
@@ -392,7 +396,8 @@ def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
     assert empty.ranking.startswith("fallback: model scored only 0") and len(empty.delivered) == 3
 
     no_key = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=None)
-    assert no_key.ranking == "fallback: no API key"
+    assert no_key.ranking == "fallback: no API key; set FORENOON_ANTHROPIC_API_KEY in the deploy's env file"
+    assert any("Ranking was skipped (no API key" in p for p in problems(no_key, cfg)), "a missing key is alerted"
 
     capped = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, daily_token_cap=1000))
     backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
@@ -417,7 +422,7 @@ def test_batches_mix_feed_articles_and_finds(env):
 
     backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
     feed, found = items("feed", 12), items("find", 12)
-    llm = Llm(enabled=True, batch_size=6, read_candidates=6, explore_slots=0)
+    llm = Llm(batch_size=6, read_candidates=6, explore_slots=0)
     ranking = rank(llm, backend, store, cfg.users[0], feed, 4, "2026-03-10", found=found)
     batches = [
         [c["id"] for c in json.loads(p.split("<candidates>\n")[1].split("\n</candidates>")[0])]
@@ -696,7 +701,7 @@ def test_settings_come_from_the_environment_and_the_web_pages(tmp_path, monkeypa
     cfg = cli.load()  # nothing saved, no web app yet: the defaults
     assert (cfg.timezone, cfg.public_base_url, cfg.delivery_time) == ("America/New_York", "https://fb.example", "06:00")
     assert (cfg.smtp.host, cfg.smtp.port, cfg.smtp.max_message_bytes) == ("smtp.example", 587, 38_000_000)
-    assert not cfg.llm.enabled and cfg.discovery.sites == () and cfg.alerts.to == ""
+    assert cfg.discovery.sites == () and cfg.alerts.to == ""
 
     store = Store(cfg.db_path)
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
@@ -713,7 +718,7 @@ def test_settings_come_from_the_environment_and_the_web_pages(tmp_path, monkeypa
     cfg = cli.load()
     assert (cfg.delivery_time, cfg.llm.read_candidates, cfg.alerts.on_empty) == ("07:30", 20, False)
     assert cfg.smtp.host == "smtp.example" and cfg.max_age_days == 3, "deploy settings and bad values are left alone"
-    assert cfg.llm.enabled and cfg.discovery.sites == ("hackernews",)
+    assert cfg.discovery.sites == ("hackernews",)
     assert cfg.alerts.to == "a@example.com", "alerts go to the admins unless another address is saved"
     assert cli._reload(cfg).delivery_time == "07:30"
 
@@ -775,7 +780,10 @@ def test_pointer_post_is_replaced_by_the_articles_it_links_to_as_one_story(env, 
         ),
     )
     sent = []
-    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
+    # The model says which links the post is about: the report it quotes, and the paper's page.
+    backend = FakeBackend()
+    backend.subjects = {"Post 4": [1, 2]}
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m), backend=backend)
 
     # Two stories fill the cap of two; the pointer itself is not an article in the book.
     titles = [store.get_article(i).title for i in report.delivered]
@@ -796,13 +804,20 @@ def test_pointer_post_is_replaced_by_the_articles_it_links_to_as_one_story(env, 
     again = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: pytest.fail("cap reached"))
     assert again.cap_reached and not again.delivered
 
-    # When nothing it links to can be fetched, the short post goes out as before. (Its own data
-    # folder: the page saved above would otherwise be reused instead of fetched.)
+    # With no model to say which links matter, none is followed, though the page is there: the
+    # short post goes out as it is. (Its own data folder: the page saved above would otherwise
+    # be reused instead of fetched.)
+    bare = Store(tmp_path / "bare.sqlite3")
+    fetcher = Fetcher("test", bare, min_host_interval=0, transport=httpx.MockTransport(routed))
+    unasked = run(dataclasses.replace(cfg, data_dir=tmp_path / "bare"), bare, fetcher, user, now=NOW, dry_run=True)
+    assert [bare.get_article(i).title for i in unasked.delivered] == ["Post 4", "Post 1"]
+
+    # When nothing it links to can be fetched, the short post goes out as before.
     routes.pop("https://orig.example/post-7")
     cfg = dataclasses.replace(cfg, data_dir=tmp_path / "second")
     fresh = Store(tmp_path / "second.sqlite3")
     fetcher = Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(routed))
-    alone = run(cfg, fresh, fetcher, user, now=NOW, dry_run=True)
+    alone = run(cfg, fresh, fetcher, user, now=NOW, dry_run=True, backend=backend)
     assert [fresh.get_article(i).title for i in alone.delivered] == ["Post 4", "Post 1"]
 
 

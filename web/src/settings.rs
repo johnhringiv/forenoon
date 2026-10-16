@@ -365,6 +365,6 @@ mod tests {
         assert!(
             check("llm.choose_model", "").is_ok() && check("llm.choose_model", "anthropic/claude-opus-5-5").is_ok()
         );
-        assert_eq!(spec("llm.enabled").check(None).unwrap(), "0");
+        assert_eq!(spec("alerts.enabled").check(None).unwrap(), "0");
     }
 }
