@@ -107,8 +107,10 @@ https there. Then set, in `.env`:
   proxy connects from (as Docker sees it), so that no one else can set it. Without these the
   sign-in limits count every visitor as the proxy.
 
-With secure cookies on, signing in over plain http (`http://<host>:8081`) does not work; use
-the https address.
+With secure cookies on, a sign-in holds only at the https address: a browser drops a secure
+cookie anywhere else. So when `FORENOON_WEB_URL` is an https address, a request for any other
+host (`http://<host>:8081`) is redirected to the same page there; `/healthz` is answered
+wherever it is asked.
 
 ## Alternative: deploy script and continuous deploy
 

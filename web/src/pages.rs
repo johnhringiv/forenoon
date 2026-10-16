@@ -164,6 +164,39 @@ pub async fn https_only(request: Request, next: Next) -> Response {
     response
 }
 
+/// The https address the pages are served at, when cookies are secure (`FORENOON_WEB_URL`).
+#[derive(Clone)]
+pub struct PublicAddress {
+    /// `https://forenoon.example.com`, with no slash at the end.
+    pub url: String,
+    /// Its host, `forenoon.example.com`, as a request addressed to it names it.
+    pub host: String,
+}
+
+impl PublicAddress {
+    /// `None` unless `url` is an https address.
+    pub fn new(url: &str) -> Option<PublicAddress> {
+        let url = url.trim().trim_end_matches('/');
+        let host = url.strip_prefix("https://")?.split('/').next()?.to_ascii_lowercase();
+        (!host.is_empty()).then(|| PublicAddress { url: url.to_owned(), host })
+    }
+}
+
+/// With secure cookies a sign-in holds only at the https address: a browser drops the cookie
+/// anywhere else, and the next page finds nobody signed in. So a request addressed to another
+/// host (the LAN address, over plain http) is sent to the same page there. The health check is
+/// answered wherever it is asked, for the deploy script's check from inside the container.
+pub async fn to_public_address(State(public): State<PublicAddress>, request: Request, next: Next) -> Response {
+    let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).map(str::to_ascii_lowercase);
+    match host {
+        Some(host) if host != public.host && request.uri().path() != "/healthz" => {
+            let path = request.uri().path_and_query().map_or("/", |path| path.as_str());
+            Redirect::temporary(&format!("{}{path}", public.url)).into_response()
+        }
+        _ => next.run(request).await,
+    }
+}
+
 // requests that change something
 
 /// Whether a form post came from one of our own pages, as far as the browser says.

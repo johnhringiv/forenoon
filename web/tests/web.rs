@@ -80,7 +80,8 @@ async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
     let options = Options {
         secure_cookies,
         mailer: Mailer::Memory(mail.clone()),
-        base_url: "http://nas:8787/".to_owned(),
+        // Secure cookies come with an https address; plain ones with the LAN address.
+        base_url: if secure_cookies { "https://forenoon.example.com/" } else { "http://nas:8787/" }.to_owned(),
         data_dir: folder.path().to_owned(),
         logins_dir: Some(folder.path().join("logins")),
         proxy: forenoon_web::proxy::Proxy::default(),
@@ -1686,7 +1687,7 @@ async fn over_https_the_cookie_is_host_only_and_browsers_are_told_to_stay() {
     let form = format!("email=john%40example.com&password={}", PASSWORD.replace(' ', "+"));
     let request = Request::post("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::HOST, "nas:8787")
+        .header(header::HOST, "forenoon.example.com")
         .body(Body::from(form))
         .unwrap();
     let response = site.router.clone().oneshot(request).await.unwrap();
@@ -1698,6 +1699,36 @@ async fn over_https_the_cookie_is_host_only_and_browsers_are_told_to_stay() {
     let plain = site_with(true, false).await;
     let response = plain.router.clone().oneshot(Request::get("/login").body(Body::empty()).unwrap()).await.unwrap();
     assert!(!response.headers().contains_key(header::STRICT_TRANSPORT_SECURITY));
+}
+
+#[tokio::test]
+async fn with_secure_cookies_another_address_is_sent_to_the_https_one() {
+    let site = site_with(true, true).await;
+    let get = |host: &str, path: &str| {
+        let request = Request::get(path).header(header::HOST, host).body(Body::empty()).unwrap();
+        site.router.clone().oneshot(request)
+    };
+    // The LAN address, where a sign-in could never hold: the same page at the https address.
+    let response = get("192.168.1.5:8787", "/archive?q=rust").await.unwrap();
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(response.headers()[header::LOCATION], "https://forenoon.example.com/archive?q=rust");
+    let form = format!("email=john%40example.com&password={}", PASSWORD.replace(' ', "+"));
+    let post = Request::post("/login")
+        .header(header::HOST, "nas:8787")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(form))
+        .unwrap();
+    let response = site.router.clone().oneshot(post).await.unwrap();
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert!(!response.headers().contains_key(header::SET_COOKIE), "no sign-in where it cannot hold");
+    // Addressed to the https host (through the tunnel, any letter case): served as usual.
+    assert_eq!(get("Forenoon.Example.com", "/login").await.unwrap().status(), StatusCode::OK);
+    // The health check answers wherever it is asked, as the deploy script asks it inside the container.
+    assert_eq!(get("localhost", "/healthz").await.unwrap().status(), StatusCode::OK);
+    // Plain cookies: the LAN address is the address, and nothing is redirected.
+    let plain = site_with(true, false).await;
+    let request = Request::get("/login").header(header::HOST, "192.168.1.5:8787").body(Body::empty()).unwrap();
+    assert_eq!(plain.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }
 
 #[tokio::test]
