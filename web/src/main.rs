@@ -236,7 +236,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             let kindle = auth::kindle_addresses(&kindle.join("\n"))?;
             let hash = auth::hash_password(read_password()?).await?;
             db::add_user(&pool, &id, &email, name.as_deref().unwrap_or(&id), &hash, &role, &timezone).await?;
-            db::set_kindle_addresses(&pool, &id, &kindle.join("\n")).await?;
+            db::set_kindle(&pool, &id, &kindle.join("\n"), true).await?;
             if !follow_nothing {
                 db::follow_shared(&pool, &id).await?;
             }

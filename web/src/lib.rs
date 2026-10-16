@@ -115,6 +115,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/reading", get(reading::page))
         .route("/learned", get(reading::learned).post(reading::save))
         .route("/learned/restore", post(reading::restore))
+        .route("/learned/switch", post(reading::switch))
         .route("/sources", get(sources::page).post(sources::add))
         .route("/sources/{id}", post(sources::update))
         .route("/sources/{id}/delete", post(sources::delete))

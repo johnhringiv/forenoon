@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime
 
 from . import archive, thumbs
-from .config import Config, Source
+from .config import Config, Source, for_reader
 from .cover import article_cover
 from .deliver import Attachment, build_messages, safe_filename, send
 from .extract import Extracted, extract
@@ -77,13 +77,14 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
             user = readers.get(request["user_id"])
             if user is None or not user.kindle_addresses:
                 raise ValueError("the reader has no Kindle address")
+            mine = for_reader(cfg, user)  # their images in colour or not
             fresh = not store.is_delivered(user.id, request["article_id"])
             judged = store.assessment(user.id, request["article_id"]) if fresh else None
             if fresh and judged is None and not store.added_by(user.id, request["article_id"]):
                 raise ValueError("not an article in this reader's library")
             story = request["story"] and not fresh
             ids = _story_ids(store, user.id, request["article_id"]) if story else [request["article_id"]]
-            rebuilt = [_rebuild(cfg, store, fetcher, article_id) for article_id in ids]
+            rebuilt = [_rebuild(mine, store, fetcher, article_id) for article_id in ids]
             articles = [article for article, _ in rebuilt]
             first = articles[0]
             # A book asked for by name stands alone in the library: its own title, with no date
@@ -93,7 +94,7 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                 first.title,
                 first.source,
                 picture.read_bytes() if picture.exists() else None,
-                cfg.images.grayscale,
+                mine.images.grayscale,
                 more=len(articles) - 1,
             )
             if len(articles) == 1:

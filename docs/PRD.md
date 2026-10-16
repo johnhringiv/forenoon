@@ -124,9 +124,19 @@ what its own users configure and delivers only to the addresses its readers have
   before. Pages the source links to on other sites are fetched as usual, without the
   session.
 
-- **Settings** for the whole install (delivery time, the format, ranking and its model,
-  how many places built-in sources may take, alerts, what is kept) are on the web pages'
-  Settings page (admins only) and live in the database. Each has a default in the code; only
+- **Settings** for the whole install (delivery time, how old an article may be, ranking,
+  its models and token cap, how many articles are read in full, alerts, what is kept) are
+  on the web pages' Settings page (admins only) and live in the database. A setting stays
+  only when it controls cost, depends on the deploy, or is a real choice; what used to be a
+  switch for a later feature is now just how Forenoon works, described here.
+- **Each reader's own settings** are on their Reading page: one book a day or one per
+  article, the most articles on one broad subject (2; 0 for no limit), room for a surprise
+  (the exploration pick, on), the model's reason printed in the book (on), and notes kept
+  from their ratings (on). Whether their Kindle has a colour screen (images and covers in
+  colour; otherwise gray) is on their Account page beside their Kindle addresses. A new
+  account starts with the defaults; migration 0024 started every reader from the values
+  the install had.
+- An admin setting has a default in the code; only
   a value that differs from it is stored, so a default that changes in a later version
   reaches installs that never touched it. The pipeline reads them before every run. A stored
   value it cannot use is logged and skipped, never fatal.
@@ -201,9 +211,10 @@ The whole process for one reader's day, in order. The sections named give the de
 3. **Round 1: abstracts** (section 7a). Every other candidate is scored 0 to 10 from its
    title, source and opening, by batches of 80, shuffled so feed articles and finds share
    batches. With the reader's interests, learned notes and recent ratings.
-4. **The exploration pick.** One place, the day's last, goes to an article drawn at random
-   from those below the cut, so the ratings learn about what the model would not choose.
-   It keeps that place through the later rounds.
+4. **The exploration pick** ("Leave room for a surprise", each reader's own, on by
+   default). One place, the day's last, goes to an article drawn at random from those below
+   the cut, so the ratings learn about what the model would not choose. It keeps that place
+   through the later rounds.
 5. **Same event** (section 7e). The 40 best are compared for coverage of one event; those
    become one story, which takes one place.
 6. **Round 2: reading** (section 7f). `llm.read_candidates` (40) are fetched and read in
@@ -213,7 +224,7 @@ The whole process for one reader's day, in order. The sections named give the de
 7. **Round 3: choosing the issue** (section 7f). One call sees every read article at once
    and returns exactly the open places' worth (the day's places less the hand-added and
    pinned ones and the exploration pick), best first, under two rules: at most
-   `llm.most_per_subject` (2) on one broad subject, counting the hand-added and pinned
+   the reader's limit on one broad subject (2 by default), counting the hand-added and pinned
    articles it is shown as already in the issue; and at least one news story of major
    consequence when one scored 7 or more. Within them, better articles first. Then reserves
    in the order to use them, as many as the places held by hand-added and pinned articles
@@ -412,7 +423,7 @@ source).
   (Sonnet 5.5, Opus 5.5, so marked in the file) or one not listed is asked for it in the
   prompt instead.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
-  contents page (`llm.show_reasons`).
+  contents page, unless the reader turned that off on their Reading page.
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
@@ -472,7 +483,7 @@ source).
   did not judge `ok`, beside the extractor's own verdict. **Delivery is never changed.**
 - The call counts against the daily token cap and is skipped when it would cross it.
 - It runs on `llm.model`: the verdicts change nothing that is delivered, so the routine model
-  is enough. `llm.check_extraction: false` turns it off.
+  is enough. It always runs when ranking does.
 
 ## 7d. The browser container (optional)
 
@@ -494,13 +505,13 @@ source).
 ## 7e. Stories
 
 The daily cap counts stories, not articles. A story is one article, or up to
-`max_story_entries` (3) articles on one subject delivered together. An article over
-`max_article_words` (45,000) is never delivered, whether picked or reached through a link. It
+three articles on one subject delivered together. An article over 45,000 words is never
+delivered, whether picked or reached through a link. It
 is a failsafe for manuals and books; choosing well is the model's job. The number of articles in
 a day's book is therefore a target, not a limit.
 
-- **Articles about another page.** After the day's stories are chosen, one model call
-  (`llm.follow_links`, on by default) is shown each chosen feed article's opening words and
+- **Articles about another page.** After the day's stories are chosen, one model call is
+  shown each chosen feed article's opening words and
   up to eight of its links to other sites, and returns the links that are the article's
   subject: the page it quotes, announces, summarises or responds to. Usually that is none.
   Those pages are fetched, and the ones that extract cleanly join the story:
@@ -513,8 +524,7 @@ a day's book is therefore a target, not a limit.
   - Without a working model, only pointers are followed, through their first four links.
   - Links to the article's own site, to video, social and chat sites, to files and to front
     pages are never followed. Discovered articles are not examined.
-- **Same event.** When ranking is on (`llm.group_stories`, on by default), one more model
-  call compares the 40 best-scored candidates and returns those that cover the same specific
+- **Same event.** When ranking is on, one more model call compares the 40 best-scored candidates and returns those that cover the same specific
   event, announcement or release. When one of them is chosen, the others are delivered right
   after it as part of its story; any beyond the limit are dropped for the day rather than
   taking a slot of their own. Ids the model invents or repeats are ignored, and a failed call
@@ -541,14 +551,14 @@ best candidates in full.
 - The read articles are tried first, best score first; candidates that were not read follow
   in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
   reading replace the ranking ones in the book and in what is recorded.
-- **Choosing the issue** (`llm.choose_issue`, on; on `llm.choose_model` when set, else
-  `llm.model`: one small call, so a stronger model here costs a few cents a day). One more
+- **Choosing the issue** (on `llm.choose_model` when set, else `llm.model`: one small
+  call, so a stronger model here costs a few cents a day). One more
   call sees every read article
   at once: title, source, length, how long it lasts, the reading's score and reason, and a
   story id for those on one event; with the open places and each source's limit. It returns
   exactly that many, best first, with each one's broad subject, keeping to at most
-  `llm.most_per_subject` (2, 0 for no limit) on one subject (the hand-added and pinned
-  articles, listed as already in the issue, count) and including a news story of major
+  the reader's limit on one broad subject (2 by default, 0 for none; the hand-added
+  and pinned articles, listed as already in the issue, count) and including a news story of major
   consequence when one scored 7 or more; within those, better articles first; and
   then reserves in the order to use them: as many as the places hand-added and pinned
   articles hold, plus two. Any it names beyond the places become its first reserves. The
@@ -593,8 +603,9 @@ it keeps a second text of its own: a few plain statements of what the reader's r
   the two disagree, the interests win.
 - **The reader's.** The web pages show the notes, let the reader edit or empty them, and
   keep every version, the pipeline's and the reader's, with a way back to each (section
-  9a). An edit is not a lock: the next rewrite starts from it. `llm.learn` on the Settings
-  page turns the whole thing off.
+  9a). An edit is not a lock: the next rewrite starts from it. "Keep notes from my ratings"
+  on the reader's Reading page turns it off for them: the notes are then neither rewritten
+  nor given to the model, and are kept for when it is turned on again.
 
 ## 7g. The library: what is kept about every candidate
 

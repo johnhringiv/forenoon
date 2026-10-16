@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET interests = ?, daily_stories = ?, format = ?, explore = ?, most_per_subject = ?,\n         show_reasons = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "3be4f23644ded686280441e2d43c9a84e287513aa9d74ea08e3bf0e1cf111466"
+}

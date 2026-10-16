@@ -13,10 +13,20 @@
 <p class="hint">In your own words. The model that picks your articles is given this, and where it disagrees with the notes below, this wins. It applies from the next run.</p>
 <label>Stories a day <input name="daily_stories" type="number" min="1" max="50" value="{{ daily_stories }}" required></label>
 <p class="hint">A target, not a hard limit. A story is one article, or a few on one subject.</p>
+<h2>How your issue is made</h2>
+<label>Send as <select name="format"><option value="issue"{% if issue %} selected{% endif %}>One book a day, with a contents page</option><option value="articles"{% if !issue %} selected{% endif %}>One book per article</option></select></label>
+<label>Most articles on one broad subject <input name="most_per_subject" type="number" min="0" max="20" value="{{ most_per_subject }}" required></label>
+<p class="hint">Security, AI, chips and so on, so that one busy subject does not fill the issue. A story counts once; 0 for no limit.</p>
+<label class="tick"><input type="checkbox" name="explore" value="1"{% if explore %} checked{% endif %}> Leave room for a surprise</label>
+<p class="hint">The day's last place goes to something the model ranked lower. It shows you what you would otherwise never see, and how you rate it teaches the model whether it is underrating that kind of article.</p>
+<label class="tick"><input type="checkbox" name="show_reasons" value="1"{% if show_reasons %} checked{% endif %}> Print why each article was picked</label>
+<p class="hint">The model's one-line reason, under each article's title in the book.</p>
 <button class="primary">Save</button>
 </form>
 <section class="learned">
 <h2>What Forenoon has learned</h2>
+<form class="switch" method="post" action="/learned/switch"><input type="hidden" name="csrf" value="{{ csrf }}"><label class="tick"><input type="checkbox" name="learn" value="1"{% if learn %} checked{% endif %}> Keep notes from my ratings</label> <button>Save</button></form>
+{% if !learn %}<p class="hint">Turned off: the notes below are not rewritten and the model is not given them. They are kept for when you turn this on again.</p>{% endif %}
 {% if notes.is_empty() %}
 <p class="hint">{% if rewritten.is_none() %}Nothing has been learned yet: the first notes are written once you have rated ten articles.{% else %}No notes are in use.{% endif %}</p>
 {% else %}

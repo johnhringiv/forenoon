@@ -1321,7 +1321,13 @@ pub struct ReadingForm {
     csrf: String,
     interests: String,
     daily_stories: String,
+    format: Option<String>,
+    explore: Option<String>,
+    most_per_subject: Option<String>,
+    show_reasons: Option<String>,
 }
+
+const MAX_PER_SUBJECT: i64 = 20;
 
 /// What the pipeline should pick for this reader, and how much. Shown on the Reading page.
 pub async fn set_reading(
@@ -1338,22 +1344,44 @@ pub async fn set_reading(
     let interests = form.interests.replace("\r\n", "\n");
     let interests = interests.trim();
     let daily = form.daily_stories.trim().parse::<i64>().ok().filter(|n| (1..=MAX_DAILY_STORIES).contains(n));
+    let per_subject = form.most_per_subject.as_deref().unwrap_or("").trim().parse::<i64>().ok();
+    let per_subject = per_subject.filter(|n| (0..=MAX_PER_SUBJECT).contains(n));
+    let format = form.format.as_deref().filter(|format| ["issue", "articles"].contains(format));
     let problem = if interests.chars().count() > MAX_INTERESTS {
         Some(format!("Interests can be at most {MAX_INTERESTS} characters."))
     } else if daily.is_none() {
         Some(format!("Stories a day must be a number from 1 to {MAX_DAILY_STORIES}."))
+    } else if per_subject.is_none() {
+        Some(format!("Most on one subject must be a number from 0 to {MAX_PER_SUBJECT}."))
+    } else if format.is_none() {
+        Some("Choose one book a day or one book per article.".to_owned())
     } else {
         None
     };
-    let problem = match (problem, daily) {
-        (None, Some(daily)) => {
-            db::set_reading(&state.pool, &user.id, interests, daily).await?;
+    let problem = match (problem, daily, per_subject, format) {
+        (None, Some(daily_stories), Some(most_per_subject), Some(format)) => {
+            let reading = db::Reading {
+                interests,
+                daily_stories,
+                format,
+                explore: form.explore.is_some(),
+                most_per_subject,
+                show_reasons: form.show_reasons.is_some(),
+            };
+            db::set_reading(&state.pool, &user.id, &reading).await?;
             return Ok(Redirect::to("/reading?saved=reading").into_response());
         }
-        (problem, _) => problem.unwrap_or_default(),
+        (problem, ..) => problem.unwrap_or_default(),
     };
     // Shown again as typed, so a slip does not lose the rest.
-    let typed = (interests.to_owned(), form.daily_stories.trim().to_owned());
+    let typed = reading::Typed {
+        interests: interests.to_owned(),
+        daily_stories: form.daily_stories.trim().to_owned(),
+        format: form.format.clone().unwrap_or_default(),
+        most_per_subject: form.most_per_subject.as_deref().unwrap_or("").trim().to_owned(),
+        explore: form.explore.is_some(),
+        show_reasons: form.show_reasons.is_some(),
+    };
     reading::render(&state, user, form.csrf, StatusCode::BAD_REQUEST, Some(typed), Some(problem), None).await
 }
 
@@ -1361,6 +1389,7 @@ pub async fn set_reading(
 pub struct KindleForm {
     csrf: String,
     kindle_addresses: String,
+    colour: Option<String>,
 }
 
 /// Where this reader's books are emailed. Theirs to set: only the signed-in reader's own
@@ -1378,11 +1407,14 @@ pub async fn set_kindle(
     }
     match auth::kindle_addresses(&form.kindle_addresses) {
         Ok(addresses) => {
-            db::set_kindle_addresses(&state.pool, &user.id, &addresses.join("\n")).await?;
+            db::set_kindle(&state.pool, &user.id, &addresses.join("\n"), form.colour.is_none()).await?;
             Ok(Redirect::to("/account?saved=kindle").into_response())
         }
         Err(problem) => {
             let nav = Nav::new(&state, &user, "account").await?;
+            // Shown again as typed, so a slip in one address loses neither the rest nor the tick.
+            let user =
+                User { kindle_addresses: form.kindle_addresses.clone(), grayscale: form.colour.is_none(), ..user };
             html(
                 StatusCode::BAD_REQUEST,
                 AccountPage {

@@ -91,6 +91,15 @@ pub struct User {
     pub pending_email: Option<String>,
     /// When an admin invited this reader; `None` once they have joined (or were never invited).
     pub invited_at: Option<String>,
+    /// Their own settings for how their issue is made, read by the pipeline: "issue" or
+    /// "articles"; images in gray for e-ink; a place for a lower-ranked pick; the most on one
+    /// broad subject (0 for no limit); the model's reason printed; notes kept from ratings.
+    pub format: String,
+    pub grayscale: bool,
+    pub explore: bool,
+    pub most_per_subject: i64,
+    pub show_reasons: bool,
+    pub learn: bool,
 }
 
 // Written by hand so that a logged user never includes the password hash.
@@ -203,7 +212,8 @@ pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx
     sqlx::query_as!(
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
-           email, email_verified_at, pending_email, invited_at
+           email, email_verified_at, pending_email, invited_at, format, grayscale AS "grayscale: bool",
+           explore AS "explore: bool", most_per_subject, show_reasons AS "show_reasons: bool", learn AS "learn: bool"
            FROM users WHERE id = ?"#,
         id
     )
@@ -216,7 +226,8 @@ pub async fn find_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option
     sqlx::query_as!(
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
-           email, email_verified_at, pending_email, invited_at
+           email, email_verified_at, pending_email, invited_at, format, grayscale AS "grayscale: bool",
+           explore AS "explore: bool", most_per_subject, show_reasons AS "show_reasons: bool", learn AS "learn: bool"
            FROM users WHERE email = ?"#,
         email
     )

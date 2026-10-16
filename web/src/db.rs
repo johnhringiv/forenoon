@@ -212,17 +212,46 @@ pub async fn set_profile(pool: &SqlitePool, id: &str, name: &str, timezone: &str
     Ok(())
 }
 
+/// How a reader's issue is made, beside what it is about: read by the pipeline.
+pub struct Reading<'a> {
+    pub interests: &'a str,
+    pub daily_stories: i64,
+    pub format: &'a str,
+    pub explore: bool,
+    pub most_per_subject: i64,
+    pub show_reasons: bool,
+}
+
 /// The settings the pipeline reads for this reader.
-pub async fn set_reading(pool: &SqlitePool, id: &str, interests: &str, daily_stories: i64) -> Result<(), sqlx::Error> {
-    sqlx::query!("UPDATE users SET interests = ?, daily_stories = ? WHERE id = ?", interests, daily_stories, id)
-        .execute(pool)
-        .await?;
+pub async fn set_reading(pool: &SqlitePool, id: &str, reading: &Reading<'_>) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE users SET interests = ?, daily_stories = ?, format = ?, explore = ?, most_per_subject = ?,
+         show_reasons = ? WHERE id = ?",
+        reading.interests,
+        reading.daily_stories,
+        reading.format,
+        reading.explore,
+        reading.most_per_subject,
+        reading.show_reasons,
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
-/// Where the reader's books are sent; `addresses` is one per line.
-pub async fn set_kindle_addresses(pool: &SqlitePool, id: &str, addresses: &str) -> Result<(), sqlx::Error> {
-    sqlx::query!("UPDATE users SET kindle_addresses = ? WHERE id = ?", addresses, id).execute(pool).await?;
+/// Whether the pipeline keeps notes on this reader's ratings and gives them to the model.
+pub async fn set_learn(pool: &SqlitePool, id: &str, on: bool) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE users SET learn = ? WHERE id = ?", on, id).execute(pool).await?;
+    Ok(())
+}
+
+/// Where the reader's books are sent, `addresses` one per line, and whether their images are
+/// made gray for an e-ink screen.
+pub async fn set_kindle(pool: &SqlitePool, id: &str, addresses: &str, grayscale: bool) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE users SET kindle_addresses = ?, grayscale = ? WHERE id = ?", addresses, grayscale, id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

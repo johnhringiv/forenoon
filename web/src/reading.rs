@@ -2,8 +2,11 @@
 //! has learned about their taste: a short note it rewrites from their ratings about once a
 //! week and gives to the model beside their interests.
 //!
-//! The note is the pipeline's, not the reader's, but it is theirs to see, correct and roll
-//! back. An edit is not a lock: the next rewrite starts from it and may change it. What a
+//! Also how their issue is made: one book or one per article, a place for a lower-ranked
+//! pick, how many on one broad subject, whether the model's reasons are printed.
+//!
+//! The note is the pipeline's, not the reader's, but it is theirs to see, correct, roll back
+//! or turn off; turned off, it is neither rewritten nor given to the model. An edit is not a lock: the next rewrite starts from it and may change it. What a
 //! reader wants to hold for good belongs in their interests, on the same page.
 
 use std::str::FromStr;
@@ -43,6 +46,13 @@ struct ReadingPage {
     csrf: String,
     interests: String,
     daily_stories: String,
+    /// One book a day, rather than one per article.
+    issue: bool,
+    explore: bool,
+    show_reasons: bool,
+    /// As saved, or as typed when the form was refused.
+    most_per_subject: String,
+    learn: bool,
     notes: String,
     /// When the pipeline last rewrote it, in words.
     rewritten: Option<String>,
@@ -51,14 +61,25 @@ struct ReadingPage {
     versions: Vec<Version>,
 }
 
-/// The page, with the reader's interests and stories a day as saved, or as `typed` when a
-/// form of theirs was refused.
+/// The Reading form as the reader sent it, shown again when it was refused so that a slip in
+/// one field loses none of the others.
+pub(crate) struct Typed {
+    pub interests: String,
+    pub daily_stories: String,
+    pub format: String,
+    pub most_per_subject: String,
+    pub explore: bool,
+    pub show_reasons: bool,
+}
+
+/// The page, with the reader's settings as saved, or as `typed` when a form of theirs was
+/// refused.
 pub(crate) async fn render(
     state: &AppState,
     user: User,
     csrf: String,
     status: StatusCode,
-    typed: Option<(String, String)>,
+    typed: Option<Typed>,
     error: Option<String>,
     notice: Option<&'static str>,
 ) -> Page {
@@ -76,12 +97,24 @@ pub(crate) async fn render(
             notes: version.notes,
         })
         .collect();
-    let (interests, daily_stories) = typed.unwrap_or_else(|| (user.interests.clone(), user.daily_stories.to_string()));
+    let typed = typed.unwrap_or_else(|| Typed {
+        interests: user.interests.clone(),
+        daily_stories: user.daily_stories.to_string(),
+        format: user.format.clone(),
+        most_per_subject: user.most_per_subject.to_string(),
+        explore: user.explore,
+        show_reasons: user.show_reasons,
+    });
     let page = ReadingPage {
         nav: Nav::new(state, &user, "reading").await?,
         csrf,
-        interests,
-        daily_stories,
+        issue: typed.format != "articles",
+        explore: typed.explore,
+        most_per_subject: typed.most_per_subject,
+        show_reasons: typed.show_reasons,
+        interests: typed.interests,
+        daily_stories: typed.daily_stories,
+        learn: user.learn,
         rewritten: now.learned_at.as_deref().map(day),
         notes: now.notes,
         notice,
@@ -107,6 +140,7 @@ pub async fn page(
         Some("reading") => Some("Saved. It applies from the next run."),
         Some("notes") => Some("Saved. It applies from the next run."),
         Some("restored") => Some("Restored. It applies from the next run."),
+        Some("learn") => Some("Saved. It applies from the next run."),
         Some("joined") => {
             Some("Welcome. Say what you want to read: your issues are chosen from it and the sources you follow.")
         }
@@ -147,6 +181,29 @@ pub async fn save(
     }
     db::set_learned(&state.pool, &user.id, notes).await?;
     Ok(Redirect::to("/reading?saved=notes").into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SwitchForm {
+    csrf: String,
+    learn: Option<String>,
+}
+
+/// Whether notes are kept on the reader's ratings and given to the model. Turned off, the
+/// notes and their history stay, for when it is turned on again.
+pub async fn switch(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<SwitchForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    db::set_learn(&state.pool, &user.id, form.learn.is_some()).await?;
+    Ok(Redirect::to("/reading?saved=learn").into_response())
 }
 
 #[derive(Deserialize)]

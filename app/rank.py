@@ -334,7 +334,7 @@ def group_stories(
     run then treats every article as its own story.
     """
     top = list(ranked[:GROUP_TOP])
-    if backend is None or not cfg.group_stories or len(top) < 2:
+    if backend is None or len(top) < 2:
         return {}
     estimate = GROUP_TOKENS_OVERHEAD + GROUP_TOKENS_PER_CANDIDATE * len(top)
     if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
@@ -421,7 +421,7 @@ def subject_links(
     `articles` are dicts with id, title, words, opening and links (a list of dicts in number
     order). None when the model was not asked or the call failed, so the caller can fall back.
     """
-    if backend is None or not cfg.follow_links or not articles:
+    if backend is None or not articles:
         return None
     estimate = LINK_TOKENS_OVERHEAD + LINK_TOKENS_PER_ARTICLE * len(articles)
     if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:

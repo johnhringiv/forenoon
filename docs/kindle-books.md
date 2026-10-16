@@ -28,8 +28,8 @@ code blocks, reached by following a link. It was suspected first for the reboots
 holding it back did not stop them (see above). The limit stays, because a manual is not an
 article.
 
-Fix (144cc7b, 07d6cb4): an article over `max_article_words` (45,000 by default) is never
-delivered. This is a failsafe; the model choosing articles is the main control.
+Fix (144cc7b, 07d6cb4): an article over 45,000 words (`MAX_ARTICLE_WORDS` in `app/pipeline.py`) is
+never delivered. This is a failsafe; the model choosing articles is the main control.
 
 ### Embedded fonts looked dropped, but were not (11 to 14 October 2026)
 
@@ -179,7 +179,8 @@ empty line keeps its height with a non-breaking space.
 ## Rules that came from the device
 
 - Images are flattened onto white before conversion, so transparent diagrams stay readable.
-- The cover is in colour only when images are (the `images.grayscale` setting). A grayscale
+- The cover is in colour only when images are (the reader's "My Kindle has a colour screen",
+  on their Account page). A grayscale
   cover carries the ink-only version of the mark (`app/mark.py`), whose hatching and solid
   black need no dithering on e-ink; the colour version's tints would turn into grey speckle.
 - The Kindle's browser needs TLS 1.2, so the public hostname's zone must not require 1.3.
