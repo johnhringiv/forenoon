@@ -110,7 +110,9 @@ https there. Then set, in `.env`:
 With secure cookies on, a sign-in holds only at the https address: a browser drops a secure
 cookie anywhere else. So when `FORENOON_WEB_URL` is an https address, a request for any other
 host (`http://<host>:8081`) is redirected to the same page there; `/healthz` is answered
-wherever it is asked.
+wherever it is asked. A request from one of `FORENOON_WEB_TRUSTED_PROXIES` is never
+redirected, so a proxy that names its upstream as the host (nginx does unless given
+`proxy_set_header Host $host`; Apache unless `ProxyPreserveHost On`) must be listed there.
 
 ## Alternative: deploy script and continuous deploy
 

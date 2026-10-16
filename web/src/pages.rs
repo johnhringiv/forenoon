@@ -171,25 +171,36 @@ pub struct PublicAddress {
     pub url: String,
     /// Its host, `forenoon.example.com`, as a request addressed to it names it.
     pub host: String,
+    /// A request from a trusted proxy is never sent on: the proxy may name another host (nginx
+    /// names its upstream unless told otherwise), and redirecting it would go round forever.
+    pub proxy: Arc<Proxy>,
 }
 
 impl PublicAddress {
     /// `None` unless `url` is an https address.
-    pub fn new(url: &str) -> Option<PublicAddress> {
+    pub fn new(url: &str, proxy: Arc<Proxy>) -> Option<PublicAddress> {
         let url = url.trim().trim_end_matches('/');
         let host = url.strip_prefix("https://")?.split('/').next()?.to_ascii_lowercase();
-        (!host.is_empty()).then(|| PublicAddress { url: url.to_owned(), host })
+        // Browsers leave the default port out of the Host they send.
+        let host = host.strip_suffix(":443").map_or(host.clone(), str::to_owned);
+        (!host.is_empty()).then(|| PublicAddress { url: url.to_owned(), host, proxy })
     }
 }
 
 /// With secure cookies a sign-in holds only at the https address: a browser drops the cookie
 /// anywhere else, and the next page finds nobody signed in. So a request addressed to another
-/// host (the LAN address, over plain http) is sent to the same page there. The health check is
-/// answered wherever it is asked, for the deploy script's check from inside the container.
+/// host (the LAN address, over plain http) is sent to the same page there, unless it came
+/// through a trusted proxy. The health check is answered wherever it is asked, for the deploy
+/// script's check from inside the container.
 pub async fn to_public_address(State(public): State<PublicAddress>, request: Request, next: Next) -> Response {
     let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).map(str::to_ascii_lowercase);
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
     match host {
-        Some(host) if host != public.host && request.uri().path() != "/healthz" => {
+        Some(host)
+            if host != public.host
+                && request.uri().path() != "/healthz"
+                && !peer.is_some_and(|peer| public.proxy.trusts(peer)) =>
+        {
             let path = request.uri().path_and_query().map_or("/", |path| path.as_str());
             Redirect::temporary(&format!("{}{path}", public.url)).into_response()
         }
@@ -1421,6 +1432,21 @@ pub async fn health() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_public_address_is_https_and_its_host_is_as_browsers_send_it() {
+        let proxy = Arc::new(Proxy::default());
+        let host = |url: &str| PublicAddress::new(url, proxy.clone()).map(|public| (public.url, public.host));
+        assert_eq!(
+            host("https://Forenoon.Example.com/"),
+            Some(("https://Forenoon.Example.com".into(), "forenoon.example.com".into()))
+        );
+        // The default port is left out of Host; another port is not.
+        assert_eq!(host("https://forenoon.example.com:443").unwrap().1, "forenoon.example.com");
+        assert_eq!(host("https://forenoon.example.com:8443/app").unwrap().1, "forenoon.example.com:8443");
+        assert_eq!(host("http://nas:8787"), None);
+        assert_eq!(host("https://"), None);
+    }
 
     #[test]
     fn only_plain_web_links_are_kept() {

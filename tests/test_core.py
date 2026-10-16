@@ -28,8 +28,10 @@ def test_token_round_trip_and_rejections():
     assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "f4")
     with pytest.raises(TokenError):
         verify_token(b"x" * 32, token)
+    # A different signature: one ending in "AA" already would be left as it was (1 run in 256).
+    tampered = token[:-2] + ("BA" if token.endswith("AA") else "AA")
     with pytest.raises(TokenError):
-        verify_token(SECRET, token[:-2] + "AA")
+        verify_token(SECRET, tampered)
     with pytest.raises(TokenError, match="expired"):
         verify_token(SECRET, token, now=expires + 1)
     with pytest.raises(TokenError):

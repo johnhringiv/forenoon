@@ -743,7 +743,7 @@ database with the pipeline.
   `__Host-forenoon_session`, marked Secure, and responses carry `Strict-Transport-Security`.
   A request for any host other than the https `FORENOON_WEB_URL` (the LAN address) is
   redirected to the same page there, since a sign-in cannot hold anywhere else; `/healthz`
-  is answered wherever it is asked.
+  is answered wherever it is asked, and a request from a trusted proxy is never redirected.
   The client address for the sign-in and tap limits comes from the proxy's header
   (`FORENOON_WEB_CLIENT_IP_HEADER`) only when the request came from a trusted address
   (`FORENOON_WEB_TRUSTED_PROXIES`, default loopback, which is where a tunnel sharing the

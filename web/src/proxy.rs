@@ -32,11 +32,17 @@ impl Proxy {
         Ok(Proxy { header, trusted })
     }
 
+    /// Whether `peer` is a proxy the install trusts.
+    pub fn trusts(&self, peer: IpAddr) -> bool {
+        let peer = peer.to_canonical();
+        self.trusted.iter().any(|&(net, bits)| contains(net, bits, peer))
+    }
+
     /// The client's address: the proxy's word for it when `peer` is trusted, `peer` otherwise.
     pub fn client(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
         let peer = peer.to_canonical();
         let Some(header) = &self.header else { return peer };
-        if !self.trusted.iter().any(|&(net, bits)| contains(net, bits, peer)) {
+        if !self.trusts(peer) {
             return peer;
         }
         // X-Forwarded-For is a list that the client can start: the last entry is the one the

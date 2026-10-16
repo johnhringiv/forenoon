@@ -84,7 +84,12 @@ async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
         base_url: if secure_cookies { "https://forenoon.example.com/" } else { "http://nas:8787/" }.to_owned(),
         data_dir: folder.path().to_owned(),
         logins_dir: Some(folder.path().join("logins")),
-        proxy: forenoon_web::proxy::Proxy::default(),
+        // Behind a tunnel that connects from loopback, as deploy.sh sets it up.
+        proxy: if secure_cookies {
+            forenoon_web::proxy::Proxy::new("CF-Connecting-IP", "127.0.0.1").unwrap()
+        } else {
+            forenoon_web::proxy::Proxy::default()
+        },
         feedback_secret: Some(FEEDBACK_SECRET.to_vec()),
     };
     let router = app(pool.clone(), options).await.unwrap();
@@ -1723,6 +1728,15 @@ async fn with_secure_cookies_another_address_is_sent_to_the_https_one() {
     assert!(!response.headers().contains_key(header::SET_COOKIE), "no sign-in where it cannot hold");
     // Addressed to the https host (through the tunnel, any letter case): served as usual.
     assert_eq!(get("Forenoon.Example.com", "/login").await.unwrap().status(), StatusCode::OK);
+    // From a trusted proxy, whatever host it names (nginx names its upstream): served, never
+    // sent round again. The same request from the LAN is sent on.
+    let from = |peer: [u8; 4]| {
+        let mut request = Request::get("/login").header(header::HOST, "127.0.0.1:8081").body(Body::empty()).unwrap();
+        request.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((peer, 50000))));
+        site.router.clone().oneshot(request)
+    };
+    assert_eq!(from([127, 0, 0, 1]).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(from([192, 168, 1, 5]).await.unwrap().status(), StatusCode::TEMPORARY_REDIRECT);
     // The health check answers wherever it is asked, as the deploy script asks it inside the container.
     assert_eq!(get("localhost", "/healthz").await.unwrap().status(), StatusCode::OK);
     // Plain cookies: the LAN address is the address, and nothing is redirected.

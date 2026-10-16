@@ -133,7 +133,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .layer(CompressionLayer::new());
     let router = if options.secure_cookies { router.layer(middleware::from_fn(pages::https_only)) } else { router };
     // Outermost, so a request for another host is sent on before anything else looks at it.
-    let router = match options.secure_cookies.then(|| pages::PublicAddress::new(&options.base_url)).flatten() {
+    let public = options.secure_cookies.then(|| pages::PublicAddress::new(&options.base_url, state.proxy.clone()));
+    let router = match public.flatten() {
         Some(public) => router.layer(middleware::from_fn_with_state(public, pages::to_public_address)),
         None => router,
     };
