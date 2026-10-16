@@ -24,8 +24,8 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, allowed, csrf_token, html,
-        length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, allowed, back_to, csrf_token,
+        html, length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
     },
     ratings,
 };
@@ -111,6 +111,9 @@ struct Row {
     question: &'static str,
     sendable: bool,
     sent: Option<String>,
+    /// How the last "Fetch again" went, within the day; and whether it is still waiting.
+    refreshed: Option<String>,
+    refreshing: bool,
 }
 
 #[derive(Template)]
@@ -246,6 +249,8 @@ fn row(found: Shelved, zone: Tz) -> Row {
         question: ratings::question(found.rating),
         sendable: false,
         sent: None,
+        refreshed: None,
+        refreshing: false,
         id: found.id,
     }
 }
@@ -353,6 +358,7 @@ pub async fn page(
     }
     let can_send = !user.kindle_addresses.trim().is_empty();
     let requests = db::send_states(pool, &user.id).await?;
+    let refreshes = db::refresh_states(pool, &user.id).await?;
     page.rows = found
         .into_iter()
         .map(|found| {
@@ -360,10 +366,58 @@ pub async fn page(
             let last = requests.iter().rev().find(|request| !request.story && request.article_id == row.id);
             row.sendable = can_send && last.is_none_or(|request| request.status != "queued");
             row.sent = last.map(|request| send_outcome(request, zone));
+            if let Some(refresh) = refreshes.iter().rev().find(|refresh| refresh.article_id == row.id) {
+                row.refreshing = refresh.status == "queued";
+                row.refreshed = Some(refresh_outcome(refresh, zone));
+            }
             row
         })
         .collect();
+    page.fetching |= page.rows.iter().any(|row| row.refreshing);
     html(StatusCode::OK, page)
+}
+
+fn refresh_outcome(refresh: &db::RefreshState, zone: Tz) -> String {
+    match refresh.status.as_str() {
+        "queued" => "Being fetched again; this page updates within a minute or two.".to_owned(),
+        "done" => {
+            let at = refresh.done_at.as_deref().and_then(|at| local(at, zone));
+            format!("Fetched again{}.", at.map(|at| at.format(" at %H:%M").to_string()).unwrap_or_default())
+        }
+        _ => format!("Could not be fetched again: {}", refresh.error),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RefreshForm {
+    csrf: String,
+    article: String,
+    back: Option<String>,
+}
+
+/// Fetch an article's page again and extract it anew: after signing in to a site, or once the
+/// extraction has been improved. This only queues it; the pipeline does the fetching.
+pub async fn refresh(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<RefreshForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let pool = &state.pool;
+    if !db::pipeline_ready(pool).await? || !db::in_library(pool, &user.id, &form.article).await? {
+        return refused(StatusCode::NOT_FOUND, "No such article.");
+    }
+    match db::queue_refresh(pool, &user.id, &form.article).await? {
+        db::Queued::TooMany => {
+            refused(StatusCode::TOO_MANY_REQUESTS, "That is the most articles that can be fetched again in a day.")
+        }
+        db::Queued::Added | db::Queued::Waiting => back_to(&form.back, &form.article),
+    }
 }
 
 #[derive(Deserialize)]

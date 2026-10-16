@@ -1048,7 +1048,7 @@ pub async fn rate(
     back_to(&form.back, &form.article)
 }
 
-fn back_to(back: &Option<String>, article: &str) -> Page {
+pub(crate) fn back_to(back: &Option<String>, article: &str) -> Page {
     let anchor = utf8_percent_encode(article, NON_ALPHANUMERIC);
     Ok(Redirect::to(&format!("{}#a-{anchor}", safe_back(back.as_deref()))).into_response())
 }

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT article_id, status, error, done_at FROM refresh_requests\n         WHERE user_id = ? AND requested_at > ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "article_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "error",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "done_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "e0d942ca23a76c61cebf8a9db051d11cb188f931c468a426f90b18fbb1dc18a1"
+}

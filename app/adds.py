@@ -1,4 +1,4 @@
-"""Links a reader added by hand on the web pages.
+"""Links a reader added by hand on the web pages, and articles they asked to fetch again.
 
 The web app only queues the link. Here the page is fetched like any article's (public
 addresses only, and with the reader's subscriber session when one is saved for that site),
@@ -14,7 +14,7 @@ import logging
 import re
 from urllib.parse import urlsplit
 
-from . import sessions, thumbs
+from . import archive, sessions, thumbs
 from .config import Config, Source
 from .discover import site_host
 from .fetch import Fetcher
@@ -82,3 +82,51 @@ def add_requested(cfg: Config, store: Store, fetcher: Fetcher) -> int:
         log.info("added %s for %s (%s)", request["url"], request["user_id"], request["action"])
         added += 1
     return added
+
+
+def refresh_one(cfg: Config, store: Store, fetcher: Fetcher, item_id: str) -> None:
+    """Fetch an article's page again and extract it with the code that runs now, replacing its
+    summary, length, thumbnail and extraction verdict. Raises ValueError when nothing could be
+    read, and then what was there is kept."""
+    known = store.get_article(item_id)
+    if known is None:
+        raise ValueError("no such article")
+    # How its source asks for it to be read; a source since removed (a Calibre recipe), from
+    # its page and with the feed's copy kept from the first time to fall back on.
+    source = next((s for s in cfg.sources if s.name == known.source), None)
+    mode = source.extract if source and source.extract != "link" else "auto"
+    saved = archive.load(cfg.pages_dir, item_id)
+    feed_html = saved["feed_html"] if saved else ""
+    item = Item(item_id, known.url, Source(known.source, extract=mode), known.title, known.author, None, feed_html)
+    result = _extract(item, fetcher, cfg, keep=True)
+    if result.body is None:
+        why = f"nothing could be read there: {result.reason or result.status}"
+        if TURNED_AWAY.search(result.reason) and not sessions.for_url(cfg.sessions, known.url):
+            why += f". If you subscribe to {site_host(known.url)}, save a session for it under Subscriber sessions"
+            why += " on the Sources page and try again"
+        raise ValueError(why)
+    if not known.title and result.title:
+        store.set_title(item_id, result.title)
+    store.set_extraction(item_id, result.status, result.reason, result.word_count)
+    store.set_preview(item_id, result.image_url, result.description)
+    store.set_word_count(item_id, result.word_count)
+    thumbs.save(cfg.thumbs_dir, item_id, _pictures(result), fetcher)
+
+
+def refresh_requested(cfg: Config, store: Store, fetcher: Fetcher) -> int:
+    """Work through the "Fetch again" queue. Returns how many were done; a failure is recorded."""
+    readers = {reader.id for reader in store.readers()}
+    done = 0
+    for request in store.refresh_requests():
+        try:
+            if request["user_id"] not in readers:
+                raise ValueError("no such reader")
+            refresh_one(cfg, store, fetcher, request["article_id"])
+        except Exception as exc:  # noqa: BLE001 - one bad page must not block the rest
+            log.warning("refresh request %s failed: %s", request["id"], exc)
+            store.finish_refresh(request["id"], "failed", error=str(exc)[:300])
+            continue
+        store.finish_refresh(request["id"], "done")
+        log.info("fetched %s again for %s", request["article_id"], request["user_id"])
+        done += 1
+    return done

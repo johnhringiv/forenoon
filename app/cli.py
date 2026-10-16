@@ -142,19 +142,20 @@ def _send_queue(cfg: Config) -> int:
 
 
 def _add_queue(cfg: Config) -> int:
-    """Fetch the links readers added on the web pages. Checked every minute by the scheduler."""
-    from .adds import add_requested
+    """Fetch the links readers added on the web pages, and the articles they asked to fetch
+    again. Checked every minute by the scheduler."""
+    from .adds import add_requested, refresh_requested
 
     try:
         store = Store(cfg.db_path)
-        if not store.add_requests():
+        if not store.add_requests() and not store.refresh_requests():
             store.close()
             return 0
-        # The sessions as saved now: the scheduler reloads its settings only once a delivery.
-        cfg = dataclasses.replace(cfg, sessions=store.session_sites())
+        # The sessions and sources as saved now: the scheduler reloads its settings only once a delivery.
+        cfg = dataclasses.replace(cfg, sessions=store.session_sites(), sources=store.sources())
         fetcher = Fetcher(cfg.user_agent, store)
         try:
-            return add_requested(cfg, store, fetcher)
+            return add_requested(cfg, store, fetcher) + refresh_requested(cfg, store, fetcher)
         finally:
             fetcher.close()
             store.close()
