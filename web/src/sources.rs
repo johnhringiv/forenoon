@@ -230,6 +230,8 @@ struct BuiltinRow {
     failing: bool,
     /// The colour of the dot before its name: ok, bad, wait, off or none.
     state: &'static str,
+    /// The dot's tooltip.
+    dot: String,
 }
 
 struct FeedRow {
@@ -243,9 +245,12 @@ struct FeedRow {
     /// This reader follows it, and pinned it.
     followed: bool,
     pinned: bool,
-    /// The button before its name: "none" (not followed), "made" (followed for them when it was
-    /// shared, or when their account was made) or "chosen".
+    /// How this reader follows it: "none" (a button to follow it stands for its dot), "made"
+    /// (followed for them when it was shared or their account was made: a ring) or "chosen"
+    /// (a filled dot).
     follow: &'static str,
+    /// The dot's tooltip: how it is followed and how its last run went.
+    dot: String,
     shared: bool,
     /// Shared lately and not followed by this reader: marked new.
     fresh: bool,
@@ -322,6 +327,22 @@ struct SourcesPage {
     notice: Option<&'static str>,
     /// An address is still being checked: the page reloads itself until it is done.
     checking: bool,
+}
+
+/// What a source's dot says, as its tooltip: how this reader follows it, and how its last run went.
+fn dot(follow: &str, state: &str, problem: Option<&str>, status: Option<&str>) -> String {
+    let follow = match follow {
+        "chosen" => "Following",
+        "made" => "Added for you: open it and keep it to make it yours",
+        _ => "Not followed",
+    };
+    let health = match state {
+        "off" => "Paused",
+        "wait" => "Its address is being checked",
+        "none" => "Not read yet",
+        _ => problem.or(status).unwrap_or("Not read yet"),
+    };
+    format!("{follow}. {health}.")
 }
 
 fn limit(daily_max: i64) -> String {
@@ -438,6 +459,7 @@ async fn render(
                 limit: limit(source.daily_max),
                 enabled: source.enabled,
                 followed: source.followed,
+                dot: dot(if source.followed { "chosen" } else { "none" }, state, None, status.as_deref()),
                 status,
                 failing,
                 state,
@@ -449,8 +471,22 @@ async fn render(
                 if source.followed {
                     own_sites.extend(covered.clone());
                 }
+                let follow = match (source.followed, source.chosen) {
+                    (false, _) => "none",
+                    (true, false) => "made",
+                    (true, true) => "chosen",
+                };
+                let shown = match state {
+                    "off" => "off",
+                    _ if check_failed => "bad",
+                    _ if checking => "wait",
+                    state => state,
+                };
+                let problem = check_failed.then_some(source.check_note.as_str());
                 feeds.push(FeedRow {
                     id: source.id,
+                    dot: dot(follow, shown, problem, status.as_deref()),
+                    follow,
                     // Said only where the reader sees the session itself: on feeds they follow.
                     session: if admin || source.followed { covered } else { None },
                     new: sieve.new == Some(source.id),
@@ -465,11 +501,6 @@ async fn render(
                     },
                     followed: source.followed,
                     pinned: source.pinned,
-                    follow: match (source.followed, source.chosen) {
-                        (false, _) => "none",
-                        (true, false) => "made",
-                        (true, true) => "chosen",
-                    },
                     shared: source.shared,
                     fresh: source.shared
                         && !source.followed
@@ -487,12 +518,7 @@ async fn render(
                     limit: limit(source.daily_max),
                     enabled: source.enabled,
                     attention: source.enabled && (failing || check_failed) && (admin || source.followed),
-                    state: match state {
-                        "off" => "off",
-                        _ if check_failed => "bad",
-                        _ if checking => "wait",
-                        state => state,
-                    },
+                    state: shown,
                     failing,
                     status,
                     check: match source.check_state.as_str() {
@@ -582,6 +608,16 @@ const ADMINS_ONLY: &str = "That is for an admin.";
 const FRESH_DAYS: i64 = 14;
 const NOT_YOURS: &str = "That source is not yours to change.";
 const NO_SUCH: &str = "No such source.";
+const KEPT_FOR_EDIT: &str =
+    "Another reader chose to follow this feed, so only an admin changes its address and settings now.";
+const KEPT_FOR_REMOVAL: &str =
+    "Another reader follows this feed, so it is kept. You can unfollow it, or an admin can pause it.";
+
+/// Refused, though asked from the page itself (one loaded before someone else followed the feed,
+/// say): the page again, with why at the top, rather than a bare error.
+async fn kept(state: &AppState, auth: &AuthSession, session: &Session, why: &str) -> Page {
+    render(state, auth, session, StatusCode::FORBIDDEN, Some(why.to_owned()), None, Sieve::all()).await
+}
 
 #[derive(Deserialize)]
 pub struct PageQuery {
@@ -816,10 +852,7 @@ pub async fn update(
         }
         if form.name.is_some() || form.address.is_some() {
             // The page was loaded while the feed was still theirs alone to edit.
-            return refused(
-                StatusCode::FORBIDDEN,
-                "Someone else follows this feed now, so only an admin changes its address and settings. Reload the page.",
-            );
+            return kept(&state, &auth, &session, KEPT_FOR_EDIT).await;
         }
         if source.followed {
             follow(pool, &user.id, id, pinned, pinned).await?;
@@ -984,10 +1017,7 @@ pub async fn delete(
         return refused(StatusCode::NOT_FOUND, NO_SUCH);
     };
     if source.chosen_by_others > 0 {
-        return refused(
-            StatusCode::FORBIDDEN,
-            "Another reader follows this feed, so it is kept. You can unfollow it, or an admin can pause it.",
-        );
+        return kept(&state, &auth, &session, KEPT_FOR_REMOVAL).await;
     }
     if !source.removable_by(&user) {
         return refused(StatusCode::FORBIDDEN, NOT_YOURS);
@@ -1132,10 +1162,13 @@ pub async fn remove_session(
             // Told apart only by a reader who sees the session anyway; to anyone else there
             // is no session to speak of.
             if has_feed_on(&state.pool, &user, &site).await? {
-                return refused(
-                    StatusCode::FORBIDDEN,
+                return kept(
+                    &state,
+                    &auth,
+                    &session,
                     "That session was saved by someone else; an admin can remove it.",
-                );
+                )
+                .await;
             }
             return saved("nosession");
         }
