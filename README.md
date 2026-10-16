@@ -102,7 +102,7 @@ What has gone wrong with books on the Kindle, and the rules that came from it:
 - All fetched content is untrusted. Article HTML is reduced to an allowlist of elements and
   attributes; scripts, iframes, forms, styles and remote resources never reach the EPUB.
   Images are re-encoded and embedded.
-- Recipients come only from readers' accounts, where an admin sets them. Nothing in a feed or
+- Recipients come only from readers' own accounts. Nothing in a feed or
   article can choose one.
 - The fetcher refuses non-public addresses, on redirects too. This check does not stop DNS
   rebinding, so do not give the container network access to anything sensitive.

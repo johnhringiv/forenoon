@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,\n           email, email_verified_at, pending_email\n           FROM users WHERE email = ?",
+  "query": "SELECT id AS \"id!\", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,\n           email, email_verified_at, pending_email, invited_at\n           FROM users WHERE email = ?",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,11 @@
         "name": "pending_email",
         "ordinal": 10,
         "type_info": "Text"
+      },
+      {
+        "name": "invited_at",
+        "ordinal": 11,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -73,8 +78,9 @@
       false,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "bb9ea440f777dc82271c28f6b6b2303dcb5d384c759e2d111ff446028dc39507"
+  "hash": "0e039055c5cbe8645c75d973d49ff6b49d009622bd25d1f648ad85f81fda19c4"
 }

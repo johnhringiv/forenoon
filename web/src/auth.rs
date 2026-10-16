@@ -25,6 +25,12 @@ impl User {
         self.role == "admin"
     }
 
+    /// Invited by an admin and yet to choose a password: it cannot sign in, and the pipeline
+    /// delivers nothing to it.
+    pub fn is_invited(&self) -> bool {
+        self.invited_at.is_some()
+    }
+
     /// The address still waiting to be confirmed, if any: a requested change, else an
     /// unconfirmed current one.
     pub fn unconfirmed_email(&self) -> Option<&str> {
@@ -52,7 +58,9 @@ pub fn normal_email(text: &str) -> Option<String> {
     email_shaped(&email).then_some(email)
 }
 
-/// The addresses in a block of text, one per line, or what is wrong with it.
+/// The addresses in a block of text, one per line, or what is wrong with it. Any email-shaped
+/// address: Kindle's end in `@kindle.com`, but other readers take mail too (PocketBook's end in
+/// `@pbsync.com`), and a reader can only ever send their own issues to the address they typed.
 pub fn kindle_addresses(text: &str) -> Result<Vec<String>, String> {
     let addresses: Vec<String> =
         text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
@@ -81,6 +89,8 @@ pub struct User {
     pub email_verified_at: Option<String>,
     /// A requested change of address, until the link sent to it is opened.
     pub pending_email: Option<String>,
+    /// When an admin invited this reader; `None` once they have joined (or were never invited).
+    pub invited_at: Option<String>,
 }
 
 // Written by hand so that a logged user never includes the password hash.
@@ -137,9 +147,13 @@ pub fn password_problem(password: &str) -> Option<String> {
     }
 }
 
-/// Whether this can be an account id: the pipeline's reader ids are short plain words.
+/// Whether this can be an account id: the pipeline's reader ids are short plain words. At
+/// least one letter or digit, so an id is never `.` or `..`, which a browser would take out of
+/// the paths it appears in.
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= MAX_ID && id.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+    id.len() <= MAX_ID
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+        && id.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
 /// Slow by design; call it off the async threads (see `hash_password`).
@@ -189,7 +203,7 @@ pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx
     sqlx::query_as!(
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
-           email, email_verified_at, pending_email
+           email, email_verified_at, pending_email, invited_at
            FROM users WHERE id = ?"#,
         id
     )
@@ -202,7 +216,7 @@ pub async fn find_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option
     sqlx::query_as!(
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
-           email, email_verified_at, pending_email
+           email, email_verified_at, pending_email, invited_at
            FROM users WHERE email = ?"#,
         email
     )
@@ -223,9 +237,14 @@ impl AuthnBackend for Backend {
             Some(email) => find_user_by_email(&self.pool, &email).await?,
             None => None,
         };
-        let stored = user.as_ref().map_or_else(|| self.decoy_hash.clone(), |u| u.password_hash.clone());
+        // An invited account has no password yet. It is checked against the decoy like an
+        // account that does not exist, so the time taken does not say which it is.
+        let stored = match user.as_ref().filter(|user| !user.is_invited()) {
+            Some(user) => user.password_hash.clone(),
+            None => self.decoy_hash.clone(),
+        };
         let matches = verify_password(creds.password, stored).await?;
-        Ok(user.filter(|_| matches))
+        Ok(user.filter(|user| matches && !user.is_invited()))
     }
 
     async fn get_user(&self, id: &UserId<Self>) -> Result<Option<User>, AuthError> {

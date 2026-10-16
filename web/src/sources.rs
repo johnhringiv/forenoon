@@ -1,7 +1,11 @@
 //! The sources page: what the pipeline reads, and the subscriber sessions it reads with.
 //! Built-in sources are front pages the pipeline knows how to read and are only switched on or
 //! off; feeds are added by address; a session is a site's cookie, used for every page on it.
-//! Admins only, because every reader on the install shares them.
+//!
+//! Sources belong to the household and are read for the readers who follow them. One a reader
+//! adds is theirs alone until they share it: nobody else sees it, except an admin, who sees
+//! everything. A session is the household's: every page on its site is fetched with it,
+//! whoever follows the feed.
 
 use std::{
     io::Write,
@@ -23,7 +27,7 @@ use sqlx::SqlitePool;
 use tower_sessions::Session;
 
 use crate::{
-    auth::AuthSession,
+    auth::{AuthSession, User},
     db::{self, now_iso},
     pages::{AppError, AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, web_url},
 };
@@ -52,24 +56,64 @@ pub struct Source {
     /// For a built-in source, the pipeline's key for it.
     pub builtin: String,
     pub extract: String,
-    pub pinned: bool,
     /// The most of a day's places its articles may take; 0 for no limit.
     pub daily_max: i64,
     pub enabled: bool,
     /// "" (never checked), "pending", "ok" or "failed": the pipeline's check of the address.
     pub check_state: String,
     pub check_note: String,
+    /// The account that added it; "" for a built-in, or a source from before readers had their own.
+    pub added_by: String,
+    pub added_by_name: String,
+    /// Listed for the rest of the household to follow.
+    pub shared: bool,
+    /// Whether the reader it was listed for follows it, and pinned it.
+    pub followed: bool,
+    pub pinned: bool,
+    /// How many readers follow it.
+    pub followers: i64,
 }
 
-pub async fn list(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
+impl Source {
+    /// Whether this reader may change or remove it: an admin, or the one who added it while
+    /// nobody else follows it.
+    fn editable_by(&self, user: &User) -> bool {
+        user.is_admin() || (self.added_by == user.id && self.followers <= i64::from(self.followed))
+    }
+
+    /// Whether this reader may share it with the household, or take that back.
+    fn shareable_by(&self, user: &User) -> bool {
+        user.is_admin() || self.added_by == user.id
+    }
+}
+
+/// The sources this reader may see: every one for an admin; otherwise the ones they follow or
+/// added, and the shared ones. Pinned ones first, as this reader pinned them.
+pub async fn list(pool: &SqlitePool, user: &User) -> Result<Vec<Source>, sqlx::Error> {
+    let admin = user.is_admin();
     sqlx::query_as!(
         Source,
-        r#"SELECT id AS "id!", name, kind, url, builtin, extract, pinned AS "pinned: bool",
-           daily_max, enabled AS "enabled: bool", check_state, check_note
-           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE"#
+        r#"SELECT s.id AS "id!", s.name, s.kind, s.url, s.builtin, s.extract, s.daily_max,
+           s.enabled AS "enabled: bool", s.check_state, s.check_note, s.added_by,
+           COALESCE(u.name, s.added_by) AS "added_by_name!: String", s.shared AS "shared: bool",
+           f.user_id IS NOT NULL AS "followed!: bool", COALESCE(f.pinned, 0) AS "pinned!: bool",
+           (SELECT COUNT(*) FROM follows WHERE source_id = s.id) AS "followers!: i64"
+           FROM sources s
+           LEFT JOIN follows f ON f.source_id = s.id AND f.user_id = ?
+           LEFT JOIN users u ON u.id = s.added_by
+           WHERE ? OR s.shared = 1 OR s.added_by = ? OR f.user_id IS NOT NULL
+           ORDER BY COALESCE(f.pinned, 0) DESC, s.name COLLATE NOCASE"#,
+        user.id,
+        admin,
+        user.id
     )
     .fetch_all(pool)
     .await
+}
+
+/// One source, if this reader may see it.
+async fn visible(pool: &SqlitePool, user: &User, id: i64) -> Result<Option<Source>, sqlx::Error> {
+    Ok(list(pool, user).await?.into_iter().find(|source| source.id == id))
 }
 
 struct Health {
@@ -163,6 +207,7 @@ struct BuiltinRow {
     /// "2 a day", or "No limit".
     limit: String,
     enabled: bool,
+    followed: bool,
     status: Option<String>,
     failing: bool,
     /// The colour of the dot before its name: ok, bad, wait, off or none.
@@ -176,7 +221,15 @@ struct FeedRow {
     extract: Vec<Choice>,
     /// Where its text is taken from, in a word or two; "" for the usual way.
     mode: &'static str,
+    /// This reader follows it, and pinned it.
+    followed: bool,
     pinned: bool,
+    shared: bool,
+    /// Who added it, for an admin's eyes; "" when that is this reader or nobody in particular.
+    added_by: String,
+    /// This reader may change or remove it, or share it.
+    can_edit: bool,
+    can_share: bool,
     daily_max: i64,
     limit: String,
     enabled: bool,
@@ -202,6 +255,8 @@ struct SessionRow {
     /// How the last page fetched with it went, and when the site says its sign-in ends.
     note: Option<String>,
     failed: bool,
+    /// This reader may remove it: they saved it, or they are an admin.
+    removable: bool,
 }
 
 struct View {
@@ -216,12 +271,15 @@ struct View {
 struct SourcesPage {
     nav: Option<Nav>,
     csrf: String,
+    admin: bool,
     builtins: Vec<BuiltinRow>,
     sessions: Vec<SessionRow>,
-    /// The feeds that need attention, then the rest, both as filtered.
+    /// The feeds that need attention, then the rest this reader follows, then the ones they
+    /// could follow, all as filtered.
     attention: Vec<FeedRow>,
     feeds: Vec<FeedRow>,
-    /// How many feeds there are in all.
+    available: Vec<FeedRow>,
+    /// How many feeds this reader may see in all.
     total: usize,
     search: String,
     show: &'static str,
@@ -255,7 +313,7 @@ fn matches(row: &FeedRow, search: &str, show: &str) -> bool {
         && match show {
             "failing" => row.attention,
             "paused" => !row.enabled,
-            "pinned" => row.pinned,
+            "pinned" => row.followed && row.pinned,
             _ => true,
         }
 }
@@ -311,14 +369,19 @@ async fn render(
     sieve: Sieve,
 ) -> Page {
     let user = reader(auth)?;
+    let admin = user.is_admin();
     let health = health(&state.pool).await?;
-    let sources = list(&state.pool).await?;
-    let sites = session_sites(&state.pool).await?;
+    let sources = list(&state.pool, &user).await?;
+    let sites = sessions(&state.pool).await?;
     let runs: std::collections::HashMap<String, Run> =
         read_json(&state.sessions_dir.join("status.json")).unwrap_or_default();
     let (total, paused) = (sources.len(), sources.iter().filter(|source| !source.enabled).count());
+    let followed_count = sources.iter().filter(|source| source.followed).count();
     let (mut builtins, mut feeds) = (Vec::new(), Vec::new());
     let mut failing_count = 0;
+    let site_names: Vec<String> = sites.iter().map(|(site, _)| site.clone()).collect();
+    // The sites this reader has a feed on: the sessions they see, and may save or replace.
+    let mut own_sites = Vec::new();
     for source in sources {
         let seen = health.iter().find(|entry| entry.source == source.name);
         let status = seen.map(|entry| match entry.failures {
@@ -326,7 +389,8 @@ async fn render(
             n => format!("Failed {n} run{} in a row: {}", if n == 1 { "" } else { "s" }, entry.last_error),
         });
         let failing = seen.is_some_and(|entry| entry.failures > 0);
-        failing_count += usize::from(failing && source.enabled);
+        // An admin is told of every failing source; a reader, of the ones they follow.
+        failing_count += usize::from(failing && source.enabled && (admin || source.followed));
         let state = match (source.enabled, failing, &status) {
             (false, _, _) => "off",
             (_, true, _) => "bad",
@@ -341,6 +405,7 @@ async fn render(
                 daily_max: source.daily_max,
                 limit: limit(source.daily_max),
                 enabled: source.enabled,
+                followed: source.followed,
                 status,
                 failing,
                 state,
@@ -348,12 +413,17 @@ async fn render(
             _ => {
                 let check_failed = source.check_state == "failed";
                 let checking = source.check_state == "pending";
+                let covered = covering(&site_names, &source.url);
+                if source.followed {
+                    own_sites.extend(covered.clone());
+                }
                 feeds.push(FeedRow {
                     id: source.id,
-                    session: covering(&sites, &source.url),
+                    // Said only where the reader sees the session itself: on feeds they follow.
+                    session: if admin || source.followed { covered } else { None },
                     new: sieve.new == Some(source.id),
                     open: sieve.new == Some(source.id),
-                    address: source.url,
+                    address: source.url.clone(),
                     extract: choices(&source.extract),
                     mode: match source.extract.as_str() {
                         "page" => "Page only",
@@ -361,11 +431,20 @@ async fn render(
                         "link" => "Links only",
                         _ => "",
                     },
+                    followed: source.followed,
                     pinned: source.pinned,
+                    shared: source.shared,
+                    added_by: if admin && source.added_by != user.id {
+                        source.added_by_name.clone()
+                    } else {
+                        String::new()
+                    },
+                    can_edit: source.editable_by(&user),
+                    can_share: source.shareable_by(&user),
                     daily_max: source.daily_max,
                     limit: limit(source.daily_max),
                     enabled: source.enabled,
-                    attention: source.enabled && (failing || check_failed),
+                    attention: source.enabled && (failing || check_failed) && (admin || source.followed),
                     state: match state {
                         "off" => "off",
                         _ if check_failed => "bad",
@@ -376,11 +455,11 @@ async fn render(
                     status,
                     check: match source.check_state.as_str() {
                         "pending" => Some("Checking this address; it takes up to a minute.".to_owned()),
-                        "ok" | "failed" => Some(source.check_note),
+                        "ok" | "failed" => Some(source.check_note.clone()),
                         _ => None,
                     },
                     check_failed,
-                    name: source.name,
+                    name: source.name.clone(),
                 });
             }
         }
@@ -398,11 +477,13 @@ async fn render(
             href: view_url(key, &sieve.search),
         })
         .collect();
-    let (attention, feeds): (Vec<FeedRow>, Vec<FeedRow>) =
-        named.into_iter().filter(|row| matches(row, "", sieve.show)).partition(|row| row.attention);
+    let shown: Vec<FeedRow> = named.into_iter().filter(|row| matches(row, "", sieve.show)).collect();
+    let (attention, rest): (Vec<FeedRow>, Vec<FeedRow>) = shown.into_iter().partition(|row| row.attention);
+    let (feeds, available): (Vec<FeedRow>, Vec<FeedRow>) = rest.into_iter().partition(|row| row.followed);
     let sessions = sites
         .into_iter()
-        .map(|site| {
+        .filter(|(site, _)| admin || own_sites.contains(site))
+        .map(|(site, saved_by)| {
             let run = runs.get(&format!("site-{site}"));
             SessionRow {
                 note: run.map(|run| match run.ok {
@@ -415,21 +496,30 @@ async fn render(
                     false => format!("Last page with it failed {}: {}", when(&run.at), run.note),
                 }),
                 failed: run.is_some_and(|run| !run.ok),
+                removable: admin || saved_by == user.id,
                 site,
             }
         })
         .collect();
-    let summary =
-        format!("{total} source{}, {paused} paused, {failing_count} failing.", if total == 1 { "" } else { "s" });
-    let checking = attention.iter().chain(&feeds).any(|row| row.state == "wait");
+    let summary = if admin {
+        format!("{total} source{}, {paused} paused, {failing_count} failing.", if total == 1 { "" } else { "s" })
+    } else {
+        format!(
+            "Following {followed_count} of {total} source{}, {failing_count} failing.",
+            if total == 1 { "" } else { "s" }
+        )
+    };
+    let checking = attention.iter().chain(&feeds).chain(&available).any(|row| row.state == "wait");
     let page = SourcesPage {
         nav: Nav::new(state, &user, "sources").await?,
         csrf: csrf_token(session).await?,
+        admin,
         builtins,
         sessions,
         adding: error.is_some() || feed_count == 0,
         attention,
         feeds,
+        available,
         total: feed_count,
         filtered: !sieve.search.is_empty() || !sieve.show.is_empty(),
         search: sieve.search,
@@ -444,12 +534,9 @@ async fn render(
     html(status, page)
 }
 
-/// Everything here is for admins; anyone else is told so.
-fn admin(auth: &AuthSession) -> Result<bool, AppError> {
-    Ok(reader(auth)?.is_admin())
-}
-
-const ADMINS_ONLY: &str = "Sources are managed by an admin.";
+const ADMINS_ONLY: &str = "That is for an admin.";
+const NOT_YOURS: &str = "That source is not yours to change.";
+const NO_SUCH: &str = "No such source.";
 
 #[derive(Deserialize)]
 pub struct PageQuery {
@@ -466,11 +553,10 @@ pub async fn page(
     session: Session,
     Query(query): Query<PageQuery>,
 ) -> Page {
-    if !admin(&auth)? {
-        return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
-    }
     let notice = match query.saved.as_deref() {
         Some("added") => Some("Source added. Its address is being checked; it is read from the next run."),
+        Some("followed") => Some("Followed. It is read for you from the next run."),
+        Some("unfollowed") => Some("Unfollowed. It is kept for whoever else follows it."),
         Some("session") => Some("Session saved. Pages from that site are fetched with it from the next run."),
         Some("nosession") => Some("Session removed."),
         Some("saved") => Some("Saved."),
@@ -492,9 +578,7 @@ async fn guard(
     headers: &HeaderMap,
     csrf: &str,
 ) -> Result<Option<axum::response::Response>, AppError> {
-    if !admin(auth)? {
-        return Ok(Some(refused(StatusCode::FORBIDDEN, ADMINS_ONLY)?));
-    }
+    reader(auth)?;
     if !allowed(headers, session, csrf).await? {
         return Ok(Some(refused(StatusCode::FORBIDDEN, NOT_FROM_HERE)?));
     }
@@ -512,13 +596,15 @@ fn saved(what: &str) -> Page {
 #[derive(Deserialize)]
 pub struct SourceForm {
     csrf: String,
-    name: String,
+    /// Absent when the reader may only pin or unpin the source.
+    name: Option<String>,
     /// A feed's address, or a site's for the feed to be found on.
     address: Option<String>,
     extract: Option<String>,
     pinned: Option<String>,
     daily_max: Option<String>,
     enabled: Option<String>,
+    shared: Option<String>,
 }
 
 impl SourceForm {
@@ -537,6 +623,12 @@ impl SourceForm {
     fn extract(&self) -> &'static str {
         let wanted = self.extract.as_deref().unwrap_or("auto");
         EXTRACT.iter().map(|(key, _)| *key).find(|key| *key == wanted).unwrap_or("auto")
+    }
+
+    /// The name, address and places a day, or what is wrong with them.
+    fn checked(&self) -> Result<(String, String, i64), String> {
+        let name = check_name(self.name.as_deref().unwrap_or(""))?;
+        Ok((name, self.address()?, self.daily_max()?))
     }
 }
 
@@ -557,6 +649,32 @@ async fn finish(
     render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
 }
 
+async fn follow(pool: &SqlitePool, user: &str, source: i64, pinned: bool) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    sqlx::query!(
+        "INSERT INTO follows (user_id, source_id, pinned, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (user_id, source_id) DO UPDATE SET pinned = excluded.pinned",
+        user,
+        source,
+        pinned,
+        now
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// An address as one feed is the same as another: case, the scheme, a leading `www.` and a
+/// trailing slash aside.
+fn same_feed(url: &str) -> String {
+    let url = url.trim().to_ascii_lowercase();
+    let url = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(&url);
+    url.strip_prefix("www.").unwrap_or(url).trim_end_matches('/').to_owned()
+}
+
+/// Add a feed and follow it. A feed this reader may already see, by address, is followed
+/// instead. Another reader's private feed is not looked at, whatever its address: it gets a
+/// row of its own, so nobody learns of a feed by guessing its address.
 pub async fn add(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -567,29 +685,42 @@ pub async fn add(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let (name, url, daily_max) = match (check_name(&form.name), form.address(), form.daily_max()) {
-        (Ok(name), Ok(url), Ok(daily_max)) => (name, url, daily_max),
-        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
-            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
-        }
+    let user = reader(&auth)?;
+    let (name, url, daily_max) = match form.checked() {
+        Ok(checked) => checked,
+        Err(problem) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
     };
     let (extract, pinned, now) = (form.extract(), form.pinned.is_some(), now_iso());
+    let shared = form.shared.is_some();
+    let pool = &state.pool;
+    let wanted = same_feed(&url);
+    let existing = list(pool, &user).await?.into_iter().find(|s| s.kind == "rss" && same_feed(&s.url) == wanted);
+    if let Some(source) = existing {
+        follow(pool, &user.id, source.id, pinned).await?;
+        return saved(&format!("followed&new={0}#s-{0}", source.id));
+    }
     let done = sqlx::query!(
-        "INSERT INTO sources (name, kind, url, extract, pinned, daily_max, enabled, created_at, check_state)
-         VALUES (?, 'rss', ?, ?, ?, ?, 1, ?, 'pending')",
+        "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared)
+                 VALUES (?, 'rss', ?, ?, ?, 1, ?, 'pending', ?, ?)",
         name,
         url,
         extract,
-        pinned,
         daily_max,
-        now
+        now,
+        user.id,
+        shared
     )
-    .execute(&state.pool)
+    .execute(pool)
     .await;
-    let what = done.as_ref().map(|row| format!("added&new={0}#s-{0}", row.last_insert_rowid())).unwrap_or_default();
-    finish(&state, &auth, &session, done.map(|_| Ok(what.as_str())), &name).await
+    let id = match done {
+        Ok(row) => row.last_insert_rowid(),
+        Err(error) => return finish(&state, &auth, &session, Err(error), &name).await,
+    };
+    follow(pool, &user.id, id, pinned).await?;
+    saved(&format!("added&new={id}#s-{id}"))
 }
 
+/// Change a feed: its own settings for whoever may edit it, and this reader's pin.
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -601,28 +732,96 @@ pub async fn update(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let (name, url, daily_max) = match (check_name(&form.name), form.address(), form.daily_max()) {
-        (Ok(name), Ok(url), Ok(daily_max)) => (name, url, daily_max),
-        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
-            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
-        }
-    };
-    let (extract, pinned, enabled) = (form.extract(), form.pinned.is_some(), form.enabled.is_some());
+    let user = reader(&auth)?;
+    let pool = &state.pool;
     // A built-in source is only switched on or off and given its limit: this changes feeds alone.
+    let Some(source) = visible(pool, &user, id).await?.filter(|source| source.kind == "rss") else {
+        return refused(StatusCode::NOT_FOUND, NO_SUCH);
+    };
+    let pinned = form.pinned.is_some();
+    if !source.editable_by(&user) {
+        // Others follow it too: the adder still says whether it is shared, and anyone who
+        // follows it pins it for themselves. The rest is an admin's now.
+        if !source.followed && !source.shareable_by(&user) {
+            return refused(StatusCode::FORBIDDEN, NOT_YOURS);
+        }
+        if form.name.is_some() || form.address.is_some() {
+            // The page was loaded while the feed was still theirs alone to edit.
+            return refused(
+                StatusCode::FORBIDDEN,
+                "Someone else follows this feed now, so only an admin changes its address and settings. Reload the page.",
+            );
+        }
+        if source.followed {
+            follow(pool, &user.id, id, pinned).await?;
+        }
+        if source.shareable_by(&user) {
+            let shared = form.shared.is_some();
+            sqlx::query!("UPDATE sources SET shared = ? WHERE id = ?", shared, id).execute(pool).await?;
+        }
+        return saved("saved");
+    }
+    let (name, url, daily_max) = match form.checked() {
+        Ok(checked) => checked,
+        Err(problem) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    };
+    let extract = form.extract();
+    // Pausing is an admin's: it stops the feed for everyone. Whoever may edit may share.
+    let enabled = if user.is_admin() { form.enabled.is_some() } else { source.enabled };
+    let shared = form.shared.is_some();
     let done = sqlx::query!(
-        "UPDATE sources SET name = ?, url = ?, extract = ?, pinned = ?, daily_max = ?, enabled = ?,
+        "UPDATE sources SET name = ?, url = ?, extract = ?, daily_max = ?, enabled = ?, shared = ?,
          check_state = 'pending', check_note = '' WHERE id = ? AND kind = 'rss'",
         name,
         url,
         extract,
-        pinned,
         daily_max,
         enabled,
+        shared,
         id
     )
-    .execute(&state.pool)
+    .execute(pool)
     .await;
-    finish(&state, &auth, &session, done.map(|_| Ok("saved")), &name).await
+    if let Err(error) = done {
+        return finish(&state, &auth, &session, Err(error), &name).await;
+    }
+    if source.followed {
+        follow(pool, &user.id, id, pinned).await?;
+    }
+    saved("saved")
+}
+
+#[derive(Deserialize)]
+pub struct FollowForm {
+    csrf: String,
+    /// "1" to follow, anything else to stop.
+    follow: String,
+    pinned: Option<String>,
+}
+
+/// Follow a source this reader may see, or stop following one.
+pub async fn set_follow(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Form(form): Form<FollowForm>,
+) -> Page {
+    if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
+        return Ok(response);
+    }
+    let user = reader(&auth)?;
+    let pool = &state.pool;
+    if form.follow != "1" {
+        sqlx::query!("DELETE FROM follows WHERE user_id = ? AND source_id = ?", user.id, id).execute(pool).await?;
+        return saved("unfollowed");
+    }
+    if visible(pool, &user, id).await?.is_none() {
+        return refused(StatusCode::NOT_FOUND, NO_SUCH);
+    }
+    follow(pool, &user.id, id, form.pinned.is_some()).await?;
+    saved("followed")
 }
 
 #[derive(Deserialize)]
@@ -633,7 +832,7 @@ pub struct ToggleForm {
     daily_max: Option<String>,
 }
 
-/// Switch a built-in source on or off.
+/// Switch a built-in source on or off, for everyone; admins only.
 pub async fn toggle(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -644,6 +843,9 @@ pub async fn toggle(
 ) -> Page {
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
+    }
+    if !reader(&auth)?.is_admin() {
+        return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
     }
     let daily_max = match daily_max(form.daily_max.as_deref()) {
         Ok(daily_max) => daily_max,
@@ -666,6 +868,7 @@ pub struct CsrfForm {
     csrf: String,
 }
 
+/// Remove a feed, for whoever may edit it. Articles already delivered from it are kept.
 pub async fn delete(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -677,7 +880,18 @@ pub async fn delete(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    sqlx::query!("DELETE FROM sources WHERE id = ? AND kind != 'builtin'", id).execute(&state.pool).await?;
+    let user = reader(&auth)?;
+    let pool = &state.pool;
+    let Some(source) = visible(pool, &user, id).await?.filter(|source| source.kind != "builtin") else {
+        return refused(StatusCode::NOT_FOUND, NO_SUCH);
+    };
+    if !source.editable_by(&user) {
+        return refused(StatusCode::FORBIDDEN, NOT_YOURS);
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query!("DELETE FROM follows WHERE source_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM sources WHERE id = ? AND kind != 'builtin'", id).execute(&mut *tx).await?;
+    tx.commit().await?;
     saved("removed")
 }
 
@@ -699,8 +913,11 @@ fn check_site(site: &str) -> Option<String> {
     named.then_some(site)
 }
 
-async fn session_sites(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar!(r#"SELECT domain AS "domain!" FROM sessions ORDER BY domain"#).fetch_all(pool).await
+/// Every site with a session, and who saved it.
+async fn sessions(pool: &SqlitePool) -> Result<Vec<(String, String)>, sqlx::Error> {
+    let rows =
+        sqlx::query!(r#"SELECT domain AS "domain!", saved_by FROM sessions ORDER BY domain"#).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|row| (row.domain, row.saved_by)).collect())
 }
 
 /// The site whose session a page at `url` is fetched with, as the pipeline matches it: the
@@ -714,6 +931,15 @@ fn covering(sites: &[String], url: &str) -> Option<String> {
         .cloned()
 }
 
+/// Whether this reader has a feed on `site`, which lets them save or replace its session.
+async fn has_feed_on(pool: &SqlitePool, user: &User, site: &str) -> Result<bool, sqlx::Error> {
+    let sites = [site.to_owned()];
+    Ok(list(pool, user)
+        .await?
+        .iter()
+        .any(|source| source.followed && source.kind == "rss" && covering(&sites, &source.url).is_some()))
+}
+
 #[derive(Deserialize)]
 pub struct SessionForm {
     csrf: String,
@@ -723,7 +949,8 @@ pub struct SessionForm {
 
 /// Save a subscriber session for a site, where only the browser container reads it. Every page
 /// on that site, from any feed or added by hand, is fetched with it. The cookie is never shown
-/// again, never stored in the database, and sent to that one site only.
+/// again, never stored in the database, and sent to that one site only. A reader saves one for
+/// a site they have a feed on; an admin, for any.
 pub async fn set_session(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -734,10 +961,15 @@ pub async fn set_session(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
+    let user = reader(&auth)?;
     let Some(site) = check_site(&form.site) else {
         let problem = "Give the site the session is for, such as ft.com.".to_owned();
         return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
     };
+    if !user.is_admin() && !has_feed_on(&state.pool, &user, &site).await? {
+        let problem = format!("Add or follow a feed on {site} first; a session is for the pages of a site you read.");
+        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+    }
     let Some(path) = login_file(&state, &site) else {
         let problem = "Sessions cannot be saved: this install has no logins folder (FORENOON_LOGINS_DIR).".to_owned();
         return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
@@ -756,9 +988,16 @@ pub async fn set_session(
     }
     write_whole(&path, content.as_bytes(), 0o600)?;
     let now = now_iso();
-    sqlx::query!("INSERT OR IGNORE INTO sessions (domain, created_at) VALUES (?, ?)", site, now)
-        .execute(&state.pool)
-        .await?;
+    // Replacing a cookie makes the session the replacer's to remove.
+    sqlx::query!(
+        "INSERT INTO sessions (domain, created_at, saved_by) VALUES (?, ?, ?)
+         ON CONFLICT (domain) DO UPDATE SET saved_by = excluded.saved_by",
+        site,
+        now,
+        user.id
+    )
+    .execute(&state.pool)
+    .await?;
     saved("session")
 }
 
@@ -768,6 +1007,7 @@ pub struct RemoveSessionForm {
     site: String,
 }
 
+/// Remove a session: whoever saved it, or an admin.
 pub async fn remove_session(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -778,7 +1018,25 @@ pub async fn remove_session(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
+    let user = reader(&auth)?;
     let Some(site) = check_site(&form.site) else { return saved("nosession") };
+    let saved_by =
+        sqlx::query_scalar!("SELECT saved_by FROM sessions WHERE domain = ?", site).fetch_optional(&state.pool).await?;
+    match saved_by {
+        None => return saved("nosession"),
+        Some(saved_by) if saved_by != user.id && !user.is_admin() => {
+            // Told apart only by a reader who sees the session anyway; to anyone else there
+            // is no session to speak of.
+            if has_feed_on(&state.pool, &user, &site).await? {
+                return refused(
+                    StatusCode::FORBIDDEN,
+                    "That session was saved by someone else; an admin can remove it.",
+                );
+            }
+            return saved("nosession");
+        }
+        Some(_) => {}
+    }
     sqlx::query!("DELETE FROM sessions WHERE domain = ?", site).execute(&state.pool).await?;
     if let Some(path) = login_file(&state, &site) {
         match std::fs::remove_file(path) {
@@ -800,5 +1058,25 @@ mod tests {
         for bad in ["", "com", "localhost", "192.168.1.1", "ft.com/path", "ft.com:443", "a b.com", "-x.com", "x..com"] {
             assert_eq!(check_site(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn an_address_names_the_same_feed_whatever_its_dressing() {
+        let same = same_feed("https://www.paper.example/rss");
+        for url in ["http://paper.example/rss", "HTTPS://Paper.Example/rss/", " www.paper.example/rss "] {
+            assert_eq!(same_feed(url), same, "{url}");
+        }
+        assert_ne!(same_feed("https://paper.example/rss.xml"), same);
+        assert_ne!(same_feed("https://blogs.paper.example/rss"), same);
+    }
+
+    #[test]
+    fn a_feed_is_covered_by_the_most_particular_session_for_its_host() {
+        let sites = ["ft.com".to_owned(), "blogs.ft.com".to_owned(), "nytimes.com".to_owned()];
+        assert_eq!(covering(&sites, "https://www.ft.com/rss").as_deref(), Some("ft.com"));
+        assert_eq!(covering(&sites, "https://blogs.ft.com/x").as_deref(), Some("blogs.ft.com"));
+        assert_eq!(covering(&sites, "https://FT.COM/").as_deref(), Some("ft.com"));
+        assert_eq!(covering(&sites, "https://notft.com/rss"), None);
+        assert_eq!(covering(&sites, "nonsense"), None);
     }
 }

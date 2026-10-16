@@ -18,22 +18,43 @@ links, and the ratings feed the next day's choices. Web pages show what was deli
 what was passed over, take ratings and links added by hand, and hold all the settings.
 
 It runs as containers on a home server. It is not a hosted service: each install fetches only
-what its own users configure and delivers only to the addresses its admin has set.
+what its own users configure and delivers only to the addresses its readers have set.
 
 ## 2. Users and configuration
 
 - An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
   addresses, a daily target of stories (default 8; section 7e) and an interests text. They
   live in the database: a reader is an account of the web pages
-  (section 9a), created with `forenoon-web add-user` and edited on its Reading and account
-  pages. The
+  (section 9a), made by an admin's invitation (or `forenoon-web add-user`) and edited on its
+  Reading and account pages. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
-- **Sources** come in two kinds, each with its own section on the web pages' Sources page
-  (admins only), which also shows how each source's last runs went. A source is one compact
-  row (a coloured dot for its state, name, address, and tags for pinned, paused, places a day
-  and where its text comes from), opened to change it; feeds that are failing or whose
-  address could not be checked are listed first under "Needs attention". The list is
+- **Sources** belong to the household and are read for the readers who **follow** them: a
+  reader's issue is built from the sources they follow, and nothing else. Each reader has
+  their own pin on a source. A feed is added **shared** unless the adder unticks it; a
+  private feed is the adder's alone until they share it: nobody else sees it anywhere,
+  except an admin, who sees every source and may share or unshare any. A shared source is listed for the rest of the household to follow.
+  A new account follows every shared source (`add-user --follow-nothing` for none). A feed
+  added by an address the reader can already see (shared, their own or followed; case, the
+  scheme, `www.` and a trailing slash aside) is followed, not added again. Another reader's
+  private feed is never matched, whatever its address, so nobody learns of one by guessing;
+  the same feed may then exist twice, once each, and the address check's rewriting of a
+  site's address to its feed's can have the same effect. Names are unique across the
+  install, since articles and health records refer to a source by name; a reader who picks
+  a taken name is told so, and an article two such feeds carry is named for whichever
+  reader's run saw it first. Both are accepted as the one small leak.
+  - Who may do what: anyone adds feeds, follows, unfollows and pins; the reader who added
+    a feed changes, shares or removes it while nobody else follows it, and shares or
+    unshares it at any time; an admin does all of that to any source; pausing a source,
+    which stops it for everyone, and switching a built-in source on or off are an admin's.
+
+  Sources come in two kinds, each with its own section on the web pages' Sources page,
+  which also shows how each source's last runs went. A source is one compact row (a
+  coloured dot for its state, name, address, and tags for pinned, not followed, paused,
+  places a day, where its text comes from, and shared or private, with the adder's name
+  for an admin), opened to change it; feeds that are failing or whose address could not be
+  checked are listed first under "Needs attention" (for a reader, only the ones they
+  follow), then the rest the reader follows, then those they could follow. The list is
   narrowed by a text filter on name and address and by views with a count each (all,
   failing, paused, pinned), both plain GET parameters; adding a feed or a session is a
   panel opened from a button, apart from the list.
@@ -43,9 +64,10 @@ what its own users configure and delivers only to the addresses its admin has se
     delivered by itself.
   - **Feeds**: RSS or Atom, by address.
 
-  They live in the database. The pipeline reads them at the start of every run; with no
-  feeds, nothing is delivered and an alert is sent. A feed has a name and:
-  - pinned: its articles are taken before all other sources, every one of them.
+  They live in the database. The pipeline reads each reader's at the start of their run; a
+  reader who follows nothing gets nothing, and an alert says so. A feed has a name and:
+  - pinned (by each reader for themselves): its articles are taken before all other
+    sources, every one of them.
   - places a day (default 2, 0 for no limit): the most of an issue it may take. For a pinned
     source, how many of its articles use the day's places; the rest are extra.
   - where the text comes from: the page, falling back to the feed (default); always the
@@ -63,12 +85,14 @@ what its own users configure and delivers only to the addresses its admin has se
   Articles and health records refer to a source by name, so renaming one starts its health
   record afresh.
 
-  **Subscriber sessions.** A site the reader subscribes to can have a session: the cookie
-  the reader's own browser sends to it, pasted once in the Sources page's Subscriber
-  sessions section. It belongs to the site, not to a feed: every page on the site and its
-  subdomains is fetched with it, from any of its feeds or added by hand, and each feed on
-  the site says so on its row. The pipeline knows only which sites have one (the `sessions`
-  table). (A
+  **Subscriber sessions.** A site the household subscribes to can have a session: the cookie
+  a reader's own browser sends to it, pasted once in the Sources page's Subscriber
+  sessions section. It belongs to the site, not to a feed or a reader: every page on the
+  site and its subdomains is fetched with it, from any of its feeds or added by hand, for
+  whoever follows the feed, so nobody pastes a cookie twice; each feed on the site says so
+  on its row. A reader sees the sessions of the sites they have a feed on, may save or
+  replace one for such a site, and may remove one they saved; an admin sees and does all.
+  The pipeline knows only which sites have one (the `sessions` table). (A
   username and password are not offered: the FT and the NYT both ask for a CAPTCHA at
   sign-in.) Feeds are read as usual, without it.
   Only the article pages the ranking wants read (the reading pass and the day's choices) are
@@ -265,7 +289,9 @@ folder, for good by default (`keep_pages_days`: a number of days prunes older on
 none). They are the only copy of what was read: for re-sending, and for learning from later. `forenoon replay` runs the current
 extractor over every saved page and lists those whose verdict or word count differs from what
 was recorded, so a change to extraction can be checked against real pages. Dry runs and
-`forenoon report` save nothing.
+`forenoon report` save nothing. A page saved in the last six hours is not fetched again by
+another reader's run that picks the same article: two readers of one paywalled feed cost the
+site one page. "Fetch again" and links added by hand always fetch.
 
 ## 5. Images
 
@@ -613,7 +639,7 @@ shown on the row for a day. At most 30 a day per reader.
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
-Send to Kindle addresses. Recipients come only from the reader's account, where an admin sets them;
+Send to Kindle addresses. Recipients come only from the reader's own account page;
 nothing in a feed or article can add or change a recipient. The sender address must be on
 the Amazon account's approved sender list.
 
@@ -637,9 +663,21 @@ database with the pipeline.
 
 - **Accounts.** Every page except sign-in and the health check needs a session. An account
   is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
-  reader sees and changes only their own deliveries, ratings and settings. Accounts are created from the command line
-  (`forenoon-web add-user <id> --email <address>`); there is no sign-up page. The first account is an admin,
-  later ones readers; the role is stored but grants nothing yet.
+  reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
+  created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
+  admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
+  sees every source and session, and pauses sources for everyone. Each reader sets their own
+  Kindle addresses.
+- **Invitations.** On the Accounts page an admin invites a reader by email address, with an
+  id (taken from the address when none is given), a name and a role. The account exists from
+  then on, invited: no password, no sign-in, no reset email, and the pipeline delivers nothing
+  to it. The address gets a link that works for seven days, once; the admin is shown the link
+  too, for when the email does not arrive, and can send a fresh one (the old stops working)
+  or take the invitation back, which removes the account. The join page shows the address,
+  asks for a name, password, time zone and Kindle addresses, and signs the reader in; the
+  address counts as confirmed, the account follows every shared source, and the reader lands
+  on the Reading page. Kindle hints name the install's sender address (`FORENOON_SMTP_SENDER`)
+  and link to Amazon's Personal Document Settings, where every Kindle must approve it.
 - **Sign-in is by email address**, stored lowercase so casing and stray spaces cannot make
   two accounts of one address. The account id is separate and never changes: it names the
   reader in the pipeline's records.
@@ -690,8 +728,8 @@ database with the pipeline.
   characters at most), and the last 10 versions with who wrote each and a button to restore
   it. `/learned`, the notes' old address, leads here.
 - **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
-  name: Newsstand, Archive, Reading, then for an admin Sources, Settings and Problems (with
-  the count of reports), then the reader's name, which opens the account page. The current
+  name: Newsstand, Archive, Reading, Sources, then for an admin Settings, Accounts and
+  Problems (with the count of reports), then the reader's name, which opens the account page. The current
   page is marked. Sign out is on the account page. Below the row each page has its own
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.
@@ -721,8 +759,8 @@ database with the pipeline.
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
 - **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
-  out. Only an admin can change Kindle addresses, because they decide where content is
-  emailed. Interests and stories a day are on the Reading page.
+  out. A reader changes only their own row, so the only addresses an account can send to are
+  the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
@@ -736,7 +774,7 @@ database with the pipeline.
   serve it, only to a reader the article was delivered to. A card falls back to the
   article's own lead image address when there is no thumbnail, and has no picture when the
   article has none. `forenoon thumbs` makes thumbnails for articles delivered earlier.
-- Who owns what in the database: the web program owns accounts (with the readers' settings)
+- Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
   pipeline needs cannot be dropped unnoticed. Of the pipeline's tables the web program writes only ratings and the
@@ -776,13 +814,13 @@ database with the pipeline.
 
 The web pages have their own program:
 
-| Command                                                                                                 | Purpose                                    |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]` | Serve the pages and answer rating links    |
-| `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone]`                  | Create an account; asks for the password   |
-| `forenoon-web set-password ID`                                                                          | Change a password, signing the account out |
-| `forenoon-web users`                                                                                    | List the accounts                          |
-| `forenoon-web health`                                                                                   | Exit 0 when the local server answers       |
+| Command                                                                                                   | Purpose                                    |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]`   | Serve the pages and answer rating links    |
+| `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone] [--follow-nothing]` | Create an account; asks for the password   |
+| `forenoon-web set-password ID`                                                                            | Change a password, signing the account out |
+| `forenoon-web users`                                                                                      | List the accounts, invited ones marked     |
+| `forenoon-web health`                                                                                     | Exit 0 when the local server answers       |
 
 ## 11. Storage
 
@@ -816,7 +854,8 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 ## 13. Security properties
 
 - Fetched content cannot choose recipients, run code, or reach private network addresses.
-- Rating links accept only signed, expiring tokens and write only ratings.
+- Rating links accept only signed, expiring tokens and write only ratings. Emailed links
+  (confirm, reset, invite) are stored only as hashes, expire, and work once.
 - The web pages need a login and show each reader only their own data. Admin pages are
   public too, behind the same login and an admin role.
 - Secrets are never read from or written to config files, reports or logs.
@@ -844,6 +883,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 - The whole archive of a followed blog; full-text search of stored articles; expiring
   articles past their shelf life; a "throwback" section of older pieces worth a second look.
 - A search agent, or an MCP server, over the library.
-- Editing the prompts in the browser; sign-up and admin pages for accounts.
+- Editing the prompts in the browser; changing a reader's role from the Accounts page (a
+  public sign-up page is not wanted).
 - Newsletters by email as a source.
 - E-readers other than Kindle.

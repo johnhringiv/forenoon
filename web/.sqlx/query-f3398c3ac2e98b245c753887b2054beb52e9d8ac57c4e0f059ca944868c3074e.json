@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, role, timezone, created_at, kindle_addresses, email, email_verified_at\n           FROM users ORDER BY created_at",
+  "query": "SELECT users.id AS \"id!\", name, role, timezone, users.created_at, kindle_addresses, users.email, email_verified_at,\n           invited_at, invite.expires_at AS \"invite_expires_at?\"\n           FROM users LEFT JOIN email_tokens invite ON invite.user_id = users.id AND invite.purpose = 'invite'\n           ORDER BY users.created_at, users.id",
   "describe": {
     "columns": [
       {
@@ -42,6 +42,16 @@
         "name": "email_verified_at",
         "ordinal": 7,
         "type_info": "Text"
+      },
+      {
+        "name": "invited_at",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "invite_expires_at?",
+        "ordinal": 9,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -55,8 +65,10 @@
       false,
       false,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "65961d4a3fa324354b1e48657b6e5f8a2a1bff718482a44ec2a65204069947e2"
+  "hash": "f3398c3ac2e98b245c753887b2054beb52e9d8ac57c4e0f059ca944868c3074e"
 }

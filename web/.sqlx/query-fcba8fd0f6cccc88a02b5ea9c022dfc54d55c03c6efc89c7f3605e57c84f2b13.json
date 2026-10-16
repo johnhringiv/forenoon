@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM users WHERE id = ? AND invited_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "fcba8fd0f6cccc88a02b5ea9c022dfc54d55c03c6efc89c7f3605e57c84f2b13"
+}

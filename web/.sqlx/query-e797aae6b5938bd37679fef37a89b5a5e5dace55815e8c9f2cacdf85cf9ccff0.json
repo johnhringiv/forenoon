@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT domain AS \"domain!\", saved_by FROM sessions ORDER BY domain",
+  "describe": {
+    "columns": [
+      {
+        "name": "domain!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "saved_by",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "e797aae6b5938bd37679fef37a89b5a5e5dace55815e8c9f2cacdf85cf9ccff0"
+}

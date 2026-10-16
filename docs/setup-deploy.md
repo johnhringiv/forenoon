@@ -174,13 +174,17 @@ from their own image. Without at least one reader the daily run delivers nothing
    pipeline's records. You are asked for a password of at least 10 characters:
    `sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <you>@example.com --kindle <you>@kindle.com`
    The first account is an admin. Dates are shown in the container's `TZ` unless you pass
-   `--timezone`.
+   `--timezone`. Everyone else is invited from the **Accounts** page once you are signed in:
+   they get an emailed link, choose their own password and Kindle address, and start by
+   following every source shared with the household. Each Kindle must have the sender
+   address from `.env` on its approved list at Amazon; the join page says so and links there.
 5. Open the public address and sign in. A banner asks you to confirm your address: press
    **Send it again** and open the link in the email. Everything works before you do, but a
    forgotten password can only be reset through a confirmed address.
 6. On **Account**, write your interests and set the stories a day. Changes apply from the
    next run.
-7. On **Sources** (admins only), add the feeds to read; without any, nothing is delivered.
+7. On **Sources**, add the feeds to read; a reader who follows none gets nothing. A feed is
+   the adder's alone until shared with the household; an admin sees every one.
    Hacker News and Lobsters are built in and can be switched off there. Sessions for sites
    you subscribe to are saved there too once the browser container runs
    ([setup-sessions.md](setup-sessions.md)).
@@ -188,7 +192,8 @@ from their own image. Without at least one reader the daily run delivers nothing
    default. Nothing needs changing for a first run.
 
 Other account commands, run the same way: `set-password <id>` (also signs the account out
-everywhere) and `users`, which lists each account's email. `set-password` is the way back in
+everywhere) and `users`, which lists each account's email and marks invitations not yet
+accepted. `set-password` is the way back in
 if the email route fails.
 
 The deploy gives the container two secrets: the mail password and the feedback secret, which

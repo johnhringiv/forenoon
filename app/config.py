@@ -1,7 +1,7 @@
 """Configuration: defaults here, deploy settings and secrets from the environment, and the
 rest from the settings an admin saves on the web pages (the `settings` table).
 
-Recipients come only from the database, where an admin sets them.
+Recipients come only from the database, where each reader sets their own.
 """
 
 from __future__ import annotations
@@ -112,7 +112,6 @@ class Source:
     daily_max: int = 0  # at most this many of a day's places; 0 for no limit
     # auto: extract from the page, fall back to feed content. page / feed force one.
     extract: str = "auto"
-    users: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,6 +142,7 @@ class Config:
     alerts: Alerts = field(default_factory=Alerts)
     llm: Llm = field(default_factory=Llm)
     discovery: Discovery = field(default_factory=Discovery)
+    # The feeds to read: for a delivery, the ones the reader follows (Store.sources).
     sources: tuple[Source, ...] = ()
     # Sites the reader subscribes to and saved a session for (app/sessions.py): their pages,
     # from any source or added by hand, are fetched with it.
@@ -182,9 +182,6 @@ class Config:
             if user.id == user_id:
                 return user
         raise ConfigError(f"unknown user: {user_id}")
-
-    def sources_for(self, user: User) -> list[Source]:
-        return [s for s in self.sources if not s.users or user.id in s.users]
 
 
 # Set by the deploy, not on the web pages.

@@ -1,6 +1,7 @@
 //! Forenoon's web pages: sign in, then a newsstand of what was delivered and how it was rated.
 //! Also the answer to the rating links in delivered books, which need no sign-in.
 
+pub mod accounts;
 pub mod archive;
 pub mod auth;
 pub mod db;
@@ -56,6 +57,9 @@ pub struct Options {
     pub proxy: proxy::Proxy,
     /// The secret the pipeline signs rating links with (`FORENOON_FEEDBACK_SECRET`).
     pub feedback_secret: Option<Vec<u8>>,
+    /// The address issues are sent from (`FORENOON_SMTP_SENDER`), which every Kindle must
+    /// approve; shown beside the Kindle address fields. `None` when it is not set.
+    pub sender: Option<String>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -77,6 +81,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         pool,
         sign_ins: Arc::new(Limiter::new(SIGN_IN_WINDOW)),
         mail_limits: Arc::new(Limiter::new(Duration::from_secs(3600))),
+        public_limits: Arc::new(Limiter::evicting(Duration::from_secs(3600))),
         mailer: options.mailer,
         base_url: options.base_url.trim_end_matches('/').to_owned(),
         thumbs_dir: options.data_dir.join("thumbs"),
@@ -84,6 +89,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         logins_dir: options.logins_dir,
         proxy: Arc::new(options.proxy),
         feedback_secret: options.feedback_secret.map(Arc::from),
+        sender: options.sender.filter(|sender| !sender.is_empty()),
         // Evicting: these links are public, and a flood of addresses must not stop a Kindle.
         taps: Arc::new(Limiter::evicting(Duration::from_secs(60))),
     };
@@ -112,9 +118,13 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/sources/{id}", post(sources::update))
         .route("/sources/{id}/delete", post(sources::delete))
         .route("/sources/{id}/toggle", post(sources::toggle))
+        .route("/sources/{id}/follow", post(sources::set_follow))
         .route("/sources/sessions", post(sources::set_session))
         .route("/sources/sessions/delete", post(sources::remove_session))
         .route("/settings", get(settings::page).post(settings::save))
+        .route("/accounts", get(accounts::page).post(accounts::invite))
+        .route("/accounts/{id}/resend", post(accounts::resend))
+        .route("/accounts/{id}/revoke", post(accounts::revoke))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.
         .route_layer(middleware::from_fn(pages::require_login))
@@ -122,6 +132,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/forgot", get(pages::forgot_page).post(pages::forgot))
         .route("/reset/{token}", get(pages::reset_page).post(pages::reset))
         .route("/verify/{token}", get(pages::verify))
+        .route("/join/{token}", get(accounts::join_page).post(accounts::join))
         .route("/healthz", get(pages::health))
         .route("/f/{token}", get(feedback::tap))
         // Signed in or not: it names no page, so it gives nothing away.

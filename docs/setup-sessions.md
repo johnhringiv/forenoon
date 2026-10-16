@@ -29,8 +29,13 @@ against a site's terms even for subscribers: that is yours to check.
 3. Under **Subscriber sessions**, give the site (such as `ft.com` or `nytimes.com`), paste
    the cookie your browser sends to it when you are signed in, and press **Save session**.
    Every page on that site and its subdomains is then fetched with it: from any of its
-   feeds, and links you add by hand. Each feed on the site says so on its row. Saving the
+   feeds, and links added by hand. Each feed on the site says so on its row. Saving the
    site again replaces the cookie.
+
+The session is the household's. Another reader who follows a feed on the site, or adds one,
+gets its pages fetched with the same cookie without pasting anything; they see the session
+on their Sources page but cannot remove it. A reader can save a session only for a site they
+have a feed on; an admin, for any site.
 
 Two ways to get the cookie:
 

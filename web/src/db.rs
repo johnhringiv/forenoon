@@ -93,6 +93,101 @@ pub async fn add_user(
     Ok(())
 }
 
+/// An account for a reader an admin has invited: no password until they join through the
+/// emailed link (see `join`). `invited_at` marks it until then.
+pub async fn invite_user(
+    pool: &SqlitePool,
+    id: &str,
+    email: &str,
+    name: &str,
+    role: &str,
+    timezone: &str,
+) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    sqlx::query!(
+        "INSERT INTO users (id, email, name, password_hash, role, timezone, created_at, invited_at)
+         VALUES (?, ?, ?, '', ?, ?, ?, ?)",
+        id,
+        email,
+        name,
+        role,
+        timezone,
+        now,
+        now
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The invited reader has chosen a password: the account is theirs from now on, in one
+/// transaction with its link used up and the household's shared sources followed. The address
+/// counts as confirmed, since the link reached it. False when the account is not an open invite.
+pub async fn join(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    password_hash: &str,
+    timezone: &str,
+    kindle_addresses: &str,
+) -> Result<bool, sqlx::Error> {
+    let now = now_iso();
+    let mut tx = pool.begin().await?;
+    let done = sqlx::query!(
+        "UPDATE users SET name = ?, password_hash = ?, timezone = ?, kindle_addresses = ?, email_verified_at = ?,
+         invited_at = NULL WHERE id = ? AND invited_at IS NOT NULL",
+        name,
+        password_hash,
+        timezone,
+        kindle_addresses,
+        now,
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Ok(false);
+    }
+    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?", id, INVITE).execute(&mut *tx).await?;
+    follow_shared_with(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Take back an invitation: the account goes, with its link. False when it is not an open invite.
+pub async fn revoke_invite(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let done = sqlx::query!("DELETE FROM users WHERE id = ? AND invited_at IS NOT NULL", id).execute(&mut *tx).await?;
+    if done.rows_affected() == 0 {
+        return Ok(false);
+    }
+    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM follows WHERE user_id = ?", id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Follow every source shared with the household, as a new account does so that its first
+/// issue has something in it.
+pub async fn follow_shared(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    follow_shared_with(&mut tx, user).await?;
+    tx.commit().await
+}
+
+async fn follow_shared_with(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user: &str) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    sqlx::query!(
+        "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at)
+         SELECT ?, id, 0, ? FROM sources WHERE shared = 1",
+        user,
+        now
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// True when the account exists. Changing the hash signs out every session made with the old one.
 pub async fn set_password(pool: &SqlitePool, id: &str, password_hash: &str) -> Result<bool, sqlx::Error> {
     let done = sqlx::query!("UPDATE users SET password_hash = ? WHERE id = ?", password_hash, id).execute(pool).await?;
@@ -127,13 +222,19 @@ pub struct UserLine {
     pub kindle_addresses: String,
     pub email: Option<String>,
     pub email_verified_at: Option<String>,
+    pub invited_at: Option<String>,
+    /// When the invitation's link stops working; `None` for an account in use, or an invite
+    /// whose link has been cleared out.
+    pub invite_expires_at: Option<String>,
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserLine>, sqlx::Error> {
     sqlx::query_as!(
         UserLine,
-        r#"SELECT id AS "id!", name, role, timezone, created_at, kindle_addresses, email, email_verified_at
-           FROM users ORDER BY created_at"#
+        r#"SELECT users.id AS "id!", name, role, timezone, users.created_at, kindle_addresses, users.email, email_verified_at,
+           invited_at, invite.expires_at AS "invite_expires_at?"
+           FROM users LEFT JOIN email_tokens invite ON invite.user_id = users.id AND invite.purpose = 'invite'
+           ORDER BY users.created_at, users.id"#
     )
     .fetch_all(pool)
     .await
@@ -143,6 +244,7 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserLine>, sqlx::Error>
 
 pub const VERIFY: &str = "verify";
 pub const RESET: &str = "reset";
+pub const INVITE: &str = "invite";
 
 fn token_hash(token: &str) -> String {
     use sha2::{Digest, Sha256};

@@ -487,7 +487,7 @@ pub async fn add(
         return Ok(Redirect::to("/archive?show=added&error=link").into_response());
     };
     if action != "keep" && user.kindle_addresses.trim().is_empty() {
-        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; an admin sets it.");
+        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; add one on your account page.");
     }
     // A rating belongs to something already read.
     let rating = form.rating.as_deref().and_then(|n| n.parse::<i64>().ok()).filter(|n| (1..=5).contains(n));

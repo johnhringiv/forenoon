@@ -194,9 +194,11 @@ class Store:
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
             return ()
         learned = "learned" if self.can_learn() else "''"  # older web app: no such column
+        # An account an admin has invited is nobody's until its reader joins: no issue for it.
+        joined = "WHERE invited_at IS NULL" if self._has_column("users", "invited_at") else ""
         rows = self.db.execute(
             f"SELECT id, name, kindle_addresses, daily_stories, interests, {learned} AS learned"
-            " FROM users ORDER BY created_at, id"
+            f" FROM users {joined} ORDER BY created_at, id"
         ).fetchall()
         return tuple(
             User(
@@ -230,15 +232,27 @@ class Store:
                     (user_id, notes, stamp),
                 )
 
-    def sources(self) -> tuple[Source, ...]:
-        """The sources to read, as set on the web app's sources page; paused ones are left out."""
-        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
-            return ()
-        rows = self.db.execute(
-            "SELECT id, name, url, extract, pinned, daily_max FROM sources"
-            " WHERE enabled = 1 AND kind = 'rss'"
-            " ORDER BY pinned DESC, name COLLATE NOCASE"
-        ).fetchall()
+    def sources(self, user_id: str | None = None) -> tuple[Source, ...]:
+        """The feeds to read, as set on the web app's Sources page; paused ones are left out.
+
+        For a reader, the feeds they follow, pinned as they pinned them. With no reader, every
+        feed, none pinned: for the reports and the links added by hand.
+        """
+        if not self._has_table("follows"):
+            return ()  # the web app has not run yet
+        if user_id is None:
+            rows = self.db.execute(
+                "SELECT name, url, extract, 0 AS pinned, daily_max FROM sources"
+                " WHERE enabled = 1 AND kind = 'rss' ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        else:
+            rows = self.db.execute(
+                "SELECT s.name, s.url, s.extract, f.pinned, s.daily_max FROM sources s"
+                " JOIN follows f ON f.source_id = s.id AND f.user_id = ?"
+                " WHERE s.enabled = 1 AND s.kind = 'rss'"
+                " ORDER BY f.pinned DESC, s.name COLLATE NOCASE",
+                (user_id,),
+            ).fetchall()
         return tuple(
             Source(
                 name=row["name"],
@@ -256,6 +270,9 @@ class Store:
             return ()
         return tuple(row["domain"] for row in self.db.execute("SELECT domain FROM sessions ORDER BY domain"))
 
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(row["name"] == column for row in self.db.execute(f"PRAGMA table_info({table})"))
+
     def _has_table(self, name: str) -> bool:
         return bool(
             self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone()
@@ -269,7 +286,7 @@ class Store:
         """
         if not self._has_table("sources"):
             return ()
-        if not any(column["name"] == "builtin" for column in self.db.execute("PRAGMA table_info(sources)")):
+        if not self._has_table("follows"):
             return ()  # the web app has not been upgraded yet
         rows = {
             row["builtin"]: row["enabled"]
@@ -279,11 +296,23 @@ class Store:
         if missing:
             with self.db:
                 self.db.executemany(
-                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at, daily_max)"
-                    " VALUES (?, 'builtin', ?, 0, ?, 0)",
+                    "INSERT OR IGNORE INTO sources (name, kind, builtin, enabled, created_at, daily_max, shared)"
+                    " VALUES (?, 'builtin', ?, 0, ?, 0, 1)",
                     missing,
                 )
         return tuple(key for key in known if rows.get(key))
+
+    def followed_builtins(self, user_id: str, sites: tuple[str, ...]) -> tuple[str, ...]:
+        """Of the built-in sources switched on (`sites`, by key), the ones this reader follows."""
+        if not self._has_table("follows"):
+            return ()
+        rows = self.db.execute(
+            "SELECT s.builtin FROM sources s JOIN follows f ON f.source_id = s.id AND f.user_id = ?"
+            " WHERE s.kind = 'builtin'",
+            (user_id,),
+        )
+        followed = {row["builtin"] for row in rows}
+        return tuple(key for key in sites if key in followed)
 
     def builtin_daily_max(self) -> dict[str, int]:
         """The most of a day's places each built-in source may take, by key; 0 for no limit."""
@@ -299,9 +328,13 @@ class Store:
         return {row["key"]: row["value"] for row in self.db.execute("SELECT key, value FROM settings")}
 
     def admin_emails(self) -> tuple[str, ...]:
+        """Where alerts go when no address is set: the admins who have joined, not ones only invited."""
         if not self._has_table("users"):
             return ()
-        rows = self.db.execute("SELECT email FROM users WHERE role = 'admin' AND email != '' ORDER BY created_at, id")
+        joined = "AND invited_at IS NULL" if self._has_column("users", "invited_at") else ""
+        rows = self.db.execute(
+            f"SELECT email FROM users WHERE role = 'admin' AND email != '' {joined} ORDER BY created_at, id"
+        )
         return tuple(row["email"] for row in rows)
 
     def pending_source_checks(self) -> list[sqlite3.Row]:
