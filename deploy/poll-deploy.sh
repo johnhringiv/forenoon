@@ -2,9 +2,10 @@
 # Poll the deploy image tag and redeploy when its digest changes, and
 # self-heal: an unchanged tag with the pipeline container not running (a host
 # reboot) also triggers a redeploy. The web and tunnel containers are healed
-# as a pair on their own, without bouncing the pipeline: after a reboot
-# cloudflared can start before the web container and fail to join its network
-# namespace, and a web container that exited must not interrupt a daily run.
+# on their own, without bouncing the pipeline: a web container that exited
+# must not interrupt a daily run, and a tunnel that did not come up (after a
+# reboot cloudflared can start before the web container and fail to join its
+# network namespace) is replaced without touching the web container.
 #
 # Runs from a scheduler on the host (Synology DSM Task Scheduler, every 5
 # minutes, as root; elsewhere: cron). Deploys are pull-based: CI publishes to
@@ -73,8 +74,14 @@ fi
 latest=$(docker image inspect "$IMAGE" --format '{{.Id}}')
 running=$(docker inspect forenoon --format '{{.Image}}' 2>/dev/null || echo none)
 
-# The tunnel image: a failed pull here is not fatal, the running one keeps working.
+# The tunnel image: a failed pull here is not fatal, the running one keeps working. The tunnel
+# container not running (after a reboot it can start before the web container and fail to join
+# its network namespace) means replacing it alone, since the web container stays as it is.
 tunnel_changed=false
+if [ -n "$TUNNEL_TOKEN" ]; then
+    tunnel_up=$(docker inspect forenoon-cloudflared --format '{{.State.Running}}' 2>/dev/null || echo false)
+    [ "$tunnel_up" = true ] || tunnel_changed=true
+fi
 if [ -n "$TUNNEL_TOKEN" ] && docker pull -q "$CLOUDFLARED_IMAGE" >/dev/null 2>&1; then
     tunnel_latest=$(docker image inspect "$CLOUDFLARED_IMAGE" --format '{{.Id}}')
     tunnel_running=$(docker inspect forenoon-cloudflared --format '{{.Image}}' 2>/dev/null || echo none)
@@ -94,16 +101,11 @@ if [ -n "$BROWSER_IMAGE" ] && docker pull -q "$BROWSER_IMAGE" >/dev/null 2>&1; t
 fi
 
 # The web pages image, the same way; replacing it replaces the tunnel inside it too, and the
-# web container, or the tunnel in its network namespace, not running means replacing just
-# those two. A failed pull is logged: a newly published package is private until made public,
-# and the container is then not updated.
+# web container not running means replacing those two as well. A failed pull is logged: a
+# newly published package is private until made public, and the container is then not updated.
 web_changed=false
 web_up=$(docker inspect forenoon-web --format '{{.State.Running}}' 2>/dev/null || echo false)
 [ "$web_up" = true ] || web_changed=true
-if [ -n "$TUNNEL_TOKEN" ]; then
-    tunnel_up=$(docker inspect forenoon-cloudflared --format '{{.State.Running}}' 2>/dev/null || echo false)
-    [ "$tunnel_up" = true ] || web_changed=true
-fi
 if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
     web_latest=$(docker image inspect "$WEB_IMAGE" --format '{{.Id}}')
     web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
@@ -115,7 +117,7 @@ fi
 if [ "$latest" = "$running" ]; then
     if all_running; then
         if [ "$web_changed" = true ]; then
-            echo "$(date -u +%FT%TZ) new image for $WEB_IMAGE, or its container or the tunnel stopped; replacing the web and tunnel containers"
+            echo "$(date -u +%FT%TZ) new image for $WEB_IMAGE, or its container stopped; replacing the web and tunnel containers"
             if ! ONLY=web sh "$DIR/deploy.sh" "$ENV_FILE"; then
                 echo "$(date -u +%FT%TZ) WEB UNHEALTHY after update"
                 exit 1
@@ -130,7 +132,7 @@ if [ "$latest" = "$running" ]; then
             docker image prune -f >/dev/null
         fi
         if [ "$tunnel_changed" = true ]; then
-            echo "$(date -u +%FT%TZ) new image for $CLOUDFLARED_IMAGE; replacing the tunnel container only"
+            echo "$(date -u +%FT%TZ) new image for $CLOUDFLARED_IMAGE, or its container stopped; replacing the tunnel container only"
             ONLY=tunnel sh "$DIR/deploy.sh" "$ENV_FILE"
             sleep 10
             if edge_healthy; then

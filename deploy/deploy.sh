@@ -241,6 +241,9 @@ echo "$(date -u +%FT%TZ) recreating forenoon-web from $WEB_IMAGE"
 start_web
 web_healthy=true
 wait_web || web_healthy=false
+# The tunnel next, before the pipeline is touched: a pipeline image that does not run must
+# not leave the public hostname dark.
+start_tunnel
 
 echo "$(date -u +%FT%TZ) recreating forenoon from $IMAGE"
 docker stop -t 30 forenoon >/dev/null 2>&1 || true
@@ -264,7 +267,6 @@ run_app forenoon -e FORENOON_SMTP_PASSWORD -e FORENOON_ANTHROPIC_API_KEY -e FORE
     -e FORENOON_SMTP_MAX_MESSAGE_BYTES \
     "$IMAGE" schedule
 
-start_tunnel
 start_browser
 
 sleep 5
