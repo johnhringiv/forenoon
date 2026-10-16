@@ -18,7 +18,7 @@ links, and the ratings feed the next day's choices. Web pages show what was deli
 what was passed over, take ratings and links added by hand, and hold all the settings.
 
 It runs as containers on a home server. It is not a hosted service: each install fetches only
-what its own users configure and delivers only to the addresses its admin has set.
+what its own users configure and delivers only to the addresses its readers have set.
 
 ## 2. Users and configuration
 
@@ -723,8 +723,8 @@ database with the pipeline.
   characters at most), and the last 10 versions with who wrote each and a button to restore
   it. `/learned`, the notes' old address, leads here.
 - **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
-  name: Newsstand, Archive, Reading, Sources, then for an admin Settings and Problems (with
-  the count of reports), then the reader's name, which opens the account page. The current
+  name: Newsstand, Archive, Reading, Sources, then for an admin Settings, Accounts and
+  Problems (with the count of reports), then the reader's name, which opens the account page. The current
   page is marked. Sign out is on the account page. Below the row each page has its own
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.

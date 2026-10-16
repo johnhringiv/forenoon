@@ -22,7 +22,7 @@ use tower_sessions::Session;
 use crate::{
     auth::{self, AuthSession, User},
     db,
-    mail::Message,
+    mail::{Mailer, Message},
     pages::{
         AppError, AppState, Client, MAX_NAME, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, local, message,
         random_token, reader, refused, same_origin,
@@ -45,7 +45,7 @@ struct Row {
     role: String,
     email: String,
     kindle: String,
-    /// "Joined 3 October 2026", or how the invitation stands.
+    /// "Added 3 October 2026", or how the invitation stands.
     state: String,
     invited: bool,
 }
@@ -79,7 +79,7 @@ async fn rows(state: &AppState, viewer: &User) -> Result<Vec<Row>, AppError> {
         .into_iter()
         .map(|user| {
             let state = match (&user.invited_at, &user.invite_expires_at) {
-                (None, _) => format!("Joined {}", day(&user.created_at, zone)),
+                (None, _) => format!("Added {}", day(&user.created_at, zone)),
                 (Some(_), Some(until)) if *until >= now => {
                     format!("Invited; the link works until {}", day(until, zone))
                 }
@@ -172,10 +172,13 @@ async fn send_invitation(
     );
     let mail = Message { to: email.to_owned(), subject: "You are invited to Forenoon".to_owned(), body };
     // A failure is not a reason to lose the invitation: the admin is shown the link to pass on.
-    let failed = state.mailer.send(mail).await.err().map(|error| {
+    let mut failed = state.mailer.send(mail).await.err().map(|error| {
         eprintln!("error: could not send an invitation: {error}");
         format!("The email could not be sent ({error}). Give them the link below instead.")
     });
+    if matches!(state.mailer, Mailer::Log) {
+        failed = Some("No mail server is set, so nothing was emailed. Give them the link below.".to_owned());
+    }
     Ok((link, failed))
 }
 

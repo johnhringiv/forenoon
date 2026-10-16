@@ -642,7 +642,7 @@ async fn an_admin_invites_a_reader_by_email_and_the_link_lets_them_join_once() {
     assert_eq!(mary.get(&site, "/accounts").await.status, StatusCode::FORBIDDEN);
     assert!(!mary.get(&site, "/").await.text.contains(r#"href="/accounts""#));
     let page = john.get(&site, "/accounts").await;
-    assert!(page.status == StatusCode::OK && page.text.contains("Mary") && page.text.contains("Joined "));
+    assert!(page.status == StatusCode::OK && page.text.contains("Mary") && page.text.contains("Added "));
     let csrf = page.csrf();
     let invite = |email: &'static str, id: &'static str, role: &'static str| {
         vec![
