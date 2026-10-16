@@ -33,7 +33,7 @@ what its own users configure and delivers only to the addresses its readers have
   reader's issue is built from the sources they follow, and nothing else. Each reader has
   their own pin on a source. A feed is added **shared** unless the adder unticks it; a
   private feed is the adder's alone until they share it: nobody else sees it anywhere,
-  except an admin, who sees every source and may share or unshare any. A shared source is listed for the rest of the household to follow.
+  except an admin, who sees every source and may share or unshare any. A source is followed for every reader when it is shared (added shared, or shared later), as it would be for an account made then; a reader who does not want it unfollows it, and later edits leave that alone. Unsharing it leaves its followers following.
   A new account follows every shared source (`add-user --follow-nothing` for none). A feed
   added by an address the reader can already see (shared, their own or followed; case, the
   scheme, `www.` and a trailing slash aside) is followed, not added again. Another reader's

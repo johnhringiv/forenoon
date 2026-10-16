@@ -1082,22 +1082,44 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
         ("shared", "1"),
     ];
     assert_eq!(admin.post(&site, &format!("/sources/{}", mine.id), &share).await.location, "/sources?saved=saved");
+    // Shared, it is followed for every reader, as it would be for an account made now.
     let text = carl.get(&site, "/sources").await.text;
     assert!(
-        text.contains("Shared with the household, not followed")
-            && text.contains(r#"any reader can follow it">Shared</span>"#),
+        text.contains("Following 3 of 3 sources")
+            && text.contains(r#"any reader can follow it">Shared</span>"#)
+            && !text.contains("Shared with the household, not followed"),
         "{text}"
     );
-    assert!(text.contains("Following 2 of 3 sources"));
-    // Now that he may see it, adding its address again, however dressed, follows it instead.
+    assert_eq!(sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap().followers, 3);
+    // Carl unfollows it, and a later edit of the shared feed leaves that alone.
+    let unfollow = [("csrf", carl_csrf.as_str()), ("follow", "0")];
+    carl.post(&site, &format!("/sources/{}/follow", mine.id), &unfollow).await;
+    assert_eq!(admin.post(&site, &format!("/sources/{}", mine.id), &share).await.location, "/sources?saved=saved");
+    let text = carl.get(&site, "/sources").await.text;
+    assert!(text.contains("Shared with the household, not followed") && text.contains("Following 2 of 3 sources"));
+    // Adding its address again, however dressed, follows it instead.
     assert_eq!(
         carl.post(&site, "/sources", &same).await.location,
         format!("/sources?saved=followed&new={0}#s-{0}", mine.id)
     );
     assert_eq!(count().await, 1);
     let mine_for_carl = sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap();
-    assert!(mine_for_carl.followed && mine_for_carl.followers == 2 && mine_for_carl.name == "Mine");
+    assert!(mine_for_carl.followed && mine_for_carl.followers == 3 && mine_for_carl.name == "Mine");
     assert!(carl.get(&site, "/sources").await.text.contains("Following 3 of 3 sources"));
+    // A feed added shared is followed for everyone straight away; one added private is not.
+    let wire =
+        [("csrf", admin_csrf.as_str()), ("name", "Wire"), ("address", "https://wire.example/rss"), ("shared", "1")];
+    admin.post(&site, "/sources", &wire).await;
+    let wire = sources_of(&site, "carl").await.into_iter().find(|s| s.name == "Wire").unwrap();
+    assert!(wire.followed && !wire.pinned && wire.followers == 3);
+    let quiet = [("csrf", admin_csrf.as_str()), ("name", "Quiet"), ("address", "https://quiet.example/rss")];
+    admin.post(&site, "/sources", &quiet).await;
+    assert!(sources_of(&site, "carl").await.iter().all(|s| s.name != "Quiet"));
+    for name in ["Wire", "Quiet"] {
+        let id = sources_of(&site, "john").await.into_iter().find(|s| s.name == name).unwrap().id;
+        admin.post(&site, &format!("/sources/{id}/delete"), &[("csrf", &admin_csrf)]).await;
+    }
+    assert_eq!(count().await, 1);
 
     // With two followers it is no longer Mary's alone to change or remove: she pins it for
     // herself, and still says whether it is shared.
@@ -1176,7 +1198,9 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     assert_eq!(admin.post(&site, "/sources/sessions/delete", &form).await.location, "/sources?saved=nosession");
     assert!(!site.folder.path().join("logins/site-paper.example.json").exists());
 
-    // Alone again on the feed she added, Mary may remove it; its follows go with it.
+    // Alone again on the feed she added (sharing had it followed for the admin too), Mary may
+    // remove it; its follows go with it.
+    admin.post(&site, &format!("/sources/{}/follow", mine.id), &[("csrf", &admin_csrf), ("follow", "0")]).await;
     assert_eq!(
         mary.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &mary_csrf)]).await.location,
         "/sources?saved=removed"

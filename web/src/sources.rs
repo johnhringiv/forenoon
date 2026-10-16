@@ -4,7 +4,8 @@
 //!
 //! Sources belong to the household and are read for the readers who follow them. One a reader
 //! adds is theirs alone until they share it: nobody else sees it, except an admin, who sees
-//! everything. A session is the household's: every page on its site is fetched with it,
+//! everything. Shared, it is followed for every reader, as it would be for an account made
+//! now; whoever does not want it unfollows it. A session is the household's: every page on its site is fetched with it,
 //! whoever follows the feed.
 
 use std::{
@@ -650,6 +651,20 @@ async fn finish(
     render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
 }
 
+/// A feed just shared with the household: every reader follows it, unpinned. Only on sharing,
+/// so an unfollow stands through later edits.
+async fn follow_for_everyone(pool: &SqlitePool, source: i64) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    sqlx::query!(
+        "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at) SELECT id, ?, 0, ? FROM users",
+        source,
+        now
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn follow(pool: &SqlitePool, user: &str, source: i64, pinned: bool) -> Result<(), sqlx::Error> {
     let now = now_iso();
     sqlx::query!(
@@ -718,6 +733,9 @@ pub async fn add(
         Err(error) => return finish(&state, &auth, &session, Err(error), &name).await,
     };
     follow(pool, &user.id, id, pinned).await?;
+    if shared {
+        follow_for_everyone(pool, id).await?;
+    }
     saved(&format!("added&new={id}#s-{id}"))
 }
 
@@ -759,6 +777,9 @@ pub async fn update(
         if source.shareable_by(&user) {
             let shared = form.shared.is_some();
             sqlx::query!("UPDATE sources SET shared = ? WHERE id = ?", shared, id).execute(pool).await?;
+            if shared && !source.shared {
+                follow_for_everyone(pool, id).await?;
+            }
         }
         return saved("saved");
     }
@@ -788,6 +809,9 @@ pub async fn update(
     }
     if source.followed {
         follow(pool, &user.id, id, pinned).await?;
+    }
+    if shared && !source.shared {
+        follow_for_everyone(pool, id).await?;
     }
     saved("saved")
 }
