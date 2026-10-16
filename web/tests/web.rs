@@ -1378,7 +1378,8 @@ async fn the_archive_says_how_many_articles_match() {
     let none = browser.get(&site, "/archive?q=watches").await.text;
     // Only the existing empty text: no count line.
     assert!(none.contains(r#"<p class="empty">No articles match.</p>"#));
-    assert_eq!(none.matches("match").count(), 1);
+    assert_eq!(none.matches("articles match").count(), 1);
+    assert!(!none.contains("article matches"));
 }
 
 #[tokio::test]
