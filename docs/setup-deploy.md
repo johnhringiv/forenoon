@@ -71,8 +71,8 @@ No inbound port is opened.
    `http://localhost:8081`.
 3. In `.env`, set `FORENOON_PUBLIC_URL` and `FORENOON_WEB_URL` to
    `https://forenoon.your-domain.example`. For docker compose, also set
-   `FORENOON_WEB_SECURE_COOKIES=true` and `FORENOON_WEB_CLIENT_IP_HEADER=CF-Connecting-IP`;
-   `deploy.sh` sets both itself when `TUNNEL_TOKEN` is set.
+   `FORENOON_WEB_SECURE_COOKIES=true`; `deploy.sh` sets it itself when `TUNNEL_TOKEN` is set.
+   Both already take the client's address from the tunnel's `CF-Connecting-IP` header.
 4. Keep `COMPOSE_PROFILES=cloudflared` in `.env` and run `docker compose up -d`.
 5. Check: `curl https://forenoon.your-domain.example/healthz` prints `ok`. A 530 / error 1033
    means the tunnel has no connector: check `docker logs` for the cloudflared container.

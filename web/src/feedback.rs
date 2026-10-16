@@ -15,7 +15,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 use crate::{
-    db,
+    db::{self, Rating},
     pages::{AppState, Client, Page, html},
     ratings::{self, Signal},
 };
@@ -30,6 +30,8 @@ const PROBLEM: &str = "problem";
 /// What a link asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Tap {
+    /// A signal in the words `Signal` writes; `done`, from a book delivered before ratings,
+    /// still counts.
     Rate(Signal),
     /// "This article came out broken or incomplete": a report about the delivery, not a rating.
     Problem,
@@ -37,18 +39,7 @@ pub enum Tap {
 
 impl Tap {
     fn parse(text: &str) -> Option<Tap> {
-        if text == PROBLEM {
-            return Some(Tap::Problem);
-        }
-        if let Some(reason) = text.strip_prefix("why-") {
-            return ratings::label(reason).map(|_| Tap::Rate(Signal::Why(reason.to_owned())));
-        }
-        let (kind, n) = text.split_at_checked(1)?;
-        let rating = n.parse::<i64>().ok().filter(|n| (1..=5).contains(n))?;
-        match kind {
-            "f" | "r" => Some(Tap::Rate(Signal::Rated { rating, finished: kind == "f" })),
-            _ => None,
-        }
+        if text == PROBLEM { Some(Tap::Problem) } else { text.parse().ok().map(Tap::Rate) }
     }
 }
 
@@ -147,14 +138,17 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
     let signal = match &claim.tap {
         Tap::Problem => {
-            db::report_problem(pool, &claim.user, &claim.article, SOURCE).await?;
+            // Once per article, as on the web pages: the Kindle's browser may ask again on
+            // its own, and a second tap on a slow screen is the same report.
+            if !db::reported(pool, &claim.user).await?.contains(&claim.article) {
+                db::report_problem(pool, &claim.user, &claim.article, SOURCE).await?;
+            }
             return plain(StatusCode::OK, "Reported. Thank you.", &title);
         }
         Tap::Rate(signal) => signal,
     };
-    db::record_feedback(pool, &claim.user, &claim.article, signal, SOURCE).await?;
-    let now = db::get_rating(pool, &claim.user, &claim.article).await?;
-    let (rating, finished, reason) = now.map_or((None, false, String::new()), |r| (r.rating, r.finished, r.reason));
+    let Rating { rating, finished, reason } =
+        db::record_feedback(pool, &claim.user, &claim.article, signal, SOURCE).await?;
     let mut message = match rating {
         Some(n) => format!("Rated {n} of 5, "),
         None => "Not rated, ".to_owned(),

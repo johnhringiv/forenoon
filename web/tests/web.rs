@@ -1649,6 +1649,8 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     // A fault in the delivery is reported apart from the rating, which it leaves as it was.
     let reported = kindle.get(&site, &link("problem")).await.text;
     assert!(reported.contains("Reported. Thank you.") && !reported.contains("Change it"));
+    // Opened again (the Kindle's browser retries on its own), it is still one report.
+    assert!(kindle.get(&site, &link("problem")).await.text.contains("Reported. Thank you."));
 
     let rating = db::get_rating(pool, "john", "a1").await.unwrap().unwrap();
     assert_eq!((rating.rating, rating.finished, rating.reason.as_str()), (Some(5), true, "more-topic,depth"));

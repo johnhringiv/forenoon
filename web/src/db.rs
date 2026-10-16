@@ -12,7 +12,10 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 
-use crate::ratings::{self, Signal};
+use crate::{
+    hex,
+    ratings::{self, Signal},
+};
 
 pub async fn open(path: &Path) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::from_str("sqlite:")?
@@ -143,7 +146,7 @@ pub const RESET: &str = "reset";
 
 fn token_hash(token: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(token.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+    hex::encode(&Sha256::digest(token.as_bytes()))
 }
 
 fn iso_in(seconds: i64) -> String {
@@ -904,6 +907,7 @@ pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<
 }
 
 /// Log the signal and apply it: the latest one decides the stored rating and finished flag.
+/// Returns the rating as it now stands.
 ///
 /// A reason sets only the reason. A new rating drops a stored reason that no longer fits it
 /// (a "too thin" on an article now rated 5). `source` is as for `report_problem`.
@@ -913,7 +917,7 @@ pub async fn record_feedback(
     article: &str,
     signal: &Signal,
     source: &str,
-) -> Result<(), sqlx::Error> {
+) -> Result<Rating, sqlx::Error> {
     let now = now_iso();
     let text = signal.to_string();
     let (rating, finished) = signal.meaning();
@@ -943,7 +947,8 @@ pub async fn record_feedback(
     .execute(&mut *tx)
     .await?;
     let stored = sqlx::query!(
-        r#"SELECT rating AS "rating?: i64", reason FROM ratings WHERE user_id = ? AND article_id = ?"#,
+        r#"SELECT rating AS "rating?: i64", finished AS "finished!: bool", reason
+           FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
         article
     )
@@ -958,7 +963,8 @@ pub async fn record_feedback(
             .execute(&mut *tx)
             .await?;
     }
-    tx.commit().await
+    tx.commit().await?;
+    Ok(Rating { rating: stored.rating, finished: stored.finished, reason: kept })
 }
 
 /// Forget an article's rating, finished flag and reason; the event log keeps the history.

@@ -80,6 +80,10 @@ TZ=$(env_get TZ)
 export TZ="${TZ:-UTC}"
 FORENOON_FEEDBACK_SECRET=$(env_get FORENOON_FEEDBACK_SECRET)
 [ -n "$FORENOON_FEEDBACK_SECRET" ] || { echo "FORENOON_FEEDBACK_SECRET is not set in $ENV_FILE"; exit 1; }
+# Checked before anything is replaced: the pipeline refuses a short one, and the pages would
+# answer no rating link, so a bad value must not take a working install down.
+[ "${#FORENOON_FEEDBACK_SECRET}" -ge 32 ] ||
+    { echo "FORENOON_FEEDBACK_SECRET must be at least 32 characters (openssl rand -hex 32)"; exit 1; }
 FORENOON_SMTP_PASSWORD=$(env_get FORENOON_SMTP_PASSWORD)
 FORENOON_ANTHROPIC_API_KEY=$(env_get FORENOON_ANTHROPIC_API_KEY)
 TUNNEL_TOKEN=$(env_get TUNNEL_TOKEN)
@@ -184,11 +188,15 @@ wait_web() {
 
 if [ "${ONLY:-}" = "web" ]; then
     echo "$(date -u +%FT%TZ) recreating forenoon-web from $WEB_IMAGE"
-    # Fail loudly when it does not come up, so a scheduler's failure notice fires.
     start_web
-    wait_web
+    # The tunnel went with the old web container and comes back whether or not the new one is
+    # healthy: the public hostname must not stay dark over a bad web image.
+    web_healthy=true
+    wait_web || web_healthy=false
     start_tunnel
     docker ps --filter name=forenoon-web --filter name=forenoon-cloudflared --format '{{.Names}}: {{.Status}}'
+    # Fail loudly when the pages did not come up, so a scheduler's failure notice fires.
+    [ "$web_healthy" = true ] || exit 1
     exit 0
 fi
 

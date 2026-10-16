@@ -172,15 +172,19 @@ async fn run(cli: Cli) -> Result<(), Error> {
             });
             let data_dir = cli.db.parent().map(PathBuf::from).unwrap_or_default();
             let proxy = Proxy::new(&client_ip_header, &trusted_proxies)?;
-            // Only ever from the environment, like the mail password. Without it the rating
-            // links in books are not answered.
+            // Only ever from the environment, like the mail password. Without it, or with one
+            // too short to sign anything with, the rating links in books are not answered; the
+            // rest of the pages still serve, since the tunnel lives in this container too.
             let feedback_secret = match std::env::var("FORENOON_FEEDBACK_SECRET").unwrap_or_default() {
                 secret if secret.is_empty() => {
                     eprintln!("FORENOON_FEEDBACK_SECRET is not set: rating links in books will not work.");
                     None
                 }
                 secret if secret.len() < 32 => {
-                    return Err("FORENOON_FEEDBACK_SECRET must be at least 32 characters".into());
+                    eprintln!(
+                        "FORENOON_FEEDBACK_SECRET is shorter than 32 characters: rating links in books will not work. Generate one with: openssl rand -hex 32"
+                    );
+                    None
                 }
                 secret => Some(secret.into_bytes()),
             };

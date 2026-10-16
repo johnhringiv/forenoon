@@ -27,6 +27,7 @@ use tower_sessions::Session;
 use crate::{
     auth::{self, AuthSession, Credentials, User},
     db::{self, Delivered},
+    hex,
     limit::Limiter,
     mail::{Mailer, Message},
     proxy::Proxy,
@@ -181,22 +182,10 @@ fn same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    let digits = text.as_bytes();
-    if !digits.len().is_multiple_of(2) {
-        return None;
-    }
-    digits.chunks(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()).collect()
-}
-
 fn random_token() -> Result<String, AppError> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)?;
-    Ok(hex(&bytes))
+    Ok(hex::encode(&bytes))
 }
 
 /// The session's own token, kept in the session.
@@ -218,14 +207,14 @@ pub(crate) async fn csrf_token(session: &Session) -> Result<String, AppError> {
     let mut mask = vec![0u8; token.len()];
     getrandom::fill(&mut mask)?;
     let masked: Vec<u8> = token.bytes().zip(&mask).map(|(byte, pad)| byte ^ pad).collect();
-    Ok(hex(&mask) + &hex(&masked))
+    Ok(hex::encode(&mask) + &hex::encode(&masked))
 }
 
 /// Only our own pages may ask for a change: a form on another site has neither the token
 /// nor our origin.
 pub(crate) async fn allowed(headers: &HeaderMap, session: &Session, sent: &str) -> Result<bool, AppError> {
     let token = session_token(session).await?;
-    let Some(sent) = unhex(sent).filter(|bytes| bytes.len() == 2 * token.len()) else { return Ok(false) };
+    let Some(sent) = hex::decode(sent).filter(|bytes| bytes.len() == 2 * token.len()) else { return Ok(false) };
     let (mask, masked) = sent.split_at(token.len());
     let unmasked: Vec<u8> = masked.iter().zip(mask).map(|(byte, pad)| byte ^ pad).collect();
     Ok(same_origin(headers) && bool::from(token.as_bytes().ct_eq(&unmasked)))
@@ -1089,7 +1078,9 @@ pub async fn rate(
         return back_to(&form.back, &form.article);
     };
     match signal {
-        Some(signal) => db::record_feedback(pool, &user.id, &form.article, &signal, "web").await?,
+        Some(signal) => {
+            db::record_feedback(pool, &user.id, &form.article, &signal, "web").await?;
+        }
         None => db::clear_rating(pool, &user.id, &form.article).await?,
     }
     back_to(&form.back, &form.article)

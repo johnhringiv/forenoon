@@ -5,6 +5,7 @@ pub mod archive;
 pub mod auth;
 pub mod db;
 pub mod feedback;
+mod hex;
 pub mod limit;
 pub mod mail;
 pub mod pages;

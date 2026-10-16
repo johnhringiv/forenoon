@@ -63,8 +63,10 @@ services:
       # only that way. Signing in over plain http then does not work.
       FORENOON_WEB_SECURE_COOKIES: ${FORENOON_WEB_SECURE_COOKIES:-false}
       # The header a proxy in front gives the client's address in, and the addresses it is
-      # believed from. For the tunnel: CF-Connecting-IP from 127.0.0.1 (the default).
-      FORENOON_WEB_CLIENT_IP_HEADER: ${FORENOON_WEB_CLIENT_IP_HEADER:-}
+      # believed from. The defaults fit the tunnel: cloudflared shares this container's network
+      # namespace and is the only thing that reaches the pages from 127.0.0.1, so without it
+      # the header is never believed. For your own proxy, set both.
+      FORENOON_WEB_CLIENT_IP_HEADER: ${FORENOON_WEB_CLIENT_IP_HEADER:-CF-Connecting-IP}
       FORENOON_WEB_TRUSTED_PROXIES: ${FORENOON_WEB_TRUSTED_PROXIES:-127.0.0.1,::1}
       # For the links in account emails. They go through the same mail server as the books;
       # without a host they are written to this container's log instead.
