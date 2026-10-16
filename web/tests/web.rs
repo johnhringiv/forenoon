@@ -463,7 +463,7 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(page.contains(r#"<a href="/reading" aria-current="page">Reading</a>"#), "{page}");
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.interests.as_str(), user.daily_stories), ("Compilers.\nNot watches. <b>", 16));
-    // Kindle addresses, on the account page: only an admin's change.
+    // Kindle addresses, on the account page: the reader's own, checked for shape.
     let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", "not an address")];
     let reply = browser.post(&site, "/account/kindle", &kindle).await;
     assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("not an address is not an email address."));

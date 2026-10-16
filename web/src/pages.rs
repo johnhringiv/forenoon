@@ -1013,7 +1013,7 @@ pub async fn send(
         return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
     }
     if user.kindle_addresses.trim().is_empty() {
-        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; an admin sets it.");
+        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; add one on your account page.");
     }
     if !db::pipeline_ready(&state.pool).await? || !db::in_library(&state.pool, &user.id, &form.article).await? {
         return refused(StatusCode::NOT_FOUND, "No such article.");
