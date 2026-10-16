@@ -80,6 +80,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         pool,
         sign_ins: Arc::new(Limiter::new(SIGN_IN_WINDOW)),
         mail_limits: Arc::new(Limiter::new(Duration::from_secs(3600))),
+        public_limits: Arc::new(Limiter::evicting(Duration::from_secs(3600))),
         mailer: options.mailer,
         base_url: options.base_url.trim_end_matches('/').to_owned(),
         thumbs_dir: options.data_dir.join("thumbs"),

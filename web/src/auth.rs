@@ -58,15 +58,26 @@ pub fn normal_email(text: &str) -> Option<String> {
     email_shaped(&email).then_some(email)
 }
 
-/// The addresses in a block of text, one per line, or what is wrong with it.
+/// A Send to Kindle address: Amazon's, at `kindle.com` or a subdomain (`free.kindle.com`).
+fn kindle_shaped(address: &str) -> bool {
+    email_shaped(address)
+        && address.rsplit_once('@').is_some_and(|(_, host)| {
+            let host = host.to_ascii_lowercase();
+            host == "kindle.com" || host.ends_with(".kindle.com")
+        })
+}
+
+/// The addresses in a block of text, one per line, or what is wrong with it. Only Amazon's
+/// own addresses: a reader sets these themselves, and the install's mail must not become a
+/// way to send to anywhere else.
 pub fn kindle_addresses(text: &str) -> Result<Vec<String>, String> {
     let addresses: Vec<String> =
         text.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
     if addresses.len() > MAX_KINDLE_ADDRESSES {
         return Err(format!("At most {MAX_KINDLE_ADDRESSES} Kindle addresses."));
     }
-    match addresses.iter().find(|address| !email_shaped(address)) {
-        Some(address) => Err(format!("{address} is not an email address.")),
+    match addresses.iter().find(|address| !kindle_shaped(address)) {
+        Some(address) => Err(format!("{address} is not a Send to Kindle address (name@kindle.com).")),
         None => Ok(addresses),
     }
 }
@@ -247,3 +258,21 @@ impl AuthnBackend for Backend {
 }
 
 pub type AuthSession = axum_login::AuthSession<Backend>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_amazons_addresses_are_kindle_addresses() {
+        assert_eq!(
+            kindle_addresses(" a@kindle.com \n\nb@free.kindle.com").unwrap(),
+            ["a@kindle.com", "b@free.kindle.com"]
+        );
+        assert!(kindle_addresses("me@example.com").unwrap_err().contains("not a Send to Kindle address"));
+        assert!(
+            kindle_addresses("me@kindle.com.evil.example").is_err() && kindle_addresses("me@notkindle.com").is_err()
+        );
+        assert!(kindle_addresses("not an address").is_err() && kindle_addresses("").unwrap().is_empty());
+    }
+}

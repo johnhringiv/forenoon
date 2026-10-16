@@ -61,8 +61,12 @@ const SHOW: [(&str, &str); 3] = [("", "All"), ("rated", "Rated"), ("unrated", "N
 pub struct AppState {
     pub pool: SqlitePool,
     pub sign_ins: Arc<Limiter>,
-    /// Counts emails sent and reset attempts, per hour.
+    /// Counts emails sent per account and invitations per admin, per hour.
     pub mail_limits: Arc<Limiter>,
+    /// Counts the posts anyone may make without a session, per client address and hour:
+    /// reset requests and attempts, join attempts. Evicting, so a flood of addresses there
+    /// cannot fill the table and refuse an account's own emails.
+    pub public_limits: Arc<Limiter>,
     pub mailer: Mailer,
     /// Where the pages are reached, for links in emails; no trailing slash.
     pub base_url: String,
@@ -424,7 +428,7 @@ pub async fn forgot(
     if !same_origin(&headers) {
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
     }
-    if !state.mail_limits.allow(&format!("forgot client {client}"), RESET_REQUESTS_PER_CLIENT) {
+    if !state.public_limits.allow(&format!("forgot client {client}"), RESET_REQUESTS_PER_CLIENT) {
         return html(
             StatusCode::TOO_MANY_REQUESTS,
             ForgotPage { nav: None, error: Some("Too many requests. Try again in an hour.") },
@@ -491,7 +495,7 @@ pub async fn reset(
     if !same_origin(&headers) {
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
     }
-    if !state.mail_limits.allow(&format!("reset client {client}"), RESET_ATTEMPTS_PER_CLIENT) {
+    if !state.public_limits.allow(&format!("reset client {client}"), RESET_ATTEMPTS_PER_CLIENT) {
         return message(StatusCode::TOO_MANY_REQUESTS, "Too many attempts", "Try again in an hour.");
     }
     let Some(found) = db::read_token(&state.pool, &token, db::RESET).await? else {

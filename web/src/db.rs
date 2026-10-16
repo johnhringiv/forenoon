@@ -120,7 +120,8 @@ pub async fn invite_user(
     Ok(())
 }
 
-/// The invited reader has chosen a password: the account is theirs from now on. The address
+/// The invited reader has chosen a password: the account is theirs from now on, in one
+/// transaction with its link used up and the household's shared sources followed. The address
 /// counts as confirmed, since the link reached it. False when the account is not an open invite.
 pub async fn join(
     pool: &SqlitePool,
@@ -131,6 +132,7 @@ pub async fn join(
     kindle_addresses: &str,
 ) -> Result<bool, sqlx::Error> {
     let now = now_iso();
+    let mut tx = pool.begin().await?;
     let done = sqlx::query!(
         "UPDATE users SET name = ?, password_hash = ?, timezone = ?, kindle_addresses = ?, email_verified_at = ?,
          invited_at = NULL WHERE id = ? AND invited_at IS NOT NULL",
@@ -141,9 +143,15 @@ pub async fn join(
         now,
         id
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(done.rows_affected() > 0)
+    if done.rows_affected() == 0 {
+        return Ok(false);
+    }
+    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?", id, INVITE).execute(&mut *tx).await?;
+    follow_shared_with(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Take back an invitation: the account goes, with its link. False when it is not an open invite.
@@ -162,6 +170,12 @@ pub async fn revoke_invite(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Er
 /// Follow every source shared with the household, as a new account does so that its first
 /// issue has something in it.
 pub async fn follow_shared(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    follow_shared_with(&mut tx, user).await?;
+    tx.commit().await
+}
+
+async fn follow_shared_with(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     sqlx::query!(
         "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at)
@@ -169,7 +183,7 @@ pub async fn follow_shared(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Er
         user,
         now
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }

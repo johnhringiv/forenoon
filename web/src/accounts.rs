@@ -262,11 +262,8 @@ pub async fn invite(
     // The admin's zone to start with: a household mostly shares one. The reader sets theirs on joining.
     db::invite_user(&state.pool, &id, &email, &name, &typed.role, &user.timezone).await?;
     let (link, failed) = send_invitation(&state, &user, &id, &email).await?;
-    let notice = match failed {
-        Some(problem) => problem,
-        None => format!("Invitation sent to {email}."),
-    };
-    let shown = Shown { status: StatusCode::OK, error: None, notice: Some(notice), link: Some(link), typed: None };
+    let notice = failed.is_none().then(|| format!("Invitation sent to {email}."));
+    let shown = Shown { status: StatusCode::OK, error: failed, notice, link: Some(link), typed: None };
     render(&state, &user, &session, shown).await
 }
 
@@ -308,8 +305,8 @@ pub async fn resend(
         return render(&state, &user, &session, shown).await;
     }
     let (link, failed) = send_invitation(&state, &user, &id, &email).await?;
-    let notice = failed.unwrap_or_else(|| format!("A new link was sent to {email}; the old one no longer works."));
-    let shown = Shown { status: StatusCode::OK, error: None, notice: Some(notice), link: Some(link), typed: None };
+    let notice = failed.is_none().then(|| format!("A new link was sent to {email}; the old one no longer works."));
+    let shown = Shown { status: StatusCode::OK, error: failed, notice, link: Some(link), typed: None };
     render(&state, &user, &session, shown).await
 }
 
@@ -398,7 +395,7 @@ pub async fn join(
     if !same_origin(&headers) {
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
     }
-    if !state.mail_limits.allow(&format!("join client {client}"), JOIN_ATTEMPTS_PER_CLIENT) {
+    if !state.public_limits.allow(&format!("join client {client}"), JOIN_ATTEMPTS_PER_CLIENT) {
         return message(StatusCode::TOO_MANY_REQUESTS, "Too many attempts", "Try again in an hour.");
     }
     let Some((invited, email)) = invited_by(&state, &token).await? else {
@@ -433,12 +430,11 @@ pub async fn join(
     }
     let hash = auth::hash_password(form.password).await?;
     let addresses = kindle.unwrap_or_default().join("\n");
+    // One transaction: the account is theirs, the link is used up, and everything shared with
+    // the household so far is followed, so the first issue has something in it.
     if !db::join(&state.pool, &invited.id, name, &hash, timezone, &addresses).await? {
         return message(StatusCode::BAD_REQUEST, "Link not valid", JOIN_INVALID);
     }
-    db::drop_tokens(&state.pool, &invited.id, db::INVITE).await?;
-    // Everything shared with the household so far, so the first issue has something in it.
-    db::follow_shared(&state.pool, &invited.id).await?;
     // Signed in from a fresh session, as `login` does.
     if auth.user.is_some() {
         auth.logout().await?;

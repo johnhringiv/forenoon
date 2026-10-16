@@ -6,8 +6,8 @@
 {% block main %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
-{% if let Some(link) = link %}<p class="hint">If the email does not arrive, give them this link yourself: <a href="{{ link }}">{{ link }}</a>. It works for 7 days, once.</p>{% endif %}
-<details class="add"{% if error.is_some() %} open{% endif %}>
+{% if let Some(link) = link %}<p class="hint">If the email does not arrive, give them this link yourself (copy it; opening it here would make the account yours): <code>{{ link }}</code>. It works for 7 days, once.</p>{% endif %}
+<details class="add"{% if !email.is_empty() %} open{% endif %}>
 <summary>Invite a reader</summary>
 <form class="source" method="post" action="/accounts">
 <input type="hidden" name="csrf" value="{{ csrf }}">

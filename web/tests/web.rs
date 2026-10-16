@@ -464,9 +464,12 @@ async fn account_page_changes_the_profile_and_the_password() {
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.interests.as_str(), user.daily_stories), ("Compilers.\nNot watches. <b>", 16));
     // Kindle addresses, on the account page: the reader's own, checked for shape.
+    let elsewhere = [("csrf", csrf.as_str()), ("kindle_addresses", "me@example.com")];
+    let reply = browser.post(&site, "/account/kindle", &elsewhere).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("not a Send to Kindle address"));
     let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", "not an address")];
     let reply = browser.post(&site, "/account/kindle", &kindle).await;
-    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("not an address is not an email address."));
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("not an address is not a Send to Kindle address"));
     let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", " a@kindle.com \n\nb@kindle.com")];
     assert_eq!(browser.post(&site, "/account/kindle", &kindle).await.location, "/account?saved=kindle");
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
@@ -708,7 +711,7 @@ async fn an_admin_invites_a_reader_by_email_and_the_link_lets_them_join_once() {
         (join("Jane", "short", "short", "Europe/London", ""), "at least 10 characters"),
         (join("Jane", PASSWORD, "something else", "Europe/London", ""), "not the same"),
         (join("Jane", PASSWORD, PASSWORD, "Mars/Olympus", ""), "not a time zone"),
-        (join("Jane", PASSWORD, PASSWORD, "Europe/London", "jane at kindle"), "not an email address"),
+        (join("Jane", PASSWORD, PASSWORD, "Europe/London", "jane@example.com"), "not a Send to Kindle address"),
         (join("", PASSWORD, PASSWORD, "Europe/London", ""), "display name"),
     ] {
         let reply = jane_browser.post(&site, &link, &form).await;
