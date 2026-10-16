@@ -35,10 +35,13 @@ what its own users configure and delivers only to the addresses its admin has se
   **share** it: nobody else sees it anywhere, except an admin, who sees every source and may
   share or unshare any. A shared source is listed for the rest of the household to follow.
   A new account follows every shared source (`add-user --follow-nothing` for none). A feed
-  added by its address when the household already has that address is followed, not added
-  again, and the page says only "added", so whose it is stays theirs. Names are unique
-  across the install, since articles and health records refer to a source by name; a
-  reader who picks a taken name is told so, which is accepted as the one small leak.
+  added by an address the reader can already see (shared, their own or followed; case, the
+  scheme, `www.` and a trailing slash aside) is followed, not added again. Another reader's
+  private feed is never matched, whatever its address, so nobody learns of one by guessing;
+  the same feed may then exist twice, once each, and the address check's rewriting of a
+  site's address to its feed's can have the same effect. Names are unique across the
+  install, since articles and health records refer to a source by name; a reader who picks
+  a taken name is told so, which is accepted as the one small leak.
   - Who may do what: anyone adds feeds, follows, unfollows and pins; the reader who added
     a feed changes, shares or removes it while nobody else follows it, and shares or
     unshares it at any time; an admin does all of that to any source; pausing a source,

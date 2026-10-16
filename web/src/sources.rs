@@ -663,8 +663,17 @@ async fn follow(pool: &SqlitePool, user: &str, source: i64, pinned: bool) -> Res
     Ok(())
 }
 
-/// Add a feed and follow it. A feed the household already has, by address, is followed
-/// instead, and the page says no more than "added": whose it is stays theirs.
+/// An address as one feed is the same as another: case, the scheme, a leading `www.` and a
+/// trailing slash aside.
+fn same_feed(url: &str) -> String {
+    let url = url.trim().to_ascii_lowercase();
+    let url = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(&url);
+    url.strip_prefix("www.").unwrap_or(url).trim_end_matches('/').to_owned()
+}
+
+/// Add a feed and follow it. A feed this reader may already see, by address, is followed
+/// instead. Another reader's private feed is not looked at, whatever its address: it gets a
+/// row of its own, so nobody learns of a feed by guessing its address.
 pub async fn add(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -683,30 +692,28 @@ pub async fn add(
     let (extract, pinned, now) = (form.extract(), form.pinned.is_some(), now_iso());
     let shared = form.shared.is_some();
     let pool = &state.pool;
-    let existing = sqlx::query_scalar!(r#"SELECT id AS "id!" FROM sources WHERE kind = 'rss' AND url = ?"#, url)
-        .fetch_optional(pool)
-        .await?;
-    let id = match existing {
-        Some(id) => id,
-        None => {
-            let done = sqlx::query!(
-                "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared)
+    let wanted = same_feed(&url);
+    let existing = list(pool, &user).await?.into_iter().find(|s| s.kind == "rss" && same_feed(&s.url) == wanted);
+    if let Some(source) = existing {
+        follow(pool, &user.id, source.id, pinned).await?;
+        return saved(&format!("followed&new={0}#s-{0}", source.id));
+    }
+    let done = sqlx::query!(
+        "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared)
                  VALUES (?, 'rss', ?, ?, ?, 1, ?, 'pending', ?, ?)",
-                name,
-                url,
-                extract,
-                daily_max,
-                now,
-                user.id,
-                shared
-            )
-            .execute(pool)
-            .await;
-            match done {
-                Ok(row) => row.last_insert_rowid(),
-                Err(error) => return finish(&state, &auth, &session, Err(error), &name).await,
-            }
-        }
+        name,
+        url,
+        extract,
+        daily_max,
+        now,
+        user.id,
+        shared
+    )
+    .execute(pool)
+    .await;
+    let id = match done {
+        Ok(row) => row.last_insert_rowid(),
+        Err(error) => return finish(&state, &auth, &session, Err(error), &name).await,
     };
     follow(pool, &user.id, id, pinned).await?;
     saved(&format!("added&new={id}#s-{id}"))
@@ -732,10 +739,18 @@ pub async fn update(
     };
     let pinned = form.pinned.is_some();
     if !source.editable_by(&user) {
-        if !source.followed {
+        // Others follow it too: the adder still says whether it is shared, and anyone who
+        // follows it pins it for themselves. The rest is an admin's now.
+        if !source.followed && !source.shareable_by(&user) {
             return refused(StatusCode::FORBIDDEN, NOT_YOURS);
         }
-        follow(pool, &user.id, id, pinned).await?;
+        if source.followed {
+            follow(pool, &user.id, id, pinned).await?;
+        }
+        if source.shareable_by(&user) {
+            let shared = form.shared.is_some();
+            sqlx::query!("UPDATE sources SET shared = ? WHERE id = ?", shared, id).execute(pool).await?;
+        }
         return saved("saved");
     }
     let (name, url, daily_max) = match form.checked() {
@@ -743,9 +758,9 @@ pub async fn update(
         Err(problem) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
     };
     let extract = form.extract();
-    // Pausing is an admin's: it stops the feed for everyone. Sharing is the adder's too.
+    // Pausing is an admin's: it stops the feed for everyone. Whoever may edit may share.
     let enabled = if user.is_admin() { form.enabled.is_some() } else { source.enabled };
-    let shared = if source.shareable_by(&user) { form.shared.is_some() } else { source.shared };
+    let shared = form.shared.is_some();
     let done = sqlx::query!(
         "UPDATE sources SET name = ?, url = ?, extract = ?, daily_max = ?, enabled = ?, shared = ?,
          check_state = 'pending', check_note = '' WHERE id = ? AND kind = 'rss'",
@@ -1027,6 +1042,16 @@ mod tests {
         for bad in ["", "com", "localhost", "192.168.1.1", "ft.com/path", "ft.com:443", "a b.com", "-x.com", "x..com"] {
             assert_eq!(check_site(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn an_address_names_the_same_feed_whatever_its_dressing() {
+        let same = same_feed("https://www.paper.example/rss");
+        for url in ["http://paper.example/rss", "HTTPS://Paper.Example/rss/", " www.paper.example/rss "] {
+            assert_eq!(same_feed(url), same, "{url}");
+        }
+        assert_ne!(same_feed("https://paper.example/rss.xml"), same);
+        assert_ne!(same_feed("https://blogs.paper.example/rss"), same);
     }
 
     #[test]

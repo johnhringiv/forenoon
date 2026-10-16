@@ -55,8 +55,8 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     try:
         # Read at every run, so a change made on the account page applies to the next one.
         cfg = dataclasses.replace(cfg, users=store.readers(), sources=store.sources(), sessions=store.session_sites())
-        if not cfg.sources:
-            log.error("no sources: add some on the web pages' Sources page")
+        if not cfg.sources and not cfg.discovery.sites:
+            log.error("no sources: add feeds, or switch on a built-in source, on the web pages' Sources page")
             if not args.dry_run:
                 notify(cfg, "nothing delivered", ["There are no sources. Add some on the Sources page."])
             return 1

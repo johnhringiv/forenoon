@@ -882,41 +882,30 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
         carl.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &carl_csrf)]).await.status,
         StatusCode::NOT_FOUND
     );
-    // Carl adding the same feed follows Mary's row, and is told no more than "added".
-    let same = [("csrf", carl_csrf.as_str()), ("name", "Paper"), ("address", "https://www.paper.example/rss")];
+    // Carl adding the same address gets a feed of his own: Mary's private one is not matched,
+    // so he learns nothing of it, and it stays hers to change.
+    let same = [("csrf", carl_csrf.as_str()), ("name", "Paper"), ("address", "https://paper.example/rss/")];
+    let location = carl.post(&site, "/sources", &same).await.location;
+    assert!(location.starts_with("/sources?saved=added&new=") && !location.contains(&format!("new={}", mine.id)));
+    let count = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sources WHERE kind = 'rss'")
+            .fetch_one(&site.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(count().await, 2);
+    let paper = sources_of(&site, "carl").await.into_iter().find(|s| s.name == "Paper").unwrap();
+    assert!(paper.added_by == "carl" && paper.followed && paper.followers == 1 && !paper.shared);
+    assert!(sources_of(&site, "carl").await.iter().all(|s| s.id != mine.id));
+    assert!(sources_of(&site, "mary").await.iter().all(|s| s.id != paper.id));
+    assert_eq!(sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap().followers, 1);
     assert_eq!(
-        carl.post(&site, "/sources", &same).await.location,
-        format!("/sources?saved=added&new={0}#s-{0}", mine.id)
+        carl.post(&site, &format!("/sources/{}/delete", paper.id), &[("csrf", &carl_csrf)]).await.location,
+        "/sources?saved=removed"
     );
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sources WHERE kind = 'rss'").fetch_one(&site.pool).await.unwrap();
-    assert_eq!(count, 1);
-    let mine_for_carl = sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap();
-    assert!(mine_for_carl.followed && mine_for_carl.followers == 2 && mine_for_carl.name == "Mine");
-    // With two followers it is no longer Mary's alone to change or remove: she can only pin it.
-    let edit = [
-        ("csrf", mary_csrf.as_str()),
-        ("name", "Renamed"),
-        ("address", "https://elsewhere.example/rss"),
-        ("pinned", "1"),
-    ];
-    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &edit).await.location, "/sources?saved=saved");
-    let mine_now = sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap();
-    assert!(mine_now.name == "Mine" && mine_now.url == "https://www.paper.example/rss" && mine_now.pinned);
-    assert!(
-        !sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap().pinned,
-        "pins are each reader's own"
-    );
-    assert_eq!(
-        mary.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &mary_csrf)]).await.status,
-        StatusCode::FORBIDDEN
-    );
-    let text = mary.get(&site, "/sources").await.text;
-    let row = text.split(&format!(r#"id="s-{}""#, mine.id)).nth(1).unwrap().split("</details>").next().unwrap();
-    assert!(row.contains("Only the reader who added this feed, or an admin, can change"), "{row}");
-    assert!(!row.contains(r#"name="address""#) && row.contains(r#"name="pinned""#), "{row}");
+    assert_eq!(count().await, 1);
 
-    // The admin sees it, with whose it is, and shares it with the household.
+    // The admin sees Mary's, with whose it is, and shares it with the household.
     let text = admin.get(&site, "/sources").await.text;
     assert!(
         text.contains(r#"<span class="tag">Private: Mary</span>"#) && text.contains("Not followed by you"),
@@ -931,18 +920,56 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
         ("shared", "1"),
     ];
     assert_eq!(admin.post(&site, &format!("/sources/{}", mine.id), &share).await.location, "/sources?saved=saved");
-    carl.post(&site, &format!("/sources/{}/follow", mine.id), &[("csrf", &carl_csrf), ("follow", "0")]).await;
     let text = carl.get(&site, "/sources").await.text;
     assert!(
         text.contains("Shared with the household, not followed") && text.contains(r#"<span class="tag">Shared</span>"#),
         "{text}"
     );
     assert!(text.contains("Following 2 of 3 sources"));
+    // Now that he may see it, adding its address again, however dressed, follows it instead.
     assert_eq!(
-        carl.post(&site, &format!("/sources/{}/follow", mine.id), &follow).await.location,
-        "/sources?saved=followed"
+        carl.post(&site, "/sources", &same).await.location,
+        format!("/sources?saved=followed&new={0}#s-{0}", mine.id)
     );
+    assert_eq!(count().await, 1);
+    let mine_for_carl = sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap();
+    assert!(mine_for_carl.followed && mine_for_carl.followers == 2 && mine_for_carl.name == "Mine");
     assert!(carl.get(&site, "/sources").await.text.contains("Following 3 of 3 sources"));
+
+    // With two followers it is no longer Mary's alone to change or remove: she pins it for
+    // herself, and still says whether it is shared.
+    let edit = [
+        ("csrf", mary_csrf.as_str()),
+        ("name", "Renamed"),
+        ("address", "https://elsewhere.example/rss"),
+        ("pinned", "1"),
+    ];
+    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &edit).await.location, "/sources?saved=saved");
+    let mine_now = sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap();
+    assert!(mine_now.name == "Mine" && mine_now.url == "https://www.paper.example/rss" && mine_now.pinned);
+    assert!(!mine_now.shared, "the form came back without the shared tick, so it is hers alone again");
+    let for_carl = sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap();
+    assert!(for_carl.followed && !for_carl.pinned, "a follower keeps following, and pins are each reader's own");
+    let reshare = [("csrf", mary_csrf.as_str()), ("pinned", "1"), ("shared", "1")];
+    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &reshare).await.location, "/sources?saved=saved");
+    assert!(sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap().shared);
+    assert_eq!(
+        mary.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &mary_csrf)]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let text = mary.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{}""#, mine.id)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(
+        row.contains("only an admin can change its address") && row.contains("so is whether it is shared"),
+        "{row}"
+    );
+    assert!(!row.contains(r#"name="address""#) && row.contains(r#"name="pinned""#) && row.contains(r#"name="shared""#));
+    // Carl, a follower who did not add it, pins and nothing more.
+    let text = carl.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{}""#, mine.id)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(
+        row.contains(r#"name="pinned""#) && !row.contains(r#"name="shared""#) && !row.contains(r#"name="address""#)
+    );
 
     // A session is the household's: Mary, with a feed on the site, saves it; Carl, following
     // that feed, sees it is there but cannot remove it; an admin can. Nobody without a feed on

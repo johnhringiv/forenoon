@@ -15,12 +15,12 @@
 {% endif %}
 {% if row.followed %}<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>{% endif %}
 {% if row.can_edit && admin %}<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>{% endif %}
-{% if row.can_edit && row.can_share %}<label class="tick"><input type="checkbox" name="shared" value="1"{% if row.shared %} checked{% endif %}> Shared with the household</label>{% endif %}
-{% if row.can_edit || row.followed %}<button class="primary">Save</button>{% endif %}
+{% if row.can_share %}<label class="tick"><input type="checkbox" name="shared" value="1"{% if row.shared %} checked{% endif %}> Shared with the household</label>{% endif %}
+{% if row.can_edit || row.followed || row.can_share %}<button class="primary">Save</button>{% endif %}
 {% if row.followed %}<button name="follow" value="0" formaction="/sources/{{ row.id }}/follow">Unfollow</button>{% else %}<button class="primary" name="follow" value="1" formaction="/sources/{{ row.id }}/follow">Follow</button>{% endif %}
 {% if row.can_edit %}<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>{% endif %}
 </div>
 {% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with the household's {{ site }} session.</p>{% endif %}
-{% if !row.can_edit && row.followed %}<p class="hint">Only the reader who added this feed, or an admin, can change its address and settings. Pinning is yours.</p>{% endif %}
+{% if !row.can_edit && row.followed %}<p class="hint">Others follow this feed too, so only an admin can change its address and settings now. Pinning is yours{% if row.can_share %}, and so is whether it is shared{% endif %}.</p>{% endif %}
 </form>
 </details>

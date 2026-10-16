@@ -294,7 +294,7 @@ class Store:
         """
         if not self._has_table("sources"):
             return ()
-        if not any(column["name"] == "builtin" for column in self.db.execute("PRAGMA table_info(sources)")):
+        if not self._has_table("follows"):
             return ()  # the web app has not been upgraded yet
         rows = {
             row["builtin"]: row["enabled"]
