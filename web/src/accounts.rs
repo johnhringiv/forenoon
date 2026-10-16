@@ -202,7 +202,7 @@ fn id_from_email(email: &str) -> String {
     let local = email.split('@').next().unwrap_or("");
     let id: String =
         local.chars().filter(|c| c.is_ascii_alphanumeric() || "_.-".contains(*c)).take(auth::MAX_ID).collect();
-    if id.is_empty() { "reader".to_owned() } else { id }
+    if auth::valid_id(&id) { id } else { "reader".to_owned() }
 }
 
 pub async fn invite(
@@ -241,7 +241,11 @@ pub async fn invite(
     };
     let id = if typed.id.is_empty() { id_from_email(&email) } else { typed.id.clone() };
     if !auth::valid_id(&id) {
-        return refuse(format!("The id must be 1 to {} letters, digits, '_', '.' or '-'.", auth::MAX_ID)).await;
+        return refuse(format!(
+            "The id must be 1 to {} letters, digits, '_', '.' or '-', with a letter or digit in it.",
+            auth::MAX_ID
+        ))
+        .await;
     }
     let name = if typed.name.is_empty() { id.clone() } else { typed.name.clone() };
     if name.chars().count() > MAX_NAME || name.chars().any(char::is_control) {
@@ -456,6 +460,8 @@ mod tests {
         assert_eq!(id_from_email("jane.doe@example.com"), "jane.doe");
         assert_eq!(id_from_email("j+kindle@example.com"), "jkindle");
         assert_eq!(id_from_email("+@example.com"), "reader");
+        assert_eq!(id_from_email("..@example.com"), "reader", "never a path segment a browser drops");
+        assert!(!auth::valid_id("..") && !auth::valid_id("-") && auth::valid_id("a.b"));
         assert!(auth::valid_id(&id_from_email(&format!("{}@example.com", "x".repeat(100)))));
     }
 }

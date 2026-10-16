@@ -210,7 +210,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Command::AddUser { id, email, name, role, timezone, kindle, follow_nothing } => {
             if !auth::valid_id(&id) {
-                return Err("the id must be 1 to 64 letters, digits, '_', '.' or '-'".into());
+                return Err(
+                    "the id must be 1 to 64 letters, digits, '_', '.' or '-', with a letter or digit in it".into()
+                );
             }
             let Some(email) = auth::normal_email(&email) else {
                 return Err(format!("{email} is not an email address").into());

@@ -147,9 +147,13 @@ pub fn password_problem(password: &str) -> Option<String> {
     }
 }
 
-/// Whether this can be an account id: the pipeline's reader ids are short plain words.
+/// Whether this can be an account id: the pipeline's reader ids are short plain words. At
+/// least one letter or digit, so an id is never `.` or `..`, which a browser would take out of
+/// the paths it appears in.
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= MAX_ID && id.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+    id.len() <= MAX_ID
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+        && id.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
 /// Slow by design; call it off the async threads (see `hash_password`).
