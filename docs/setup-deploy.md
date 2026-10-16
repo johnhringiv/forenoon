@@ -40,9 +40,6 @@ docker compose build
 docker compose up -d
 ```
 
-An install from before the web pages has a `feedback` container, which answered the rating
-links; `docker compose up -d --remove-orphans` retires it.
-
 Then set up the web pages (below): create your reader and add sources. After that you can
 try a run without sending anything:
 

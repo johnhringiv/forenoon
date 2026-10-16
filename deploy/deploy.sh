@@ -250,12 +250,8 @@ wait_web || web_healthy=false
 start_tunnel
 
 echo "$(date -u +%FT%TZ) recreating forenoon from $IMAGE"
-# forenoon-feedback answered the rating links before the web pages did; an install from
-# before them still has it.
-for c in forenoon forenoon-feedback; do
-    docker stop -t 30 "$c" >/dev/null 2>&1 || true
-    docker rm -f "$c" >/dev/null 2>&1 || true
-done
+docker stop -t 30 forenoon >/dev/null 2>&1 || true
+docker rm -f forenoon >/dev/null 2>&1 || true
 
 run_app() {
     name="$1"
