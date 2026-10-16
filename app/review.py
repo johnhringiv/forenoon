@@ -90,7 +90,7 @@ def review(
     cfg: Llm, backend: Backend | None, store: Store, articles: list[Article], today_start: str
 ) -> dict[str, Review]:
     """Verdicts by article id; empty when the check is off, over budget or failed."""
-    if backend is None or not cfg.check_extraction or not articles:
+    if backend is None or not articles:
         return {}
     estimate = TOKENS_OVERHEAD + TOKENS_PER_ARTICLE * len(articles)
     if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:

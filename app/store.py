@@ -193,12 +193,10 @@ class Store:
         """Every reader with their delivery settings; none until the web app has made an account."""
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
             return ()
-        learned = "learned" if self.can_learn() else "''"  # older web app: no such column
         # An account an admin has invited is nobody's until its reader joins: no issue for it.
-        joined = "WHERE invited_at IS NULL" if self._has_column("users", "invited_at") else ""
         rows = self.db.execute(
-            f"SELECT id, name, kindle_addresses, daily_stories, interests, {learned} AS learned"
-            f" FROM users {joined} ORDER BY created_at, id"
+            "SELECT id, name, kindle_addresses, daily_stories, interests, learned, format, grayscale, explore,"
+            " most_per_subject, show_reasons, learn FROM users WHERE invited_at IS NULL ORDER BY created_at, id"
         ).fetchall()
         return tuple(
             User(
@@ -207,7 +205,14 @@ class Store:
                 kindle_addresses=tuple(line.strip() for line in row["kindle_addresses"].splitlines() if line.strip()),
                 daily_cap=row["daily_stories"],
                 interests=row["interests"],
-                learned=row["learned"],
+                # Notes the reader turned off are kept, but not given to the model.
+                learned=row["learned"] if row["learn"] else "",
+                format=row["format"],
+                grayscale=bool(row["grayscale"]),
+                explore=bool(row["explore"]),
+                most_per_subject=row["most_per_subject"],
+                show_reasons=bool(row["show_reasons"]),
+                learn=bool(row["learn"]),
             )
             for row in rows
         )

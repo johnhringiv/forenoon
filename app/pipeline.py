@@ -49,6 +49,11 @@ POINTER_MAX_WORDS = 150
 FULL = "not sent: the day's places were taken"
 SPARE_CHOICES = 2  # reserves the model names beyond the places hand-added and pinned articles hold
 MAX_LINKS_TRIED = 4  # per pointer, when there is no model to say which links matter
+# A failsafe, not the main control (the model choosing articles is): anything longer is a
+# manual or a book and is not delivered (the whole NixOS manual once arrived as one chapter).
+MAX_ARTICLE_WORDS = 45_000
+# The most articles one story may bring. The daily cap counts stories, not articles.
+MAX_STORY_ENTRIES = 3
 MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 THUMB_TRIES = 4
@@ -794,13 +799,12 @@ def run(
             open_places = max(0, remaining - _pinned_places(pinned, by_hand))
             if explored is not None:
                 read_first.remove(explored)
-            if cfg.llm.choose_issue:
-                words = {item.id: extracted[item.id].word_count for item in read_first}
-                read_first = _chosen(
-                    cfg, backend, store, user, read_first, verdicts, ranking, grouped, words,
-                    open_places - (explored is not None), _pinned_places(pinned, by_hand) + SPARE_CHOICES,
-                    today, report, dry_run, pinned,
-                )  # fmt: skip
+            words = {item.id: extracted[item.id].word_count for item in read_first}
+            read_first = _chosen(
+                cfg, backend, store, user, read_first, verdicts, ranking, grouped, words,
+                open_places - (explored is not None), _pinned_places(pinned, by_hand) + SPARE_CHOICES,
+                today, report, dry_run, pinned,
+            )  # fmt: skip
             if explored is not None:
                 # The exploration pick keeps the day's last slot whatever its score.
                 read_first.insert(max(0, open_places - 1), explored)
@@ -855,8 +859,8 @@ def run(
             # What the model read is what would be sent: not worth a slot today.
             entry.reason = "; ".join(filter(None, [entry.reason, "held back: the model judged it not the article"]))
             return None
-        if cfg.max_article_words and result.word_count > cfg.max_article_words:
-            limit = f"held back: {result.word_count} words is over the limit of {cfg.max_article_words}"
+        if result.word_count > MAX_ARTICLE_WORDS:
+            limit = f"held back: {result.word_count} words is over the limit of {MAX_ARTICLE_WORDS}"
             entry.reason = "; ".join(filter(None, [entry.reason, limit]))
             return None
         if article is None:
@@ -924,7 +928,7 @@ def run(
             if other.id in taken:
                 continue
             taken.add(other.id)
-            if len(story.members) >= cfg.max_story_entries:
+            if len(story.members) >= MAX_STORY_ENTRIES:
                 skipped[other.id] = f"not sent: its story ({lead.article.title}) was full"
                 continue  # still marked taken: the story has had its share of the day
             if other.id in found_ids:
@@ -997,14 +1001,14 @@ def run(
         lead = story.members[0]
         pointer = lead.result.word_count < POINTER_MAX_WORDS
         if story.id in verdicts:
-            wanted = [story.links[n - 1].item for n in verdicts[story.id].links] if cfg.llm.follow_links else []
+            wanted = [story.links[n - 1].item for n in verdicts[story.id].links]
         elif subjects is not None:
             wanted = [story.links[n - 1].item for n in subjects.get(story.id, [])]
         elif pointer:
             wanted = [link.item for link in story.links[:MAX_LINKS_TRIED]]
         else:
             continue
-        room = cfg.max_story_entries - (0 if pointer else len(story.members))
+        room = MAX_STORY_ENTRIES - (0 if pointer else len(story.members))
         originals: list[_Prepared] = []
         for linked in wanted:
             if len(originals) >= room or linked.id in taken:

@@ -1,7 +1,6 @@
-"""Configuration: defaults here, deploy settings and secrets from the environment, and the
-rest from the settings an admin saves on the web pages (the `settings` table).
-
-Recipients come only from the database, where each reader sets their own.
+"""Configuration: defaults here, deploy settings and secrets from the environment, the
+settings an admin saves on the web pages (the `settings` table), and each reader's own (the
+`users` table), applied for their run by `for_reader`.
 """
 
 from __future__ import annotations
@@ -26,6 +25,13 @@ class User:
     daily_cap: int = 8  # stories a day; a story is one article, or a few on one subject
     interests: str = ""  # in the user's own words; given to the ranking model
     learned: str = ""  # what their ratings have shown; kept by the pipeline (app/learn.py)
+    # Their own settings, from the Reading and Account pages; `for_reader` applies them.
+    format: str = "issue"
+    grayscale: bool = True
+    explore: bool = True
+    most_per_subject: int = 2
+    show_reasons: bool = True
+    learn: bool = True
 
 
 @dataclass(frozen=True)
@@ -65,19 +71,16 @@ class Llm:
     daily_token_cap: int = 600_000  # input + output tokens per local day, all users
     max_candidates: int = 600  # ceiling on abstracts sent to the model per user per run
     batch_size: int = 80  # candidates per ranking call
-    group_stories: bool = True  # one more call finds candidates that cover the same event
-    follow_links: bool = True  # one more call finds articles that are about a page they link to
     # The reading pass: this many of the best-ranked candidates are fetched and read in full
     # by the model, which gives the final scores. 0 turns it off.
     read_candidates: int = 40
     read_words: int = 2500  # of each article; the rest is not sent
-    choose_issue: bool = True  # the model chooses the day's set from the articles it read
     choose_model: str = ""  # for choosing the day's set; "" for `model`
-    most_per_subject: int = 2  # when it does: at most this many on one broad subject; 0 for no limit
+    # Each reader's own (User), set for their run by `for_reader`:
+    most_per_subject: int = 2  # when choosing the day's set: at most this many on one broad subject; 0 for no limit
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book
-    check_extraction: bool = True  # ask the model whether each article looks complete; log only
-    learn: bool = True  # keep a note per reader of what their ratings show, for the prompts
+    learn: bool = True  # keep a note on what the reader's ratings show, and give it to the model
     timeout: float = 60.0  # seconds
 
 
@@ -127,13 +130,8 @@ class Config:
     # learning from later. A number of days prunes older ones; 0 keeps none; -1 keeps all.
     keep_pages_days: int = -1
     keep_issues_days: int = -1
-    # A failsafe, not the main control (the model choosing articles is): anything longer is a
-    # manual or a book and is not delivered (the whole NixOS manual once arrived as one
-    # chapter). 0 = no limit.
-    max_article_words: int = 45_000
-    # The most articles one story may bring. The daily cap counts stories, not articles.
-    max_story_entries: int = 3
-    # "issue": one book a day with a contents page. "articles": one book per article.
+    # "issue": one book a day with a contents page. "articles": one book per article. The
+    # reader's own (User), set for their run by `for_reader`.
     format: str = "issue"
     user_agent: str = "Forenoon/0.1 (self-hosted personal reader)"
     users: tuple[User, ...] = ()
@@ -186,6 +184,33 @@ class Config:
 
 # Set by the deploy, not on the web pages.
 ENVIRONMENT_ONLY = ("data_dir", "timezone", "public_base_url", "users", "sources", "smtp", "discovery.sites")
+# Each reader's own, not an admin's: set from User by `for_reader`.
+READER_SET = (
+    "format",
+    "images.grayscale",
+    "llm.explore_slots",
+    "llm.most_per_subject",
+    "llm.show_reasons",
+    "llm.learn",
+)
+
+
+def for_reader(cfg: Config, user: User) -> Config:
+    """`cfg` with this reader's own settings, for their run and anything sent to them."""
+    return replace(
+        cfg,
+        format=user.format,
+        images=replace(cfg.images, grayscale=user.grayscale),
+        llm=replace(
+            cfg.llm,
+            explore_slots=int(user.explore),
+            most_per_subject=user.most_per_subject,
+            show_reasons=user.show_reasons,
+            learn=user.learn,
+        ),
+    )
+
+
 SECTIONS = ("images", "alerts", "llm", "discovery")
 
 
@@ -249,7 +274,12 @@ def setting_keys() -> dict[str, type]:
     ):
         for spec in fields(cls):
             key = f"{section}.{spec.name}" if section else spec.name
-            if key not in ENVIRONMENT_ONLY and key not in SECTIONS and type(spec.default) in (bool, int, float, str):
+            if (
+                key not in ENVIRONMENT_ONLY
+                and key not in READER_SET
+                and key not in SECTIONS
+                and type(spec.default) in (bool, int, float, str)
+            ):
                 keys[key] = type(spec.default)
     return keys
 

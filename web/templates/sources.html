@@ -53,7 +53,7 @@
 <p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. "Places a day" is the most of an issue the source may take (0 for no limit); links you add by hand do not count. A pinned source's articles are all taken, before all others, and past its places a day they are extra: they do not use the day's places. A feed is shared with the household unless you untick it: sharing it adds it to the sources of every reader who follows shared feeds (the tick below), and anyone who does not want it unfollows it. A private feed is yours alone until you share it. Changes apply from the next run.</p>
 </form>
 </details>
-<form class="follow-new" method="post" action="/sources/follow-new"><input type="hidden" name="csrf" value="{{ csrf }}"><label class="tick"><input type="checkbox" name="follow_new" value="1"{% if follow_new %} checked{% endif %}> Follow feeds when they are shared with the household</label> <button>Save</button></form>
+<form class="switch" method="post" action="/sources/follow-new"><input type="hidden" name="csrf" value="{{ csrf }}"><label class="tick"><input type="checkbox" name="follow_new" value="1"{% if follow_new %} checked{% endif %}> Follow feeds when they are shared with the household</label> <button>Save</button></form>
 {% if total > 0 %}
 <form class="source filters" method="get" action="/sources">
 <div class="fields">

@@ -353,7 +353,6 @@ mod tests {
         for bad in ["7:30", "24:00", "06:60", "soon", ""] {
             assert!(check("delivery_time", bad).is_err(), "{bad}");
         }
-        assert!(check("format", "articles").is_ok() && check("format", "pdf").is_err());
         assert!(check("keep_pages_days", "-1").is_ok() && check("keep_pages_days", "-2").is_err());
         assert!(check("max_age_days", "0").is_err() && check("max_age_days", "2.5").is_err());
         assert_eq!(check("alerts.to", " Me@Example.com ").unwrap(), "me@example.com");

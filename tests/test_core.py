@@ -210,6 +210,46 @@ def test_readers_come_from_the_web_apps_accounts_table(tmp_path):
     assert (reader.daily_cap, reader.interests, reader.name) == (16, "Compilers.", "John")
 
 
+def test_each_readers_own_settings_start_from_the_installs_and_apply_to_their_run(tmp_path):
+    from pathlib import Path
+
+    from app.config import Config, for_reader
+
+    store = Store(tmp_path / "forenoon.sqlite3")
+    migrations = sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql"))
+    moved = next(m for m in migrations if m.name.startswith("0024_"))
+    for migration in migrations[: migrations.index(moved)]:
+        store.db.executescript(migration.read_text())
+    add = "INSERT INTO users (id, name, password_hash, created_at, learned) VALUES (?, ?, 'x', ?, 'Likes long reads.')"
+    store.db.execute(add, ("john", "John", "2026-01-01"))
+    store.db.execute(add, ("mary", "Mary", "2026-01-02"))
+    save = "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 'x')"
+    saved = [
+        ("format", "articles"),
+        ("images.grayscale", "0"),
+        ("llm.explore_slots", "0"),
+        ("llm.most_per_subject", "5"),
+    ]
+    store.db.executemany(
+        save, [*saved, ("llm.show_reasons", "0"), ("llm.group_stories", "0"), ("delivery_time", "07:00")]
+    )
+    store.db.executescript(moved.read_text())
+    assert [row[0] for row in store.db.execute("SELECT key FROM settings")] == ["delivery_time"]
+    store.db.execute("UPDATE users SET learn = 0 WHERE id = 'mary'")
+    john, mary = store.readers()
+    assert (john.format, john.grayscale, john.explore, john.most_per_subject) == ("articles", False, False, 5)
+    assert (john.show_reasons, john.learn, john.learned) == (False, True, "Likes long reads.")
+    assert not mary.learn and mary.learned == "", "notes turned off are kept but not given to the model"
+    mine = for_reader(Config(data_dir=tmp_path), john)
+    assert (mine.format, mine.images.grayscale, mine.llm.explore_slots, mine.llm.most_per_subject) == (
+        "articles",
+        False,
+        0,
+        5,
+    )
+    assert not mine.llm.show_reasons and mine.llm.learn
+
+
 def test_web_app_offers_the_same_reasons():
     from pathlib import Path
 

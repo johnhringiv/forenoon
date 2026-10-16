@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .alerts import notify, notify_run
-from .config import Config, ConfigError, from_env, with_settings
+from .config import Config, ConfigError, for_reader, from_env, with_settings
 from .discover import SITES
 from .fetch import Fetcher
 from .llm import API_KEY_ENV, backend_from_env
@@ -76,7 +76,9 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             # Each reader's own: the feeds and built-in front pages they follow.
             sites = store.followed_builtins(user.id, cfg.discovery.sites)
             own = dataclasses.replace(
-                cfg, sources=store.sources(user.id), discovery=dataclasses.replace(cfg.discovery, sites=sites)
+                for_reader(cfg, user),
+                sources=store.sources(user.id),
+                discovery=dataclasses.replace(cfg.discovery, sites=sites),
             )
             if not own.sources and not sites:
                 log.error("%s follows no sources; follow some on the Sources page", user.id)
@@ -97,7 +99,7 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             print(f"Report written to {path}", file=sys.stderr)
             if not args.dry_run:
                 notify_run(cfg, report)
-                _learn(cfg, store, backend, user)
+                _learn(own, store, backend, user)
             failed += bool(report.delivery_error)
     finally:
         fetcher.close()

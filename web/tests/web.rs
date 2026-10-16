@@ -455,7 +455,14 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert_eq!((user.name.as_str(), user.timezone.as_str()), ("John R", "Europe/London"));
     // Reading settings, on the Reading page: the pipeline reads these.
     let reading = |interests: &'static str, daily: &'static str| {
-        [("csrf", csrf.as_str()), ("interests", interests), ("daily_stories", daily)]
+        [
+            ("csrf", csrf.as_str()),
+            ("interests", interests),
+            ("daily_stories", daily),
+            ("format", "articles"),
+            ("most_per_subject", "4"),
+            ("show_reasons", "1"),
+        ]
     };
     let reply = browser.post(&site, "/account/reading", &reading("Compilers.", "0")).await;
     assert!(
@@ -469,6 +476,30 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(page.contains(r#"<a href="/reading" aria-current="page">Reading</a>"#), "{page}");
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.interests.as_str(), user.daily_stories), ("Compilers.\nNot watches. <b>", 16));
+    // How the issue is made is the reader's own too; an unticked box is off.
+    assert_eq!(
+        (user.format.as_str(), user.most_per_subject, user.show_reasons, user.explore),
+        ("articles", 4, true, false)
+    );
+    assert!(page.contains(r#"<option value="articles" selected>"#) && page.contains(r#"name="explore" value="1">"#));
+    let mut odd = reading("Compilers.", "16").to_vec();
+    odd[3] = ("format", "pdf");
+    assert_eq!(browser.post(&site, "/account/reading", &odd).await.status, StatusCode::BAD_REQUEST);
+    odd[3] = ("format", "issue");
+    odd[4] = ("most_per_subject", "21");
+    let reply = browser.post(&site, "/account/reading", &odd).await;
+    assert!(
+        reply.status == StatusCode::BAD_REQUEST
+            && reply.text.contains("Most on one subject must be a number from 0 to 20.")
+    );
+    // Notes kept from ratings: on by default, the reader's to turn off.
+    assert!(user.learn && page.contains(r#"name="learn" value="1" checked"#));
+    assert_eq!(
+        browser.post(&site, "/learned/switch", &[("csrf", csrf.as_str())]).await.location,
+        "/reading?saved=learn"
+    );
+    assert!(!auth::find_user(&site.pool, "john").await.unwrap().unwrap().learn);
+    assert!(browser.get(&site, "/reading").await.text.contains("Turned off: the notes below are not rewritten"));
     // Kindle addresses, on the account page: the reader's own, checked for shape.
     let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", "not an address")];
     let reply = browser.post(&site, "/account/kindle", &kindle).await;
@@ -477,13 +508,24 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert_eq!(browser.post(&site, "/account/kindle", &kindle).await.location, "/account?saved=kindle");
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!(user.kindle_addresses, "a@kindle.com\nb@kindle.com");
+    assert!(user.grayscale, "an e-ink screen unless the reader says it is in colour");
+    let colour = [("csrf", csrf.as_str()), ("kindle_addresses", "a@kindle.com\nb@kindle.com"), ("colour", "1")];
+    browser.post(&site, "/account/kindle", &colour).await;
+    assert!(!auth::find_user(&site.pool, "john").await.unwrap().unwrap().grayscale);
+    assert!(browser.get(&site, "/account").await.text.contains(r#"name="colour" value="1" checked"#));
 
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
     let page = mary.get(&site, "/account").await;
     assert!(page.text.contains(r#"name="kindle_addresses""#), "a reader sets their own Kindle addresses");
     let token = page.csrf();
-    let form = [("csrf", token.as_str()), ("interests", "Sailing."), ("daily_stories", "5")];
+    let form = [
+        ("csrf", token.as_str()),
+        ("interests", "Sailing."),
+        ("daily_stories", "5"),
+        ("format", "issue"),
+        ("most_per_subject", "2"),
+    ];
     assert_eq!(mary.post(&site, "/account/reading", &form).await.status, StatusCode::SEE_OTHER);
     let form = [("csrf", token.as_str()), ("kindle_addresses", "mary@kindle.com")];
     assert_eq!(mary.post(&site, "/account/kindle", &form).await.location, "/account?saved=kindle");
@@ -819,7 +861,7 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
 
     // The story can be sent as one book: one request, apart from any for a single article.
     assert!(!text.contains("Send story to Kindle"), "no Kindle address yet");
-    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
     let text = browser.get(&site, "/").await.text;
     assert_eq!(text.matches("Send story to Kindle").count(), 1, "offered on the story, not on a lone article");
     let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();
@@ -1547,7 +1589,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     };
     let send = |form: Vec<(&'static str, String)>| form;
     let changed =
-        send(form(&[("delivery_time", "07:30"), ("max_story_entries", "4"), ("alerts.to", "Ops@Example.com")]));
+        send(form(&[("delivery_time", "07:30"), ("llm.read_candidates", "20"), ("alerts.to", "Ops@Example.com")]));
     let changed: Vec<(&str, &str)> = changed.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert_eq!(admin.post(&site, "/settings", &changed).await.location, "/settings?saved=1");
     let stored: Vec<(String, String)> =
@@ -1560,7 +1602,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
             ("alerts.on_empty", "0"),
             ("alerts.to", "ops@example.com"),
             ("delivery_time", "07:30"),
-            ("max_story_entries", "4")
+            ("llm.read_candidates", "20")
         ]
     );
     let text = admin.get(&site, "/settings?saved=1").await.text;
@@ -1569,18 +1611,18 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     );
 
     // Back to the defaults: the rows go away.
-    let back = form(&[("delivery_time", "06:00"), ("max_story_entries", "3"), ("alerts.on_empty", "1")]);
+    let back = form(&[("delivery_time", "06:00"), ("llm.read_candidates", "40"), ("alerts.on_empty", "1")]);
     let back: Vec<(&str, &str)> = back.iter().map(|(key, value)| (*key, value.as_str())).collect();
     admin.post(&site, "/settings", &back).await;
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
     assert_eq!(left, 0);
 
     // One wrong value saves nothing and keeps what was typed.
-    let wrong = form(&[("delivery_time", "25:00"), ("max_story_entries", "9")]);
+    let wrong = form(&[("delivery_time", "25:00"), ("llm.read_candidates", "9")]);
     let wrong: Vec<(&str, &str)> = wrong.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let reply = admin.post(&site, "/settings", &wrong).await;
     assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Deliver at: give a time such as 06:00."));
-    assert!(reply.text.contains(r#"name="max_story_entries" type="number" step="1" min="1" max="10" value="9""#));
+    assert!(reply.text.contains(r#"name="llm.read_candidates" type="number" step="1" min="0" max="200" value="9""#));
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
     assert_eq!(left, 0);
 
@@ -1613,7 +1655,7 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
     let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::BAD_REQUEST);
 
-    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
     assert!(browser.get(&site, "/").await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
     assert_eq!(browser.post(&site, "/send", &form).await.location, "/#a-a1");
     browser.post(&site, "/send", &form).await; // pressed twice: still one request
@@ -1672,7 +1714,7 @@ async fn a_pick_shown_only_as_a_link_is_grayed_and_never_sent() {
     article(pool, "a1", "https://blog.example/1", "Blog", "Post 1", "john", sent).await;
     article(pool, "p1", "https://paper.example/1", "Paper", "Behind the paywall", "john", sent).await;
     sqlx::query("UPDATE deliveries SET link_only = 1 WHERE article_id = 'p1'").execute(pool).await.unwrap();
-    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
     let mut browser = Browser::default();
     browser.sign_in(&site, "john").await;
 
@@ -1856,7 +1898,7 @@ async fn the_archive_lists_the_readers_library_and_filters_it() {
     let rate = [("csrf", csrf.as_str()), ("article", "n1"), ("rating", "5"), ("back", back)];
     assert_eq!(browser.post(&site, "/rate", &rate).await.location, "/archive?show=near#a-n1");
     assert!(browser.get(&site, "/archive?rating=high").await.text.contains("Rated 5 of 5"));
-    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
     assert!(browser.get(&site, back).await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
     let send = [("csrf", csrf.as_str()), ("article", "n1"), ("story", "1"), ("back", back)];
     assert_eq!(browser.post(&site, "/send", &send).await.location, "/archive?show=near#a-n1");
@@ -1951,7 +1993,7 @@ async fn a_link_added_by_hand_is_only_queued_and_then_shown_as_the_readers_own()
     // Kept as read needs no Kindle; anything to be sent does. Only web addresses are taken.
     assert_eq!(send!(add("https://blog.example/read", "keep", "4")).location, "/archive?show=added");
     assert_eq!(send!(add("https://blog.example/x", "next", "")).status, StatusCode::BAD_REQUEST);
-    db::set_kindle_addresses(pool, "john", "john@kindle.com").await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
     assert_eq!(send!(add("https://blog.example/next", "next", "5")).location, "/archive?show=added");
     for bad in ["javascript:alert(1)", "file:///etc/passwd", "blog.example/no-scheme"] {
         assert_eq!(send!(add(bad, "next", "")).location, "/archive?show=added&error=link");

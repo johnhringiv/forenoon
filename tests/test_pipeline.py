@@ -640,11 +640,6 @@ def test_extraction_check_is_logged_and_never_changes_delivery(env):
     assert sorted(r["verdict"] for r in rows) == ["bad", "ok"]
     assert all(len(r["problem"]) <= 160 for r in rows) and "ignored" not in "".join(r["problem"] for r in rows)
 
-    off = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, check_extraction=False))
-    quiet = FakeBackend(backend.scores)
-    run(off, Store(cfg.data_dir / "off.sqlite3"), fetcher, user, now=NOW, dry_run=True, backend=quiet)
-    assert not quiet.checked and len(quiet.prompts) == 3  # ranking, grouping and reading; no check
-
 
 def test_fetched_pages_are_kept_for_replay_and_pruned(env):
     from app import archive
@@ -710,24 +705,27 @@ def test_settings_come_from_the_environment_and_the_web_pages(tmp_path, monkeypa
         "INSERT INTO users (id, name, password_hash, role, email, created_at) VALUES ('a', 'A', 'x', 'admin', 'a@example.com', 'x')"
     )
     save = "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 'x')"
-    store.db.executemany(save, [("delivery_time", "07:30"), ("llm.read_candidates", "20"), ("images.grayscale", "0")])
+    store.db.executemany(save, [("delivery_time", "07:30"), ("llm.read_candidates", "20"), ("alerts.on_empty", "0")])
     store.db.executemany(save, [("delivery_time ", "x"), ("smtp.host", "evil.example"), ("max_age_days", "soon")])
     store.db.execute("UPDATE sources SET enabled = 0 WHERE builtin = 'lobsters'")
     store.db.commit()
     monkeypatch.setenv("FORENOON_ANTHROPIC_API_KEY", "k")
     cfg = cli.load()
-    assert (cfg.delivery_time, cfg.llm.read_candidates, cfg.images.grayscale) == ("07:30", 20, False)
+    assert (cfg.delivery_time, cfg.llm.read_candidates, cfg.alerts.on_empty) == ("07:30", 20, False)
     assert cfg.smtp.host == "smtp.example" and cfg.max_age_days == 3, "deploy settings and bad values are left alone"
     assert cfg.llm.enabled and cfg.discovery.sites == ("hackernews",)
     assert cfg.alerts.to == "a@example.com", "alerts go to the admins unless another address is saved"
     assert cli._reload(cfg).delivery_time == "07:30"
 
     assert with_settings(cfg, {"alerts.enabled": "0"})[0].alerts.enabled is False
-    for bad in ({"delivery_time": "25:00"}, {"format": "pdf"}, {"max_age_days": "-2"}, {"users": "x"}):
+    for bad in ({"delivery_time": "25:00"}, {"alerts.source_failures": "x"}, {"max_age_days": "-2"}, {"users": "x"}):
         assert with_settings(cfg, bad) == (
             cfg,
             [next(iter(bad)) + (": not a setting" if "users" in bad else f": cannot use {next(iter(bad.values()))!r}")],
         )
+    # A reader's own settings are theirs, not an admin's.
+    for key in ("format", "images.grayscale", "llm.explore_slots", "llm.learn"):
+        assert with_settings(cfg, {key: "0"})[1] == [f"{key}: not a setting"]
     assert with_settings(cfg, {"keep_pages_days": "-1"})[1] == []
     assert "smtp.host" not in setting_keys() and "discovery.sites" not in setting_keys()
 
@@ -1033,10 +1031,12 @@ def test_saved_pages_and_books_are_kept_for_good_by_default(env):
     assert not (cfg.pages_dir / "ancient.json.gz").exists() and not (cfg.issues_dir / "ancient.epub").exists()
 
 
-def test_an_article_over_the_word_limit_is_held_back(env):
+def test_an_article_over_the_word_limit_is_held_back(env, monkeypatch):
+    import app.pipeline
+
     cfg, store, fetcher = env
     words = len(BODY.split())
-    cfg = dataclasses.replace(cfg, max_article_words=words // 2)
+    monkeypatch.setattr(app.pipeline, "MAX_ARTICLE_WORDS", words // 2)
     sent = []
     report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))
     assert not sent and not report.delivered
@@ -1580,7 +1580,7 @@ def test_a_link_only_source_is_never_fetched_and_its_picks_are_links(env):
 
 def test_an_articles_age_counts_from_when_it_was_first_seen(env, monkeypatch):
     cfg, store, fetcher = env
-    cfg = _llm_cfg(cfg, explore_slots=0, read_candidates=0, group_stories=False, follow_links=False)
+    cfg = _llm_cfg(cfg, explore_slots=0, read_candidates=0)
     cfg = dataclasses.replace(cfg, sources=(Source("Blog", "https://blog.example/feed"),))
     user = cfg.users[0]
 
