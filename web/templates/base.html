@@ -161,6 +161,10 @@ button.kindle { border:1.5px solid var(--accent); color:var(--accent); font-weig
 button.primary:hover, button.kindle:hover { filter:brightness(1.1) }
 .extra, form.send.apart { border-top:1px solid var(--line); padding-top:.45rem; margin-top:.25rem }
 .notes { white-space:pre-line; color:var(--ink) }
+/* Read, not filled in: the notes the pipeline keeps are shown as text, their edit form tucked away. */
+section.learned { max-width:44rem; margin:2rem 0 }
+section.learned > p.notes { margin:.8rem 0; padding:.1rem 0 .1rem .9rem; border-left:3px solid var(--line) }
+section.learned form.sheet { margin:.6rem 0 0; font-size:.9rem; color:var(--ink) }
 form.rate { margin:0; display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; font-size:.78rem }
 form.rate button.on { background:var(--ink); color:var(--card); border-color:var(--ink) }
 .extra { display:flex; flex-wrap:wrap; gap:.3rem .9rem; align-items:center; font-size:.78rem; color:var(--soft) }

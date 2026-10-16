@@ -1030,7 +1030,7 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     assert!(added.starts_with("/sources?saved=added") && mine.followed && mine.added_by == "mary" && !mine.shared);
     let text = mary.get(&site, "/sources").await.text;
     assert!(
-        text.contains("Following 3 of 3 sources") && text.contains(r#"<span class="tag">Private</span>"#),
+        text.contains("Following 3 of 3 sources") && text.contains(r#"until they share it">Private</span>"#),
         "{text}"
     );
     assert!(!text.contains("Private: "), "the adder is not told their own name");
@@ -1070,7 +1070,7 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     // The admin sees Mary's, with whose it is, and shares it with the household.
     let text = admin.get(&site, "/sources").await.text;
     assert!(
-        text.contains(r#"<span class="tag">Private: Mary</span>"#) && text.contains("Not followed by you"),
+        text.contains(r#"until they share it">Private: Mary</span>"#) && text.contains("Not followed by you"),
         "{text}"
     );
     assert!(text.contains("3 sources, 0 paused, 0 failing."));
@@ -1084,7 +1084,8 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     assert_eq!(admin.post(&site, &format!("/sources/{}", mine.id), &share).await.location, "/sources?saved=saved");
     let text = carl.get(&site, "/sources").await.text;
     assert!(
-        text.contains("Shared with the household, not followed") && text.contains(r#"<span class="tag">Shared</span>"#),
+        text.contains("Shared with the household, not followed")
+            && text.contains(r#"any reader can follow it">Shared</span>"#),
         "{text}"
     );
     assert!(text.contains("Following 2 of 3 sources"));
@@ -1944,6 +1945,10 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
     assert_eq!(now.learned_at.as_deref(), Some("2026-10-12T11:00:00+00:00"));
     let text = browser.get(&site, "/reading?saved=notes").await.text;
     assert!(text.contains("Edited by you · in use") && text.contains("Restore this version"));
+    // Shown to read; the form to correct them is tucked away, not the page's main action.
+    assert!(text.contains("<p class=\"notes\">Skips market reports.\nLikes long pieces.</p>"));
+    let tucked = text.find("<summary>Correct these notes</summary>").unwrap();
+    assert!(text.find("name=\"notes\"").unwrap() > tucked);
     let long = "x".repeat(2001);
     let too_long = [("csrf", csrf.as_str()), ("notes", long.as_str())];
     assert_eq!(browser.post(&site, "/learned", &too_long).await.location, "/reading?saved=long");

@@ -15,14 +15,25 @@
 <p class="hint">A target, not a hard limit. A story is one article, or a few on one subject.</p>
 <button class="primary">Save</button>
 </form>
-<form class="sheet wide" method="post" action="/learned">
+<section class="learned">
 <h2>What Forenoon has learned</h2>
+{% if notes.is_empty() %}
+<p class="hint">{% if rewritten.is_none() %}Nothing has been learned yet: the first notes are written once you have rated ten articles.{% else %}No notes are in use.{% endif %}</p>
+{% else %}
+<p class="notes">{{ notes }}</p>
+{% endif %}
+<p class="hint">{% if let Some(day) = rewritten %}Last rewritten from your ratings on {{ day }}. {% endif %}About once a week, when there are new ratings, the model rewrites these from everything you have rated, and it is given them beside your interests. You don't need to do anything here: to change what you get, rate articles or edit your interests above.</p>
+{% if !notes.is_empty() %}
+<details class="help"><summary>Correct these notes</summary>
+<form class="sheet wide" method="post" action="/learned">
 <input type="hidden" name="csrf" value="{{ csrf }}">
-<p class="hint">{% if let Some(day) = rewritten %}Last rewritten from your ratings on {{ day }}.{% else %}Nothing has been learned yet: the first notes are written once you have rated ten articles.{% endif %} About once a week, when there are new ratings, the model rewrites these from everything you have rated. It is given them beside your interests.</p>
-<label>What your ratings have shown <textarea name="notes" rows="10" maxlength="2000">{{ notes }}</textarea></label>
-<p class="hint">You can correct or empty them. An edit is a starting point, not a lock: the next rewrite keeps what your ratings still bear out and may change the rest. What you want held for good belongs in your interests, above.</p>
-<button class="primary">Save the notes</button>
+<label>The notes <textarea name="notes" rows="8" maxlength="2000">{{ notes }}</textarea></label>
+<p class="hint">Correct or empty them. An edit is a starting point, not a lock: the next rewrite keeps what your ratings still bear out and may change the rest. What you want held for good belongs in your interests.</p>
+<button>Save the correction</button>
 </form>
+</details>
+{% endif %}
+</section>
 {% if !versions.is_empty() %}
 <h2>Earlier versions of the notes <span>newest first</span></h2>
 {% for version in versions %}
