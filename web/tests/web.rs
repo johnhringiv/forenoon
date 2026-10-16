@@ -1528,7 +1528,8 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     let page = admin.get(&site, "/settings").await;
     let csrf = page.csrf();
     assert!(page.text.contains(r#"<input name="delivery_time" type="time" value="06:00" required>"#));
-    assert!(page.text.contains(r#"name="llm.enabled" value="1" checked"#) && !page.text.contains("changed"));
+    assert!(page.text.contains(r#"name="alerts.enabled" value="1" checked"#) && !page.text.contains("changed"));
+    assert!(!page.text.contains(r#"name="llm.enabled""#), "the model is required, not switched on");
     assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/settings">Settings</a>"#));
     // What the model used, priced by the pipeline when it logged each call; a call to a model
     // with no known price is said apart. Nothing about prices is a setting.
@@ -1570,22 +1571,10 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
 
     // Every field as the page shows it, with a few changed.
     let defaults = [
-        ("format", "issue"),
         ("max_age_days", "3"),
-        ("max_article_words", "45000"),
-        ("images.grayscale", "1"),
-        ("llm.enabled", "1"),
         ("llm.model", "anthropic/claude-haiku-5-5"),
         ("llm.daily_token_cap", "600000"),
         ("llm.read_candidates", "40"),
-        ("llm.explore_slots", "1"),
-        ("llm.choose_issue", "1"),
-        ("llm.most_per_subject", "2"),
-        ("llm.group_stories", "1"),
-        ("llm.follow_links", "1"),
-        ("llm.show_reasons", "1"),
-        ("llm.check_extraction", "1"),
-        ("llm.learn", "1"),
         ("alerts.enabled", "1"),
         ("alerts.source_failures", "3"),
         ("keep_pages_days", "-1"),

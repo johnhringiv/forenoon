@@ -29,8 +29,9 @@ openssl rand -hex 32    # paste as FORENOON_FEEDBACK_SECRET
 
 Fill in `FORENOON_HOST_DATA`, `TZ`, the mail server (`FORENOON_SMTP_HOST`,
 `FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`; see
-[setup-email.md](setup-email.md)) and, for ranking, `FORENOON_ANTHROPIC_API_KEY`. Never
-commit `.env`.
+[setup-email.md](setup-email.md)) and `FORENOON_ANTHROPIC_API_KEY`, which Forenoon needs:
+the model is what chooses your articles. Without it a run still delivers, newest first, and
+the alert says the key is missing. Never commit `.env`.
 Changing `FORENOON_FEEDBACK_SECRET` invalidates every rating link already delivered.
 
 ## 3. First run

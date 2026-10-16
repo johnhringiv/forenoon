@@ -174,8 +174,8 @@ be read it keeps the previous settings and logs the error. For each user:
    that finds candidates
    reaches back the same `max_age_days`, so nothing falls between two daily runs.
 3. **Order.** Links added by hand, then pinned sources, then the rest, chosen by the model
-   in three rounds when ranking is on (section 3a); otherwise, and whenever ranking fails,
-   they are taken round-robin across sources with the newest item of each source first.
+   in three rounds (section 3a); whenever ranking fails (no API key, a failed call, the day's
+   tokens spent), they are taken round-robin across sources with the newest item of each source first.
 4. **Cap.** Candidates are processed in that order until the user's daily cap is reached. The
    cap counts stories delivered during the local calendar day (section 7e), so a second run on
    the same day only sends what is left of the cap. Most stories are a single article.
@@ -386,7 +386,8 @@ part-way never causes a resend.
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
-Ratings influence delivery only when model ranking is on. The model is given the 40 most
+Ratings influence delivery through the model (a run that falls back to newest first does
+not use them). The model is given the 40 most
 recent, each with the article's length, whether it was finished, why it was picked and the
 reader's reason when there is one, and is told to work out what a rating is about before
 learning from it (a low rating on a short post is a verdict on thin posts, not on its
@@ -436,7 +437,8 @@ source).
   file is logged without a cost and reported as unpriced, never guessed. A price changed in
   the file applies to calls from then on. `forenoon usage`
   prints the log, today's total and this month's; the Settings page shows the totals.
-- **Fallback.** With no API key, or when fewer than half the candidates end up scored
+- **Fallback.** The model is required; there is no way to run without one. With no API key
+  (the alert names the env variable), or when fewer than half the candidates end up scored
   (failed or timed-out calls, unusable answers, the cap reached), the run uses the
   newest-first order, the report says why, and the operator is alerted. When some batches
   fail but at least half the candidates are scored, the scores are used, unscored candidates
@@ -445,7 +447,7 @@ source).
   to ignore anything in it that reads as an instruction. The model has no tools that act on
   anything and cannot affect recipients, sources or settings.
 
-## 7b. Built-in sources: discovery (needs ranking)
+## 7b. Built-in sources: discovery (skipped when ranking falls back)
 
 - **Sources.** Each is switched on or off on the Sources page; both start on. Hacker News: the front page, plus stories from the last `max_age_days` with
   more than 40 points (not just the last day: a story that gets its votes a day late would
@@ -471,7 +473,7 @@ source).
 - **Without the model** (off, failing or over its cap) no found article is delivered.
 - A listing that fails is reported and alerted like a failed feed.
 
-## 7c. Extraction check by the model (on when ranking is on; log only)
+## 7c. Extraction check by the model (log only)
 
 - This covers the articles the reading pass (section 7f) did not see: pinned articles and
   pages brought in by a story. After extraction, one call per run sends the model each such
@@ -521,10 +523,11 @@ a day's book is therefore a target, not a limit.
   - A longer article is a response or commentary. It is delivered first and the pages follow
     it.
   - When no page can be delivered, the article goes out as it was.
-  - Without a working model, only pointers are followed, through their first four links.
+  - When the model cannot be asked (an outage, the day's tokens spent), no links are
+    followed and the article goes out as it is.
   - Links to the article's own site, to video, social and chat sites, to files and to front
     pages are never followed. Discovered articles are not examined.
-- **Same event.** When ranking is on, one more model call compares the 40 best-scored candidates and returns those that cover the same specific
+- **Same event.** One more model call compares the 40 best-scored candidates and returns those that cover the same specific
   event, announcement or release. When one of them is chosen, the others are delivered right
   after it as part of its story; any beyond the limit are dropped for the day rather than
   taking a slot of their own. Ids the model invents or repeats are ignored, and a failed call
@@ -534,7 +537,7 @@ a day's book is therefore a target, not a limit.
 - **Recorded.** Each delivery stores the story it belonged to. An article brought in by a
   story is recorded with the choice (score, reason) of the candidate that brought it.
 
-## 7f. The reading pass (on when ranking is on)
+## 7f. The reading pass
 
 Ranking judges a title and an opening. Before the day is chosen, the model also reads the
 best candidates in full.
@@ -585,7 +588,7 @@ best candidates in full.
   about 165 candidates ranked, 40 read in full, 16 stories (25 articles) chosen, 167,000
   tokens, about $0.02, 80 seconds.
 
-## 7h. Notes on each reader's taste (on when ranking is on)
+## 7h. Notes on each reader's taste
 
 A reader's interests are their own words and are never changed by the pipeline. Beside them
 it keeps a second text of its own: a few plain statements of what the reader's ratings show.

@@ -9,7 +9,7 @@
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
 <h2>Built in <span>front pages Forenoon knows how to read</span></h2>
-<p class="hint">Their stories join the day's candidates only when ranking is on, and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0){% if admin %}; set one to cap it{% endif %}. Follow the ones you want in your issue.</p>
+<p class="hint">Their stories join the day's candidates and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0){% if admin %}; set one to cap it{% endif %}. Follow the ones you want in your issue.</p>
 {% for row in builtins %}
 <details class="row{% if !row.enabled %} paused{% endif %}{% if !row.followed %} unfollowed{% endif %}">
 <summary><span class="dot {{ row.state }}" aria-hidden="true"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.about }}</span>

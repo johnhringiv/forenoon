@@ -85,7 +85,7 @@ def learn(
 ) -> bool:
     """Rewrite the reader's note when it is due. Returns whether it was rewritten."""
     now = now or datetime.now(UTC)
-    if not cfg.enabled or not cfg.learn or backend is None or not store.can_learn() or not due(store, user, now):
+    if not cfg.learn or backend is None or not store.can_learn() or not due(store, user, now):
         return False
     if store.llm_tokens_since(today_start) + TOKENS_ESTIMATE > cfg.daily_token_cap:
         log.warning("reader notes not updated: daily token cap reached")
