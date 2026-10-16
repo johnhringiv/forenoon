@@ -193,7 +193,7 @@ def read(
             log.warning("reading pass stopped: daily token cap reached (%d of %d used)", used, cfg.daily_token_cap)
             break
         try:
-            reply = backend.structured(SYSTEM, _listing(batch, cfg.read_words), SCHEMA, shared=profile)
+            reply = backend.structured(SYSTEM, _listing(batch, cfg.read_words), SCHEMA, model=cfg.model, shared=profile)
         except LlmError as exc:
             store.log_llm_call("read", cfg.model, 0, 0, "error", str(exc)[:300])
             log.warning("reading pass batch failed: %s", exc)

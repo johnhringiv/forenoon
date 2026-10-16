@@ -972,7 +972,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         page.text.contains("Today: 0 of 600,000 tokens, about $0.0000.") && !page.text.contains("Price per million")
     );
     let now = forenoon_web::db::now_iso();
-    for (model, cost) in [("claude-haiku-5-5", Some(0.0125)), ("claude-new-9", None)] {
+    for (model, cost) in [("anthropic/claude-haiku-5-5", Some(0.0125)), ("anthropic/claude-new-9", None)] {
         sqlx::query(
             "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status,
              cache_write_tokens, cache_read_tokens, cost) VALUES (?, 'rank', ?, 1000, 200, 'ok', 300, 50000, ?)",
@@ -987,6 +987,10 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     let text = admin.get(&site, "/settings").await.text;
     assert!(text.contains("Today: 103,000 of 600,000 tokens, about $0.0125.") && text.contains("This month: 103,000"));
     assert!(text.contains("1 calls this month were to a model with no known price"));
+    // Both model settings list the shipped models; only the second can follow the first.
+    assert!(text.contains(r#"<option value="anthropic/claude-haiku-5-5" selected>Claude Haiku 5.5</option>"#));
+    assert_eq!(text.matches(r#"<option value="anthropic/claude-sonnet-5-5">Claude Sonnet 5.5</option>"#).count(), 2);
+    assert!(text.contains(r#"<option value="" selected>The model above</option>"#));
 
     // Every field as the page shows it, with a few changed.
     let defaults = [
@@ -995,7 +999,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("max_article_words", "45000"),
         ("images.grayscale", "1"),
         ("llm.enabled", "1"),
-        ("llm.model", "claude-haiku-5-5"),
+        ("llm.model", "anthropic/claude-haiku-5-5"),
         ("llm.daily_token_cap", "600000"),
         ("llm.read_candidates", "40"),
         ("llm.explore_slots", "1"),

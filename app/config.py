@@ -56,10 +56,12 @@ class Images:
 
 @dataclass(frozen=True)
 class Llm:
-    """Ranking with Claude. Only used when FORENOON_ANTHROPIC_API_KEY is set."""
+    """Ranking with a model. Only used when there is a key for its connection (FORENOON_ANTHROPIC_API_KEY)."""
 
     enabled: bool = True
-    model: str = "claude-haiku-5-5"
+    # Named with its connection (app/models.py). It does all the routine work: ranking, the
+    # reading pass, grouping stories, following links, the notes, and the extraction check.
+    model: str = "anthropic/claude-haiku-5-5"
     daily_token_cap: int = 600_000  # input + output tokens per local day, all users
     max_candidates: int = 600  # ceiling on abstracts sent to the model per user per run
     batch_size: int = 80  # candidates per ranking call
@@ -71,7 +73,6 @@ class Llm:
     read_words: int = 2500  # of each article; the rest is not sent
     choose_issue: bool = True  # the model chooses the day's set from the articles it read
     choose_model: str = ""  # for choosing the day's set; "" for `model`
-    check_model: str = ""  # for the extraction check; "" for `model`
     most_per_subject: int = 2  # when it does: at most this many on one broad subject; 0 for no limit
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
     show_reasons: bool = True  # print the model's one-line reason in the book

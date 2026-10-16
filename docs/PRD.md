@@ -343,7 +343,7 @@ reader's reason when there is one, and is told to work out what a rating is abou
 learning from it (a low rating on a short post is a verdict on thin posts, not on its
 source).
 
-## 7a. Ranking with Claude (on by default; needs an API key)
+## 7a. Ranking with a model (on by default; needs an API key)
 
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
@@ -362,11 +362,17 @@ source).
   the reading pass and the choice of the issue (section 3a), except that the day's last slot
   goes to one article chosen uniformly at random from those outside the top picks
   (exploration). If an article then fails extraction, the next in order takes its place.
-- **Models.** Every call uses `llm.model` (Claude Haiku 5.5), except that the choosing of the
-  issue (section 7f) and the extraction check (section 7c) can each have their own
-  (`llm.choose_model`, `llm.check_model`). Every call is logged and priced under the model it
-  used. The answer is a forced call of one tool; a model that refuses a forced tool call
-  (Sonnet 5.5, Opus 5.5) is asked for it in the prompt instead, from its first refusal on.
+- **Models.** A model is named with the connection it is reached through,
+  `anthropic/claude-haiku-5-5`; Anthropic is the only connection so far. Two settings: every
+  call uses `llm.model` (Claude Haiku 5.5), except the choosing of the issue (section 7f),
+  which can have its own (`llm.choose_model`): one small call a day that decides what the
+  reader gets, where a stronger model costs cents. Every call is logged and priced under the
+  model it used. The models offered, and their prices, are listed in `web/models.json`,
+  shipped with the app and read-only: the web pages build it in for the Settings page's lists
+  and the pipeline reads it for prices and for how each model is asked. The answer is a call
+  of one tool, forced where the model allows it; a model that refuses a forced tool call
+  (Sonnet 5.5, Opus 5.5, so marked in the file) or one not listed is asked for it in the
+  prompt instead.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page (`llm.show_reasons`).
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
@@ -375,11 +381,11 @@ source).
   checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
   later batches are skipped; the cap counts cached input too. Every call is logged with
   model, input, cache-write, cache-read and output tokens, outcome and cost. The cost is
-  worked out when the call is logged, from a table of each model's published prices kept in
-  the code (`app/prices.py`; the API does not report prices), so cached input is priced at
-  the cache's rates and a long prompt at the model's long-prompt rates. A model missing from
-  the table is logged without a cost and reported as unpriced, never guessed. Calls logged
-  before cached tokens were kept apart are priced as if none was cached. `forenoon usage`
+  worked out when the call is logged, from each model's published prices in
+  `web/models.json` (the API does not report prices), so cached input is priced at the
+  cache's rates and a long prompt at the model's long-prompt rates. A model missing from the
+  file is logged without a cost and reported as unpriced, never guessed. A price changed in
+  the file applies to calls from then on. `forenoon usage`
   prints the log, today's total and this month's; the Settings page shows the totals.
 - **Fallback.** With no API key, or when fewer than half the candidates end up scored
   (failed or timed-out calls, unusable answers, the cap reached), the run uses the
@@ -427,9 +433,8 @@ source).
 - Verdicts are stored and shown in the run report; `forenoon checks` lists the articles it
   did not judge `ok`, beside the extractor's own verdict. **Delivery is never changed.**
 - The call counts against the daily token cap and is skipped when it would cross it.
-- `llm.check_model` (Settings page; empty for `llm.model`) runs it on another model, for
-  example Sonnet: one small call a day, so a stronger model costs cents.
-  `llm.check_extraction: false` turns it off.
+- It runs on `llm.model`: the verdicts change nothing that is delivered, so the routine model
+  is enough. `llm.check_extraction: false` turns it off.
 
 ## 7d. The browser container (optional)
 
@@ -829,7 +834,8 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 
 ## 15. Not built yet
 
-- Summaries; a local model as an alternative to Claude; a ranker that needs no model call.
+- Summaries; an OpenAI-compatible connection (OpenAI, or a local model through LM Studio,
+  Ollama, llama.cpp or vLLM) beside Anthropic; a ranker that needs no model call.
 - Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
 - The whole archive of a followed blog; full-text search of stored articles; expiring

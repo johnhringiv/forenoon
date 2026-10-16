@@ -1,7 +1,8 @@
 //! The settings page: how the pipeline behaves, for the whole install. Admins only.
 //!
 //! `settings.json` describes every setting offered and its default; a Python test holds it to
-//! the pipeline's own defaults. Only a value that differs from the default is stored, so a
+//! the pipeline's own defaults. The model settings offer the models in `models.json`, the list
+//! shipped with the app that the pipeline also reads for prices. Only a value that differs from the default is stored, so a
 //! default that changes in a later version reaches an install that never touched it.
 
 use std::{collections::HashMap, sync::LazyLock};
@@ -33,7 +34,8 @@ const ADMINS_ONLY: &str = "Settings are managed by an admin.";
 struct Spec {
     section: String,
     key: String,
-    /// "time", "choice", "int", "float", "bool", "text" or "email".
+    /// "time", "choice", "int", "float", "bool", "text" or "email"; "model" is read as a choice
+    /// of the shipped models.
     kind: String,
     default: serde_json::Value,
     label: String,
@@ -43,10 +45,32 @@ struct Spec {
     max: Option<f64>,
     #[serde(default)]
     choices: Vec<(String, String)>,
+    /// For a model setting: the label of the empty choice, "the same as another", if it has one.
+    #[serde(default)]
+    same: String,
 }
 
-static SPECS: LazyLock<Vec<Spec>> =
-    LazyLock::new(|| serde_json::from_str(include_str!("../settings.json")).expect("settings.json is valid"));
+#[derive(Deserialize)]
+struct Model {
+    id: String,
+    label: String,
+}
+
+#[derive(Deserialize)]
+struct Models {
+    models: Vec<Model>,
+}
+
+static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
+    let mut specs: Vec<Spec> = serde_json::from_str(include_str!("../settings.json")).expect("settings.json is valid");
+    let models: Models = serde_json::from_str(include_str!("../models.json")).expect("models.json is valid");
+    for spec in specs.iter_mut().filter(|spec| spec.kind == "model") {
+        spec.kind = "choice".to_owned();
+        spec.choices = (!spec.same.is_empty()).then(|| (String::new(), spec.same.clone())).into_iter().collect();
+        spec.choices.extend(models.models.iter().map(|model| (model.id.clone(), model.label.clone())));
+    }
+    specs
+});
 
 impl Spec {
     /// The default as it would be stored: "1" or "0" for yes or no, otherwise as written.
@@ -317,7 +341,11 @@ mod tests {
         assert!(check("max_age_days", "0").is_err() && check("max_age_days", "2.5").is_err());
         assert_eq!(check("alerts.to", " Me@Example.com ").unwrap(), "me@example.com");
         assert!(check("alerts.to", "").is_ok() && check("alerts.to", "nope").is_err());
-        assert!(check("llm.model", "").is_err() && check("llm.model", "a\nb").is_err());
+        assert!(check("llm.model", "anthropic/claude-sonnet-5-5").is_ok());
+        assert!(check("llm.model", "").is_err() && check("llm.model", "claude-haiku-5-5").is_err());
+        assert!(
+            check("llm.choose_model", "").is_ok() && check("llm.choose_model", "anthropic/claude-opus-5-5").is_ok()
+        );
         assert_eq!(spec("llm.enabled").check(None).unwrap(), "0");
     }
 }

@@ -1,6 +1,10 @@
-"""LLM backends for ranking. Only Claude today; local models can implement the same call.
+"""The model calls: one interface, a backend per kind of connection, and a router between them.
 
-The model receives article abstracts as data and returns typed scores. It has no tools that
+A model is named with the connection it is reached through (`anthropic/claude-haiku-5-5`, see
+app/models.py), and the router hands each call to that connection's backend. Anthropic is the
+only kind today; an OpenAI-compatible one can implement the same call.
+
+The model receives article text as data and returns a structured answer. It has no tools that
 act on anything, and its output is validated by the caller before use.
 """
 
@@ -10,6 +14,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from . import models
 from .config import Llm
 
 API_KEY_ENV = "FORENOON_ANTHROPIC_API_KEY"
@@ -30,47 +35,47 @@ class Reply:
 
 
 class Backend(Protocol):
-    def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "", model: str = "") -> Reply:
-        """One request whose answer must match `schema`. Raises LlmError.
+    def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
+        """One request to `model` whose answer must match `schema`. Raises LlmError.
 
         `shared` is text that comes before `user` and is the same across a run's calls; a
-        backend may cache it. `model`, when given, is used instead of the configured one.
+        backend may cache it.
         """
 
 
 ASK_FOR_TOOL = "Give your answer by calling the `answer` tool exactly once, and write nothing else."
 
 
-class ClaudeBackend:
+class AnthropicBackend:
     def __init__(self, cfg: Llm, api_key: str):
         import anthropic
 
         self._anthropic = anthropic
-        self._model = cfg.model
         self._client = anthropic.Anthropic(api_key=api_key, timeout=cfg.timeout, max_retries=1)
-        # Models that refuse a forced tool call (Sonnet 5.5, Opus 5.5): they are asked in the
-        # system prompt instead, and the first refusal decides for the run.
-        self._unforced: set[str] = set()
 
-    def structured(self, system: str, user: str, schema: dict[str, Any], shared: str = "", model: str = "") -> Reply:
-        # A single forced tool call is the answer format; the "tool" does nothing.
+    def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
+        # A single call of a tool that does nothing is the answer format. It is forced where
+        # the model allows that; a model that refuses it, or one not listed, is offered it and
+        # asked for it in the system prompt.
         tool = {"name": "answer", "description": "Return the result.", "input_schema": schema}
+        profile = models.profiles().get(model)
+        choice: dict[str, str] = {"type": "tool", "name": "answer"}
+        if profile is None or profile.tool_choice != "forced":
+            choice, system = {"type": "auto"}, f"{system}\n\n{ASK_FOR_TOOL}"
         content: list[dict[str, Any]] = [{"type": "text", "text": user}]
         if shared:
             # Marked for the prompt cache, so later batches of a run pay a tenth for it. The
             # API ignores the mark when the text is under the model's minimum cacheable size.
             content.insert(0, {"type": "text", "text": shared, "cache_control": {"type": "ephemeral"}})
-        model = model or self._model
         try:
-            response = self._ask(model, system, content, tool)
-        except self._anthropic.BadRequestError as exc:
-            if model in self._unforced or "tool_choice" not in str(exc):
-                raise LlmError(f"{type(exc).__name__}: {exc}") from exc
-            self._unforced.add(model)
-            try:
-                response = self._ask(model, system, content, tool)
-            except self._anthropic.APIError as again:
-                raise LlmError(f"{type(again).__name__}: {again}") from again
+            response = self._client.messages.create(
+                model=models.split(model)[1],
+                max_tokens=MAX_OUTPUT_TOKENS,
+                system=system,
+                messages=[{"role": "user", "content": content}],
+                tools=[tool],
+                tool_choice=choice,
+            )
         except self._anthropic.APIError as exc:
             raise LlmError(f"{type(exc).__name__}: {exc}") from exc
         usage = response.usage
@@ -81,23 +86,27 @@ class ClaudeBackend:
                 return Reply(block.input, usage.input_tokens, usage.output_tokens, written, read)
         raise LlmError(f"no structured answer (stop reason: {response.stop_reason})")
 
-    def _ask(self, model: str, system: str, content: list[dict[str, Any]], tool: dict[str, Any]) -> Any:
-        choice: dict[str, str] = {"type": "tool", "name": "answer"}
-        if model in self._unforced:
-            choice, system = {"type": "auto"}, f"{system}\n\n{ASK_FOR_TOOL}"
-        return self._client.messages.create(
-            model=model,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            system=system,
-            messages=[{"role": "user", "content": content}],
-            tools=[tool],
-            tool_choice=choice,
-        )
+
+class Router:
+    """Sends each call to the backend of the connection its model names."""
+
+    def __init__(self, backends: dict[str, Backend]):
+        self._backends = backends
+
+    def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
+        try:
+            connection = models.split(model)[0]
+        except ValueError as exc:
+            raise LlmError(str(exc)) from exc
+        backend = self._backends.get(connection)
+        if backend is None:
+            raise LlmError(f"no connection named {connection!r} for the model {model}")
+        return backend.structured(system, user, schema, model=model, shared=shared)
 
 
 def backend_from_env(cfg: Llm) -> Backend | None:
-    """The configured backend, or None when the LLM is off or has no key."""
+    """The connections there are keys for, or None when the model is off or there are none."""
     key = os.environ.get(API_KEY_ENV, "")
     if not cfg.enabled or not key:
         return None
-    return ClaudeBackend(cfg, key)
+    return Router({"anthropic": AnthropicBackend(cfg, key)})

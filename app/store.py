@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import prices
+from . import models
 from .config import Source, User
 from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
@@ -179,19 +179,6 @@ class Store:
         if "deferred_at" not in {row["name"] for row in self.db.execute("PRAGMA table_info(assessments)")}:
             with self.db:
                 self.db.execute("ALTER TABLE assessments ADD COLUMN deferred_at TEXT NOT NULL DEFAULT ''")
-        calls = {row["name"] for row in self.db.execute("PRAGMA table_info(llm_calls)")}
-        if "cost" not in calls:
-            # Calls logged before cached tokens were kept apart: their input is priced as if
-            # none of it was cached, the best that can be said of them now.
-            with self.db:
-                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0")
-                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0")
-                self.db.execute("ALTER TABLE llm_calls ADD COLUMN cost REAL")
-                old = self.db.execute("SELECT id, model, input_tokens, output_tokens FROM llm_calls").fetchall()
-                self.db.executemany(
-                    "UPDATE llm_calls SET cost = ? WHERE id = ?",
-                    [(prices.cost(r["model"], r["input_tokens"], r["output_tokens"]), r["id"]) for r in old],
-                )
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -750,7 +737,7 @@ class Store:
         cache_read: int = 0,
     ) -> None:
         """One call, with what it cost at the model's published prices (none when unknown)."""
-        spent = prices.cost(model, input_tokens, output_tokens, cache_write, cache_read)
+        spent = models.cost(model, input_tokens, output_tokens, cache_write, cache_read)
         with self.db:
             self.db.execute(
                 "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error,"
