@@ -112,7 +112,10 @@ cookie anywhere else. So when `FORENOON_WEB_URL` is an https address, a request 
 host (`http://<host>:8081`) is redirected to the same page there; `/healthz` is answered
 wherever it is asked. A request from one of `FORENOON_WEB_TRUSTED_PROXIES` is never
 redirected, so a proxy that names its upstream as the host (nginx does unless given
-`proxy_set_header Host $host`; Apache unless `ProxyPreserveHost On`) must be listed there.
+`proxy_set_header Host $host`; Apache unless `ProxyPreserveHost On`) must be listed there. Prefer
+passing the host on: a proxy on the same machine reaches the container from Docker's bridge
+gateway (often `172.17.0.1`), which is also where LAN visits to the published port can come
+from, so trusting it would let those visits through without the redirect.
 
 ## Alternative: deploy script and continuous deploy
 
