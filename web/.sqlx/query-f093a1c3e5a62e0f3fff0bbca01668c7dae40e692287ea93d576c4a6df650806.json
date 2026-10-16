@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO follows (user_id, source_id, pinned, created_at, chosen) VALUES (?, ?, ?, ?, ?)\n         ON CONFLICT (user_id, source_id) DO UPDATE SET pinned = excluded.pinned,\n         chosen = MAX(chosen, excluded.chosen)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f093a1c3e5a62e0f3fff0bbca01668c7dae40e692287ea93d576c4a6df650806"
+}

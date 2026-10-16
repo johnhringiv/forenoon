@@ -1005,6 +1005,115 @@ async fn feeds_are_added_checked_filtered_and_changed() {
 }
 
 #[tokio::test]
+async fn a_follow_made_for_a_reader_holds_nothing_until_they_choose_it() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let hash = auth::hash_password(PASSWORD.to_owned()).await.unwrap();
+    db::add_user(pool, "carl", "carl@example.com", "Carl", &hash, "reader", "UTC").await.unwrap();
+    let (mut admin, mut mary, mut carl) = (Browser::default(), Browser::default(), Browser::default());
+    admin.sign_in(&site, "john").await;
+    mary.sign_in(&site, "mary").await;
+    carl.sign_in(&site, "carl").await;
+    let (admin_csrf, mary_csrf, carl_csrf) = (
+        admin.get(&site, "/sources").await.csrf(),
+        mary.get(&site, "/sources").await.csrf(),
+        carl.get(&site, "/sources").await.csrf(),
+    );
+    let chosen = |user: &'static str, source: i64| async move {
+        sqlx::query_scalar::<_, bool>("SELECT chosen FROM follows WHERE user_id = ? AND source_id = ?")
+            .bind(user)
+            .bind(source)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    };
+    let here = &site;
+    let feed_of = |user: &'static str, name: &'static str| async move {
+        sources_of(here, user).await.into_iter().find(|s| s.name == name)
+    };
+
+    // Carl turns off following shared feeds; Mary adds one shared. It is followed for the admin,
+    // made for him, not chosen; Carl sees it as new, not followed.
+    let off = [("csrf", carl_csrf.as_str())];
+    assert_eq!(carl.post(&site, "/sources/follow-new", &off).await.location, "/sources?saved=follownew");
+    assert!(!db::follows_new(pool, "carl").await.unwrap());
+    let blog =
+        [("csrf", mary_csrf.as_str()), ("name", "Blog"), ("address", "https://blog.example/rss"), ("shared", "1")];
+    mary.post(&site, "/sources", &blog).await;
+    let id = feed_of("mary", "Blog").await.unwrap().id;
+    assert_eq!(
+        (chosen("mary", id).await, chosen("john", id).await, chosen("carl", id).await),
+        (Some(true), Some(false), None)
+    );
+    let text = carl.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(row.contains(">New</span>") && row.contains("+ Follow") && !row.contains("Added for you"), "{row}");
+    assert!(!text.contains(r#"name="follow_new" value="1" checked"#));
+    let text = admin.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(row.contains("Added for you") && !row.contains(">New</span>"), "{row}");
+
+    // A follow made for the admin holds nothing: Mary still changes her feed.
+    let rename =
+        [("csrf", mary_csrf.as_str()), ("name", "Blog"), ("address", "https://blog.example/feed"), ("shared", "1")];
+    assert_eq!(mary.post(&site, &format!("/sources/{id}"), &rename).await.location, "/sources?saved=saved");
+    assert_eq!(feed_of("mary", "Blog").await.unwrap().url, "https://blog.example/feed");
+
+    // Carl chooses it with the button before its name: now it is kept. Mary can no longer
+    // change or remove it, and neither can the admin remove it, only pause it.
+    let follow = [("csrf", carl_csrf.as_str()), ("follow", "1")];
+    assert_eq!(carl.post(&site, &format!("/sources/{id}/follow"), &follow).await.location, "/sources?saved=followed");
+    assert_eq!(chosen("carl", id).await, Some(true));
+    let text = carl.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(row.contains("✓ Following") && !row.contains(">New</span>"), "{row}");
+    let gone = mary.post(&site, &format!("/sources/{id}/delete"), &[("csrf", &mary_csrf)]).await;
+    assert!(gone.status == StatusCode::FORBIDDEN && gone.text.contains("Another reader follows this feed"));
+    assert_eq!(mary.post(&site, &format!("/sources/{id}"), &rename).await.status, StatusCode::FORBIDDEN);
+    let gone = admin.post(&site, &format!("/sources/{id}/delete"), &[("csrf", &admin_csrf)]).await;
+    assert_eq!(gone.status, StatusCode::FORBIDDEN);
+    let text = admin.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(!row.contains("Remove</button>") && row.contains("it can be paused, not removed"), "{row}");
+    assert!(row.contains("Fetch it for the household (untick to pause)"));
+
+    // Pinning a follow made for the admin chooses it; following again keeps its pin.
+    let pin = [
+        ("csrf", admin_csrf.as_str()),
+        ("name", "Blog"),
+        ("address", "https://blog.example/feed"),
+        ("pinned", "1"),
+        ("enabled", "1"),
+        ("shared", "1"),
+    ];
+    admin.post(&site, &format!("/sources/{id}"), &pin).await;
+    assert_eq!(chosen("john", id).await, Some(true));
+    let again = [("csrf", admin_csrf.as_str()), ("follow", "1")];
+    admin.post(&site, &format!("/sources/{id}/follow"), &again).await;
+    assert!(feed_of("john", "Blog").await.unwrap().pinned);
+
+    // Once nobody else has chosen it, its adder may remove it again.
+    for (who, csrf) in [(&mut carl, &carl_csrf), (&mut admin, &admin_csrf)] {
+        who.post(&site, &format!("/sources/{id}/follow"), &[("csrf", csrf.as_str()), ("follow", "0")]).await;
+    }
+    assert_eq!(
+        mary.post(&site, &format!("/sources/{id}/delete"), &[("csrf", &mary_csrf)]).await.location,
+        "/sources?saved=removed"
+    );
+
+    // A new account's follows are made for it, not chosen.
+    db::add_user(pool, "dana", "dana@example.com", "Dana", &hash, "reader", "UTC").await.unwrap();
+    db::follow_shared(pool, "dana").await.unwrap();
+    let made: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM follows WHERE user_id = 'dana' AND chosen = 0")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let all: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM follows WHERE user_id = 'dana'").fetch_one(pool).await.unwrap();
+    assert!(made > 0 && made == all);
+}
+
+#[tokio::test]
 async fn a_readers_feed_is_private_until_shared_and_the_household_shares_sessions() {
     let site = site(true).await;
     let hash = auth::hash_password(PASSWORD.to_owned()).await.unwrap();

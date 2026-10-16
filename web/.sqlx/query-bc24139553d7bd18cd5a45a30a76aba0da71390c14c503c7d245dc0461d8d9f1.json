@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT s.id AS \"id!\", s.name, s.kind, s.url, s.builtin, s.extract, s.daily_max,\n           s.enabled AS \"enabled: bool\", s.check_state, s.check_note, s.added_by,\n           COALESCE(u.name, s.added_by) AS \"added_by_name!: String\", s.shared AS \"shared: bool\",\n           f.user_id IS NOT NULL AS \"followed!: bool\", COALESCE(f.pinned, 0) AS \"pinned!: bool\",\n           (SELECT COUNT(*) FROM follows WHERE source_id = s.id) AS \"followers!: i64\"\n           FROM sources s\n           LEFT JOIN follows f ON f.source_id = s.id AND f.user_id = ?\n           LEFT JOIN users u ON u.id = s.added_by\n           WHERE ? OR s.shared = 1 OR s.added_by = ? OR f.user_id IS NOT NULL\n           ORDER BY COALESCE(f.pinned, 0) DESC, s.name COLLATE NOCASE",
+  "query": "SELECT s.id AS \"id!\", s.name, s.kind, s.url, s.builtin, s.extract, s.daily_max,\n           s.enabled AS \"enabled: bool\", s.check_state, s.check_note, s.added_by,\n           COALESCE(u.name, s.added_by) AS \"added_by_name!: String\", s.shared AS \"shared: bool\",\n           s.shared_at, f.user_id IS NOT NULL AS \"followed!: bool\", COALESCE(f.chosen, 0) AS \"chosen!: bool\",\n           COALESCE(f.pinned, 0) AS \"pinned!: bool\",\n           (SELECT COUNT(*) FROM follows WHERE source_id = s.id) AS \"followers!: i64\",\n           (SELECT COUNT(*) FROM follows WHERE source_id = s.id AND chosen = 1 AND user_id != ?)\n             AS \"chosen_by_others!: i64\"\n           FROM sources s\n           LEFT JOIN follows f ON f.source_id = s.id AND f.user_id = ?\n           LEFT JOIN users u ON u.id = s.added_by\n           WHERE ? OR s.shared = 1 OR s.added_by = ? OR f.user_id IS NOT NULL\n           ORDER BY COALESCE(f.pinned, 0) DESC, s.name COLLATE NOCASE",
   "describe": {
     "columns": [
       {
@@ -69,23 +69,38 @@
         "type_info": "Integer"
       },
       {
-        "name": "followed!: bool",
+        "name": "shared_at",
         "ordinal": 13,
-        "type_info": "Integer"
+        "type_info": "Text"
       },
       {
-        "name": "pinned!: bool",
+        "name": "followed!: bool",
         "ordinal": 14,
         "type_info": "Integer"
       },
       {
-        "name": "followers!: i64",
+        "name": "chosen!: bool",
         "ordinal": 15,
+        "type_info": "Integer"
+      },
+      {
+        "name": "pinned!: bool",
+        "ordinal": 16,
+        "type_info": "Integer"
+      },
+      {
+        "name": "followers!: i64",
+        "ordinal": 17,
+        "type_info": "Integer"
+      },
+      {
+        "name": "chosen_by_others!: i64",
+        "ordinal": 18,
         "type_info": "Integer"
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false,
@@ -101,10 +116,13 @@
       false,
       false,
       false,
+      true,
+      false,
+      false,
       false,
       false,
       false
     ]
   },
-  "hash": "bd30381d6c13e10c4d147ee847d6da7e1a79f7060b406901dabbe2d77ded4b4f"
+  "hash": "bc24139553d7bd18cd5a45a30a76aba0da71390c14c503c7d245dc0461d8d9f1"
 }
