@@ -17,9 +17,10 @@
 #   sh poll-deploy.sh [env-file]
 #
 # Exit codes: 0 = no-op or successful deploy; 1 = unhealthy (a deploy ran but
-# the edge never came up, or the containers are running yet the edge is
-# unreachable: tunnel/DNS trouble a redeploy would not fix). Configure the
-# scheduler to notify on abnormal termination.
+# the edge never came up, the web container did not come up after its image
+# changed, the tunnel container did not start, or the containers are running
+# yet the edge is unreachable: tunnel/DNS trouble a redeploy would not fix).
+# Configure the scheduler to notify on abnormal termination.
 set -e
 
 ENV_FILE="${1:-.env}"
@@ -133,7 +134,10 @@ if [ "$latest" = "$running" ]; then
         fi
         if [ "$tunnel_changed" = true ]; then
             echo "$(date -u +%FT%TZ) new image for $CLOUDFLARED_IMAGE, or its container stopped; replacing the tunnel container only"
-            ONLY=tunnel sh "$DIR/deploy.sh" "$ENV_FILE"
+            if ! ONLY=tunnel sh "$DIR/deploy.sh" "$ENV_FILE"; then
+                echo "$(date -u +%FT%TZ) TUNNEL container did not start"
+                exit 1
+            fi
             sleep 10
             if edge_healthy; then
                 echo "$(date -u +%FT%TZ) tunnel healthy at edge"

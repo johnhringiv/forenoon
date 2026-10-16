@@ -83,7 +83,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         logins_dir: options.logins_dir,
         proxy: Arc::new(options.proxy),
         feedback_secret: options.feedback_secret.map(Arc::from),
-        taps: Arc::new(Limiter::new(Duration::from_secs(60))),
+        // Evicting: these links are public, and a flood of addresses must not stop a Kindle.
+        taps: Arc::new(Limiter::evicting(Duration::from_secs(60))),
     };
     let router = Router::new()
         .route("/", get(pages::newsstand))
