@@ -545,15 +545,18 @@ def test_covers_are_in_colour_only_when_images_are():
 
 
 def test_generated_icons_match_the_mark():
-    """web/icons/make.py's outputs are committed; after a change to app/mark.py it must be run."""
+    """tools/make_icons.py's outputs are committed; after a change to app/mark.py it must be run."""
     import importlib.util
     from pathlib import Path
+
+    from PIL import Image
 
     from app import mark
 
     root = Path(__file__).parent.parent
-    spec = importlib.util.spec_from_file_location("make_icons", root / "web/icons/make.py")
+    spec = importlib.util.spec_from_file_location("make_icons", root / "tools/make_icons.py")
     make = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(make)
     assert (root / "web/templates/_mark.html").read_text() == make.header_html()
     assert (root / "web/icons/icon.svg").read_text() == mark.svg_tile()
+    assert Image.open(root / "web/icons/og.png").convert("RGB").tobytes() == make.share_card().tobytes()

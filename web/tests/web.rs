@@ -1825,6 +1825,7 @@ async fn icons_and_the_manifest_need_no_session() {
         ("/icon-192.png", "image/png"),
         ("/icon-512.png", "image/png"),
         ("/icon-maskable-512.png", "image/png"),
+        ("/og.png", "image/png"),
         ("/manifest.webmanifest", "application/manifest+json"),
     ] {
         let response = site.router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
@@ -1849,5 +1850,22 @@ async fn icons_and_the_manifest_need_no_session() {
         r#"href="/manifest.webmanifest""#,
     ] {
         assert!(page.text.contains(link), "{link}");
+    }
+}
+
+#[tokio::test]
+async fn a_shared_link_previews_with_the_sites_card() {
+    let site = site(false).await;
+    // A chat app fetching a link's preview has no session, so it lands on the sign-in page.
+    let home = Browser::default().get(&site, "/").await;
+    assert_eq!(home.location, "/login");
+    let page = Browser::default().get(&site, "/login").await;
+    for tag in [
+        r#"<meta property="og:title" content="Forenoon">"#,
+        r#"<meta property="og:url" content="http://nas:8787/login">"#,
+        r#"<meta property="og:image" content="http://nas:8787/og.png">"#,
+        r#"<meta name="twitter:card" content="summary_large_image">"#,
+    ] {
+        assert!(page.text.contains(tag), "{tag}");
     }
 }

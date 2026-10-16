@@ -308,6 +308,9 @@ pub async fn require_login(auth: AuthSession, session: Session, request: Request
 #[template(path = "login.html")]
 struct LoginPage {
     nav: Option<Nav>,
+    /// For the Open Graph tags, which need full addresses: everyone not signed in, a chat app
+    /// fetching a shared link's preview among them, is sent here.
+    base_url: String,
     email: String,
     error: Option<&'static str>,
     notice: Option<&'static str>,
@@ -318,12 +321,12 @@ pub struct LoginQuery {
     reset: Option<String>,
 }
 
-pub async fn login_page(auth: AuthSession, Query(query): Query<LoginQuery>) -> Page {
+pub async fn login_page(State(state): State<AppState>, auth: AuthSession, Query(query): Query<LoginQuery>) -> Page {
     if auth.user.is_some() {
         return Ok(Redirect::to("/").into_response());
     }
     let notice = query.reset.map(|_| "Password changed. Sign in with the new one.");
-    html(StatusCode::OK, LoginPage { nav: None, email: String::new(), error: None, notice })
+    html(StatusCode::OK, LoginPage { nav: None, base_url: state.base_url, email: String::new(), error: None, notice })
 }
 
 pub async fn login(
@@ -338,8 +341,18 @@ pub async fn login(
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from the sign-in page.");
     }
     let email: String = creds.email.trim().to_lowercase().chars().take(254).collect();
-    let failed =
-        |status, error| html(status, LoginPage { nav: None, email: email.clone(), error: Some(error), notice: None });
+    let failed = |status, error| {
+        html(
+            status,
+            LoginPage {
+                nav: None,
+                base_url: state.base_url.clone(),
+                email: email.clone(),
+                error: Some(error),
+                notice: None,
+            },
+        )
+    };
     // Checked in this order and stopping at the first refusal, so a blocked address cannot
     // fill the table with names.
     let allowed = state.sign_ins.allow(&format!("client {client}"), ATTEMPTS_PER_CLIENT)
