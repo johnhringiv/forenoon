@@ -588,6 +588,54 @@ def _page_pictures(page_html: str, url: str, body: lxml.html.HtmlElement, most: 
     return []
 
 
+# Elements that start a new line of text, for reading a body as text: BLOCK and the rest.
+TEXT_BREAKS = {*BLOCK, "li", "dt", "dd", "tr", "td", "th", "h1", "br"}
+PROSE = {"p", "li", "blockquote"}
+
+
+def _opening(body: lxml.html.HtmlElement) -> str:
+    """The body as text for a summary, a space between blocks so that a standfirst and the first
+    paragraph do not run together.
+
+    Only the paragraphs when there are any: loose text in other blocks is a caption, a byline or
+    a date as often as not. Captions are always left out, and so are blocks at the start that
+    are mostly links: a navigation bar, breadcrumbs ("| Next | Section menu | Previous |")."""
+    runs: list[list] = [["", 0, "div"]]  # text, how many of its letters are in links, its block
+
+    def add(text: str | None, linked: bool) -> None:
+        if text:
+            runs[-1][0] += text
+            if linked:
+                runs[-1][1] += sum(c.isalnum() for c in text)
+
+    def walk(el: lxml.html.HtmlElement, linked: bool, block: str) -> None:
+        # A comment, or a picture's caption: not the article's words. Its tail is the parent's.
+        if not isinstance(el.tag, str) or el.tag in ("figure", "figcaption"):
+            return
+        linked = linked or el.tag == "a"
+        breaks = el.tag in TEXT_BREAKS
+        if breaks:
+            runs.append(["", 0, el.tag])
+        add(el.text, linked)
+        for child in el:
+            walk(child, linked, el.tag if breaks else block)
+            add(child.tail, linked)
+        if breaks:
+            runs.append(["", 0, block])  # the rest of the enclosing block
+
+    walk(body, False, "div")
+    blocks = [(" ".join(text.split()), linked, block) for text, linked, block in runs if text.strip()]
+    if any(block in PROSE for _, _, block in blocks):
+        blocks = [run for run in blocks if run[2] in PROSE]
+    start = 0
+    for text, linked, _ in blocks:
+        letters = sum(c.isalnum() for c in text)
+        if letters and linked < letters / 2:
+            break
+        start += 1
+    return " ".join(text for text, _, _ in (blocks[start:] or blocks))
+
+
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
     """Lead image and summary for listing an article; falls back to the body's own."""
     image = urljoin(url, image.strip()) if image.strip() else ""
@@ -595,7 +643,7 @@ def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str
         image = next((img.get("src", "") for img in body.iter("img")), "")
     if not image.startswith(("http://", "https://")) or len(image) > MAX_PREVIEW_URL:
         image = ""
-    description = " ".join(description.split()) or " ".join(body.text_content().split())
+    description = " ".join(description.split()) or _opening(body)
     if len(description) > MAX_DESCRIPTION:
         description = description[: MAX_DESCRIPTION - 1].rsplit(" ", 1)[0] + "…"
     return image, description
