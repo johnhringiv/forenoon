@@ -1357,6 +1357,29 @@ async fn the_archive_lists_the_readers_library_and_filters_it() {
     let second = browser.get(&site, "/archive?show=near&page=2").await.text;
     assert_eq!(second.matches(r#"<div class="shelf""#).count(), 6);
     assert!(second.contains(r#"<a href="/archive?show=near">Newer</a>"#) && !second.contains(">Older<"));
+    // The count is of every page, and a later page says which of them it shows.
+    assert!(first.contains("<p>56 articles match.</p>"));
+    assert!(second.contains("<p>56 articles match, showing 51–56.</p>"));
+}
+
+#[tokio::test]
+async fn the_archive_says_how_many_articles_match() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Compilers today", "john", sent).await;
+    article(pool, "a2", "https://blog.example/2", "Blog", "More compilers", "john", sent).await;
+    article(pool, "a3", "https://blog.example/3", "Blog", "Sailing", "john", sent).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    assert!(browser.get(&site, "/archive?q=compilers").await.text.contains("<p>2 articles match.</p>"));
+    assert!(browser.get(&site, "/archive?q=sailing").await.text.contains("<p>1 article matches.</p>"));
+    let none = browser.get(&site, "/archive?q=watches").await.text;
+    // Only the existing empty text: no count line.
+    assert!(none.contains(r#"<p class="empty">No articles match.</p>"#));
+    assert_eq!(none.matches("articles match").count(), 1);
+    assert!(!none.contains("article matches"));
 }
 
 #[tokio::test]

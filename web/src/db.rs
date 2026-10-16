@@ -531,23 +531,15 @@ pub struct Shelved {
     pub routes: String,
 }
 
-pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved>, sqlx::Error> {
-    sqlx::query_as!(
-        Shelved,
-        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description,
-           d.delivered_at AS "delivered_at?",
-           (SELECT m.requested_at FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
-                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_at?: String",
-           (SELECT m.action FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
-                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_for?: String",
-           COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) AS "at!: String",
-           COALESCE(s.score, x.score) AS "score?: f64",
-           COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
-           COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
-           s.policy AS "policy?", r.rating AS "rating?: i64", r.finished AS "finished?: bool",
-           COALESCE(r.reason, '') AS "why!: String",
-           COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t
-                     WHERE t.article_id = a.id), '') AS "routes!: String"
+/// A query over the articles a shelf selects: `$select`, then the shared FROM and WHERE, then
+/// `$rest`. The filters are ?1 to ?9, taken from the shelf. Both `shelved` and `shelved_count`
+/// go through here so their filters cannot drift; a macro because sqlx's macros take only
+/// string literals (joined with `+`), not constants.
+macro_rules! on_shelf {
+    ($query:ident!($($before:tt)*), $shelf:expr, $select:tt, $rest:tt $(, $more:expr)*) => {
+        sqlx::$query!(
+            $($before)*
+            $select + r#"
            FROM articles a
            LEFT JOIN deliveries d ON d.article_id = a.id AND d.user_id = ?1
            LEFT JOIN assessments x ON x.article_id = a.id AND x.user_id = ?1
@@ -568,25 +560,55 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
                WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END
            AND (?8 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) >= ?8)
            AND (?9 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) <= ?9)
+"# + $rest,
+            $shelf.user,
+            $shelf.show,
+            $shelf.title,
+            $shelf.via,
+            $shelf.route,
+            $shelf.rating,
+            $shelf.lasting,
+            $shelf.from,
+            $shelf.to
+            $(, $more)*
+        )
+    };
+}
+
+pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved>, sqlx::Error> {
+    on_shelf!(
+        query_as!(Shelved,),
+        shelf,
+        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description,
+           d.delivered_at AS "delivered_at?",
+           (SELECT m.requested_at FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
+                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_at?: String",
+           (SELECT m.action FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
+                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_for?: String",
+           COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) AS "at!: String",
+           COALESCE(s.score, x.score) AS "score?: f64",
+           COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
+           COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
+           s.policy AS "policy?", r.rating AS "rating?: i64", r.finished AS "finished?: bool",
+           COALESCE(r.reason, '') AS "why!: String",
+           COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t
+                     WHERE t.article_id = a.id), '') AS "routes!: String""#,
+        r#"
            ORDER BY CASE ?10 WHEN 'score' THEN -COALESCE(s.score, x.score, -1)
                WHEN 'rating' THEN -COALESCE(r.rating, 0) WHEN 'length' THEN -a.word_count ELSE 0 END,
                COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) DESC, a.id
            LIMIT ?11 OFFSET ?12"#,
-        shelf.user,
-        shelf.show,
-        shelf.title,
-        shelf.via,
-        shelf.route,
-        shelf.rating,
-        shelf.lasting,
-        shelf.from,
-        shelf.to,
         shelf.sort,
         shelf.limit,
         shelf.offset
     )
     .fetch_all(pool)
     .await
+}
+
+/// How many articles the shelf's filters match, over all its pages.
+pub async fn shelved_count(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<i64, sqlx::Error> {
+    on_shelf!(query_scalar!(), shelf, r#"SELECT COUNT(*) AS "count!: i64""#, "").fetch_one(pool).await
 }
 
 // links added by hand; the pipeline's scheduler fetches them and records the outcome

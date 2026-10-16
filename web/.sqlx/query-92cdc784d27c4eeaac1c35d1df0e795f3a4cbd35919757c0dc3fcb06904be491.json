@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"count!: i64\"\n           FROM articles a\n           LEFT JOIN deliveries d ON d.article_id = a.id AND d.user_id = ?1\n           LEFT JOIN assessments x ON x.article_id = a.id AND x.user_id = ?1\n           LEFT JOIN selections s ON s.article_id = a.id AND s.user_id = ?1\n           LEFT JOIN ratings r ON r.article_id = a.id AND r.user_id = ?1\n           WHERE (d.article_id IS NOT NULL OR x.article_id IS NOT NULL OR EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'))\n           AND CASE ?2 WHEN 'all' THEN 1 WHEN 'delivered' THEN d.article_id IS NOT NULL\n               WHEN 'near' THEN d.article_id IS NULL AND COALESCE(x.read, 0)\n               WHEN 'added' THEN EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done')\n               ELSE d.article_id IS NOT NULL OR COALESCE(x.read, 0) OR EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done') END\n           AND (?3 = '' OR instr(lower(a.title), lower(?3)) > 0)\n           AND (?4 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.via = ?4))\n           AND (?5 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.route = ?5))\n           AND CASE ?6 WHEN 'rated' THEN r.rating IS NOT NULL WHEN 'unrated' THEN r.rating IS NULL\n               WHEN 'high' THEN COALESCE(r.rating >= 4, 0) WHEN 'low' THEN COALESCE(r.rating <= 2, 0)\n               WHEN 'finished' THEN COALESCE(r.finished, 0) ELSE 1 END\n           AND CASE ?7 WHEN 'years' THEN COALESCE(x.lasting = 'years', 0)\n               WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END\n           AND (?8 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) >= ?8)\n           AND (?9 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) <= ?9)\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "92cdc784d27c4eeaac1c35d1df0e795f3a4cbd35919757c0dc3fcb06904be491"
+}

@@ -136,6 +136,8 @@ struct ArchivePage {
     /// Some links could not be added: offer to clear them.
     failed: bool,
     rows: Vec<Row>,
+    /// "214 articles match, showing 51–100.": none when nothing matches.
+    count: Option<String>,
     back: String,
     newer: Option<String>,
     older: Option<String>,
@@ -191,6 +193,19 @@ fn arrivals(routes: &str) -> Vec<String> {
             })
         })
         .collect()
+}
+
+/// "214 articles match.", with which of them this page shows when it is not the first.
+fn matching(total: i64, offset: i64, shown: usize) -> Option<String> {
+    let count = match total {
+        0 => return None,
+        1 => "1 article matches".to_owned(),
+        _ => format!("{total} articles match"),
+    };
+    Some(match (offset, shown) {
+        (0, _) | (_, 0) => format!("{count}."),
+        _ => format!("{count}, showing {}–{}.", offset + 1, offset + shown as i64),
+    })
 }
 
 fn row(found: Shelved, zone: Tz) -> Row {
@@ -311,6 +326,7 @@ pub async fn page(
         fetching: false,
         failed: false,
         rows: Vec::new(),
+        count: None,
         back: address(&parts, number),
         newer: (number > 1).then(|| address(&parts, number - 1)),
         older: None,
@@ -356,6 +372,7 @@ pub async fn page(
         found.truncate(PER_PAGE as usize);
         page.older = Some(address(&parts, number + 1));
     }
+    page.count = matching(db::shelved_count(pool, &shelf).await?, shelf.offset, found.len());
     let can_send = !user.kindle_addresses.trim().is_empty();
     let requests = db::send_states(pool, &user.id).await?;
     let refreshes = db::refresh_states(pool, &user.id).await?;
