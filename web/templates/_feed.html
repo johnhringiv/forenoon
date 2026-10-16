@@ -22,6 +22,6 @@
 </div>
 {% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with the household's {{ site }} session.</p>{% endif %}
 {% if !row.can_edit && row.followed %}<p class="hint">{% if row.can_share %}Another reader chose to follow this feed, so only an admin can change its address and settings now, and it is kept. Pinning is yours, and so is whether it is shared.{% else %}Only the reader who added this feed, or an admin, changes its address and settings. Pinning is yours.{% endif %}</p>
-{% else if row.can_edit && row.kept %}<p class="hint">Another reader chose to follow this feed, so it is kept: it can be paused, not removed.</p>{% endif %}
+{% else if row.kept && row.can_share %}<p class="hint">Another reader chose to follow this feed, so it is kept: {% if admin %}it can be paused, not removed{% else %}only an admin changes it now, and nobody removes it{% endif %}.</p>{% endif %}
 </form>
 </details>

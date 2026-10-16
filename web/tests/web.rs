@@ -1077,6 +1077,13 @@ async fn a_follow_made_for_a_reader_holds_nothing_until_they_choose_it() {
     assert!(!row.contains("Remove</button>") && row.contains("it can be paused, not removed"), "{row}");
     assert!(row.contains("Fetch it for the household (untick to pause)"));
 
+    // Mary, having unfollowed her own kept feed, is still told why she cannot remove it.
+    mary.post(&site, &format!("/sources/{id}/follow"), &[("csrf", mary_csrf.as_str()), ("follow", "0")]).await;
+    let text = mary.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(!row.contains("Remove</button>") && row.contains("nobody removes it"), "{row}");
+    mary.post(&site, &format!("/sources/{id}/follow"), &[("csrf", mary_csrf.as_str()), ("follow", "1")]).await;
+
     // Pinning a follow made for the admin chooses it; following again keeps its pin.
     let pin = [
         ("csrf", admin_csrf.as_str()),
