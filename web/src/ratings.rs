@@ -104,15 +104,13 @@ impl fmt::Display for Signal {
     }
 }
 
-/// The reverse of `Display`, and nothing more: `f+3` and `f03` are not signals, nor is a
-/// reason nobody can give.
+/// The signals a rating link carries, in the words `Display` writes, and nothing more: `f+3`
+/// and `f03` are not signals, nor is a reason nobody can give. `Done` is not read: only the
+/// web pages record it.
 impl FromStr for Signal {
     type Err = ();
 
     fn from_str(text: &str) -> Result<Signal, ()> {
-        if text == "done" {
-            return Ok(Signal::Done);
-        }
         if let Some(reason) = text.strip_prefix("why-") {
             return label(reason).map(|_| Signal::Why(reason.to_owned())).ok_or(());
         }
@@ -137,12 +135,12 @@ mod tests {
     #[test]
     fn a_signal_reads_back_as_it_was_written() {
         let all = [Signal::Rated { rating: 1, finished: true }, Signal::Rated { rating: 5, finished: false }];
-        for signal in all.into_iter().chain([Signal::Done, Signal::Why("thin".into()), Signal::Why("depth".into())]) {
+        for signal in all.into_iter().chain([Signal::Why("thin".into()), Signal::Why("depth".into())]) {
             assert_eq!(signal.to_string().parse::<Signal>(), Ok(signal.clone()), "{signal}");
         }
         assert_eq!("f4".parse::<Signal>(), Ok(Signal::Rated { rating: 4, finished: true }));
         assert_eq!("r2".parse::<Signal>(), Ok(Signal::Rated { rating: 2, finished: false }));
-        for text in ["", "f", "f0", "f6", "f+3", "f03", "x3", "up", "down", "why-", "why-broken", "problem"] {
+        for text in ["", "f", "f0", "f6", "f+3", "f03", "x3", "up", "down", "done", "why-", "why-broken", "problem"] {
             assert_eq!(text.parse::<Signal>(), Err(()), "{text}");
         }
     }

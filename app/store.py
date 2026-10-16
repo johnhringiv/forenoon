@@ -196,15 +196,6 @@ class Store:
             if column not in have:
                 with self.db:
                     self.db.execute(f"ALTER TABLE articles ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
-        # The first schema kept one row per signal; replay it into the event log and ratings.
-        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'feedback'").fetchone():
-            old = self.db.execute(
-                "SELECT user_id, article_id, signal, source, created_at FROM feedback ORDER BY created_at"
-            ).fetchall()
-            for row in old:
-                self.record_feedback(*row)
-            with self.db:
-                self.db.execute("DROP TABLE feedback")
 
     def close(self) -> None:
         self.db.close()

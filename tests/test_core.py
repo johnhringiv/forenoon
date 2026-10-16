@@ -8,7 +8,7 @@ from lxml import etree
 from app.config import Smtp, User
 from app.deliver import Attachment, batch, build_messages, safe_filename
 from app.golden import golden_epub
-from app.store import Rating, Store
+from app.store import Store
 from app.tokens import TokenError, make_token, verify_token
 from app.urls import article_id, canonical_url
 
@@ -23,9 +23,9 @@ def test_canonical_url_strips_noise():
 
 def test_token_round_trip_and_rejections():
     expires = int(time.time()) + 60
-    token = make_token(SECRET, "john", "abc", "up", expires)
+    token = make_token(SECRET, "john", "abc", "f4", expires)
     claim = verify_token(SECRET, token)
-    assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "up")
+    assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "f4")
     with pytest.raises(TokenError):
         verify_token(b"x" * 32, token)
     with pytest.raises(TokenError):
@@ -38,6 +38,9 @@ def test_token_round_trip_and_rejections():
         make_token(SECRET, "john", "abc", "delete-everything", expires)
     with pytest.raises(TokenError):  # no longer a reason
         make_token(SECRET, "john", "abc", "why-broken", expires)
+    for signal in ("up", "down", "done"):  # not something a link carries
+        with pytest.raises(TokenError):
+            make_token(SECRET, "john", "abc", signal, expires)
 
 
 def test_tokens_are_the_ones_the_web_app_checks():
@@ -55,31 +58,6 @@ def test_tokens_are_the_ones_the_web_app_checks():
         make_token(secret, "john", "a1", "problem", 2_000_000_000)
         == "MXxqb2hufGExfHByb2JsZW18MjAwMDAwMDAwMA.21UPHi4dtcYgvhV0QRpvjA"
     )
-
-
-def test_store_replays_feedback_from_the_first_schema(tmp_path):
-    import sqlite3
-
-    path = tmp_path / "old.sqlite3"
-    db = sqlite3.connect(path)
-    db.execute(
-        "CREATE TABLE feedback (user_id TEXT, article_id TEXT, signal TEXT, source TEXT,"
-        " created_at TEXT, PRIMARY KEY (user_id, article_id, signal, source))"
-    )
-    db.executemany(
-        "INSERT INTO feedback VALUES ('john', 'abc', ?, 'kindle-footer', ?)",
-        [("up", "2026-10-11T18:18:09+00:00"), ("done", "2026-10-11T18:26:13+00:00")],
-    )
-    db.commit()
-    db.close()
-
-    store = Store(path)
-    assert store.get_rating("john", "abc") == Rating(5, True)
-    assert [r["created_at"][:16] for r in store.feedback_rows()] == [
-        "2026-10-11T18:18",
-        "2026-10-11T18:26",
-    ]
-    assert Store(path).get_rating("john", "abc") == Rating(5, True)  # second open: no replay
 
 
 def test_batching_respects_size_and_count():

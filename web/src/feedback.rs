@@ -30,8 +30,6 @@ const PROBLEM: &str = "problem";
 /// What a link asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Tap {
-    /// A signal in the words `Signal` writes; `done`, from a book delivered before ratings,
-    /// still counts.
     Rate(Signal),
     /// "This article came out broken or incomplete": a report about the delivery, not a rating.
     Problem,
@@ -212,7 +210,7 @@ mod tests {
         assert_eq!(verify(SECRET, &format!("{payload}.{}", &signature[..8]), 0), Err(TokenError::Invalid));
         let forged = URL_SAFE_NO_PAD.encode("1|john|a1|f5|1000");
         assert_eq!(verify(SECRET, &format!("{forged}.{signature}"), 0), Err(TokenError::Invalid));
-        for signal in ["up", "f6", "x3", "why-broken", "r", ""] {
+        for signal in ["up", "done", "f6", "x3", "why-broken", "r", ""] {
             assert_eq!(
                 verify(SECRET, &make(SECRET, "john", "a1", signal, 1000), 0),
                 Err(TokenError::Invalid),
