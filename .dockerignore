@@ -3,5 +3,5 @@
 !uv.lock
 !README.md
 !app
-!feedback
+!web/models.json
 **/__pycache__

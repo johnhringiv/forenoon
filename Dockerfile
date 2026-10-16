@@ -35,7 +35,10 @@ PY
 FROM python:3.12-slim-bookworm
 COPY --from=build /opt/venv /opt/venv
 COPY --from=fonts /out/ /usr/share/forenoon/fonts/
+# The shipped models and their prices; the web pages build in the same file (app/models.py).
+COPY web/models.json /usr/share/forenoon/models.json
 ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 FORENOON_DATA_DIR=/data \
+    FORENOON_MODELS=/usr/share/forenoon/models.json \
     FORENOON_CODE_FONT=/usr/share/forenoon/fonts/JetBrainsMonoNL-Regular.ttf \
     FORENOON_EMOJI_FONT=/usr/share/forenoon/fonts/NotoEmoji-Regular.ttf
 WORKDIR /data

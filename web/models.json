@@ -1,0 +1,57 @@
+{
+  "prices_source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "prices_checked": "2026-10-14",
+  "models": [
+    {
+      "id": "anthropic/claude-haiku-5-5",
+      "label": "Claude Haiku 5.5",
+      "tool_choice": "forced",
+      "prices": {
+        "input": 0.1,
+        "cache_write": 0.125,
+        "cache_read": 0.01,
+        "output": 0.5
+      },
+      "long_over": 100000,
+      "long_prices": {
+        "input": 0.5,
+        "cache_write": 0.625,
+        "cache_read": 0.05,
+        "output": 2.5
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5-5",
+      "label": "Claude Sonnet 5.5",
+      "tool_choice": "auto",
+      "prices": {
+        "input": 2.0,
+        "cache_write": 2.5,
+        "cache_read": 0.1,
+        "output": 10.0
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5-5",
+      "label": "Claude Opus 5.5",
+      "tool_choice": "auto",
+      "prices": {
+        "input": 4.0,
+        "cache_write": 5.0,
+        "cache_read": 0.2,
+        "output": 20.0
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5-1",
+      "label": "Claude Fable 5.1",
+      "tool_choice": "auto",
+      "prices": {
+        "input": 10.0,
+        "cache_write": 12.5,
+        "cache_read": 0.25,
+        "output": 50.0
+      }
+    }
+  ]
+}

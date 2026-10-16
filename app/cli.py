@@ -258,7 +258,7 @@ def _usage(cfg: Config, args: argparse.Namespace) -> int:
     if month["unpriced"]:
         print(f"{month['unpriced']} calls this month were to a model with no known price, and are not counted.")
     print(
-        "Cost is an estimate from the published prices kept in app/prices.py: each call at its own"
+        "Cost is an estimate from the published prices in web/models.json: each call at its own"
         " model's rates, with cached input at the cache's rates. Cache is the tokens written/read."
     )
     return 0

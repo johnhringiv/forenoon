@@ -96,13 +96,12 @@ def review(
     if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
         log.warning("extraction check skipped: daily token cap reached")
         return {}
-    model = cfg.check_model or cfg.model
     samples = [_sample(article) for article in articles]
     prompt = f"<articles>\n{json.dumps(samples, ensure_ascii=False)}\n</articles>"
     try:
-        reply = backend.structured(SYSTEM, prompt, SCHEMA, model=model)
+        reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("check", model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_call("check", cfg.model, 0, 0, "error", str(exc)[:300])
         log.warning("extraction check failed: %s", exc)
         return {}
     wanted = {article.id for article in articles}
@@ -115,7 +114,7 @@ def review(
             continue
         problem = " ".join(str(entry.get("problem", "")).split())[:MAX_PROBLEM_CHARS]
         out[entry["id"]] = Review(entry["verdict"], "" if entry["verdict"] == "ok" else problem)
-    store.log_llm_reply("check", model, reply, "ok" if out else "invalid")
+    store.log_llm_reply("check", cfg.model, reply, "ok" if out else "invalid")
     for article_id, verdict in out.items():
         store.record_review(article_id, verdict.verdict, verdict.problem, cfg.model)
     return out

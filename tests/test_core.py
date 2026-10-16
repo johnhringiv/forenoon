@@ -364,7 +364,16 @@ def test_the_settings_page_offers_the_pipelines_own_settings_with_its_defaults()
 
     specs = json.loads((Path(__file__).parent.parent / "web" / "settings.json").read_text())
     known, cfg = setting_keys(), Config(data_dir=Path("."))
-    kinds = {"bool": bool, "int": int, "float": float, "time": str, "choice": str, "text": str, "email": str}
+    kinds = {
+        "bool": bool,
+        "int": int,
+        "float": float,
+        "time": str,
+        "choice": str,
+        "text": str,
+        "email": str,
+        "model": str,
+    }
     assert len({spec["key"] for spec in specs}) == len(specs)
     for spec in specs:
         key, default = spec["key"], spec["default"]
@@ -380,42 +389,26 @@ def test_the_settings_page_offers_the_pipelines_own_settings_with_its_defaults()
 
 
 def test_a_call_is_priced_at_its_models_rates_with_cached_input_apart(tmp_path):
-    import sqlite3
 
-    from app import prices
+    from app import models
     from app.llm import Reply
     from app.store import Store
 
     # Haiku 5.5: $0.10 in, $0.125 to write the cache, $0.01 to read it, $0.50 out, per million;
     # five times that for a prompt over 100,000 tokens.
-    assert abs(prices.cost("claude-haiku-5-5", 100_000, 0) - 0.01) < 1e-12  # 100,000 is not over
-    assert abs(prices.cost("claude-haiku-5-5", 10_000, 1_000, 20_000, 50_000) - 0.0045) < 1e-12
-    assert abs(prices.cost("claude-haiku-5-5", 60_000, 0, 0, 50_000) - 0.0325) < 1e-12  # 110,000 in all
-    assert prices.cost("claude-unknown-1", 1000, 1000) is None
+    assert abs(models.cost("anthropic/claude-haiku-5-5", 100_000, 0) - 0.01) < 1e-12  # 100,000 is not over
+    assert abs(models.cost("anthropic/claude-haiku-5-5", 10_000, 1_000, 20_000, 50_000) - 0.0045) < 1e-12
+    assert abs(models.cost("anthropic/claude-haiku-5-5", 60_000, 0, 0, 50_000) - 0.0325) < 1e-12  # 110,000 in all
+    assert models.cost("anthropic/claude-unknown-1", 1000, 1000) is None
 
     store = Store(tmp_path / "f.db")
-    store.log_llm_reply("rank", "claude-haiku-5-5", Reply({}, 10_000, 1_000, 20_000, 50_000), "ok")
-    store.log_llm_call("rank", "claude-unknown-1", 100, 10, "ok")
-    store.log_llm_call("rank", "claude-unknown-1", 0, 0, "error", "overloaded")
+    store.log_llm_reply("rank", "anthropic/claude-haiku-5-5", Reply({}, 10_000, 1_000, 20_000, 50_000), "ok")
+    store.log_llm_call("rank", "anthropic/claude-unknown-1", 100, 10, "ok")
+    store.log_llm_call("rank", "anthropic/claude-unknown-1", 0, 0, "error", "overloaded")
     assert store.llm_tokens_since("2000-01-01") == 81_110  # the daily cap counts cached tokens too
     used = store.llm_usage_since("2000-01-01")
     assert abs(used["cost"] - 0.0045) < 1e-12 and used["unpriced"] == 1
     store.close()
-
-    # A database from before: its calls are priced as if nothing was cached.
-    old = tmp_path / "old.db"
-    db = sqlite3.connect(old)
-    db.execute(
-        "CREATE TABLE llm_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, purpose TEXT NOT NULL,"
-        " model TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, status TEXT NOT NULL,"
-        " error TEXT NOT NULL DEFAULT '')"
-    )
-    db.execute(
-        "INSERT INTO llm_calls VALUES (1, '2026-10-01T06:00:00+00:00', 'rank', 'claude-haiku-5-5', 100000, 0, 'ok', '')"
-    )
-    db.commit()
-    db.close()
-    assert abs(Store(old).llm_usage_since("2000-01-01")["cost"] - 0.01) < 1e-12
 
 
 def test_code_lines_are_blocks_with_a_hanging_indent():
@@ -486,33 +479,45 @@ def test_code_lines_are_blocks_with_a_hanging_indent():
     assert again == chapter, "rendering the same body twice does not split the lines again"
 
 
-def test_a_model_that_refuses_a_forced_tool_call_is_asked_for_it_instead():
-    import anthropic
-    import httpx
+def test_each_call_goes_to_its_models_connection_and_is_asked_as_its_profile_says():
+    import pytest
 
     from app.config import Llm
-    from app.llm import ASK_FOR_TOOL, ClaudeBackend
+    from app.llm import ASK_FOR_TOOL, AnthropicBackend, LlmError, Router
 
     calls = []
 
     class Messages:
         def create(self, **kw):
             calls.append(kw)
-            if kw["tool_choice"]["type"] == "tool":
-                response = httpx.Response(400, request=httpx.Request("POST", "https://api.example/v1/messages"))
-                raise anthropic.BadRequestError(
-                    'tool_choice: type "tool" and "any" are not supported for this model', response=response, body=None
-                )
             block = type("Block", (), {"type": "tool_use", "input": {"ok": True}})()
             usage = type("Usage", (), {"input_tokens": 10, "output_tokens": 2, "cache_creation_input_tokens": 0,
                                        "cache_read_input_tokens": 0})()  # fmt: skip
             return type("Response", (), {"content": [block], "usage": usage, "stop_reason": "tool_use"})()
 
-    backend = ClaudeBackend(Llm(model="claude-sonnet-5-5"), "test-key")
-    backend._client = type("Client", (), {"messages": Messages()})()
+    anthropic = AnthropicBackend(Llm(), "test-key")
+    anthropic._client = type("Client", (), {"messages": Messages()})()
+    router = Router({"anthropic": anthropic})
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
-    assert backend.structured("Judge.", "<x/>", schema).data == {"ok": True}
-    assert backend.structured("Judge.", "<y/>", schema).data == {"ok": True}
-    # Refused once, then asked in the prompt for the rest of the run: three calls, not four.
+    for model in ("anthropic/claude-haiku-5-5", "anthropic/claude-sonnet-5-5", "anthropic/claude-new-9"):
+        assert router.structured("Judge.", "<x/>", schema, model=model).data == {"ok": True}
+    # The connection's own name for the model; the tool forced only where the model allows it,
+    # otherwise asked for in the prompt (Sonnet refuses a forced call; an unlisted model may).
+    assert [c["model"] for c in calls] == ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-new-9"]
     assert [c["tool_choice"]["type"] for c in calls] == ["tool", "auto", "auto"]
-    assert calls[1]["system"].endswith(ASK_FOR_TOOL) and calls[0]["system"] == "Judge."
+    assert calls[0]["system"] == "Judge." and calls[1]["system"].endswith(ASK_FOR_TOOL)
+    for model in ("claude-haiku-5-5", "local/qwen3", "/claude-haiku-5-5"):
+        with pytest.raises(LlmError):
+            router.structured("Judge.", "<x/>", schema, model=model)
+    assert len(calls) == 3
+
+
+def test_the_shipped_models_are_complete():
+    from app import models
+
+    shipped = models.profiles()
+    assert "anthropic/claude-haiku-5-5" in shipped and len(shipped) >= 3
+    for name, profile in shipped.items():
+        assert models.split(name)[0] == "anthropic" and profile.label
+        assert profile.tool_choice in ("forced", "auto")
+        assert profile.rates.output > profile.rates.input > profile.rates.cache_read

@@ -97,7 +97,7 @@ def learn(
         f"{json.dumps(rated_entries(user, store, RATINGS_READ), ensure_ascii=False)}\n</ratings>"
     )
     try:
-        reply = backend.structured(SYSTEM, prompt, SCHEMA)
+        reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
     except LlmError as exc:
         store.log_llm_call("learn", cfg.model, 0, 0, "error", str(exc)[:300])
         log.warning("reader notes not updated: %s", exc)

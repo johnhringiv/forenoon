@@ -225,7 +225,7 @@ def rank(
             problem = f"daily token cap reached ({used} of {cfg.daily_token_cap} used)"
             break
         try:
-            reply = backend.structured(SYSTEM, _listing(batch), SCHEMA, shared=reader)
+            reply = backend.structured(SYSTEM, _listing(batch), SCHEMA, model=cfg.model, shared=reader)
         except LlmError as exc:
             store.log_llm_call("rank", cfg.model, 0, 0, "error", str(exc)[:300])
             problem = f"model call failed: {exc}"[:200]
@@ -350,7 +350,7 @@ def group_stories(
     ]
     prompt = f"<headlines>\n{json.dumps(listed, ensure_ascii=False)}\n</headlines>"
     try:
-        reply = backend.structured(GROUP_SYSTEM, prompt, GROUP_SCHEMA)
+        reply = backend.structured(GROUP_SYSTEM, prompt, GROUP_SCHEMA, model=cfg.model)
     except LlmError as exc:
         store.log_llm_call("group", cfg.model, 0, 0, "error", str(exc)[:300])
         return {}
@@ -429,7 +429,7 @@ def subject_links(
     listed = [{**a, "links": [{"n": n, **link} for n, link in enumerate(a["links"], 1)]} for a in articles]
     prompt = f"<chosen>\n{json.dumps(listed, ensure_ascii=False)}\n</chosen>"
     try:
-        reply = backend.structured(LINK_SYSTEM, prompt, LINK_SCHEMA)
+        reply = backend.structured(LINK_SYSTEM, prompt, LINK_SCHEMA, model=cfg.model)
     except LlmError as exc:
         store.log_llm_call("links", cfg.model, 0, 0, "error", str(exc)[:300])
         return None

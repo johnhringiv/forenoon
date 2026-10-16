@@ -1,7 +1,8 @@
 //! The settings page: how the pipeline behaves, for the whole install. Admins only.
 //!
 //! `settings.json` describes every setting offered and its default; a Python test holds it to
-//! the pipeline's own defaults. Only a value that differs from the default is stored, so a
+//! the pipeline's own defaults. The model settings offer the models in `models.json`, the list
+//! shipped with the app that the pipeline also reads for prices. Only a value that differs from the default is stored, so a
 //! default that changes in a later version reaches an install that never touched it.
 
 use std::{collections::HashMap, sync::LazyLock};
@@ -33,7 +34,8 @@ const ADMINS_ONLY: &str = "Settings are managed by an admin.";
 struct Spec {
     section: String,
     key: String,
-    /// "time", "choice", "int", "float", "bool", "text" or "email".
+    /// "time", "choice", "int", "float", "bool", "text" or "email"; "model" is read as a choice
+    /// of the shipped models.
     kind: String,
     default: serde_json::Value,
     label: String,
@@ -43,10 +45,37 @@ struct Spec {
     max: Option<f64>,
     #[serde(default)]
     choices: Vec<(String, String)>,
+    /// For a model setting: the label of the empty choice, "the same as another", if it has one.
+    #[serde(default)]
+    same: String,
+    /// A model setting: its choices are the shipped models, and a model not among them (one
+    /// saved before it left the list) is kept, not replaced by the first in the list.
+    #[serde(skip)]
+    models: bool,
 }
 
-static SPECS: LazyLock<Vec<Spec>> =
-    LazyLock::new(|| serde_json::from_str(include_str!("../settings.json")).expect("settings.json is valid"));
+#[derive(Deserialize)]
+struct Model {
+    id: String,
+    label: String,
+}
+
+#[derive(Deserialize)]
+struct Models {
+    models: Vec<Model>,
+}
+
+static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
+    let mut specs: Vec<Spec> = serde_json::from_str(include_str!("../settings.json")).expect("settings.json is valid");
+    let models: Models = serde_json::from_str(include_str!("../models.json")).expect("models.json is valid");
+    for spec in specs.iter_mut().filter(|spec| spec.kind == "model") {
+        spec.kind = "choice".to_owned();
+        spec.models = true;
+        spec.choices = (!spec.same.is_empty()).then(|| (String::new(), spec.same.clone())).into_iter().collect();
+        spec.choices.extend(models.models.iter().map(|model| (model.id.clone(), model.label.clone())));
+    }
+    specs
+});
 
 impl Spec {
     /// The default as it would be stored: "1" or "0" for yes or no, otherwise as written.
@@ -74,7 +103,7 @@ impl Spec {
                     });
                 if ok { Ok(text.to_owned()) } else { bad("give a time such as 06:00") }
             }
-            "choice" => match self.choices.iter().any(|(value, _)| value == text) {
+            "choice" => match self.choices.iter().any(|(value, _)| value == text) || self.models && model_name(text) {
                 true => Ok(text.to_owned()),
                 false => bad("choose one of the options"),
             },
@@ -100,6 +129,13 @@ impl Spec {
     }
 }
 
+/// A model named with its connection, as in anthropic/claude-haiku-5-5.
+fn model_name(text: &str) -> bool {
+    text.len() <= MAX_TEXT
+        && !text.chars().any(|c| c.is_control() || c.is_whitespace())
+        && text.split_once('/').is_some_and(|(connection, model)| !connection.is_empty() && !model.is_empty())
+}
+
 struct Field {
     key: &'static str,
     kind: &'static str,
@@ -108,7 +144,7 @@ struct Field {
     value: String,
     on: bool,
     changed: bool,
-    choices: Vec<(&'static str, &'static str, bool)>,
+    choices: Vec<(String, String, bool)>,
     min: Option<f64>,
     max: Option<f64>,
 }
@@ -184,6 +220,11 @@ fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -
     for spec in SPECS.iter() {
         let default = spec.default_text();
         let value = shown.get(&spec.key).cloned().unwrap_or_else(|| default.clone());
+        let mut choices: Vec<(String, String, bool)> =
+            spec.choices.iter().map(|(key, label)| (key.clone(), label.clone(), *key == value)).collect();
+        if spec.models && !choices.iter().any(|(_, _, selected)| *selected) {
+            choices.push((value.clone(), format!("{value} (not in the list)"), true));
+        }
         let field = Field {
             key: &spec.key,
             kind: &spec.kind,
@@ -191,7 +232,7 @@ fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -
             hint: &spec.hint,
             on: value == "1",
             changed: stored.get(&spec.key).is_some_and(|saved| *saved != default),
-            choices: spec.choices.iter().map(|(key, label)| (key.as_str(), label.as_str(), *key == value)).collect(),
+            choices,
             min: spec.min,
             max: spec.max,
             value,
@@ -317,7 +358,14 @@ mod tests {
         assert!(check("max_age_days", "0").is_err() && check("max_age_days", "2.5").is_err());
         assert_eq!(check("alerts.to", " Me@Example.com ").unwrap(), "me@example.com");
         assert!(check("alerts.to", "").is_ok() && check("alerts.to", "nope").is_err());
-        assert!(check("llm.model", "").is_err() && check("llm.model", "a\nb").is_err());
+        assert!(check("llm.model", "anthropic/claude-sonnet-5-5").is_ok());
+        assert!(check("llm.model", "").is_err() && check("llm.model", "claude-haiku-5-5").is_err());
+        // One no longer listed, saved before, is kept; it must still name its connection.
+        assert!(check("llm.model", "anthropic/claude-haiku-5-5-20261001").is_ok());
+        assert!(check("llm.model", "anthropic/").is_err() && check("llm.model", "anthropic/a b").is_err());
+        assert!(
+            check("llm.choose_model", "").is_ok() && check("llm.choose_model", "anthropic/claude-opus-5-5").is_ok()
+        );
         assert_eq!(spec("llm.enabled").check(None).unwrap(), "0");
     }
 }

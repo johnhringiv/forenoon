@@ -283,10 +283,10 @@ class FakeBackend:
         self.read = []
         self.choice = None  # candidates, places -> chosen ids; by default the order given
         self.choosing = []
-        self.models = []  # the model each call asked for; "" for the configured one
+        self.models = []  # the model each call asked for
         self.subjects = None  # candidates -> {id: subject}
 
-    def structured(self, system, user, schema, shared="", model=""):
+    def structured(self, system, user, schema, *, model, shared=""):
         from app.llm import LlmError, Reply
 
         self.prompts.append((system, shared + user))
@@ -455,12 +455,12 @@ def test_ranking_is_batched_and_survives_one_failed_batch(env):
     backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
     original, calls = backend.structured, []
 
-    def flaky(system, prompt, schema, shared="", model=""):
+    def flaky(system, prompt, schema, *, model, shared=""):
         if "<candidates>" in prompt:
             calls.append(prompt)
             if len(calls) == len(batches):  # the last batch fails
                 raise LlmError("overloaded")
-        return original(system, prompt, schema, shared, model)
+        return original(system, prompt, schema, model=model, shared=shared)
 
     backend.structured = flaky
     partial = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=backend)
@@ -562,13 +562,13 @@ def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
         backend = FakeBackend(scores)
         original = backend.structured
 
-        def structured(system, prompt, schema, shared="", model=""):
+        def structured(system, prompt, schema, *, model, shared=""):
             import json
 
             if "<candidates>" in prompt:
                 listed = json.loads(prompt.split("<candidates>\n")[1].split("\n</candidates>")[0])
                 sent_titles.update({c["id"]: c["title"] for c in listed})
-            return original(system, prompt, schema, shared, model)
+            return original(system, prompt, schema, model=model, shared=shared)
 
         backend.structured = structured
         sent = []
@@ -878,7 +878,7 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
     from app.rank import POLICY
 
     cfg, store, fetcher = env
-    cfg = _llm_cfg(cfg, explore_slots=0, choose_model="claude-sonnet-5-5")
+    cfg = _llm_cfg(cfg, explore_slots=0, choose_model="anthropic/claude-sonnet-5-5")
     user = dataclasses.replace(cfg.users[0], daily_cap=2)  # the pinned article and one other
     cfg = dataclasses.replace(cfg, users=(user,))
     backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "abstract"} for i in ids])
@@ -921,10 +921,10 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
     assert ("choose", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
     # Its own model for this one call, logged and priced as such; the rest use the configured one.
     asked = dict(zip((p for _, p in backend.prompts), backend.models))
-    assert {m for p, m in asked.items() if "<places>" in p} == {"claude-sonnet-5-5"}
-    assert {m for p, m in asked.items() if "<places>" not in p} <= {"", "claude-haiku-5-5"}
+    assert {m for p, m in asked.items() if "<places>" in p} == {"anthropic/claude-sonnet-5-5"}
+    assert {m for p, m in asked.items() if "<places>" not in p} == {"anthropic/claude-haiku-5-5"}
     logged = {(r["purpose"], r["model"]) for r in store.llm_call_rows()}
-    assert ("choose", "claude-sonnet-5-5") in logged and ("rank", "claude-haiku-5-5") in logged
+    assert ("choose", "anthropic/claude-sonnet-5-5") in logged and ("rank", "anthropic/claude-haiku-5-5") in logged
     # The next day it is offered again, and with nothing better it has its place. To the model
     # it is marked as deferred, with the day's rule on subjects.
     weighed = store.unoffered(user.id, "Blog", NOW - timedelta(days=3), NOW - timedelta(days=30))
@@ -1395,7 +1395,7 @@ def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_gi
     answer = {"notes": ["  - Finishes long technical pieces.  ", "x" * 500, 7, "Finishes long technical pieces."]}
 
     class Notes:
-        def structured(self, system, user, schema, shared="", model=""):
+        def structured(self, system, user, schema, *, model, shared=""):
             asked.append(user)
             return Reply(answer, 900, 80)
 
