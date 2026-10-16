@@ -754,9 +754,8 @@ database with the pipeline.
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
 - **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
-  out. A reader changes only their own row, and only Amazon's addresses (`@kindle.com` and its
-  subdomains) are accepted, so the install's mail cannot be pointed anywhere else. Interests
-  and stories a day are on the Reading page.
+  out. A reader changes only their own row, so the only addresses an account can send to are
+  the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
