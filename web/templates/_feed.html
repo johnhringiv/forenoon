@@ -1,0 +1,21 @@
+<details class="row{% if !row.enabled %} paused{% endif %}" id="s-{{ row.id }}"{% if row.open %} open{% endif %}>
+<summary><span class="dot {{ row.state }}" aria-hidden="true"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.address }}</span>
+<span class="tags">{% if row.new %}<span class="tag">Just added</span>{% endif %}{% if row.pinned %}<span class="tag">Pinned</span>{% endif %}{% if !row.enabled %}<span class="tag">Paused</span>{% endif %}<span class="tag">{{ row.limit }}</span>{% if !row.mode.is_empty() %}<span class="tag">{{ row.mode }}</span>{% endif %}{% if let Some(site) = row.session %}<span class="tag">{{ site }} session</span>{% endif %}</span>
+{% if let Some(check) = row.check %}<p class="state{% if row.check_failed %} failing{% endif %}">{{ check }}</p>{% endif %}
+<p class="state{% if row.failing %} failing{% endif %}">{% if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}{% if !row.enabled %} Paused.{% endif %}</p>
+</summary>
+<form class="source" method="post" action="/sources/{{ row.id }}">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="fields">
+<label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
+<label class="wide">Feed address <input name="address" value="{{ row.address }}" maxlength="2000" required></label>
+<label>Take the text from <select name="extract">{% for choice in row.extract %}<option value="{{ choice.key }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
+<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>
+<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Read it</label>
+<button class="primary">Save</button>
+<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>
+</div>
+{% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with your {{ site }} session.</p>{% endif %}
+</form>
+</details>

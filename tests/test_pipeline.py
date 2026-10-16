@@ -281,11 +281,16 @@ class FakeBackend:
         self.subjects = None  # article title -> the link numbers it is about
         self.readings = None  # articles as read -> verdicts
         self.read = []
+        self.choice = None  # candidates, places -> chosen ids; by default the order given
+        self.choosing = []
+        self.models = []  # the model each call asked for; "" for the configured one
+        self.subjects = None  # candidates -> {id: subject}
 
-    def structured(self, system, user, schema, shared=""):
+    def structured(self, system, user, schema, shared="", model=""):
         from app.llm import LlmError, Reply
 
         self.prompts.append((system, shared + user))
+        self.models.append(model)
         if self.fail:
             raise LlmError("overloaded")
         if "<articles>" in user:
@@ -301,6 +306,15 @@ class FakeBackend:
             self.linking = listed
             answers = [{"id": a["id"], "links": (self.subjects or {}).get(a["title"], [])} for a in listed]
             return Reply({"articles": [*answers, {"id": "made-up", "links": [1]}]}, 300, 40)
+        if "<places>" in user:
+            places = int(user.split("<places>")[1].split("</places>")[0])
+            listed = __import__("json").loads(user.split("<candidates>\n")[1].split("\n</candidates>")[0])
+            self.choosing.append((listed, places, user))
+            chosen = self.choice(listed, places) if self.choice else [c["id"] for c in listed][:places]
+            reserves = [c["id"] for c in listed if c["id"] not in chosen]
+            named = self.subjects(listed) if self.subjects else {}
+            subjects = [{"id": i, "subject": subject} for i, subject in named.items()]
+            return Reply({"chosen": [*chosen, "made-up"], "reserves": reserves, "subjects": subjects}, 500, 30)
         if "<headlines>" in user:
             listed = __import__("json").loads(user.split("<headlines>\n")[1].split("\n</headlines>")[0])
             ids = {c["title"]: c["id"] for c in listed}
@@ -349,8 +363,8 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
     assert set(rows) == set(report.delivered)
     policies = sorted(r["policy"] for r in rows.values())
-    assert policies == ["claude-rank-v1", "claude-rank-v1", "pinned"]
-    ranked = [r for r in rows.values() if r["policy"] == "claude-rank-v1"]
+    assert policies == ["claude-rank-v2", "claude-rank-v2", "pinned"]
+    ranked = [r for r in rows.values() if r["policy"] == "claude-rank-v2"]
     # Two slots after the pinned article: the top score, and one exploration pick.
     assert min(r["rank"] for r in ranked) == 1 and sum(r["explore"] for r in ranked) == 1
     assert all(0 < r["propensity"] <= 1 and len(r["reason"]) <= 140 for r in ranked)
@@ -387,6 +401,36 @@ def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
     assert not store.selection_rows(user.id)  # dry runs record no selections
 
 
+def test_batches_mix_feed_articles_and_finds(env):
+    import json
+
+    from app.config import Llm
+    from app.rank import rank
+    from app.sources import Item
+
+    cfg, store, _ = env
+
+    def items(source, n):
+        return [
+            Item(f"{source}{k}", f"https://x.example/{source}{k}", Source(source), "t", "", None, "") for k in range(n)
+        ]
+
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
+    feed, found = items("feed", 12), items("find", 12)
+    llm = Llm(enabled=True, batch_size=6, read_candidates=6, explore_slots=0)
+    ranking = rank(llm, backend, store, cfg.users[0], feed, 4, "2026-03-10", found=found)
+    batches = [
+        [c["id"] for c in json.loads(p.split("<candidates>\n")[1].split("\n</candidates>")[0])]
+        for _, p in backend.prompts
+    ]
+    assert len(batches) == 4 and sum({i[:4] for i in b} == {"feed", "find"} for b in batches) >= 3
+    assert len(ranking.choices) == 24
+    # What is read in full is an equal share of every batch: 6 over 4 batches, the first two
+    # giving one more.
+    shares = [len([item for item in ranking.shortlist if item.id in b]) for b in batches]
+    assert shares == [2, 2, 1, 1]
+
+
 def test_ranking_is_batched_and_survives_one_failed_batch(env):
     import json
 
@@ -411,12 +455,12 @@ def test_ranking_is_batched_and_survives_one_failed_batch(env):
     backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "ok"} for i in ids])
     original, calls = backend.structured, []
 
-    def flaky(system, prompt, schema, shared=""):
+    def flaky(system, prompt, schema, shared="", model=""):
         if "<candidates>" in prompt:
             calls.append(prompt)
             if len(calls) == len(batches):  # the last batch fails
                 raise LlmError("overloaded")
-        return original(system, prompt, schema, shared)
+        return original(system, prompt, schema, shared, model)
 
     backend.structured = flaky
     partial = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=backend)
@@ -433,13 +477,60 @@ def _listings(hn: list[dict], lobsters: list[dict]) -> None:
     ROUTES[SITES["lobsters"].url] = json.dumps(lobsters).encode()
 
 
-def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model(env):
+def test_a_source_takes_no_more_than_its_places_a_day(env):
+    cfg, store, fetcher = env
+    sources = tuple(dataclasses.replace(s, daily_max=1) if s.name == "Blog" else s for s in cfg.sources)
+    cfg = dataclasses.replace(cfg, sources=sources)
+    user = dataclasses.replace(cfg.users[0], daily_cap=4)
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    delivered = [store.get_article(i).source for i in report.delivered]
+    assert delivered == ["Pinned", "Blog"]  # the Blog's other posts wait, though places were left
+
+
+def test_a_pinned_source_gives_everything_but_uses_no_more_than_its_places(env):
+    cfg, store, fetcher = env
+    pin = {"Blog": {"pinned": True, "daily_max": 1}}
+    sources = tuple(dataclasses.replace(s, **pin[s.name]) if s.name in pin else s for s in cfg.sources)
+    cfg = dataclasses.replace(cfg, sources=sources)
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    delivered = sorted(store.get_article(i).source for i in report.delivered)
+    # Every Blog post, though only one uses a place; the other place is the other pinned source's.
+    assert delivered.count("Blog") >= 2 and delivered.count("Pinned") == 1 and "Teaser" not in delivered
+
+
+def test_a_built_in_source_takes_no_more_than_its_places_a_day(env):
+    from app.config import Discovery
+
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(
+        _llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews",), daily_max={"hackernews": 1})
+    )
+    user = dataclasses.replace(cfg.users[0], daily_cap=8)
+    when = "2026-03-10T06:00:00Z"
+    _listings(
+        [{"title": f"Find {n}", "url": f"https://found.example/post-{n}", "created_at": when} for n in (1, 2)], []
+    )
+    try:
+        report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend(lambda ids: [
+            {"id": i, "score": 9, "reason": "r"} for i in ids]))  # fmt: skip
+        delivered = [store.get_article(i).source for i in report.delivered]
+        assert delivered.count("Hacker News") == 1 and len(delivered) < 8  # places were left
+    finally:
+        from app.discover import SITES
+
+        for site in SITES.values():
+            ROUTES.pop(site.url, None)
+
+
+def test_discovery_finds_compete_on_score_and_never_without_the_model(env):
     from app.config import Discovery
     from app.discover import SITES
 
     cfg, store, fetcher = env
     cfg = dataclasses.replace(
-        _llm_cfg(cfg, explore_slots=0), discovery=Discovery(sites=("hackernews", "lobsters"), slots=1)
+        _llm_cfg(cfg, explore_slots=0),
+        discovery=Discovery(sites=("hackernews", "lobsters"), daily_max={"hackernews": 1}),
     )
     user = dataclasses.replace(cfg.users[0], daily_cap=4)
     when = "2026-03-10T06:00:00Z"
@@ -471,13 +562,13 @@ def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model
         backend = FakeBackend(scores)
         original = backend.structured
 
-        def structured(system, prompt, schema, shared=""):
+        def structured(system, prompt, schema, shared="", model=""):
             import json
 
             if "<candidates>" in prompt:
                 listed = json.loads(prompt.split("<candidates>\n")[1].split("\n</candidates>")[0])
                 sent_titles.update({c["id"]: c["title"] for c in listed})
-            return original(system, prompt, schema, shared)
+            return original(system, prompt, schema, shared, model)
 
         backend.structured = structured
         sent = []
@@ -486,17 +577,23 @@ def test_discovery_adds_ranked_finds_up_to_its_slots_and_never_without_the_model
         titles = sorted(sent_titles.values())
         assert titles == ["Dull find", "Great find", "Post 1", "Post 2", "Post 5", "Second find"]
         prompt = backend.prompts[0][1]
-        assert "On Hacker News: 300 points, 80 comments. Site: found.example." in prompt
+        # Also on Lobsters: one candidate, with both sites' signals.
+        assert "On Hacker News: 300 points, 80 comments. Site: found.example. On Lobsters:" in prompt
         assert "Tags: rust." in prompt
 
-        # One slot for finds: the best one only, though a second also scored well.
+        # Finds take places on their scores like any feed article: both that beat the feeds' 5s,
+        # and not the one that scored below them. Hacker News has one place; the find Lobsters
+        # also carries counts against Lobsters, so the second still has it.
         delivered = [store.get_article(i) for i in report.delivered]
-        assert [a.title for a in delivered if a.source == "Hacker News"] == ["Great find"]
+        assert [a.title for a in delivered if a.source == "Hacker News"] == ["Great find", "Second find"]
         assert len(delivered) == 4 and not any(a.source == "Lobsters" for a in delivered)
         assert {s.name for s in report.sources} >= {"Hacker News", "Lobsters"}
         epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
         book = "".join(epub.read(n).decode() for n in epub.namelist() if n.endswith(".xhtml"))
-        assert "found.example via Hacker News" in book
+        assert "found.example via Hacker News and Lobsters" in book
+        great = next(a.id for a in delivered if a.title == "Great find")
+        routes = store.db.execute("SELECT via FROM article_routes WHERE article_id = ? ORDER BY via", (great,))
+        assert [r[0] for r in routes] == ["Hacker News", "Lobsters"]
         assert 'href="https://news.ycombinator.com/item?id=42"' in book and "javascript:" not in book
 
         # Without a working model nothing discovered is delivered, and listings are not read.
@@ -726,7 +823,7 @@ def test_candidates_on_the_same_event_are_delivered_as_one_story(env):
     assert store.delivered_on("john", "2000", "3000") == 2
     assert ("group", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
     rows = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
-    assert sorted(rows.values()) == ["claude-rank-v1", "claude-rank-v1", "pinned"]
+    assert sorted(rows.values()) == ["claude-rank-v2", "claude-rank-v2", "pinned"]
 
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     contents = epub.read("OEBPS/contents.xhtml").decode()
@@ -775,6 +872,77 @@ def test_model_picks_which_links_are_the_subject_and_responses_keep_both(env):
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     assert "More on: Post 4" in epub.read("OEBPS/a02.xhtml").decode()
     assert ("links", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+
+
+def test_the_model_chooses_the_issue_from_what_it_read(env):
+    from app.rank import POLICY
+
+    cfg, store, fetcher = env
+    cfg = _llm_cfg(cfg, explore_slots=0, choose_model="claude-sonnet-5-5")
+    user = dataclasses.replace(cfg.users[0], daily_cap=2)  # the pinned article and one other
+    cfg = dataclasses.replace(cfg, users=(user,))
+    backend = FakeBackend(lambda ids: [{"id": i, "score": 5, "reason": "abstract"} for i in ids])
+    table = {"Post 1": 9, "Post 2": 8}
+    backend.readings = lambda listed: [
+        {"id": a["id"], "score": table.get(a["title"], 1), "reason": "read", "complete": "ok", "problem": "",
+         "lasting": "years" if a["title"] == "Post 1" else "days", "links": []}
+        for a in listed
+    ]  # fmt: skip
+    backend.subjects = lambda listed: {c["id"]: "compilers" for c in listed}
+    # The model takes Post 2 over the higher-scored Post 1, for the issue as a whole, and names
+    # Post 1 too, for which there is no place: it becomes the first reserve.
+    order = {"Post 2": 0, "Post 1": 1}
+    backend.choice = lambda listed, places: sorted((c["id"] for c in listed), key=lambda i: order[
+        next(c["title"] for c in listed if c["id"] == i)])  # fmt: skip
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=backend)
+
+    assert "issue chosen" in report.ranking
+    assert [store.get_article(i).title for i in report.delivered] == ["Post 9", "Post 2"]
+    # What became of each choice is in the run's report.
+    assert [(c["title"], c["reserve"], c["outcome"]) for c in report.chosen] == [
+        ("Post 2", False, "sent"),
+        ("Post 1", True, "not needed"),
+    ]
+    assert "1. Post 2 (Blog) [compilers]: sent" in report.to_markdown()
+    assert "2. (reserve) Post 1 (Blog) [compilers]" in report.to_markdown()
+    # Post 1 would have had the place on its score, and it keeps: deferred, to be offered again.
+    post1 = next(c["id"] for c in report.chosen if c["title"] == "Post 1")
+    assert report.deferred == [post1] and store.assessment(user.id, post1)["score"] == 9
+    assert post1 in store.deferred_before(user.id, [post1], "9999")
+    listed, places, prompt = backend.choosing[0]
+    assert "<reserves>3</reserves>" in prompt  # the pinned article's place, and two more
+    # The pinned article leads the issue whatever is chosen: shown, so subjects count it.
+    assert '"title": "Post 9", "source": "Pinned"' in prompt.split("<already>")[1].split("</already>")[0]
+    assert places == 1 and {c["title"] for c in listed} == {"Post 1", "Post 2"}
+    assert {c["title"]: c["score"] for c in listed}["Post 1"] == 9 and all(c["words"] > 0 for c in listed)
+    # Chosen, so certain to be offered; its score is still the reading's.
+    rows = {store.get_article(r["article_id"]).title: r for r in store.selection_rows(user.id)}
+    assert (rows["Post 2"]["propensity"], rows["Post 2"]["score"], rows["Post 2"]["policy"]) == (1.0, 8, POLICY)
+    assert ("choose", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
+    # Its own model for this one call, logged and priced as such; the rest use the configured one.
+    asked = dict(zip((p for _, p in backend.prompts), backend.models))
+    assert {m for p, m in asked.items() if "<places>" in p} == {"claude-sonnet-5-5"}
+    assert {m for p, m in asked.items() if "<places>" not in p} <= {"", "claude-haiku-5-5"}
+    logged = {(r["purpose"], r["model"]) for r in store.llm_call_rows()}
+    assert ("choose", "claude-sonnet-5-5") in logged and ("rank", "claude-haiku-5-5") in logged
+    # The next day it is offered again, and with nothing better it has its place. To the model
+    # it is marked as deferred, with the day's rule on subjects.
+    weighed = store.unoffered(user.id, "Blog", NOW - timedelta(days=3), NOW - timedelta(days=30))
+    assert [r.id for r in weighed] == [post1]  # even were the feed to drop it
+    later = run(cfg, store, fetcher, user, now=NOW + timedelta(days=1), sender=lambda m, s: None, backend=backend)
+    assert post1 in later.delivered
+    from app.choose import Candidate, _listing
+
+    listing = _listing([Candidate(post1, "Post 1", "Blog", 350, 9, "read", "years", "", True)], 1, 2, 2, {})
+    assert '"deferred": true' in listing and "<most_per_subject>2</most_per_subject>" in listing
+
+    # A reply naming nothing usable leaves the reading's order: the best read goes.
+    fresh = Store(cfg.data_dir / "second.sqlite3")
+    fetcher2 = Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(handler))
+    backend.choice = lambda listed, places: []
+    report = run(cfg, fresh, fetcher2, user, now=NOW, sender=lambda m, s: None, backend=backend)
+    assert "issue chosen" not in report.ranking
+    assert [fresh.get_article(i).title for i in report.delivered] == ["Post 9", "Post 1"]
 
 
 def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_article(env):
@@ -1184,6 +1352,31 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     assert store.waiting_adds("john") == []
 
 
+def test_a_link_added_by_hand_that_is_never_had_ends_as_a_link(env):
+    from app.urls import article_id
+
+    cfg, store, fetcher = env
+    user = cfg.users[0]
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    old, new = "https://found.example/missing", "https://found.example/missing-too"
+    for url in (old, new):
+        store.upsert_article(article_id(url), url, "found.example", "", "", None)
+    ask = (
+        "INSERT INTO add_requests (user_id, url, action, requested_at, status, article_id)"
+        " VALUES ('john', ?, 'next', ?, 'done', ?)"
+    )
+    store.db.execute(ask, (old, (NOW - timedelta(days=4)).isoformat(timespec="seconds"), article_id(old)))
+    store.db.execute(ask, (new, NOW.isoformat(timespec="seconds"), article_id(new)))
+    store.db.commit()
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: None)
+    # Older than the age limit and still not had: shown as a link, no longer holding a place.
+    assert report.retired == [article_id(old)] and store.waiting_adds("john") == [article_id(new)]
+    links = store.db.execute("SELECT article_id FROM deliveries WHERE link_only = 1").fetchall()
+    assert [r[0] for r in links] == [article_id(old)]
+    assert "Links added by hand never had in time, now shown as links: 1." in report.to_markdown()
+
+
 def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_given_to_the_model(env):
     from app.learn import learn
     from app.llm import Reply
@@ -1202,7 +1395,7 @@ def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_gi
     answer = {"notes": ["  - Finishes long technical pieces.  ", "x" * 500, 7, "Finishes long technical pieces."]}
 
     class Notes:
-        def structured(self, system, user, schema, shared=""):
+        def structured(self, system, user, schema, shared="", model=""):
             asked.append(user)
             return Reply(answer, 900, 80)
 
@@ -1418,3 +1611,38 @@ def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(en
     assert asked == [("site-paywall.example", "https://www.paywall.example/story")]
     row = store.db.execute("SELECT status, error FROM add_requests").fetchone()
     assert (row["status"], row["error"]) == ("done", "")
+
+
+def test_an_article_fetched_again_gets_a_new_summary_and_keeps_the_old_when_it_cannot(env):
+    from app.adds import refresh_requested
+    from app.urls import article_id
+
+    cfg, store, fetcher = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    stale = "| Next | Section menu | Main menu | Previous | OilOutput rose"
+    ids = {}
+    for name, url in (("calibre", "https://found.example/post-80"), ("walled", "https://www.paywall.example/x")):
+        ids[name] = article_id(url)
+        # From a source since removed, as the Calibre recipes were.
+        store.upsert_article(ids[name], url, "Old recipe", "A title", "", None)
+        store.set_extraction(ids[name], "degraded", "short (90 words)", 90)
+        store.set_preview(ids[name], "", stale)
+    ask = "INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES (?, ?, 'x')"
+    for user, name in (("john", "calibre"), ("john", "walled"), ("stranger", "calibre")):
+        store.db.execute(ask, (user, ids[name]))
+    store.db.commit()
+
+    assert refresh_requested(cfg, store, fetcher) == 1 and store.refresh_requests() == []
+    rows = store.db.execute("SELECT status, error FROM refresh_requests ORDER BY id").fetchall()
+    assert [r["status"] for r in rows] == ["done", "failed", "failed"]
+    assert "save a session for it under Subscriber sessions" in rows[1]["error"]
+    assert rows[2]["error"] == "no such reader"
+    fresh = store.get_article(ids["calibre"])
+    assert fresh.status == "clean" and fresh.word_count == 350 and fresh.title == "A title"
+    assert fresh.description and not fresh.description.startswith("|")
+    assert (cfg.pages_dir / f"{ids['calibre']}.json.gz").exists()
+    # Nothing could be read: what was there stays.
+    kept = store.get_article(ids["walled"])
+    assert (kept.description, kept.status, kept.word_count) == (stale, "degraded", 90)

@@ -101,6 +101,8 @@ class Extracted:
     author: str = ""
     image_url: str = ""  # untrusted, like everything else from the page
     description: str = ""
+    # Pictures on the page above the article's text: a header image is often outside it.
+    page_images: list[str] = field(default_factory=list)
     signed_out: str = ""  # why a subscriber's session needs signing in again; set by the pipeline
 
     @property
@@ -556,6 +558,84 @@ def _add_standfirst(body: lxml.html.HtmlElement, page_html: str, description: st
     lead.tail, body.text = body.text, None
 
 
+# Site furniture rather than the article's picture, by its class, id, address or alt text.
+NOT_A_PICTURE = re.compile(r"logo|avatar|icon|badge|sprite|gravatar|emoji", re.IGNORECASE)
+
+
+def _page_pictures(page_html: str, url: str, body: lxml.html.HtmlElement, most: int = 6) -> list[str]:
+    """Picture addresses on the page above where the article's text begins, as absolute
+    http(s) URLs; logos, avatars and icons left out. Pictures below it (related posts, a
+    sidebar) may belong to something else, and none is better than a wrong one; so is none at
+    all when the text cannot be found on the page."""
+    opening = next((_norm(p.text_content()) for p in body.iter("p") if len(p.text_content().split()) >= 5), "")
+    if not opening:
+        return []
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return []
+    found: list[str] = []
+    for el in page.iter("img", "p"):
+        if el.tag == "p":
+            if _norm(el.text_content()).startswith(opening[:60]):
+                return found[:most]
+            continue
+        src = urljoin(url, (el.get("src") or "").strip())
+        if NOT_A_PICTURE.search(" ".join(el.get(name) or "" for name in ("class", "id", "src", "alt"))):
+            continue
+        if src.startswith(("http://", "https://")) and len(src) <= MAX_PREVIEW_URL and src not in found:
+            found.append(src)
+    return []
+
+
+# Elements that start a new line of text, for reading a body as text: BLOCK and the rest.
+TEXT_BREAKS = {*BLOCK, "li", "dt", "dd", "tr", "td", "th", "h1", "br"}
+PROSE = {"p", "li", "blockquote"}
+
+
+def _opening(body: lxml.html.HtmlElement) -> str:
+    """The body as text for a summary, a space between blocks so that a standfirst and the first
+    paragraph do not run together.
+
+    Only the paragraphs when there are any: loose text in other blocks is a caption, a byline or
+    a date as often as not. Captions are always left out, and so are blocks at the start that
+    are mostly links: a navigation bar, breadcrumbs ("| Next | Section menu | Previous |")."""
+    runs: list[list] = [["", 0, "div"]]  # text, how many of its letters are in links, its block
+
+    def add(text: str | None, linked: bool) -> None:
+        if text:
+            runs[-1][0] += text
+            if linked:
+                runs[-1][1] += sum(c.isalnum() for c in text)
+
+    def walk(el: lxml.html.HtmlElement, linked: bool, block: str) -> None:
+        # A comment, or a picture's caption: not the article's words. Its tail is the parent's.
+        if not isinstance(el.tag, str) or el.tag in ("figure", "figcaption"):
+            return
+        linked = linked or el.tag == "a"
+        breaks = el.tag in TEXT_BREAKS
+        if breaks:
+            runs.append(["", 0, el.tag])
+        add(el.text, linked)
+        for child in el:
+            walk(child, linked, el.tag if breaks else block)
+            add(child.tail, linked)
+        if breaks:
+            runs.append(["", 0, block])  # the rest of the enclosing block
+
+    walk(body, False, "div")
+    blocks = [(" ".join(text.split()), linked, block) for text, linked, block in runs if text.strip()]
+    if any(block in PROSE for _, _, block in blocks):
+        blocks = [run for run in blocks if run[2] in PROSE]
+    start = 0
+    for text, linked, _ in blocks:
+        letters = sum(c.isalnum() for c in text)
+        if letters and linked < letters / 2:
+            break
+        start += 1
+    return " ".join(text for text, _, _ in (blocks[start:] or blocks))
+
+
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
     """Lead image and summary for listing an article; falls back to the body's own."""
     image = urljoin(url, image.strip()) if image.strip() else ""
@@ -563,7 +643,7 @@ def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str
         image = next((img.get("src", "") for img in body.iter("img")), "")
     if not image.startswith(("http://", "https://")) or len(image) > MAX_PREVIEW_URL:
         image = ""
-    description = " ".join(description.split()) or " ".join(body.text_content().split())
+    description = " ".join(description.split()) or _opening(body)
     if len(description) > MAX_DESCRIPTION:
         description = description[: MAX_DESCRIPTION - 1].rsplit(" ", 1)[0] + "…"
     return image, description
@@ -580,6 +660,7 @@ def extract(
     candidates: dict[str, lxml.html.HtmlElement] = {}
     reference = 0
     title = author = image = description = ""
+    pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
     if page_html and mode != "feed":
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
@@ -616,6 +697,8 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    if page_html:
+        pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
     if page_html and description:
         _add_standfirst(body, page_html, description)
     _attach_notes(body, notes.get(method), url)
@@ -636,4 +719,4 @@ def extract(
         reasons.append("looks truncated")
     status = "degraded" if reasons else "clean"
     image, description = _preview(body, url, image, description)
-    return Extracted(body, status, reasons, words, method, title, author, image, description)
+    return Extracted(body, status, reasons, words, method, title, author, image, description, pictures)

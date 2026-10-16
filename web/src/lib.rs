@@ -3,11 +3,11 @@
 pub mod archive;
 pub mod auth;
 pub mod db;
-pub mod learned;
 pub mod limit;
 pub mod mail;
 pub mod pages;
 pub mod ratings;
+pub mod reading;
 pub mod settings;
 pub mod sources;
 
@@ -72,6 +72,8 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     Ok(Router::new()
         .route("/", get(pages::newsstand))
         .route("/archive", get(archive::page).post(archive::add))
+        .route("/archive/added/clear", post(archive::clear_failed))
+        .route("/archive/refresh", post(archive::refresh))
         .route("/rate", post(pages::rate))
         .route("/thumb/{id}", get(pages::thumb))
         .route("/send", post(pages::send))
@@ -80,12 +82,14 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/account", get(pages::account))
         .route("/account/profile", post(pages::set_profile))
         .route("/account/reading", post(pages::set_reading))
+        .route("/account/kindle", post(pages::set_kindle))
         .route("/account/password", post(pages::set_password))
         .route("/account/email", post(pages::set_email))
         .route("/account/email/cancel", post(pages::cancel_email))
         .route("/account/verify", post(pages::resend_verification))
-        .route("/learned", get(learned::page).post(learned::save))
-        .route("/learned/restore", post(learned::restore))
+        .route("/reading", get(reading::page))
+        .route("/learned", get(reading::learned).post(reading::save))
+        .route("/learned/restore", post(reading::restore))
         .route("/sources", get(sources::page).post(sources::add))
         .route("/sources/{id}", post(sources::update))
         .route("/sources/{id}/delete", post(sources::delete))

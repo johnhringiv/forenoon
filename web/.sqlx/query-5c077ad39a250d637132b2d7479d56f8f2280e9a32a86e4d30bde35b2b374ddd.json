@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE add_requests SET dismissed = 1 WHERE user_id = ? AND status = 'failed'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5c077ad39a250d637132b2d7479d56f8f2280e9a32a86e4d30bde35b2b374ddd"
+}

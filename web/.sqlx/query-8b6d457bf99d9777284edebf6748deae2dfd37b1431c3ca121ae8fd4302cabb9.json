@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, kind, url, builtin, extract, pinned AS \"pinned: bool\",\n           enabled AS \"enabled: bool\", check_state, check_note\n           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE",
+  "query": "SELECT id AS \"id!\", name, kind, url, builtin, extract, pinned AS \"pinned: bool\",\n           daily_max, enabled AS \"enabled: bool\", check_state, check_note\n           FROM sources ORDER BY pinned DESC, name COLLATE NOCASE",
   "describe": {
     "columns": [
       {
@@ -39,18 +39,23 @@
         "type_info": "Integer"
       },
       {
-        "name": "enabled: bool",
+        "name": "daily_max",
         "ordinal": 7,
         "type_info": "Integer"
       },
       {
-        "name": "check_state",
+        "name": "enabled: bool",
         "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "check_state",
+        "ordinal": 9,
         "type_info": "Text"
       },
       {
         "name": "check_note",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Text"
       }
     ],
@@ -67,8 +72,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "3d4e6906993b47c8e984d6a9ef768ffb47c37569d160e1cb705ac46dcd019b42"
+  "hash": "8b6d457bf99d9777284edebf6748deae2dfd37b1431c3ca121ae8fd4302cabb9"
 }

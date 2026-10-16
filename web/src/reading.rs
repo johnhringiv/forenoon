@@ -1,9 +1,10 @@
-//! What the pipeline has learned about the reader's taste: a short note it rewrites from their
-//! ratings about once a week and gives to the model beside their interests.
+//! The Reading page: what the reader wants to read, in their own words, and what the pipeline
+//! has learned about their taste: a short note it rewrites from their ratings about once a
+//! week and gives to the model beside their interests.
 //!
 //! The note is the pipeline's, not the reader's, but it is theirs to see, correct and roll
 //! back. An edit is not a lock: the next rewrite starts from it and may change it. What a
-//! reader wants to hold for good belongs in their interests, on the account page.
+//! reader wants to hold for good belongs in their interests, on the same page.
 
 use std::str::FromStr;
 
@@ -19,9 +20,9 @@ use serde::Deserialize;
 use tower_sessions::Session;
 
 use crate::{
-    auth::AuthSession,
+    auth::{AuthSession, User},
     db,
-    pages::{AppState, NOT_FROM_HERE, Page, allowed, csrf_token, html, local, reader, refused},
+    pages::{AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, local, reader, refused},
 };
 
 const MAX_NOTES: usize = 2000;
@@ -36,30 +37,31 @@ struct Version {
 }
 
 #[derive(Template)]
-#[template(path = "learned.html")]
-struct LearnedPage {
-    name: String,
+#[template(path = "reading.html")]
+struct ReadingPage {
+    nav: Option<Nav>,
     csrf: String,
+    interests: String,
+    daily_stories: String,
     notes: String,
     /// When the pipeline last rewrote it, in words.
     rewritten: Option<String>,
     notice: Option<&'static str>,
-    error: Option<&'static str>,
+    error: Option<String>,
     versions: Vec<Version>,
 }
 
-#[derive(Deserialize)]
-pub struct LearnedQuery {
-    saved: Option<String>,
-}
-
-pub async fn page(
-    State(state): State<AppState>,
-    auth: AuthSession,
-    session: Session,
-    Query(query): Query<LearnedQuery>,
+/// The page, with the reader's interests and stories a day as saved, or as `typed` when a
+/// form of theirs was refused.
+pub(crate) async fn render(
+    state: &AppState,
+    user: User,
+    csrf: String,
+    status: StatusCode,
+    typed: Option<(String, String)>,
+    error: Option<String>,
+    notice: Option<&'static str>,
 ) -> Page {
-    let user = reader(&auth)?;
     let zone = Tz::from_str(&user.timezone).unwrap_or(Tz::UTC);
     let day = |stamp: &str| local(stamp, zone).map_or(stamp.to_owned(), |at| at.format("%-d %B %Y").to_string());
     let now = db::learned(&state.pool, &user.id).await?;
@@ -74,20 +76,47 @@ pub async fn page(
             notes: version.notes,
         })
         .collect();
-    let page = LearnedPage {
-        name: user.name,
-        csrf: csrf_token(&session).await?,
+    let (interests, daily_stories) = typed.unwrap_or_else(|| (user.interests.clone(), user.daily_stories.to_string()));
+    let page = ReadingPage {
+        nav: Nav::new(state, &user, "reading").await?,
+        csrf,
+        interests,
+        daily_stories,
         rewritten: now.learned_at.as_deref().map(day),
         notes: now.notes,
-        notice: match query.saved.as_deref() {
-            Some("notes") => Some("Saved. It applies from the next run."),
-            Some("restored") => Some("Restored. It applies from the next run."),
-            _ => None,
-        },
-        error: (query.saved.as_deref() == Some("long")).then_some("The notes can be at most 2,000 characters."),
+        notice,
+        error,
         versions,
     };
-    html(StatusCode::OK, page)
+    html(status, page)
+}
+
+#[derive(Deserialize)]
+pub struct ReadingQuery {
+    saved: Option<String>,
+}
+
+pub async fn page(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    Query(query): Query<ReadingQuery>,
+) -> Page {
+    let user = reader(&auth)?;
+    let notice = match query.saved.as_deref() {
+        Some("reading") => Some("Saved. It applies from the next run."),
+        Some("notes") => Some("Saved. It applies from the next run."),
+        Some("restored") => Some("Restored. It applies from the next run."),
+        _ => None,
+    };
+    let error =
+        (query.saved.as_deref() == Some("long")).then(|| "The notes can be at most 2,000 characters.".to_owned());
+    render(&state, user, csrf_token(&session).await?, StatusCode::OK, None, error, notice).await
+}
+
+/// The notes' old address, kept for links in older books and emails.
+pub async fn learned() -> Page {
+    Ok(Redirect::permanent("/reading").into_response())
 }
 
 #[derive(Deserialize)]
@@ -111,10 +140,10 @@ pub async fn save(
     let notes: String = form.notes.replace("\r\n", "\n").chars().filter(|c| *c == '\n' || !c.is_control()).collect();
     let notes = notes.trim();
     if notes.chars().count() > MAX_NOTES {
-        return Ok(Redirect::to("/learned?saved=long").into_response());
+        return Ok(Redirect::to("/reading?saved=long").into_response());
     }
     db::set_learned(&state.pool, &user.id, notes).await?;
-    Ok(Redirect::to("/learned?saved=notes").into_response())
+    Ok(Redirect::to("/reading?saved=notes").into_response())
 }
 
 #[derive(Deserialize)]
@@ -140,5 +169,5 @@ pub async fn restore(
         return refused(StatusCode::NOT_FOUND, "No such version of your notes.");
     };
     db::set_learned(&state.pool, &user.id, &notes).await?;
-    Ok(Redirect::to("/learned?saved=restored").into_response())
+    Ok(Redirect::to("/reading?saved=restored").into_response())
 }

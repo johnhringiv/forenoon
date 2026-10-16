@@ -318,9 +318,12 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
     store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "page", 1, 1))
     store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('zed.example', 'x'), ('ft.com', 'x')")
     assert store.session_sites() == ("ft.com", "zed.example")
+    store.builtin_sites({"hackernews": "Hacker News"})
+    store.db.execute("UPDATE sources SET daily_max = 3 WHERE builtin = 'hackernews'")
+    assert store.builtin_daily_max() == {"hackernews": 3, "lobsters": 0}
     assert store.sources() == (
-        Source("Zed", "https://zed.example/feed", pinned=True, extract="page"),
-        Source("blog", "https://blog.example/feed"),
+        Source("Zed", "https://zed.example/feed", pinned=True, extract="page", daily_max=2),
+        Source("blog", "https://blog.example/feed", daily_max=2),
     )
 
 
@@ -564,3 +567,35 @@ def test_code_lines_are_blocks_with_a_hanging_indent():
 
     again = zipfile.ZipFile(io.BytesIO(render_epub(article, day))).read("OEBPS/article.xhtml").decode()
     assert again == chapter, "rendering the same body twice does not split the lines again"
+
+
+def test_a_model_that_refuses_a_forced_tool_call_is_asked_for_it_instead():
+    import anthropic
+    import httpx
+
+    from app.config import Llm
+    from app.llm import ASK_FOR_TOOL, ClaudeBackend
+
+    calls = []
+
+    class Messages:
+        def create(self, **kw):
+            calls.append(kw)
+            if kw["tool_choice"]["type"] == "tool":
+                response = httpx.Response(400, request=httpx.Request("POST", "https://api.example/v1/messages"))
+                raise anthropic.BadRequestError(
+                    'tool_choice: type "tool" and "any" are not supported for this model', response=response, body=None
+                )
+            block = type("Block", (), {"type": "tool_use", "input": {"ok": True}})()
+            usage = type("Usage", (), {"input_tokens": 10, "output_tokens": 2, "cache_creation_input_tokens": 0,
+                                       "cache_read_input_tokens": 0})()  # fmt: skip
+            return type("Response", (), {"content": [block], "usage": usage, "stop_reason": "tool_use"})()
+
+    backend = ClaudeBackend(Llm(model="claude-sonnet-5-5"), "test-key")
+    backend._client = type("Client", (), {"messages": Messages()})()
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    assert backend.structured("Judge.", "<x/>", schema).data == {"ok": True}
+    assert backend.structured("Judge.", "<y/>", schema).data == {"ok": True}
+    # Refused once, then asked in the prompt for the rest of the run: three calls, not four.
+    assert [c["tool_choice"]["type"] for c in calls] == ["tool", "auto", "auto"]
+    assert calls[1]["system"].endswith(ASK_FOR_TOOL) and calls[0]["system"] == "Judge."

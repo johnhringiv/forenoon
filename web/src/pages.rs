@@ -30,14 +30,15 @@ use crate::{
     limit::Limiter,
     mail::{Mailer, Message},
     ratings::{self, Signal},
+    reading,
 };
 
 const ISSUES_PER_PAGE: usize = 14;
 pub(crate) const MAX_DESCRIPTION_CHARS: usize = 260;
 const WORDS_PER_MINUTE: f64 = 230.0;
 const MAX_NAME: usize = 80;
-const MAX_INTERESTS: usize = 4000;
-const MAX_DAILY_STORIES: i64 = 50;
+pub(crate) const MAX_INTERESTS: usize = 4000;
+pub(crate) const MAX_DAILY_STORIES: i64 = 50;
 const CSRF_KEY: &str = "csrf";
 const SEEN_KEY: &str = "seen";
 // Sign-in attempts allowed in the limiter's window: from one address, from one address for
@@ -89,6 +90,27 @@ impl IntoResponse for AppError {
 
 pub(crate) type Page = Result<Response, AppError>;
 
+/// The row of pages at the top of every page a signed-in reader sees, with this one marked.
+/// A page's `nav` is `None` only on the pages seen before signing in.
+pub(crate) struct Nav {
+    pub(crate) name: String,
+    /// Whether to show the pages only an admin can use.
+    pub(crate) admin: bool,
+    /// How many problem reports there are, for an admin's link.
+    pub(crate) problems: i64,
+    /// This page: newsstand, archive, reading, sources, settings, problems or account.
+    pub(crate) current: &'static str,
+}
+
+impl Nav {
+    pub(crate) async fn new(state: &AppState, user: &User, current: &'static str) -> Result<Option<Nav>, AppError> {
+        let admin = user.is_admin();
+        let problems =
+            if admin && db::pipeline_ready(&state.pool).await? { db::problem_count(&state.pool).await? } else { 0 };
+        Ok(Some(Nav { name: user.name.clone(), admin, problems, current }))
+    }
+}
+
 pub(crate) fn html(status: StatusCode, page: impl Template) -> Page {
     Ok((status, Html(page.render()?)).into_response())
 }
@@ -103,7 +125,10 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     for (name, value) in [
         (
             header::CONTENT_SECURITY_POLICY,
-            "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'",
+            // The one script allowed is the light/dark switch in base.html, by its hash; the test
+            // `pages_need_a_session_and_sign_in_is_limited` recomputes it from the page.
+            "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
+             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; base-uri 'none'; form-action 'self'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
         // Links and images to article sites opt out of the referrer one by one.
@@ -202,6 +227,7 @@ pub async fn require_login(auth: AuthSession, session: Session, request: Request
 #[derive(Template)]
 #[template(path = "login.html")]
 struct LoginPage {
+    nav: Option<Nav>,
     email: String,
     error: Option<&'static str>,
     notice: Option<&'static str>,
@@ -217,7 +243,7 @@ pub async fn login_page(auth: AuthSession, Query(query): Query<LoginQuery>) -> P
         return Ok(Redirect::to("/").into_response());
     }
     let notice = query.reset.map(|_| "Password changed. Sign in with the new one.");
-    html(StatusCode::OK, LoginPage { email: String::new(), error: None, notice })
+    html(StatusCode::OK, LoginPage { nav: None, email: String::new(), error: None, notice })
 }
 
 pub async fn login(
@@ -232,7 +258,8 @@ pub async fn login(
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from the sign-in page.");
     }
     let email: String = creds.email.trim().to_lowercase().chars().take(254).collect();
-    let failed = |status, error| html(status, LoginPage { email: email.clone(), error: Some(error), notice: None });
+    let failed =
+        |status, error| html(status, LoginPage { nav: None, email: email.clone(), error: Some(error), notice: None });
     // Checked in this order and stopping at the first refusal, so a blocked address cannot
     // fill the table with names.
     let allowed = state.sign_ins.allow(&format!("client {client}"), ATTEMPTS_PER_CLIENT)
@@ -259,12 +286,13 @@ pub async fn login(
 #[derive(Template)]
 #[template(path = "message.html")]
 struct MessagePage {
+    nav: Option<Nav>,
     heading: &'static str,
     text: String,
 }
 
 fn message(status: StatusCode, heading: &'static str, text: impl Into<String>) -> Page {
-    html(status, MessagePage { heading, text: text.into() })
+    html(status, MessagePage { nav: None, heading, text: text.into() })
 }
 
 /// Email a link that confirms `email` for this account. Refused past a few an hour.
@@ -334,11 +362,12 @@ pub async fn resend_verification(
 #[derive(Template)]
 #[template(path = "forgot.html")]
 struct ForgotPage {
+    nav: Option<Nav>,
     error: Option<&'static str>,
 }
 
 pub async fn forgot_page() -> Page {
-    html(StatusCode::OK, ForgotPage { error: None })
+    html(StatusCode::OK, ForgotPage { nav: None, error: None })
 }
 
 #[derive(Deserialize)]
@@ -360,7 +389,7 @@ pub async fn forgot(
     if !state.mail_limits.allow(&format!("forgot client {client}"), RESET_REQUESTS_PER_CLIENT) {
         return html(
             StatusCode::TOO_MANY_REQUESTS,
-            ForgotPage { error: Some("Too many requests. Try again in an hour.") },
+            ForgotPage { nav: None, error: Some("Too many requests. Try again in an hour.") },
         );
     }
     let user = match auth::normal_email(&form.email) {
@@ -394,6 +423,7 @@ pub async fn forgot(
 #[derive(Template)]
 #[template(path = "reset.html")]
 struct ResetPage {
+    nav: Option<Nav>,
     token: String,
     error: Option<String>,
 }
@@ -404,7 +434,7 @@ pub async fn reset_page(State(state): State<AppState>, Path(token): Path<String>
     if db::read_token(&state.pool, &token, db::RESET).await?.is_none() {
         return message(StatusCode::BAD_REQUEST, "Link not valid", RESET_INVALID);
     }
-    html(StatusCode::OK, ResetPage { token, error: None })
+    html(StatusCode::OK, ResetPage { nav: None, token, error: None })
 }
 
 #[derive(Deserialize)]
@@ -435,7 +465,7 @@ pub async fn reset(
         auth::password_problem(&form.password)
     };
     if problem.is_some() {
-        return html(StatusCode::BAD_REQUEST, ResetPage { token, error: problem });
+        return html(StatusCode::BAD_REQUEST, ResetPage { nav: None, token, error: problem });
     }
     let hash = auth::hash_password(form.password).await?;
     // Used once. Changing the hash also signs the account out everywhere.
@@ -549,6 +579,8 @@ struct Issue {
     /// When it was delivered, as stored.
     stamp: String,
     heading: String,
+    /// The day, short, for the links that jump to each issue on the page.
+    short: String,
     count: String,
     stories: Vec<Story>,
 }
@@ -568,11 +600,7 @@ struct Story {
 #[derive(Template)]
 #[template(path = "newsstand.html")]
 struct NewsstandPage {
-    name: String,
-    /// Whether to show the links only an admin can use.
-    admin: bool,
-    /// How many problem reports there are, for the admin's link.
-    problems: i64,
+    nav: Option<Nav>,
     csrf: String,
     /// The address still to be confirmed, for the banner.
     unconfirmed: Option<String>,
@@ -720,9 +748,7 @@ pub async fn newsstand(
     let filters =
         SHOW.iter().map(|(key, label)| Filter { href: page_url(key, None), label, current: *key == show }).collect();
     let mut page = NewsstandPage {
-        name: user.name.clone(),
-        admin: user.is_admin(),
-        problems: 0,
+        nav: Nav::new(&state, &user, "newsstand").await?,
         csrf: csrf_token(&session).await?,
         unconfirmed: user.unconfirmed_email().map(str::to_owned),
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),
@@ -735,9 +761,6 @@ pub async fn newsstand(
     };
     if !db::pipeline_ready(&state.pool).await? {
         return html(StatusCode::OK, page);
-    }
-    if user.is_admin() {
-        page.problems = db::problem_count(&state.pool).await?;
     }
     let totals = db::totals(&state.pool, &user.id).await?;
     page.summary = format!(
@@ -760,6 +783,7 @@ pub async fn newsstand(
             page.issues.push(Issue {
                 stamp: row.delivered_at.clone(),
                 heading: String::new(),
+                short: String::new(),
                 count: String::new(),
                 stories: Vec::new(),
             });
@@ -818,9 +842,13 @@ pub async fn newsstand(
         match local(&issue.stamp, zone) {
             Some(when) => {
                 issue.heading = when.format("%A %-d %B %Y").to_string();
+                issue.short = when.format("%-d %b").to_string();
                 issue.count = format!("{}, sent {}", issue.count, when.format("%H:%M"));
             }
-            None => issue.heading = issue.stamp.clone(),
+            None => {
+                issue.heading = issue.stamp.clone();
+                issue.short = issue.stamp.clone();
+            }
         }
     }
     html(StatusCode::OK, page)
@@ -887,13 +915,12 @@ struct ProblemRow {
 #[derive(Template)]
 #[template(path = "problems.html")]
 struct ProblemsPage {
-    name: String,
-    csrf: String,
+    nav: Option<Nav>,
     rows: Vec<ProblemRow>,
 }
 
 /// For admins: the articles readers reported as broken or incomplete.
-pub async fn problems(State(state): State<AppState>, auth: AuthSession, session: Session) -> Page {
+pub async fn problems(State(state): State<AppState>, auth: AuthSession) -> Page {
     let user = reader(&auth)?;
     if !user.is_admin() {
         return refused(StatusCode::FORBIDDEN, "Problem reports are for an admin.");
@@ -920,7 +947,8 @@ pub async fn problems(State(state): State<AppState>, auth: AuthSession, session:
             ),
         })
         .collect();
-    html(StatusCode::OK, ProblemsPage { name: user.name, csrf: csrf_token(&session).await?, rows })
+    let nav = Nav::new(&state, &user, "problems").await?;
+    html(StatusCode::OK, ProblemsPage { nav, rows })
 }
 
 #[derive(Deserialize)]
@@ -1020,7 +1048,7 @@ pub async fn rate(
     back_to(&form.back, &form.article)
 }
 
-fn back_to(back: &Option<String>, article: &str) -> Page {
+pub(crate) fn back_to(back: &Option<String>, article: &str) -> Page {
     let anchor = utf8_percent_encode(article, NON_ALPHANUMERIC);
     Ok(Redirect::to(&format!("{}#a-{anchor}", safe_back(back.as_deref()))).into_response())
 }
@@ -1030,6 +1058,7 @@ fn back_to(back: &Option<String>, article: &str) -> Page {
 #[derive(Template)]
 #[template(path = "account.html")]
 struct AccountPage {
+    nav: Option<Nav>,
     user: User,
     csrf: String,
     error: Option<String>,
@@ -1041,17 +1070,23 @@ pub struct AccountQuery {
     saved: Option<String>,
 }
 
-pub async fn account(auth: AuthSession, session: Session, Query(query): Query<AccountQuery>) -> Page {
+pub async fn account(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    Query(query): Query<AccountQuery>,
+) -> Page {
     let notice = match query.saved.as_deref() {
-        Some("profile") | Some("reading") => Some("Saved."),
+        Some("profile") | Some("kindle") => Some("Saved."),
         Some("sent") => Some("Confirmation email sent. Open the link in it within 24 hours."),
         Some("wait") => Some("Too many confirmation emails for now. Try again in an hour."),
         Some("email") => Some("Email change cancelled."),
         Some("password") => Some("Password changed."),
         _ => None,
     };
-    let page = AccountPage { user: reader(&auth)?, csrf: csrf_token(&session).await?, error: None, notice };
-    html(StatusCode::OK, page)
+    let user = reader(&auth)?;
+    let nav = Nav::new(&state, &user, "account").await?;
+    html(StatusCode::OK, AccountPage { nav, user, csrf: csrf_token(&session).await?, error: None, notice })
 }
 
 #[derive(Deserialize)]
@@ -1082,7 +1117,16 @@ pub async fn set_profile(
         None
     };
     if let Some(error) = problem {
-        return html(StatusCode::BAD_REQUEST, AccountPage { user, csrf, error: Some(error), notice: None });
+        return html(
+            StatusCode::BAD_REQUEST,
+            AccountPage {
+                nav: Nav::new(&state, &user, "account").await?,
+                user,
+                csrf,
+                error: Some(error),
+                notice: None,
+            },
+        );
     }
     db::set_profile(&state.pool, &user.id, name, timezone).await?;
     // A redirect, so reloading the result does not post the form again.
@@ -1139,7 +1183,13 @@ pub async fn set_email(
         let sent = send_verification(&state, &user, &email).await?;
         return Ok(Redirect::to(if sent { "/account?saved=sent" } else { "/account?saved=wait" }).into_response());
     }
-    let page = AccountPage { user, csrf: form.csrf, error: problem.map(str::to_owned), notice: None };
+    let page = AccountPage {
+        nav: Nav::new(&state, &user, "account").await?,
+        user,
+        csrf: form.csrf,
+        error: problem.map(str::to_owned),
+        notice: None,
+    };
     html(StatusCode::BAD_REQUEST, page)
 }
 
@@ -1163,11 +1213,9 @@ pub struct ReadingForm {
     csrf: String,
     interests: String,
     daily_stories: String,
-    /// Sent only by an admin's form; anyone else's is ignored.
-    kindle_addresses: Option<String>,
 }
 
-/// What the pipeline should pick for this reader, how much, and (admins only) where it is sent.
+/// What the pipeline should pick for this reader, and how much. Shown on the Reading page.
 pub async fn set_reading(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -1182,25 +1230,60 @@ pub async fn set_reading(
     let interests = form.interests.replace("\r\n", "\n");
     let interests = interests.trim();
     let daily = form.daily_stories.trim().parse::<i64>().ok().filter(|n| (1..=MAX_DAILY_STORIES).contains(n));
-    // The addresses decide where content is emailed, so only an admin may change them.
-    let addresses = form.kindle_addresses.filter(|_| user.is_admin()).map(|text| auth::kindle_addresses(&text));
     let problem = if interests.chars().count() > MAX_INTERESTS {
         Some(format!("Interests can be at most {MAX_INTERESTS} characters."))
     } else if daily.is_none() {
         Some(format!("Stories a day must be a number from 1 to {MAX_DAILY_STORIES}."))
-    } else if let Some(Err(problem)) = &addresses {
-        Some(problem.clone())
     } else {
         None
     };
-    if let (None, Some(daily)) = (&problem, daily) {
-        db::set_reading(&state.pool, &user.id, interests, daily).await?;
-        if let Some(Ok(addresses)) = addresses {
-            db::set_kindle_addresses(&state.pool, &user.id, &addresses.join("\n")).await?;
+    let problem = match (problem, daily) {
+        (None, Some(daily)) => {
+            db::set_reading(&state.pool, &user.id, interests, daily).await?;
+            return Ok(Redirect::to("/reading?saved=reading").into_response());
         }
-        return Ok(Redirect::to("/account?saved=reading").into_response());
+        (problem, _) => problem.unwrap_or_default(),
+    };
+    // Shown again as typed, so a slip does not lose the rest.
+    let typed = (interests.to_owned(), form.daily_stories.trim().to_owned());
+    reading::render(&state, user, form.csrf, StatusCode::BAD_REQUEST, Some(typed), Some(problem), None).await
+}
+
+#[derive(Deserialize)]
+pub struct KindleForm {
+    csrf: String,
+    kindle_addresses: String,
+}
+
+/// Where this reader's books are emailed. Only an admin may change it, because it decides
+/// where content goes; anyone else's form is ignored.
+pub async fn set_kindle(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<KindleForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
     }
-    html(StatusCode::BAD_REQUEST, AccountPage { user, csrf: form.csrf, error: problem, notice: None })
+    if !user.is_admin() {
+        return Ok(Redirect::to("/account").into_response());
+    }
+    match auth::kindle_addresses(&form.kindle_addresses) {
+        Ok(addresses) => {
+            db::set_kindle_addresses(&state.pool, &user.id, &addresses.join("\n")).await?;
+            Ok(Redirect::to("/account?saved=kindle").into_response())
+        }
+        Err(problem) => {
+            let nav = Nav::new(&state, &user, "account").await?;
+            html(
+                StatusCode::BAD_REQUEST,
+                AccountPage { nav, user, csrf: form.csrf, error: Some(problem), notice: None },
+            )
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1236,7 +1319,16 @@ pub async fn set_password(
         auth::password_problem(&form.password)
     };
     if let Some(error) = problem {
-        return html(StatusCode::BAD_REQUEST, AccountPage { user, csrf, error: Some(error), notice: None });
+        return html(
+            StatusCode::BAD_REQUEST,
+            AccountPage {
+                nav: Nav::new(&state, &user, "account").await?,
+                user,
+                csrf,
+                error: Some(error),
+                notice: None,
+            },
+        );
     }
     let hash = auth::hash_password(form.password).await?;
     db::set_password(&state.pool, &user.id, &hash).await?;

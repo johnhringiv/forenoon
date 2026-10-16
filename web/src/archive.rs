@@ -24,8 +24,8 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Page, ReasonOption, Star, allowed, csrf_token, html, length,
-        local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, allowed, back_to, csrf_token,
+        html, length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
     },
     ratings,
 };
@@ -111,13 +111,15 @@ struct Row {
     question: &'static str,
     sendable: bool,
     sent: Option<String>,
+    /// How the last "Fetch again" went, within the day; and whether it is still waiting.
+    refreshed: Option<String>,
+    refreshing: bool,
 }
 
 #[derive(Template)]
 #[template(path = "archive.html")]
 struct ArchivePage {
-    name: String,
-    admin: bool,
+    nav: Option<Nav>,
     csrf: String,
     /// False until the pipeline keeps what it weighs: only then is there more than deliveries.
     ready: bool,
@@ -131,6 +133,8 @@ struct ArchivePage {
     pending: Vec<Pending>,
     /// Reload while a link is being fetched, so its article appears without a click.
     fetching: bool,
+    /// Some links could not be added: offer to clear them.
+    failed: bool,
     rows: Vec<Row>,
     back: String,
     newer: Option<String>,
@@ -245,6 +249,8 @@ fn row(found: Shelved, zone: Tz) -> Row {
         question: ratings::question(found.rating),
         sendable: false,
         sent: None,
+        refreshed: None,
+        refreshing: false,
         id: found.id,
     }
 }
@@ -284,8 +290,7 @@ pub async fn page(
         ("sort", sort),
     ];
     let mut page = ArchivePage {
-        name: user.name.clone(),
-        admin: user.is_admin(),
+        nav: Nav::new(&state, &user, "archive").await?,
         csrf: csrf_token(&session).await?,
         ready,
         filtered: parts.iter().any(|(_, value)| !value.is_empty()),
@@ -304,6 +309,7 @@ pub async fn page(
         },
         pending: Vec::new(),
         fetching: false,
+        failed: false,
         rows: Vec::new(),
         back: address(&parts, number),
         newer: (number > 1).then(|| address(&parts, number - 1)),
@@ -326,6 +332,7 @@ pub async fn page(
         })
         .collect();
     page.fetching = page.pending.iter().any(|add| !add.failed);
+    page.failed = page.pending.iter().any(|add| add.failed);
     if !ready {
         return html(StatusCode::OK, page);
     }
@@ -351,6 +358,7 @@ pub async fn page(
     }
     let can_send = !user.kindle_addresses.trim().is_empty();
     let requests = db::send_states(pool, &user.id).await?;
+    let refreshes = db::refresh_states(pool, &user.id).await?;
     page.rows = found
         .into_iter()
         .map(|found| {
@@ -358,10 +366,58 @@ pub async fn page(
             let last = requests.iter().rev().find(|request| !request.story && request.article_id == row.id);
             row.sendable = can_send && last.is_none_or(|request| request.status != "queued");
             row.sent = last.map(|request| send_outcome(request, zone));
+            if let Some(refresh) = refreshes.iter().rev().find(|refresh| refresh.article_id == row.id) {
+                row.refreshing = refresh.status == "queued";
+                row.refreshed = Some(refresh_outcome(refresh, zone));
+            }
             row
         })
         .collect();
+    page.fetching |= page.rows.iter().any(|row| row.refreshing);
     html(StatusCode::OK, page)
+}
+
+fn refresh_outcome(refresh: &db::RefreshState, zone: Tz) -> String {
+    match refresh.status.as_str() {
+        "queued" => "Being fetched again; this page updates within a minute or two.".to_owned(),
+        "done" => {
+            let at = refresh.done_at.as_deref().and_then(|at| local(at, zone));
+            format!("Fetched again{}.", at.map(|at| at.format(" at %H:%M").to_string()).unwrap_or_default())
+        }
+        _ => format!("Could not be fetched again: {}", refresh.error),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RefreshForm {
+    csrf: String,
+    article: String,
+    back: Option<String>,
+}
+
+/// Fetch an article's page again and extract it anew: after signing in to a site, or once the
+/// extraction has been improved. This only queues it; the pipeline does the fetching.
+pub async fn refresh(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<RefreshForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let pool = &state.pool;
+    if !db::pipeline_ready(pool).await? || !db::in_library(pool, &user.id, &form.article).await? {
+        return refused(StatusCode::NOT_FOUND, "No such article.");
+    }
+    match db::queue_refresh(pool, &user.id, &form.article).await? {
+        db::Queued::TooMany => {
+            refused(StatusCode::TOO_MANY_REQUESTS, "That is the most articles that can be fetched again in a day.")
+        }
+        db::Queued::Added | db::Queued::Waiting => back_to(&form.back, &form.article),
+    }
 }
 
 #[derive(Deserialize)]
@@ -375,6 +431,27 @@ pub struct AddForm {
 
 /// Add a link by hand. This only queues it: the pipeline fetches the page, as it does every
 /// article, and the link is never opened from here.
+#[derive(Deserialize)]
+pub struct ClearForm {
+    csrf: String,
+}
+
+/// Clear the links that could not be added from the page.
+pub async fn clear_failed(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<ClearForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    db::dismiss_failed_adds(&state.pool, &user.id).await?;
+    Ok(Redirect::to("/archive?show=added").into_response())
+}
+
 pub async fn add(
     State(state): State<AppState>,
     auth: AuthSession,

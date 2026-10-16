@@ -150,6 +150,23 @@ impl Browser {
     }
 }
 
+/// The page's inline script, named the way a Content-Security-Policy names it: its SHA-256 in base64.
+fn script_hash(page: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let (_, rest) = page.split_once("<script>").expect("the theme script");
+    let script = rest.split_once("</script>").unwrap().0;
+    let digest = Sha256::digest(script.as_bytes());
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in digest.chunks(3) {
+        let n = chunk.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b)) << (8 * (3 - chunk.len()));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char } else { '=' });
+        }
+    }
+    format!("sha256-{out}")
+}
+
 #[tokio::test]
 async fn pages_need_a_session_and_sign_in_is_limited() {
     let site = site(true).await;
@@ -167,7 +184,11 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
     }
     assert_eq!(browser.get(&site, "/healthz").await.text, "ok");
     let page = browser.get(&site, "/login").await;
-    assert!(page.status == StatusCode::OK && page.csp.contains("default-src 'none'") && !page.csp.contains("script"));
+    assert!(page.status == StatusCode::OK && page.csp.contains("default-src 'none'"));
+    // The only script is the light/dark switch, allowed by its hash alone.
+    assert_eq!(page.text.matches("<script").count(), 1);
+    assert!(page.csp.contains(&format!("script-src '{}';", script_hash(&page.text))), "{}", page.csp);
+    assert!(page.text.contains(r#"<button class="theme" type="button" hidden"#));
     assert!(browser.cookie.is_none(), "the sign-in page must not start a session");
 
     // Wrong password, unknown account, and a form posted from another site.
@@ -189,7 +210,9 @@ async fn pages_need_a_session_and_sign_in_is_limited() {
     assert!(page.set_cookie.contains("Max-Age=2592000"), "{}", page.set_cookie);
     assert!(browser.get(&site, "/").await.set_cookie.is_empty());
     assert_eq!(browser.post(&site, "/logout", &[("csrf", "wrong")]).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(browser.post(&site, "/logout", &[("csrf", &page.csrf())]).await.location, "/login");
+    let account = browser.get(&site, "/account").await;
+    assert!(account.text.contains(r#"action="/logout""#) && !page.text.contains(r#"action="/logout""#));
+    assert_eq!(browser.post(&site, "/logout", &[("csrf", &account.csrf())]).await.location, "/login");
     assert!(browser.get(&site, "/").await.status.is_redirection());
 
     // Guessing is cut off, for the name even when the right password finally arrives.
@@ -258,7 +281,8 @@ async fn newsstand_shows_only_the_readers_own_deliveries_as_untrusted_text() {
     let older = browser.get(&site, rest.split('"').next().unwrap()).await;
     let text = &older.text;
     assert!(text.contains("Saturday 10 October 2026") && text.contains("2 articles, sent 06:00"), "{text}"); // local time
-    assert!(text.contains("A &#60;script&#62;title&#60;/script&#62;") && !text.contains("<script"));
+    // One script on the page: the theme switch, never the title's.
+    assert!(text.contains("A &#60;script&#62;title&#60;/script&#62;") && text.matches("<script").count() == 1);
     assert!(
         text.contains(r#"href="https://blog.example/post""#) && text.contains(r#"src="https://blog.example/lead.jpg""#)
     );
@@ -408,31 +432,29 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(browser.get(&site, &saved.location).await.text.contains("Saved."));
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.name.as_str(), user.timezone.as_str()), ("John R", "Europe/London"));
-    // Reading settings: the pipeline reads these. Only an admin's Kindle addresses change.
-    let reading = |interests: &'static str, daily: &'static str, kindle: &'static str| {
-        [
-            ("csrf", csrf.clone()),
-            ("interests", interests.to_owned()),
-            ("daily_stories", daily.to_owned()),
-            ("kindle_addresses", kindle.to_owned()),
-        ]
+    // Reading settings, on the Reading page: the pipeline reads these.
+    let reading = |interests: &'static str, daily: &'static str| {
+        [("csrf", csrf.as_str()), ("interests", interests), ("daily_stories", daily)]
     };
-    for (form, message) in [
-        (reading("Compilers.", "0", "a@kindle.com"), "Stories a day must be a number from 1 to 50."),
-        (reading("Compilers.", "16", "not an address"), "not an address is not an email address."),
-    ] {
-        let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
-        let reply = browser.post(&site, "/account/reading", &form).await;
-        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
-    }
-    let form = reading("Compilers.\r\nNot watches. <b>", "16", " a@kindle.com \n\nb@kindle.com");
-    let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
-    let saved = browser.post(&site, "/account/reading", &form).await;
-    assert_eq!(saved.location, "/account?saved=reading");
+    let reply = browser.post(&site, "/account/reading", &reading("Compilers.", "0")).await;
+    assert!(
+        reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Stories a day must be a number from 1 to 50.")
+    );
+    assert!(reply.text.contains("Compilers.</textarea>") && reply.text.contains(r#"value="0""#), "shown as typed");
+    let saved = browser.post(&site, "/account/reading", &reading("Compilers.\r\nNot watches. <b>", "16")).await;
+    assert_eq!(saved.location, "/reading?saved=reading");
     let page = browser.get(&site, &saved.location).await.text;
     assert!(page.contains("Not watches. &#60;b&#62;</textarea>") && page.contains(r#"value="16""#), "{page}");
+    assert!(page.contains(r#"<a href="/reading" aria-current="page">Reading</a>"#), "{page}");
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!((user.interests.as_str(), user.daily_stories), ("Compilers.\nNot watches. <b>", 16));
+    // Kindle addresses, on the account page: only an admin's change.
+    let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", "not an address")];
+    let reply = browser.post(&site, "/account/kindle", &kindle).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("not an address is not an email address."));
+    let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", " a@kindle.com \n\nb@kindle.com")];
+    assert_eq!(browser.post(&site, "/account/kindle", &kindle).await.location, "/account?saved=kindle");
+    let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
     assert_eq!(user.kindle_addresses, "a@kindle.com\nb@kindle.com");
 
     let mut mary = Browser::default();
@@ -440,13 +462,10 @@ async fn account_page_changes_the_profile_and_the_password() {
     let page = mary.get(&site, "/account").await;
     assert!(page.text.contains("An admin sets this.") && !page.text.contains(r#"name="kindle_addresses""#));
     let token = page.csrf();
-    let form = [
-        ("csrf", token.as_str()),
-        ("interests", "Sailing."),
-        ("daily_stories", "5"),
-        ("kindle_addresses", "evil@example.com"),
-    ];
+    let form = [("csrf", token.as_str()), ("interests", "Sailing."), ("daily_stories", "5")];
     assert_eq!(mary.post(&site, "/account/reading", &form).await.status, StatusCode::SEE_OTHER);
+    let form = [("csrf", token.as_str()), ("kindle_addresses", "evil@example.com")];
+    assert_eq!(mary.post(&site, "/account/kindle", &form).await.status, StatusCode::SEE_OTHER);
     let user = auth::find_user(&site.pool, "mary").await.unwrap().unwrap();
     assert_eq!((user.interests.as_str(), user.daily_stories, user.kindle_addresses.as_str()), ("Sailing.", 5, ""));
 
@@ -695,13 +714,15 @@ async fn sources_are_managed_by_admins_only() {
     for (form, message) in [
         (add("", "https://blog.example/feed", &[]), "A source needs a name"),
         (add("Blog", "javascript:alert(1)", &[]), "A feed needs an http(s) address."),
+        (add("Blog", "https://blog.example/feed", &[("daily_max", "51")]), "Places a day: give a whole number"),
+        (add("Blog", "https://blog.example/feed", &[("daily_max", "-1")]), "Places a day: give a whole number"),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
         let reply = admin.post(&site, "/sources", &form).await;
         assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(message), "{message}");
     }
     for form in [
-        add("Blog <b>", "https://blog.example/feed", &[("extract", "page"), ("pinned", "1")]),
+        add("Blog <b>", "https://blog.example/feed", &[("extract", "page"), ("pinned", "1"), ("daily_max", "0")]),
         add("Other", "https://other.example/", &[]),
     ] {
         let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
@@ -735,16 +756,19 @@ async fn sources_are_managed_by_admins_only() {
     let text = admin.get(&site, "/sources").await.text;
     assert!(
         text.contains("Feed found at https://blog.example/rss.xml")
-            && text.contains(r#"<p class="hint failing">Not usable: no feed found at this address.</p>"#)
+            && text.contains(r#"<p class="state failing">Not usable: no feed found at this address.</p>"#)
     );
+    assert!(text.contains(r#"<a href="/sources" aria-current="page">Sources</a>"#), "this page is marked in the nav");
     assert!(!text.contains("http-equiv"));
-    let rows: Vec<_> =
-        stored.iter().map(|s| (s.name.as_str(), s.url.as_str(), s.extract.as_str(), s.pinned, s.enabled)).collect();
+    let rows: Vec<_> = stored
+        .iter()
+        .map(|s| (s.name.as_str(), s.url.as_str(), s.extract.as_str(), s.pinned, s.daily_max, s.enabled))
+        .collect();
     assert_eq!(
         rows,
         [
-            ("Blog <b>", "https://blog.example/feed", "page", true, true), // pinned first
-            ("Other", "https://other.example/", "auto", false, true),
+            ("Blog <b>", "https://blog.example/feed", "page", true, 0, true), // pinned first
+            ("Other", "https://other.example/", "auto", false, 2, true),      // 2 places when not given
         ]
     );
 
@@ -754,11 +778,28 @@ async fn sources_are_managed_by_admins_only() {
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains("4 sources, 0 paused, 1 failing.") && text.contains("Failed 2 runs in a row: HTTP 404"));
     assert!(text.contains("Blog &#60;b&#62;") && !text.contains("Blog <b>"));
+    // The failing feed is listed first, under its own label; the views and the search narrow the list.
+    let (blog_row, other_row) = (format!(r#"id="s-{}""#, stored[0].id), format!(r#"id="s-{}""#, stored[1].id));
+    assert!(text.contains("Needs attention") && text.find(&other_row) < text.find(&blog_row), "{text}");
+    let failing = admin.get(&site, "/sources?show=failing").await.text;
+    assert!(failing.contains(&other_row) && !failing.contains(&blog_row));
+    assert!(
+        failing.contains("<b>Failing (1)</b>") && failing.contains(r#"<a href="/sources?show=paused">Paused (0)</a>"#)
+    );
+    let searched = admin.get(&site, "/sources?q=BLOG.example").await.text;
+    assert!(searched.contains(&blog_row) && !searched.contains(&other_row));
+    assert!(searched.contains(r#"<a href="/sources?show=failing&#38;q=BLOG%2Eexample">Failing (0)</a>"#), "{searched}");
+    assert!(admin.get(&site, "/sources?q=nothing").await.text.contains("No feeds match."));
 
     // Pause one, rename it, then remove the other.
     let (blog, other) = (stored[0].id, stored[1].id);
-    let edit =
-        [("csrf", csrf.as_str()), ("name", "The Blog"), ("address", "https://blog.example/atom"), ("extract", "auto")];
+    let edit = [
+        ("csrf", csrf.as_str()),
+        ("name", "The Blog"),
+        ("address", "https://blog.example/atom"),
+        ("extract", "auto"),
+        ("daily_max", "3"),
+    ];
     assert_eq!(admin.post(&site, &format!("/sources/{blog}"), &edit).await.location, "/sources?saved=saved");
     assert_eq!(
         admin.post(&site, &format!("/sources/{other}/delete"), &[("csrf", &csrf)]).await.location,
@@ -771,8 +812,8 @@ async fn sources_are_managed_by_admins_only() {
     let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
     assert_eq!(stored.len(), 1);
     assert_eq!(
-        (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].enabled),
-        ("The Blog", "https://blog.example/atom", false, false)
+        (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].daily_max, stored[0].enabled),
+        ("The Blog", "https://blog.example/atom", false, 3, false)
     );
     assert!(admin.get(&site, "/sources").await.text.contains("3 sources, 1 paused, 0 failing."));
 
@@ -870,16 +911,27 @@ async fn built_in_sources_are_only_switched_on_or_off() {
     admin.sign_in(&site, "john").await;
     let page = admin.get(&site, "/sources").await;
     let csrf = page.csrf();
-    assert!(page.text.contains("<b class=\"wide\">Hacker News</b>") && page.text.contains("Lobsters"));
+    assert!(page.text.contains(r#"<span class="name">Hacker News</span>"#) && page.text.contains("Lobsters"));
     let builtin = |all: Vec<forenoon_web::sources::Source>, key: &str| {
         all.into_iter().find(|source| source.builtin == key).expect("a built-in source")
     };
     let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
-    assert!(hn.kind == "builtin" && hn.enabled);
+    assert!(hn.kind == "builtin" && hn.enabled && hn.daily_max == 0); // many publishers: no limit
 
     let path = format!("/sources/{}/toggle", hn.id);
-    assert_eq!(admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "0")]).await.location, "/sources?saved=saved");
-    assert!(!builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews").enabled);
+    let reply = admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "1"), ("daily_max", "x")]).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Places a day: give a whole number"));
+    let off = [("csrf", csrf.as_str()), ("enabled", "0"), ("daily_max", "4")];
+    assert_eq!(admin.post(&site, &path, &off).await.location, "/sources?saved=saved");
+    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    assert!(!hn.enabled && hn.daily_max == 4);
+    assert!(
+        admin
+            .get(&site, "/sources")
+            .await
+            .text
+            .contains(r#"name="daily_max" type="number" step="1" min="0" max="50" value="4""#)
+    );
     assert!(admin.get(&site, "/sources").await.text.contains(r#"<button name="enabled" value="1">Turn on</button>"#));
 
     // It cannot be renamed, given an address or removed; and a feed cannot be toggled this way.
@@ -933,7 +985,6 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     let defaults = [
         ("format", "issue"),
         ("max_age_days", "3"),
-        ("max_story_entries", "3"),
         ("max_article_words", "45000"),
         ("images.grayscale", "1"),
         ("llm.enabled", "1"),
@@ -941,12 +992,13 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.daily_token_cap", "600000"),
         ("llm.read_candidates", "40"),
         ("llm.explore_slots", "1"),
+        ("llm.choose_issue", "1"),
+        ("llm.most_per_subject", "2"),
         ("llm.group_stories", "1"),
         ("llm.follow_links", "1"),
         ("llm.show_reasons", "1"),
         ("llm.check_extraction", "1"),
         ("llm.learn", "1"),
-        ("discovery.min_score", "6.0"),
         ("alerts.enabled", "1"),
         ("alerts.source_failures", "3"),
         ("keep_pages_days", "-1"),
@@ -959,7 +1011,8 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         form
     };
     let send = |form: Vec<(&'static str, String)>| form;
-    let changed = send(form(&[("delivery_time", "07:30"), ("discovery.slots", "4"), ("alerts.to", "Ops@Example.com")]));
+    let changed =
+        send(form(&[("delivery_time", "07:30"), ("max_story_entries", "4"), ("alerts.to", "Ops@Example.com")]));
     let changed: Vec<(&str, &str)> = changed.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert_eq!(admin.post(&site, "/settings", &changed).await.location, "/settings?saved=1");
     let stored: Vec<(String, String)> =
@@ -972,7 +1025,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
             ("alerts.on_empty", "0"),
             ("alerts.to", "ops@example.com"),
             ("delivery_time", "07:30"),
-            ("discovery.slots", "4")
+            ("max_story_entries", "4")
         ]
     );
     let text = admin.get(&site, "/settings?saved=1").await.text;
@@ -981,18 +1034,18 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     );
 
     // Back to the defaults: the rows go away.
-    let back = form(&[("delivery_time", "06:00"), ("discovery.slots", "2"), ("alerts.on_empty", "1")]);
+    let back = form(&[("delivery_time", "06:00"), ("max_story_entries", "3"), ("alerts.on_empty", "1")]);
     let back: Vec<(&str, &str)> = back.iter().map(|(key, value)| (*key, value.as_str())).collect();
     admin.post(&site, "/settings", &back).await;
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
     assert_eq!(left, 0);
 
     // One wrong value saves nothing and keeps what was typed.
-    let wrong = form(&[("delivery_time", "25:00"), ("discovery.slots", "9")]);
+    let wrong = form(&[("delivery_time", "25:00"), ("max_story_entries", "9")]);
     let wrong: Vec<(&str, &str)> = wrong.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let reply = admin.post(&site, "/settings", &wrong).await;
     assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Deliver at: give a time such as 06:00."));
-    assert!(reply.text.contains(r#"name="discovery.slots" type="number" step="1" min="0" max="50" value="9""#));
+    assert!(reply.text.contains(r#"name="max_story_entries" type="number" step="1" min="1" max="10" value="9""#));
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings").fetch_one(&site.pool).await.unwrap();
     assert_eq!(left, 0);
 
@@ -1389,9 +1442,31 @@ async fn a_link_added_by_hand_is_only_queued_and_then_shown_as_the_readers_own()
     .execute(pool)
     .await
     .unwrap();
-    let text = browser.get(&site, "/archive").await.text;
+    let page = browser.get(&site, "/archive").await;
+    let text = page.text.clone();
     assert!(text.contains("Could not be added: HTTP 404 &#60;b&#62;") && !text.contains("http-equiv"));
     assert!(text.contains(">Read elsewhere<") && text.contains("Added by you 12 October 2026"));
+    // A failure goes once the same link is added again, or when cleared; it stays on record.
+    let failed: i64 =
+        sqlx::query_scalar("SELECT id FROM add_requests WHERE status = 'failed'").fetch_one(pool).await.unwrap();
+    sqlx::query("INSERT INTO add_requests (user_id, url, action, requested_at) VALUES ('john', 'https://blog.example/next', 'next', ?)")
+        .bind(forenoon_web::db::now_iso())
+        .execute(pool)
+        .await
+        .unwrap();
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(!text.contains("Could not be added") && text.contains("https://blog.example/next: Being fetched"));
+    sqlx::query("DELETE FROM add_requests WHERE id > ?").bind(failed).execute(pool).await.unwrap();
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(text.contains("Clear the links that could not be added"));
+    let clear = [("csrf", page.csrf()), ("link", String::new()), ("then", "next".to_owned())];
+    let clear: Vec<(&str, &str)> = clear.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    assert_eq!(browser.post(&site, "/archive/added/clear", &clear).await.location, "/archive?show=added");
+    let text = browser.get(&site, "/archive").await.text;
+    assert!(!text.contains("Could not be added") && !text.contains("Clear the links"));
+    let kept: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM add_requests WHERE status = 'failed'").fetch_one(pool).await.unwrap();
+    assert_eq!(kept, 1);
     for (query, shown) in
         [("show=added", true), ("route=manual", true), ("show=near", false), ("show=delivered", false)]
     {
@@ -1422,10 +1497,10 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
     let site = site(true).await;
     let pool = &site.pool;
     let mut browser = Browser::default();
-    assert_eq!(browser.get(&site, "/learned").await.location, "/login");
+    assert_eq!(browser.get(&site, "/reading").await.location, "/login");
     browser.sign_in(&site, "john").await;
-    assert!(browser.get(&site, "/account").await.text.contains(r#"<a href="/learned">"#));
-    let page = browser.get(&site, "/learned").await;
+    assert_eq!(browser.get(&site, "/learned").await.location, "/reading");
+    let page = browser.get(&site, "/reading").await;
     let csrf = page.csrf();
     assert!(page.text.contains("Nothing has been learned yet") && !page.text.contains("Earlier versions"));
 
@@ -1438,7 +1513,7 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
     for (user, notes) in [("john", "Finishes long <b>technical</b> pieces."), ("mary", "Mary's notes")] {
         sqlx::query(version).bind(user).bind(notes).bind("2026-10-12T11:00:00+00:00").execute(pool).await.unwrap();
     }
-    let text = browser.get(&site, "/learned").await.text;
+    let text = browser.get(&site, "/reading").await.text;
     assert!(text.contains("Last rewritten from your ratings on 12 October 2026"));
     assert!(text.contains("Finishes long &#60;b&#62;technical&#60;/b&#62; pieces.") && !text.contains("<b>technical"));
     assert!(text.contains("Rewritten from your ratings · in use") && !text.contains("Mary"));
@@ -1446,15 +1521,15 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
 
     // The reader's edit replaces it and is a version too; the pipeline's date is left alone.
     let edit = [("csrf", csrf.as_str()), ("notes", "  Skips market reports.\r\nLikes long pieces.  ")];
-    assert_eq!(browser.post(&site, "/learned", &edit).await.location, "/learned?saved=notes");
+    assert_eq!(browser.post(&site, "/learned", &edit).await.location, "/reading?saved=notes");
     let now = db::learned(pool, "john").await.unwrap();
     assert_eq!(now.notes, "Skips market reports.\nLikes long pieces.");
     assert_eq!(now.learned_at.as_deref(), Some("2026-10-12T11:00:00+00:00"));
-    let text = browser.get(&site, "/learned?saved=notes").await.text;
+    let text = browser.get(&site, "/reading?saved=notes").await.text;
     assert!(text.contains("Edited by you · in use") && text.contains("Restore this version"));
     let long = "x".repeat(2001);
     let too_long = [("csrf", csrf.as_str()), ("notes", long.as_str())];
-    assert_eq!(browser.post(&site, "/learned", &too_long).await.location, "/learned?saved=long");
+    assert_eq!(browser.post(&site, "/learned", &too_long).await.location, "/reading?saved=long");
 
     // Back to an earlier version of their own; never to someone else's, never without the token.
     let ids: Vec<(i64, String)> =
@@ -1465,7 +1540,48 @@ async fn the_notes_kept_on_a_reader_are_theirs_to_see_edit_and_roll_back() {
     let forged = [("csrf", "wrong"), ("version", mine.as_str())];
     assert_eq!(browser.post(&site, "/learned/restore", &forged).await.status, StatusCode::FORBIDDEN);
     let back = [("csrf", csrf.as_str()), ("version", mine.as_str())];
-    assert_eq!(browser.post(&site, "/learned/restore", &back).await.location, "/learned?saved=restored");
+    assert_eq!(browser.post(&site, "/learned/restore", &back).await.location, "/reading?saved=restored");
     assert_eq!(db::learned(pool, "john").await.unwrap().notes, "Finishes long <b>technical</b> pieces.");
     assert_eq!(db::learned(pool, "mary").await.unwrap().notes, "");
+}
+
+#[tokio::test]
+async fn an_article_in_the_archive_can_be_fetched_again() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Compilers today", "john", sent).await;
+    article(pool, "m1", "https://blog.example/m", "Blog", "Mary's own", "mary", sent).await;
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+
+    let page = browser.get(&site, "/archive").await;
+    assert!(page.text.contains(r#"<form class="send apart" method="post" action="/archive/refresh">"#));
+    assert!(page.text.contains("Fetch again") && !page.text.contains(r#"http-equiv="refresh""#));
+    let csrf = page.csrf();
+    let ask = [("csrf", csrf.as_str()), ("article", "a1"), ("back", "/archive?q=compilers")];
+    assert_eq!(browser.post(&site, "/archive/refresh", &ask).await.location, "/archive?q=compilers#a-a1");
+    // Asked twice while it waits: still one request.
+    browser.post(&site, "/archive/refresh", &ask).await;
+    let queued: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT user_id, article_id, status FROM refresh_requests").fetch_all(pool).await.unwrap();
+    assert_eq!(queued, [("john".to_owned(), "a1".to_owned(), "queued".to_owned())]);
+
+    // While it waits the button is gone and the page reloads itself.
+    let waiting = browser.get(&site, "/archive").await.text;
+    assert!(waiting.contains("Being fetched again") && !waiting.contains(">Fetch again<"));
+    assert!(waiting.contains(r#"http-equiv="refresh""#));
+    sqlx::query("UPDATE refresh_requests SET status = 'failed', error = 'HTTP 403', done_at = ?")
+        .bind(sent)
+        .execute(pool)
+        .await
+        .unwrap();
+    let failed = browser.get(&site, "/archive").await.text;
+    assert!(failed.contains("Could not be fetched again: HTTP 403") && failed.contains(">Fetch again<"));
+
+    // Not another reader's article, and not from elsewhere.
+    let other = [("csrf", csrf.as_str()), ("article", "m1")];
+    assert_eq!(browser.post(&site, "/archive/refresh", &other).await.status, StatusCode::NOT_FOUND);
+    let forged = [("csrf", "forged"), ("article", "a1")];
+    assert_eq!(browser.post(&site, "/archive/refresh", &forged).await.status, StatusCode::FORBIDDEN);
 }

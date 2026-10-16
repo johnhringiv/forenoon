@@ -25,11 +25,18 @@ what its own users configure and delivers only to the addresses its admin has se
 - An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
   addresses, a daily target of stories (default 8; section 7e) and an interests text. They
   live in the database: a reader is an account of the web pages
-  (section 9a), created with `forenoon-web add-user` and edited on its account page. The
+  (section 9a), created with `forenoon-web add-user` and edited on its Reading and account
+  pages. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
 - **Sources** come in two kinds, each with its own section on the web pages' Sources page
-  (admins only), which also shows how each source's last runs went:
+  (admins only), which also shows how each source's last runs went. A source is one compact
+  row (a coloured dot for its state, name, address, and tags for pinned, paused, places a day
+  and where its text comes from), opened to change it; feeds that are failing or whose
+  address could not be checked are listed first under "Needs attention". The list is
+  narrowed by a text filter on name and address and by views with a count each (all,
+  failing, paused, pinned), both plain GET parameters; adding a feed or a session is a
+  panel opened from a button, apart from the list.
   - **Built in**: front pages the pipeline knows how to read (Hacker News and Lobsters;
     section 7b). They can only be switched on or off. The list comes from the pipeline: one
     that a new version adds appears switched off, so an upgrade never changes what is
@@ -38,7 +45,9 @@ what its own users configure and delivers only to the addresses its admin has se
 
   They live in the database. The pipeline reads them at the start of every run; with no
   feeds, nothing is delivered and an alert is sent. A feed has a name and:
-  - pinned: its articles are taken before all other sources.
+  - pinned: its articles are taken before all other sources, every one of them.
+  - places a day (default 2, 0 for no limit): the most of an issue it may take. For a pinned
+    source, how many of its articles use the day's places; the rest are extra.
   - where the text comes from: the page, falling back to the feed (default); always the
     page; only the feed, in which case the article page is never fetched; or nowhere
     (link-only), in which case its pages are never fetched and what the ranking picks from it
@@ -113,13 +122,14 @@ be read it keeps the previous settings and logs the error. For each user:
    A feed's candidates are what it lists now plus what earlier runs read from it within the
    window and the model never weighed for this user, so an article is not lost because the
    feed moved on or the run that would have weighed it did not happen; one the model weighed
-   and passed over comes back only while the feed still lists it. There is no limit per
-   source: the model weighs at most `llm.max_candidates`, taken round-robin across sources,
-   and without the model the daily cap is the limit. Every window that finds candidates
+   and passed over comes back only while the feed still lists it. Every candidate is weighed
+   (the model weighs at most `llm.max_candidates`, taken round-robin across sources); each
+   source's limit on places applies only when the day is filled (section 3a). Every window
+   that finds candidates
    reaches back the same `max_age_days`, so nothing falls between two daily runs.
-3. **Order.** Pinned sources first. The rest are ranked by the model when ranking is on
-   (section 7a); otherwise, and whenever ranking fails, they are taken round-robin across
-   sources with the newest item of each source first.
+3. **Order.** Links added by hand, then pinned sources, then the rest, chosen by the model
+   in three rounds when ranking is on (section 3a); otherwise, and whenever ranking fails,
+   they are taken round-robin across sources with the newest item of each source first.
 4. **Cap.** Candidates are processed in that order until the user's daily cap is reached. The
    cap counts stories delivered during the local calendar day (section 7e), so a second run on
    the same day only sends what is left of the cap. Most stories are a single article.
@@ -136,6 +146,67 @@ be read it keeps the previous settings and logs the error. For each user:
 
 A run is safe to repeat: an article is recorded as delivered only after the email carrying it
 was accepted by the relay, and a delivered article is never sent to the same user again.
+
+## 3a. Choosing the day's articles
+
+The whole process for one reader's day, in order. The sections named give the detail.
+
+1. **Candidates.** Every enabled feed's eligible articles (section 3, step 2), round-robin
+   across sources so a busy feed cannot crowd out a quiet one. With ranking on, the built-in
+   front pages add their links (section 7b). An article several sources carry this run (a
+   feed and a front page, or two front pages) is one candidate with every sighting: the
+   model sees each site's votes and comments together, it is credited to all of them, and
+   its place counts against whichever of its sources has room.
+2. **Ahead of the rest, not judged.** Links the reader added for their next issue lead,
+   each taking a place. One whose page still cannot be had once it is `max_age_days` old is
+   given up on: it becomes a link-only pick (shown as a link, holding no place). Then pinned
+   sources: every article they have is taken; up to the source's places a day they use the
+   day's places, and the rest are extra.
+3. **Round 1: abstracts** (section 7a). Every other candidate is scored 0 to 10 from its
+   title, source and opening, by batches of 80, shuffled so feed articles and finds share
+   batches. With the reader's interests, learned notes and recent ratings.
+4. **The exploration pick.** One place, the day's last, goes to an article drawn at random
+   from those below the cut, so the ratings learn about what the model would not choose.
+   It keeps that place through the later rounds.
+5. **Same event** (section 7e). The 40 best are compared for coverage of one event; those
+   become one story, which takes one place.
+6. **Round 2: reading** (section 7f). `llm.read_candidates` (40) are fetched and read in
+   full, taken in equal shares from every round-1 batch (each by its own batch's scores),
+   plus the exploration pick. Each gets a new score and reason, a completeness verdict, how
+   long it lasts, and which of its links are its subject.
+7. **Round 3: choosing the issue** (section 7f). One call sees every read article at once
+   and returns exactly the open places' worth (the day's places less the hand-added and
+   pinned ones and the exploration pick), best first, under two rules: at most
+   `llm.most_per_subject` (2) on one broad subject, counting the hand-added and pinned
+   articles it is shown as already in the issue; and at least one news story of major
+   consequence when one scored 7 or more. Within them, better articles first. Then reserves
+   in the order to use them, as many as the places held by hand-added and pinned articles
+   plus two, so a place freed late (one of those that cannot be sent) still goes as the
+   model would choose. The other read articles follow, then the unread ones in round-1
+   order. An article left out that its score alone would have given a place, and that keeps
+   (judged to last months or years), is **deferred**: it is offered again for the rest of
+   its age window, even if its source no longer lists it, and marked as deferred to the
+   model, which prefers it over an equal candidate but not over a better one.
+8. **Filling the day** (`daily_stories`, default 8). Candidates are taken in that order
+   until the day's places are used, each subject to:
+   - **its source's places a day** (Sources page; 2 for a feed, none for a built-in source,
+     0 for no limit). An article carried by several sources counts against whichever has the
+     most room and is passed over only when all of them have used theirs; links added by
+     hand are not counted;
+   - **being deliverable**: not judged "not the article" by the reading, under
+     `max_article_words`, and within the message size. Otherwise the place goes to the next.
+   - A candidate whose page cannot be had is a link-only pick (section 3, step 4) and takes
+     no place.
+9. **Following links** (section 7e). A short pointer post is replaced by the pages it is
+   about; a longer article is delivered with the page it responds to, in one story.
+10. **Recorded.** Every score and reason, delivered or not (the archive shows what was
+    passed over and why); for each delivery the policy (`claude-rank-v2`), score, rank,
+    whether it was the exploration pick and the probability it was put forward (1 when the
+    model chose it); and in the run's report, the model's choice with what became of each.
+
+Without the model (no key, off, failing, or over the token cap), steps 3 to 7 are skipped:
+hand-added links and pinned sources first, then newest first round-robin, still subject to
+each source's places a day; no built-in source is read.
 
 ## 4. Extraction
 
@@ -282,14 +353,22 @@ source).
   recent ratings (title, source, rating, finished).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
-  merged into one order.
+  merged into one order. With more than one batch the candidates are shuffled first (seeded by
+  the day), so feed articles and finds are judged side by side rather than each on its own
+  batch's scale.
 - **Output.** A score from 0 to 10 and a reason of at most 15 words per candidate, returned in
   a fixed structure. Entries for unknown or repeated ids and non-numeric scores are discarded;
   reasons are cut to 140 characters and escaped like any other text.
-- **Selection.** Pinned articles take slots first. The remaining slots go to the highest
-  scores, except that the day's last slot goes to one article chosen uniformly at random from
-  those outside the top picks (exploration). If an article then fails extraction, the next in
-  order takes its place.
+- **Selection.** Pinned articles take slots first (up to each pinned source's places a day;
+  the rest of them are extra). The remaining slots go to the highest scores, as refined by
+  the reading pass and the choice of the issue (section 3a), except that the day's last slot
+  goes to one article chosen uniformly at random from those outside the top picks
+  (exploration). If an article then fails extraction, the next in order takes its place.
+- **Models.** Every call uses `llm.model` (Claude Haiku 5.5), except that the choosing of the
+  issue (section 7f) and the extraction check (section 7c) can each have their own
+  (`llm.choose_model`, `llm.check_model`). Every call is logged and priced under the model it
+  used. The answer is a forced call of one tool; a model that refuses a forced tool call
+  (Sonnet 5.5, Opus 5.5) is asked for it in the prompt instead, from its first refusal on.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page (`llm.show_reasons`).
 - **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
@@ -321,15 +400,20 @@ source).
   run; if a further page fails, the rest are still used.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
-  anything already in a feed read this run, already delivered, or previously failed. At most
-  `discovery.per_site` (100) per site.
+  anything already delivered or previously failed. At most `discovery.per_site` (100) per site.
+- **Sightings.** An article a feed or another front page already gave this run is not a second
+  candidate: it is added to the first one's sightings. The model is shown every site's votes
+  and comments together, and told that being picked up in several places counts in its favour
+  (not a fixed bonus). Its place counts against whichever of its sources has the most room,
+  so it is held back only when all of them have used their places. A find is credited "site
+  via Hacker News and Lobsters", and every route is recorded.
 - **Scoring.** Found articles go into the same ranking call as feed articles. The model sees
   the title, the site, points, comment count and (Lobsters) tags and description, since there
   is no abstract.
-- **Selection.** Found articles scoring at least `discovery.min_score` (6) take up to
-  `discovery.slots` (2) of the day's slots, and never more than half of them; the rest go to
-  feed articles as before. If a found article fails extraction, the next best found article
-  takes its place, then feed articles.
+- **Selection.** Found articles are ranked with feed articles on their score alone, with no
+  places kept for them. Like every source, each built-in one takes at most its "places a day"
+  (2 unless changed on the Sources page; 0 for no limit). One that fails extraction gives its
+  place to the next candidate, whichever kind it is.
 - **In the book.** The source reads "site via Hacker News", with a link to the discussion.
 - **Without the model** (off, failing or over its cap) no found article is delivered.
 - A listing that fails is reported and alerted like a failed feed.
@@ -345,6 +429,8 @@ source).
 - Verdicts are stored and shown in the run report; `forenoon checks` lists the articles it
   did not judge `ok`, beside the extractor's own verdict. **Delivery is never changed.**
 - The call counts against the daily token cap and is skipped when it would cross it.
+- `llm.check_model` (Settings page; empty for `llm.model`) runs it on another model, for
+  example Sonnet: one small call a day, so a stronger model costs cents.
   `llm.check_extraction: false` turns it off.
 
 ## 7d. The browser container (optional)
@@ -402,7 +488,9 @@ a day's book is therefore a target, not a limit.
 Ranking judges a title and an opening. Before the day is chosen, the model also reads the
 best candidates in full.
 
-- The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted. Their
+- The `llm.read_candidates` (40) best-ranked candidates are fetched and extracted, taken in
+  equal shares from every ranking batch (each batch's share by its own scores, since batches
+  score on slightly different scales); the exploration pick is always among them. Their
   text, up to `llm.read_words` (2,500) words each, goes to the model about ten articles to a
   call, with the reader's interests and ratings.
 - Per article the model returns a score from 0 to 10, a reason, whether the text is a
@@ -412,6 +500,28 @@ best candidates in full.
 - The read articles are tried first, best score first; candidates that were not read follow
   in ranking order. The exploration pick keeps the day's last slot. Scores and reasons from
   reading replace the ranking ones in the book and in what is recorded.
+- **Choosing the issue** (`llm.choose_issue`, on; on `llm.choose_model` when set, else
+  `llm.model`: one small call, so a stronger model here costs a few cents a day). One more
+  call sees every read article
+  at once: title, source, length, how long it lasts, the reading's score and reason, and a
+  story id for those on one event; with the open places and each source's limit. It returns
+  exactly that many, best first, with each one's broad subject, keeping to at most
+  `llm.most_per_subject` (2, 0 for no limit) on one subject (the hand-added and pinned
+  articles, listed as already in the issue, count) and including a news story of major
+  consequence when one scored 7 or more; within those, better articles first; and
+  then reserves in the order to use them: as many as the places hand-added and pinned
+  articles hold, plus two. Any it names beyond the places become its first reserves. The
+  chosen are tried first, the reserves next (a hand-added or pinned article whose page
+  cannot be had frees its place late, and the reserve takes it rather than the next score),
+  then the other read articles in score order. The exploration pick still keeps the last
+  place and is not offered to it. A chosen article's propensity is 1; one left out, reserves
+  included, keeps only its chance of the exploration draw. A failed or unusable reply leaves
+  the score order. It is skipped when there are no more read articles than open places. The
+  run's report lists the choice and then the reserves, each with its subject and whether it
+  was deferred earlier, and what became of each: sent, sent
+  in another story, not needed (a reserve), or why not (its source had used its places, the
+  day was full, the reading held it back, its page could not be had); and "issue chosen (n
+  of m)" when the model named fewer than the places.
 - An article judged `bad` (a paywall notice, a teaser, an error page) is held back for the
   day and listed in the report. `suspect` is reported and does not change delivery.
 - Both prompts tell the model that news of major consequence scores at least 7 whatever the
@@ -486,6 +596,17 @@ the route `manual` and its site as the source.
 - A link that cannot be fetched or has no article in it is marked failed, with the reason
   shown on the Archive page for a day. At most 30 links a day per reader.
 
+### Fetching an article again
+
+Each row on the Archive page has **Fetch again**: after signing in to a site whose page was
+refused, or once the extraction has been improved, so an article read badly can be read
+again. The web program queues it and the scheduler works it with the added links, within a
+minute. The page is fetched again as the article's source would fetch it (from its page,
+with the feed's copy kept from the first time to fall back on, when the source is gone) and
+saved, and the summary, length, thumbnail and extraction verdict are replaced. Ratings and
+deliveries are not touched. When nothing can be read, what was there stays and the reason is
+shown on the row for a day. At most 30 a day per reader.
+
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
@@ -557,17 +678,28 @@ database with the pipeline.
   or read or everything, the feed or front page that brought it, how it arrived,
   the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
   length). Without a choice it shows what was delivered, added by hand or read by the
-  model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card. A
-  form at the top adds a link by hand (section 7g). A reader sees only what was delivered
+  model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card, and
+  fetched again (section 7g). A form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
-- **What Forenoon has learned** (`/learned`, linked from the account page). The notes the
-  pipeline keeps on the reader's taste (section 7h): when they were last rewritten, a box to
-  edit them (2,000 characters at most), and the last 10 versions with who wrote each and a
-  button to restore it.
+- **Reading** (`/reading`). What the pipeline picks for: the reader's interests, in their
+  own words, and their stories a day; below them, the notes the pipeline keeps on the
+  reader's taste (section 7h): when they were last rewritten, a box to edit them (2,000
+  characters at most), and the last 10 versions with who wrote each and a button to restore
+  it. `/learned`, the notes' old address, leads here.
+- **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
+  name: Newsstand, Archive, Reading, then for an admin Sources, Settings and Problems (with
+  the count of reports), then the reader's name, which opens the account page. The current
+  page is marked. Sign out is on the account page. Below the row each page has its own
+  controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
+  issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
   Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
-  choices: ratings, reasons, finished. The pages use no scripts, so the Archive's filters
-  apply when "Apply filters" is pressed.
+  choices: ratings, reasons, finished. The pages work without scripts, so the Archive's
+  filters apply when "Apply filters" is pressed.
+- **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
+  of the masthead switches; the choice is kept in that browser, and choosing what the system
+  already shows goes back to following it. It is the pages' one script; without scripts the
+  button is not shown.
 - **Send to Kindle.** Each article has a button that sends it to the reader's own
   Kindle address, as a book of its own with fresh rating links. An article the daily run
   passed over can be sent from the Archive: it is then recorded as delivered and marked
@@ -585,14 +717,15 @@ database with the pipeline.
   **Send story to Kindle**: every article delivered in the story as one book with a contents
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
-- **Account page.** Display name, time zone, password, and the reading settings the
-  pipeline uses: interests, stories a day, and Kindle addresses. Only an admin can change
-  Kindle addresses, because they decide where content is emailed.
+- **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
+  out. Only an admin can change Kindle addresses, because they decide where content is
+  emailed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
 - Article text is untrusted here as elsewhere: everything is escaped, links and images must
-  be plain `http(s)`, and the content security policy allows no scripts. Lead images are
+  be plain `http(s)`, and the content security policy allows no script but the light/dark
+  switch, named by its hash. Lead images are
   loaded by the browser from the article's own site, without a referrer.
 - **Pictures.** The pipeline makes a small thumbnail for each article it prepares, from the
   page's lead image or else the article's first few pictures, and keeps it in `thumbs/` in

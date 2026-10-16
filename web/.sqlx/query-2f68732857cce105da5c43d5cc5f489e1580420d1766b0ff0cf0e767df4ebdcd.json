@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET enabled = ?, daily_max = ? WHERE id = ? AND kind = 'builtin'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2f68732857cce105da5c43d5cc5f489e1580420d1766b0ff0cf0e767df4ebdcd"
+}

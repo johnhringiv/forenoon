@@ -632,17 +632,29 @@ pub struct AddState {
 }
 
 /// The reader's links from the last day that are still being fetched or could not be, newest first.
+/// A failure is left out once it was cleared, or once the same link was added again.
 pub async fn unfinished_adds(pool: &SqlitePool, user: &str) -> Result<Vec<AddState>, sqlx::Error> {
     let day_ago = iso_in(-24 * 3600);
     sqlx::query_as!(
         AddState,
-        "SELECT url, status, error FROM add_requests
-         WHERE user_id = ? AND requested_at > ? AND status != 'done' ORDER BY id DESC LIMIT 20",
+        "SELECT url, status, error FROM add_requests r
+         WHERE user_id = ?1 AND requested_at > ?2 AND status != 'done'
+         AND NOT (status = 'failed' AND (dismissed = 1 OR EXISTS (
+             SELECT 1 FROM add_requests later WHERE later.user_id = r.user_id AND later.url = r.url AND later.id > r.id)))
+         ORDER BY id DESC LIMIT 20",
         user,
         day_ago
     )
     .fetch_all(pool)
     .await
+}
+
+/// Stop showing the reader's links that could not be added. They stay on record.
+pub async fn dismiss_failed_adds(pool: &SqlitePool, user: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE add_requests SET dismissed = 1 WHERE user_id = ? AND status = 'failed'", user)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 // send requests ("Send to Kindle"); the pipeline's scheduler sends them and records the outcome
@@ -711,6 +723,66 @@ pub async fn queue_send(pool: &SqlitePool, user: &str, article: &str, story: boo
     .await?;
     tx.commit().await?;
     Ok(Queued::Added)
+}
+
+// "Fetch again"; the pipeline's scheduler fetches and extracts the article again
+
+pub const REFRESHES_PER_DAY: i64 = 30;
+
+pub struct RefreshState {
+    pub article_id: String,
+    pub status: String,
+    pub error: String,
+    pub done_at: Option<String>,
+}
+
+/// Ask for an article in the reader's library to be fetched and extracted again.
+pub async fn queue_refresh(pool: &SqlitePool, user: &str, article: &str) -> Result<Queued, sqlx::Error> {
+    let (now, day_ago) = (now_iso(), iso_in(-24 * 3600));
+    let mut tx = pool.begin().await?;
+    let waiting = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM refresh_requests WHERE article_id = ? AND status = 'queued'",
+        article
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if waiting > 0 {
+        return Ok(Queued::Waiting);
+    }
+    let recent = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM refresh_requests WHERE user_id = ? AND requested_at > ?",
+        user,
+        day_ago
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if recent >= REFRESHES_PER_DAY {
+        return Ok(Queued::TooMany);
+    }
+    sqlx::query!(
+        "INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES (?, ?, ?)",
+        user,
+        article,
+        now
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Queued::Added)
+}
+
+/// The reader's requests of the last day, oldest first, so a later one replaces an earlier.
+pub async fn refresh_states(pool: &SqlitePool, user: &str) -> Result<Vec<RefreshState>, sqlx::Error> {
+    let day_ago = iso_in(-24 * 3600);
+    sqlx::query_as!(
+        RefreshState,
+        "SELECT article_id, status, error, done_at FROM refresh_requests
+         WHERE user_id = ? AND requested_at > ? ORDER BY id",
+        user,
+        day_ago
+    )
+    .fetch_all(pool)
+    .await
 }
 
 // problem reports ("this article came out broken"): for the admin, apart from any rating

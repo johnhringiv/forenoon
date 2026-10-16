@@ -16,6 +16,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect},
 };
+use chrono::NaiveDate;
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, de::DeserializeOwned};
 use sqlx::SqlitePool;
 use tower_sessions::Session;
@@ -23,13 +25,18 @@ use tower_sessions::Session;
 use crate::{
     auth::AuthSession,
     db::{self, now_iso},
-    pages::{AppError, AppState, NOT_FROM_HERE, Page, allowed, csrf_token, html, reader, refused, web_url},
+    pages::{AppError, AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, web_url},
 };
 
 const MAX_NAME: usize = 80;
 const MAX_URL: usize = 2000;
+const DEFAULT_DAILY_MAX: i64 = 2;
+const MAX_DAILY_MAX: i64 = 50;
 const MAX_COOKIE: usize = 16 * 1024;
 const MAX_FILE: u64 = 4 * 1024 * 1024;
+const MAX_SEARCH: usize = 100;
+/// The views of the feeds, as links with a count each.
+const SHOW: [(&str, &str); 4] = [("", "All"), ("failing", "Failing"), ("paused", "Paused"), ("pinned", "Pinned")];
 const EXTRACT: [(&str, &str); 4] = [
     ("auto", "Best of page and feed"),
     ("page", "Web page only"),
@@ -46,6 +53,8 @@ pub struct Source {
     pub builtin: String,
     pub extract: String,
     pub pinned: bool,
+    /// The most of a day's places its articles may take; 0 for no limit.
+    pub daily_max: i64,
     pub enabled: bool,
     /// "" (never checked), "pending", "ok" or "failed": the pipeline's check of the address.
     pub check_state: String,
@@ -56,7 +65,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
     sqlx::query_as!(
         Source,
         r#"SELECT id AS "id!", name, kind, url, builtin, extract, pinned AS "pinned: bool",
-           enabled AS "enabled: bool", check_state, check_note
+           daily_max, enabled AS "enabled: bool", check_state, check_note
            FROM sources ORDER BY pinned DESC, name COLLATE NOCASE"#
     )
     .fetch_all(pool)
@@ -128,6 +137,18 @@ fn check_name(name: &str) -> Result<String, String> {
     }
 }
 
+/// The most of a day's places a source may take: a whole number from 0 (no limit) to 50.
+fn daily_max(sent: Option<&str>) -> Result<i64, String> {
+    match sent.map(str::trim) {
+        None => Ok(DEFAULT_DAILY_MAX),
+        Some(text) => text
+            .parse()
+            .ok()
+            .filter(|n| (0..=MAX_DAILY_MAX).contains(n))
+            .ok_or_else(|| format!("Places a day: give a whole number from 0 (no limit) to {MAX_DAILY_MAX}.")),
+    }
+}
+
 struct Choice {
     key: &'static str,
     label: &'static str,
@@ -138,9 +159,14 @@ struct BuiltinRow {
     id: i64,
     name: String,
     about: &'static str,
+    daily_max: i64,
+    /// "2 a day", or "No limit".
+    limit: String,
     enabled: bool,
     status: Option<String>,
     failing: bool,
+    /// The colour of the dot before its name: ok, bad, wait, off or none.
+    state: &'static str,
 }
 
 struct FeedRow {
@@ -148,8 +174,17 @@ struct FeedRow {
     name: String,
     address: String,
     extract: Vec<Choice>,
+    /// Where its text is taken from, in a word or two; "" for the usual way.
+    mode: &'static str,
     pinned: bool,
+    daily_max: i64,
+    limit: String,
     enabled: bool,
+    state: &'static str,
+    /// Failing, or its address could not be checked: listed first.
+    attention: bool,
+    /// Shown with its form open.
+    open: bool,
     /// How its last run went, in words; `None` before it has been read.
     status: Option<String>,
     failing: bool,
@@ -169,20 +204,71 @@ struct SessionRow {
     failed: bool,
 }
 
+struct View {
+    label: &'static str,
+    count: usize,
+    current: bool,
+    href: String,
+}
+
 #[derive(Template)]
 #[template(path = "sources.html")]
 struct SourcesPage {
-    name: String,
+    nav: Option<Nav>,
     csrf: String,
     builtins: Vec<BuiltinRow>,
     sessions: Vec<SessionRow>,
+    /// The feeds that need attention, then the rest, both as filtered.
+    attention: Vec<FeedRow>,
     feeds: Vec<FeedRow>,
+    /// How many feeds there are in all.
+    total: usize,
+    search: String,
+    show: &'static str,
+    filtered: bool,
+    views: Vec<View>,
+    /// The add form open: nothing to list yet, or a form came back with a problem.
+    adding: bool,
     logins: bool,
     summary: String,
     error: Option<String>,
     notice: Option<&'static str>,
     /// An address is still being checked: the page reloads itself until it is done.
     checking: bool,
+}
+
+fn limit(daily_max: i64) -> String {
+    if daily_max == 0 { "No limit".to_owned() } else { format!("{daily_max} a day") }
+}
+
+/// "14 October 2026" from the pipeline's timestamp.
+fn day(stamp: &str) -> String {
+    NaiveDate::parse_from_str(stamp.get(..10).unwrap_or(stamp), "%Y-%m-%d")
+        .map_or_else(|_| stamp.to_owned(), |day| day.format("%-d %B %Y").to_string())
+}
+
+fn matches(row: &FeedRow, search: &str, show: &str) -> bool {
+    let text = search.to_lowercase();
+    let named =
+        text.is_empty() || row.name.to_lowercase().contains(&text) || row.address.to_lowercase().contains(&text);
+    named
+        && match show {
+            "failing" => row.attention,
+            "paused" => !row.enabled,
+            "pinned" => row.pinned,
+            _ => true,
+        }
+}
+
+fn view_url(show: &str, search: &str) -> String {
+    let mut parts = Vec::new();
+    if !show.is_empty() {
+        parts.push(format!("show={show}"));
+    }
+    if !search.is_empty() {
+        parts.push(format!("q={}", utf8_percent_encode(search, NON_ALPHANUMERIC)));
+    }
+    if parts.is_empty() { "/sources".to_owned() } else { format!("/sources?{}", parts.join("&")) }
 }
 
 fn choices(current: &str) -> Vec<Choice> {
@@ -201,6 +287,20 @@ fn when(stamp: &str) -> String {
     stamp.get(..16).unwrap_or(stamp).replace('T', " ")
 }
 
+/// The list as the reader asked to see it: `search` in a name or address, one of SHOW, and
+/// the source just added, shown first with its form open.
+struct Sieve {
+    search: String,
+    show: &'static str,
+    new: Option<i64>,
+}
+
+impl Sieve {
+    fn all() -> Sieve {
+        Sieve { search: String::new(), show: "", new: None }
+    }
+}
+
 async fn render(
     state: &AppState,
     auth: &AuthSession,
@@ -208,7 +308,7 @@ async fn render(
     status: StatusCode,
     error: Option<String>,
     notice: Option<&'static str>,
-    new: Option<i64>,
+    sieve: Sieve,
 ) -> Page {
     let user = reader(auth)?;
     let health = health(&state.pool).await?;
@@ -222,42 +322,84 @@ async fn render(
     for source in sources {
         let seen = health.iter().find(|entry| entry.source == source.name);
         let status = seen.map(|entry| match entry.failures {
-            0 => format!("Read without trouble, {}", entry.updated_at.get(..10).unwrap_or("")),
+            0 => format!("Read without trouble, {}", day(&entry.updated_at)),
             n => format!("Failed {n} run{} in a row: {}", if n == 1 { "" } else { "s" }, entry.last_error),
         });
         let failing = seen.is_some_and(|entry| entry.failures > 0);
         failing_count += usize::from(failing && source.enabled);
+        let state = match (source.enabled, failing, &status) {
+            (false, _, _) => "off",
+            (_, true, _) => "bad",
+            (_, _, None) => "none",
+            _ => "ok",
+        };
         match source.kind.as_str() {
             "builtin" => builtins.push(BuiltinRow {
                 id: source.id,
                 about: about(&source.builtin),
                 name: source.name,
+                daily_max: source.daily_max,
+                limit: limit(source.daily_max),
                 enabled: source.enabled,
                 status,
                 failing,
+                state,
             }),
-            _ => feeds.push(FeedRow {
-                id: source.id,
-                session: covering(&sites, &source.url),
-                new: new == Some(source.id),
-                address: source.url,
-                extract: choices(&source.extract),
-                pinned: source.pinned,
-                enabled: source.enabled,
-                failing,
-                status,
-                check: match source.check_state.as_str() {
-                    "pending" => Some("Checking this address; it takes up to a minute.".to_owned()),
-                    "ok" | "failed" => Some(source.check_note),
-                    _ => None,
-                },
-                check_failed: source.check_state == "failed",
-                name: source.name,
-            }),
+            _ => {
+                let check_failed = source.check_state == "failed";
+                let checking = source.check_state == "pending";
+                feeds.push(FeedRow {
+                    id: source.id,
+                    session: covering(&sites, &source.url),
+                    new: sieve.new == Some(source.id),
+                    open: sieve.new == Some(source.id),
+                    address: source.url,
+                    extract: choices(&source.extract),
+                    mode: match source.extract.as_str() {
+                        "page" => "Page only",
+                        "feed" => "Feed only",
+                        "link" => "Links only",
+                        _ => "",
+                    },
+                    pinned: source.pinned,
+                    daily_max: source.daily_max,
+                    limit: limit(source.daily_max),
+                    enabled: source.enabled,
+                    attention: source.enabled && (failing || check_failed),
+                    state: match state {
+                        "off" => "off",
+                        _ if check_failed => "bad",
+                        _ if checking => "wait",
+                        state => state,
+                    },
+                    failing,
+                    status,
+                    check: match source.check_state.as_str() {
+                        "pending" => Some("Checking this address; it takes up to a minute.".to_owned()),
+                        "ok" | "failed" => Some(source.check_note),
+                        _ => None,
+                    },
+                    check_failed,
+                    name: source.name,
+                });
+            }
         }
     }
     // What was just added stays first until the page is loaded afresh, beside its check.
     feeds.sort_by_key(|row| !row.new);
+    let feed_count = feeds.len();
+    let named: Vec<FeedRow> = feeds.into_iter().filter(|row| matches(row, &sieve.search, "")).collect();
+    let views = SHOW
+        .iter()
+        .map(|(key, label)| View {
+            label,
+            count: named.iter().filter(|row| matches(row, "", key)).count(),
+            current: *key == sieve.show,
+            href: view_url(key, &sieve.search),
+        })
+        .collect();
+    let (attention, feeds): (Vec<FeedRow>, Vec<FeedRow>) =
+        named.into_iter().filter(|row| matches(row, "", sieve.show)).partition(|row| row.attention);
     let sessions = sites
         .into_iter()
         .map(|site| {
@@ -279,13 +421,20 @@ async fn render(
         .collect();
     let summary =
         format!("{total} source{}, {paused} paused, {failing_count} failing.", if total == 1 { "" } else { "s" });
-    let checking = feeds.iter().any(|row| row.check.as_deref().is_some_and(|note| note.starts_with("Checking")));
+    let checking = attention.iter().chain(&feeds).any(|row| row.state == "wait");
     let page = SourcesPage {
-        name: user.name,
+        nav: Nav::new(state, &user, "sources").await?,
         csrf: csrf_token(session).await?,
         builtins,
         sessions,
+        adding: error.is_some() || feed_count == 0,
+        attention,
         feeds,
+        total: feed_count,
+        filtered: !sieve.search.is_empty() || !sieve.show.is_empty(),
+        search: sieve.search,
+        show: sieve.show,
+        views,
         logins: state.logins_dir.is_some(),
         summary,
         error,
@@ -307,6 +456,8 @@ pub struct PageQuery {
     saved: Option<String>,
     /// The source just added, shown first.
     new: Option<i64>,
+    q: Option<String>,
+    show: Option<String>,
 }
 
 pub async fn page(
@@ -326,7 +477,12 @@ pub async fn page(
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
         _ => None,
     };
-    render(&state, &auth, &session, StatusCode::OK, None, notice, query.new).await
+    let sieve = Sieve {
+        search: query.q.as_deref().unwrap_or_default().trim().chars().take(MAX_SEARCH).collect(),
+        show: SHOW.iter().map(|(key, _)| *key).find(|key| Some(*key) == query.show.as_deref()).unwrap_or(""),
+        new: query.new,
+    };
+    render(&state, &auth, &session, StatusCode::OK, None, notice, sieve).await
 }
 
 /// `None` when the form may be acted on; otherwise the response that refuses it.
@@ -361,6 +517,7 @@ pub struct SourceForm {
     address: Option<String>,
     extract: Option<String>,
     pinned: Option<String>,
+    daily_max: Option<String>,
     enabled: Option<String>,
 }
 
@@ -371,6 +528,10 @@ impl SourceForm {
             return Err("A feed needs an http(s) address.".to_owned());
         }
         Ok(address.to_owned())
+    }
+
+    fn daily_max(&self) -> Result<i64, String> {
+        daily_max(self.daily_max.as_deref())
     }
 
     fn extract(&self) -> &'static str {
@@ -393,7 +554,7 @@ async fn finish(
         Err(error) if name_taken(&error) => format!("There is already a source named {name}."),
         Err(error) => return Err(error.into()),
     };
-    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, None).await
+    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
 }
 
 pub async fn add(
@@ -406,18 +567,21 @@ pub async fn add(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let (name, url) = match (check_name(&form.name), form.address()) {
-        (Ok(name), Ok(url)) => (name, url),
-        (Err(problem), _) | (_, Err(problem)) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    let (name, url, daily_max) = match (check_name(&form.name), form.address(), form.daily_max()) {
+        (Ok(name), Ok(url), Ok(daily_max)) => (name, url, daily_max),
+        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
+            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+        }
     };
     let (extract, pinned, now) = (form.extract(), form.pinned.is_some(), now_iso());
     let done = sqlx::query!(
-        "INSERT INTO sources (name, kind, url, extract, pinned, enabled, created_at, check_state)
-         VALUES (?, 'rss', ?, ?, ?, 1, ?, 'pending')",
+        "INSERT INTO sources (name, kind, url, extract, pinned, daily_max, enabled, created_at, check_state)
+         VALUES (?, 'rss', ?, ?, ?, ?, 1, ?, 'pending')",
         name,
         url,
         extract,
         pinned,
+        daily_max,
         now
     )
     .execute(&state.pool)
@@ -437,19 +601,22 @@ pub async fn update(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
-    let (name, url) = match (check_name(&form.name), form.address()) {
-        (Ok(name), Ok(url)) => (name, url),
-        (Err(problem), _) | (_, Err(problem)) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    let (name, url, daily_max) = match (check_name(&form.name), form.address(), form.daily_max()) {
+        (Ok(name), Ok(url), Ok(daily_max)) => (name, url, daily_max),
+        (Err(problem), _, _) | (_, Err(problem), _) | (_, _, Err(problem)) => {
+            return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+        }
     };
     let (extract, pinned, enabled) = (form.extract(), form.pinned.is_some(), form.enabled.is_some());
-    // A built-in source is only switched on or off: this changes feeds alone.
+    // A built-in source is only switched on or off and given its limit: this changes feeds alone.
     let done = sqlx::query!(
-        "UPDATE sources SET name = ?, url = ?, extract = ?, pinned = ?, enabled = ?,
+        "UPDATE sources SET name = ?, url = ?, extract = ?, pinned = ?, daily_max = ?, enabled = ?,
          check_state = 'pending', check_note = '' WHERE id = ? AND kind = 'rss'",
         name,
         url,
         extract,
         pinned,
+        daily_max,
         enabled,
         id
     )
@@ -463,6 +630,7 @@ pub struct ToggleForm {
     csrf: String,
     /// "1" to read it, anything else to stop.
     enabled: String,
+    daily_max: Option<String>,
 }
 
 /// Switch a built-in source on or off.
@@ -477,10 +645,19 @@ pub async fn toggle(
     if let Some(response) = guard(&auth, &session, &headers, &form.csrf).await? {
         return Ok(response);
     }
+    let daily_max = match daily_max(form.daily_max.as_deref()) {
+        Ok(daily_max) => daily_max,
+        Err(problem) => return finish(&state, &auth, &session, Ok(Err(problem)), "").await,
+    };
     let enabled = form.enabled == "1";
-    sqlx::query!("UPDATE sources SET enabled = ? WHERE id = ? AND kind = 'builtin'", enabled, id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE sources SET enabled = ?, daily_max = ? WHERE id = ? AND kind = 'builtin'",
+        enabled,
+        daily_max,
+        id
+    )
+    .execute(&state.pool)
+    .await?;
     saved("saved")
 }
 

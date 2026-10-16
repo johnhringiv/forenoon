@@ -99,9 +99,9 @@ SITES = {
 }
 
 
-def site_source(key: str) -> Source:
+def site_source(key: str, daily_max: int = 0) -> Source:
     site = SITES[key]
-    return Source(site.name, site.url, extract="page")
+    return Source(site.name, site.url, extract="page", daily_max=daily_max)
 
 
 def site_host(url: str) -> str:
@@ -144,13 +144,14 @@ def _summary(site: Site, story: dict, host: str) -> str:
     return text
 
 
-def read_listing(key: str, fetcher: Fetcher, since: datetime | None = None) -> list[Item]:
+def read_listing(key: str, fetcher: Fetcher, since: datetime | None = None, source: Source | None = None) -> list[Item]:
     """One site's front page and its further listings as candidate items, front page first.
 
-    `since` is how far back the further listings look; by default one day. Raises FetchError
+    `since` is how far back the further listings look; by default one day. `source`, with its
+    limit on the day's places, is what the items come from; by default the site's. Raises FetchError
     when the front page cannot be read; a further listing that fails is skipped.
     """
-    site, source = SITES[key], site_source(key)
+    site, source = SITES[key], source or site_source(key)
     resp = fetcher.get(site.url, max_bytes=MAX_LISTING_BYTES)
     try:
         stories = site.parse(json.loads(resp.content))

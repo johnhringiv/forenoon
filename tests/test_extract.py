@@ -81,6 +81,40 @@ def test_truncated_feed_is_degraded_and_empty_fails():
     assert failed.status == "failed" and failed.body is None
 
 
+# An FT article as the Calibre recipe delivered it, cut down and with made-up text: its
+# navigation bar, the topic link, the standfirst, the lead picture with its caption, the
+# byline and date, then the article.
+FT_ARTICLE = """<div><div class="calibre_navbar1">| <a href="../article_9/index_u3.html" rel="articlenextlink">Next</a>
+| <a href="../index_u16.html#article_4">Section menu</a> | <a href="../../index_u5.html#feed_6">Main menu</a>
+| <a href="../article_2/index_u1.html" rel="articleprevlink">Previous</a> | <hr class="calibre6">
+</div><a class="o-topper__topic" href="https://www.ft.com/oil">Oil</a><p class="o-topper__standfirst">Output
+rose to its highest level in a year, though the revival is at risk from attacks on shipping</p>
+<div class="main-image"><picture><img src="https://images.ft.com/lead.jpg" alt="A refinery"></picture>
+<div class="calibre7"><span>A refinery on the coast</span><span> © Reuters</span></div></div>
+<div class="article-info__time-byline-content"><div class="calibre7"><a href="https://www.ft.com/a-writer">A Writer</a>
+in London</div></div><div><div>Published October 13 2026</div></div>
+<div class="article-body"><p>The kingdom pumped more crude last month than at any time since the conflict began, FILLER</p>
+<p>Officials said the gains could be lost if the attacks continue.</p></div></div>"""
+
+
+def test_a_summary_from_the_body_skips_navigation_and_keeps_blocks_apart():
+    article = FT_ARTICLE.replace("FILLER", " ".join(["according to figures"] * 60))
+    result = extract("https://www.ft.com/content/e4c33601", None, article, mode="feed")
+    assert result.description.startswith(
+        "Output rose to its highest level in a year, though the revival is at risk from attacks on"
+        " shipping The kingdom pumped more crude"
+    ), result.description
+    for furniture in ("Next", "Section menu", "Oil", "Reuters", "A Writer", "Published"):
+        assert furniture not in result.description.split(" The kingdom")[0]
+    # Blocks are kept apart in any body, paragraphs or not.
+    blocks = f"<div>First block</div><div>{'word ' * 200}</div>"
+    short = extract("https://blog.example/p", None, blocks, "feed")
+    assert short.description.startswith("First block word word")
+    # A body that is all links still has a summary.
+    links = "<p>" + " ".join(f'<a href="https://x.example/{n}">link {n}</a>' for n in range(120)) + "</p>"
+    assert extract("https://blog.example/l", None, links, "feed").description.startswith("link 0 link 1")
+
+
 def test_preview_prefers_og_metadata_and_falls_back_to_the_body():
     words = " ".join(["word"] * 200)
     page = (
@@ -104,6 +138,21 @@ def test_preview_prefers_og_metadata_and_falls_back_to_the_body():
 
     hostile = page.replace("/img/lead.jpg", "javascript:alert(1)")
     assert extract("https://blog.example/post", hostile, "").image_url == ""
+
+    # A header picture above the article is kept as a fallback for the thumbnail, for when the
+    # lead image is broken and the article itself has none (unquoted, as some themes write it).
+    # Not the site's avatar, and nothing below the article's text: a related post's picture.
+    header = (
+        '<html><head><meta property="og:image" content="/assets//img/gone.jpg"></head><body>'
+        '<img src="/avatar.jpg" class="avatar"><img class=page-image src=/img/header.jpg>'
+        f'<img src="javascript:x"><article><p>{words}</p></article>'
+        '<aside><img src="/related/other-post.jpg"></aside></body></html>'
+    )
+    result = extract("https://blog.example/post", header, "")
+    assert result.page_images == ["https://blog.example/img/header.jpg"]
+    assert not list(result.body.iter("img"))
+    below = header.replace("<img class=page-image src=/img/header.jpg>", "")
+    assert extract("https://blog.example/post", below, "").page_images == []
 
 
 def test_standfirst_in_the_page_header_is_restored_once():

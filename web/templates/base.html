@@ -3,23 +3,83 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Light or dark: the reader's choice is kept in this browser; with none, the system's setting is followed.
+     Changing this script changes its hash in the Content-Security-Policy (web/src/pages.rs). -->
+<script>
+(function () {
+  var root = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)');
+  function stored() { try { var t = localStorage.getItem('theme'); return t === 'light' || t === 'dark' ? t : null } catch (e) { return null } }
+  function shown() { return root.dataset.theme || (dark.matches ? 'dark' : 'light') }
+  var choice = stored();
+  if (choice) root.dataset.theme = choice;
+  addEventListener('DOMContentLoaded', function () {
+    var button = document.querySelector('button.theme');
+    if (!button) return;
+    function label() {
+      var text = shown() === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+      button.setAttribute('aria-label', text); button.title = text;
+    }
+    button.hidden = false;
+    label();
+    button.addEventListener('click', function () {
+      var next = shown() === 'dark' ? 'light' : 'dark', system = dark.matches ? 'dark' : 'light';
+      try { if (next === system) localStorage.removeItem('theme'); else localStorage.setItem('theme', next) } catch (e) {}
+      if (next === system) delete root.dataset.theme; else root.dataset.theme = next;
+      label();
+    });
+    dark.addEventListener('change', label);
+  });
+})();
+</script>
 <title>{% block title %}Forenoon{% endblock %}</title>
 {% block head %}{% endblock %}
 <style>
-:root { --bg:#f6f4ef; --card:#fff; --ink:#1c1b19; --soft:#6b675f; --line:#dedad0; --accent:#8a3b12 }
+:root { color-scheme:light; --bg:#f6f4ef; --card:#fff; --ink:#1c1b19; --soft:#6b675f; --line:#dedad0; --accent:#8a3b12;
+  --ok:#2e7d4f; --warn:#a8711c; --bad:#b3261e }
+/* Dark when chosen, or when the system is dark and nothing was chosen. The same values twice: a media query
+   cannot be part of a selector. */
+:root[data-theme=dark] { color-scheme:dark; --bg:#161513; --card:#201f1c; --ink:#ece8df; --soft:#a39e93; --line:#35332e;
+  --accent:#e0a074; --ok:#7cc497; --warn:#e2b35e; --bad:#f28b82 }
 @media (prefers-color-scheme:dark) {
-  :root { --bg:#161513; --card:#201f1c; --ink:#ece8df; --soft:#a39e93; --line:#35332e; --accent:#e0a074 }
+  :root:not([data-theme=light]) { color-scheme:dark; --bg:#161513; --card:#201f1c; --ink:#ece8df; --soft:#a39e93; --line:#35332e;
+    --accent:#e0a074; --ok:#7cc497; --warn:#e2b35e; --bad:#f28b82 }
+  :root:not([data-theme=light]) button.theme .sun { display:block }
+  :root:not([data-theme=light]) button.theme .moon { display:none }
 }
+:root[data-theme=dark] button.theme .sun { display:block }
+:root[data-theme=dark] button.theme .moon { display:none }
 * { box-sizing:border-box }
 body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui,sans-serif }
 header, main { max-width:1180px; margin:0 auto; padding:0 16px }
-header { padding-top:28px; padding-bottom:8px; border-bottom:3px double var(--line) }
+header { padding-top:22px; padding-bottom:10px; border-bottom:3px double var(--line) }
+/* The masthead: the name on the left, the same row of pages on the right of every page. */
+.masthead { display:flex; flex-wrap:wrap; align-items:baseline; gap:.4rem 1.5rem }
 h1 { font:700 2.1rem/1.1 Georgia,serif; margin:0; letter-spacing:.01em; display:flex; align-items:center; gap:.6rem }
 h1 a { color:inherit; text-decoration:none }
 h1 svg { color:var(--accent) }
-header p { margin:.4rem 0 .6rem; color:var(--soft); font-size:.9rem }
-h2 { font:700 1.15rem Georgia,serif; margin:2rem 0 .8rem; display:flex; gap:.6rem; align-items:baseline }
+nav.site { margin-left:auto; display:flex; flex-wrap:wrap; align-items:baseline; gap:.2rem 1.1rem; font-size:.95rem }
+nav.site a { color:var(--ink); text-decoration:none; padding:.15rem 0; border-bottom:2px solid transparent }
+nav.site a:hover { border-bottom-color:var(--line) }
+nav.site a[aria-current] { font-weight:700; border-bottom-color:var(--accent) }
+nav.site .sep { align-self:center; height:1em; border-left:1px solid var(--line) }
+nav.site .me { color:var(--soft) }
+/* The light/dark switch, shown only once the script has run: without it the system's setting stands. */
+button.theme { align-self:center; display:flex; border:0; background:none; padding:.2rem; color:var(--soft); cursor:pointer }
+h1 + button.theme { margin-left:auto }
+button.theme[hidden] { display:none }
+button.theme:hover { color:var(--ink) }
+button.theme svg { width:18px; height:18px }
+button.theme .sun { display:none }
+/* On a phone the switch sits beside the name, and the row of pages takes the lines below. */
+@media (max-width:640px) {
+  h1 { order:-2 }
+  button.theme { order:-1; margin-left:auto }
+  nav.site { flex-basis:100%; margin-left:0 }
+}
+.intro { margin:.5rem 0 0; color:var(--soft); font-size:.9rem }
+h2 { font:700 1.15rem Georgia,serif; margin:2rem 0 .8rem; display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap }
 h2 span { font:400 .85rem system-ui,sans-serif; color:var(--soft) }
+h2 a.jump { margin-left:auto; font:400 .8rem system-ui,sans-serif }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:16px }
 article { background:var(--card); border:1px solid var(--line); border-radius:6px; overflow:hidden;
   display:flex; flex-direction:column }
@@ -39,7 +99,6 @@ h3 a:hover { text-decoration:underline }
 .meta { margin-top:auto; padding-top:.5rem; border-top:1px solid var(--line); font-size:.78rem;
   color:var(--soft); display:flex; flex-wrap:wrap; gap:.3rem .8rem }
 /* A story: its lead article beside (or above) the other articles delivered with it. */
-.source.new { border-left:3px solid var(--accent); padding-left:.6rem }
 article.link-only { opacity:.62; filter:grayscale(1); border-style:dashed }
 article.link-only:hover, article.link-only:focus-within { opacity:1; filter:none }
 article.story { grid-column:span 2; flex-direction:row; flex-wrap:wrap; border:2px solid var(--accent) }
@@ -65,17 +124,21 @@ h4 { font:700 .98rem/1.25 Georgia,serif; margin:0; overflow-wrap:anywhere }
 h4 a { color:inherit; text-decoration:none }
 h4 a:hover { text-decoration:underline }
 @media (max-width:640px) {
-  article.story { grid-column:auto; flex-direction:column }
+  /* Stacked, and no longer wrapping: in a column the halves' percentages would be of the height. */
+  article.story { grid-column:auto; flex-direction:column; flex-wrap:nowrap }
+  article.story .story-head, article.story .lead, article.story .more { flex:0 0 auto }
   article.story .more { border-left:0; border-top:1px solid var(--line) }
 }
 .tag { border:1px solid var(--line); border-radius:3px; padding:0 .35rem }
 .rated { color:var(--ink); font-weight:600 }
-nav { margin:2rem 0 3rem; display:flex; gap:1.2rem; font-size:.95rem }
+nav.pager { margin:2rem 0 3rem; display:flex; gap:1.2rem; font-size:.95rem }
 a { color:var(--accent) }
 .empty { margin:3rem 0; color:var(--soft) }
-.bar { font-size:.9rem; margin:0 0 .6rem; display:flex; flex-wrap:wrap; gap:.4rem 1rem; align-items:center }
-.bar b { color:var(--ink) }
-.bar .who { margin-left:auto; display:flex; gap:1rem; align-items:center; color:var(--soft) }
+/* A page's own controls, under the masthead: a view switch, or counts that filter a list. */
+.views { margin:1.2rem 0 0; display:flex; flex-wrap:wrap; gap:.4rem 1rem; align-items:center; font-size:.9rem;
+  color:var(--soft) }
+.views b { color:var(--ink) }
+.views .sep { align-self:center; height:1em; border-left:1px solid var(--line) }
 button, select, input { font:inherit; color:var(--ink); background:var(--card); border:1px solid var(--line);
   border-radius:3px }
 button, select { padding:.15rem .45rem; cursor:pointer }
@@ -105,9 +168,6 @@ textarea { font:inherit; color:var(--ink); background:var(--card); border:1px so
 form.sheet button { align-self:flex-start; padding:.4rem 1rem }
 form.sheet h2 { margin:0 }
 form.source, div.source { margin:1rem 0; padding:.8rem 1rem; background:var(--card); border:1px solid var(--line); border-radius:6px }
-.source.paused { opacity:.6 }
-form.source.add { margin-top:1.4rem }
-form.source h2 { margin:0 0 .6rem }
 .source .fields { display:flex; flex-wrap:wrap; gap:.6rem 1rem; align-items:flex-end }
 .source label { display:flex; flex-direction:column; gap:.2rem; font-size:.8rem; color:var(--soft) }
 .source .wide { flex:1 1 22rem }
@@ -117,14 +177,39 @@ form.source h2 { margin:0 0 .6rem }
 .source button:not(.link) { padding:.35rem .9rem }
 .source .hint { margin-top:.5rem }
 .source form { margin:0 }
-.source details { margin-top:.5rem }
-.source summary { cursor:pointer }
-.source details form { margin-top:.5rem }
 .source b.wide { font:700 1.02rem Georgia,serif; align-self:center }
+/* Filters are a plain row, not a card: the list below is what matters. */
+form.source.filters { margin:1rem 0 .5rem; padding:0; background:none; border:0 }
+/* Adding something is a thing set apart from the list, opened when wanted. */
+details.add { margin:1rem 0; border:1px dashed var(--accent); border-radius:6px }
+details.add > summary { list-style:none; padding:.55rem .9rem; color:var(--accent); font-weight:600; cursor:pointer }
+details.add > summary::-webkit-details-marker { display:none }
+details.add > summary::before { content:"+ " }
+details.add[open] > summary::before { content:"− " }
+details.add[open] > summary { border-bottom:1px solid var(--line) }
+details.add form.source, details.row form.source { margin:0; border:0; border-radius:0 }
+/* One compact row per source, opened to edit it. */
+details.row { margin:.5rem 0; background:var(--card); border:1px solid var(--line); border-radius:6px }
+details.row > summary { list-style:none; display:flex; flex-wrap:wrap; align-items:center; gap:.3rem .8rem;
+  padding:.55rem .9rem; cursor:pointer }
+details.row > summary::-webkit-details-marker { display:none }
+details.row[open] > summary { border-bottom:1px solid var(--line) }
+details.row > form, details.row > div { padding:.8rem .9rem }
+details.row.paused > summary { opacity:.6 }
+details.row .name { font:700 1.02rem Georgia,serif }
+details.row .addr { color:var(--soft); font-size:.82rem; min-width:0; max-width:30rem; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap }
+details.row .tags { margin-left:auto; display:flex; flex-wrap:wrap; gap:.3rem; font-size:.74rem; color:var(--soft) }
+details.row .state { flex-basis:100%; margin:0; font-size:.8rem; color:var(--soft) }
+.dot { flex:none; width:.6rem; height:.6rem; border-radius:50%; background:var(--ok) }
+.dot.bad { background:var(--bad) }
+.dot.wait { background:var(--warn) }
+.dot.off { background:var(--line) }
+.dot.none { background:none; border:1px solid var(--line) }
 form.settings label.tick { flex-direction:row; align-items:center; gap:.45rem }
 form.settings h2 { margin-top:1.2rem }
 form.settings select { padding:.45rem .55rem }
-.failing { color:#b3261e }
+.failing { color:var(--bad) }
 .problem { margin:1rem 0; padding:.7rem 1rem; background:var(--card); border:1px solid var(--line); border-radius:6px;
   display:flex; flex-direction:column; gap:.3rem }
 .problem .kicker { margin:0 }
@@ -132,18 +217,35 @@ form.settings select { padding:.45rem .55rem }
   display:flex; flex-direction:column; gap:.35rem }
 .shelf .kicker { margin:0 }
 .shelf .meta { margin-top:0; border-top:0; padding-top:0 }
-.error { color:#b3261e; margin:1rem 0 0 }
+.error { color:var(--bad); margin:1rem 0 0 }
 .notice { color:var(--accent); margin:1rem 0 0 }
 .hint { font-size:.8rem; color:var(--soft); margin:0 }
 /* After .hint, or a failing hint would stay grey. */
-.hint.failing { color:#b3261e }
+.hint.failing { color:var(--bad) }
+details.help { margin:.5rem 0 0; font-size:.8rem; color:var(--soft) }
+details.help summary { cursor:pointer; color:var(--accent) }
+details.help p { margin:.4rem 0 0 }
 form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--accent); border-radius:6px;
   display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:center; font-size:.9rem }
 </style>
 </head>
 <body>
 <header>
+<div class="masthead">
 <h1><svg viewBox="0 0 48 32" width="48" height="32" aria-hidden="true"><path d="M10 24a14 14 0 0 1 28 0z" fill="currentColor"/><path d="M2 28h44" stroke="currentColor" stroke-width="2.5"/><path d="M24 2v5M6 10l4 3M42 10l-4 3" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg><a href="/">Forenoon</a></h1>
+{% if let Some(nav) = nav %}<nav class="site" aria-label="Pages">
+<a href="/"{% if nav.current == "newsstand" %} aria-current="page"{% endif %}>Newsstand</a>
+<a href="/archive"{% if nav.current == "archive" %} aria-current="page"{% endif %}>Archive</a>
+<a href="/reading"{% if nav.current == "reading" %} aria-current="page"{% endif %}>Reading</a>
+{% if nav.admin %}<span class="sep"></span>
+<a href="/sources"{% if nav.current == "sources" %} aria-current="page"{% endif %}>Sources</a>
+<a href="/settings"{% if nav.current == "settings" %} aria-current="page"{% endif %}>Settings</a>
+<a href="/problems"{% if nav.current == "problems" %} aria-current="page"{% endif %}>Problems{% if nav.problems > 0 %} ({{ nav.problems }}){% endif %}</a>
+{% endif %}<span class="sep"></span>
+<a class="me" href="/account"{% if nav.current == "account" %} aria-current="page"{% endif %}>{{ nav.name }}</a>
+</nav>{% endif %}
+<button class="theme" type="button" hidden aria-label="Switch to dark mode"><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+</div>
 {% block header %}{% endblock %}
 </header>
 <main>

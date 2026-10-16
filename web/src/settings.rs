@@ -23,7 +23,7 @@ use std::str::FromStr;
 use crate::{
     auth::AuthSession,
     db::{self, now_iso},
-    pages::{AppState, NOT_FROM_HERE, Page, allowed, csrf_token, html, reader, refused, thousands},
+    pages::{AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, thousands},
 };
 
 const MAX_TEXT: usize = 200;
@@ -113,7 +113,14 @@ struct Field {
     max: Option<f64>,
 }
 
+/// "Model use" as an anchor: model-use.
+fn slug(title: &str) -> String {
+    title.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-")
+}
+
 struct Section {
+    /// The heading's anchor, for the links that jump to each section.
+    id: String,
     title: &'static str,
     fields: Vec<Field>,
 }
@@ -121,7 +128,7 @@ struct Section {
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsPage {
-    name: String,
+    nav: Option<Nav>,
     csrf: String,
     sections: Vec<Section>,
     error: Option<String>,
@@ -191,7 +198,7 @@ fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -
         };
         match sections.last_mut() {
             Some(section) if section.title == spec.section => section.fields.push(field),
-            _ => sections.push(Section { title: &spec.section, fields: vec![field] }),
+            _ => sections.push(Section { id: slug(&spec.section), title: &spec.section, fields: vec![field] }),
         }
     }
     sections
@@ -214,7 +221,7 @@ pub async fn page(
     }
     let stored = stored(&state).await?;
     let page = SettingsPage {
-        name: user.name,
+        nav: Nav::new(&state, &user, "settings").await?,
         csrf: csrf_token(&session).await?,
         sections: sections(&stored, &stored),
         error: None,
@@ -250,7 +257,7 @@ pub async fn save(
                 }
                 let stored = stored(&state).await?;
                 let page = SettingsPage {
-                    name: user.name,
+                    nav: Nav::new(&state, &user, "settings").await?,
                     csrf: csrf_token(&session).await?,
                     sections: sections(&typed, &stored),
                     error: Some(problem),
@@ -308,8 +315,6 @@ mod tests {
         assert!(check("format", "articles").is_ok() && check("format", "pdf").is_err());
         assert!(check("keep_pages_days", "-1").is_ok() && check("keep_pages_days", "-2").is_err());
         assert!(check("max_age_days", "0").is_err() && check("max_age_days", "2.5").is_err());
-        assert!(check("discovery.min_score", "7.5").is_ok() && check("discovery.min_score", "11").is_err());
-        assert!(check("discovery.min_score", "NaN").is_err() && check("discovery.min_score", "inf").is_err());
         assert_eq!(check("alerts.to", " Me@Example.com ").unwrap(), "me@example.com");
         assert!(check("alerts.to", "").is_ok() && check("alerts.to", "nope").is_err());
         assert!(check("llm.model", "").is_err() && check("llm.model", "a\nb").is_err());

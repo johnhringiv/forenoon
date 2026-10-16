@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -27,6 +27,12 @@ class Item:
     summary: str = ""  # shown to the ranking model in place of an abstract
     site: str = ""  # the article's host
     discussion_url: str = ""
+    # The same article found on other front pages this run: one sighting each.
+    also: list[Item] = field(default_factory=list, compare=False, hash=False)
+
+    def sources(self) -> list[Source]:
+        """Every source carrying it this run, its own first."""
+        return [self.source, *(other.source for other in self.also)]
 
 
 def _published(entry) -> datetime | None:
