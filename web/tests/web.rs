@@ -991,6 +991,18 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     assert!(text.contains(r#"<option value="anthropic/claude-haiku-5-5" selected>Claude Haiku 5.5</option>"#));
     assert_eq!(text.matches(r#"<option value="anthropic/claude-sonnet-5-5">Claude Sonnet 5.5</option>"#).count(), 2);
     assert!(text.contains(r#"<option value="" selected>The model above</option>"#));
+    // A model saved before it left the list is shown as it is, so a save keeps it.
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('llm.model', 'anthropic/claude-old-1', ?)")
+        .bind(&now)
+        .execute(&site.pool)
+        .await
+        .unwrap();
+    let text = admin.get(&site, "/settings").await.text;
+    assert!(text.contains(
+        r#"<option value="anthropic/claude-old-1" selected>anthropic/claude-old-1 (not in the list)</option>"#
+    ));
+    assert!(!text.contains(r#"<option value="anthropic/claude-haiku-5-5" selected>"#));
+    sqlx::query("DELETE FROM settings").execute(&site.pool).await.unwrap();
 
     // Every field as the page shows it, with a few changed.
     let defaults = [
