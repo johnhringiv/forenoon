@@ -49,8 +49,9 @@ struct ReadingPage {
     /// One book a day, rather than one per article.
     issue: bool,
     explore: bool,
-    most_per_subject: i64,
     show_reasons: bool,
+    /// As saved, or as typed when the form was refused.
+    most_per_subject: String,
     learn: bool,
     notes: String,
     /// When the pipeline last rewrote it, in words.
@@ -60,14 +61,25 @@ struct ReadingPage {
     versions: Vec<Version>,
 }
 
-/// The page, with the reader's interests and stories a day as saved, or as `typed` when a
-/// form of theirs was refused.
+/// The Reading form as the reader sent it, shown again when it was refused so that a slip in
+/// one field loses none of the others.
+pub(crate) struct Typed {
+    pub interests: String,
+    pub daily_stories: String,
+    pub format: String,
+    pub most_per_subject: String,
+    pub explore: bool,
+    pub show_reasons: bool,
+}
+
+/// The page, with the reader's settings as saved, or as `typed` when a form of theirs was
+/// refused.
 pub(crate) async fn render(
     state: &AppState,
     user: User,
     csrf: String,
     status: StatusCode,
-    typed: Option<(String, String)>,
+    typed: Option<Typed>,
     error: Option<String>,
     notice: Option<&'static str>,
 ) -> Page {
@@ -85,16 +97,23 @@ pub(crate) async fn render(
             notes: version.notes,
         })
         .collect();
-    let (interests, daily_stories) = typed.unwrap_or_else(|| (user.interests.clone(), user.daily_stories.to_string()));
+    let typed = typed.unwrap_or_else(|| Typed {
+        interests: user.interests.clone(),
+        daily_stories: user.daily_stories.to_string(),
+        format: user.format.clone(),
+        most_per_subject: user.most_per_subject.to_string(),
+        explore: user.explore,
+        show_reasons: user.show_reasons,
+    });
     let page = ReadingPage {
         nav: Nav::new(state, &user, "reading").await?,
         csrf,
-        interests,
-        daily_stories,
-        issue: user.format == "issue",
-        explore: user.explore,
-        most_per_subject: user.most_per_subject,
-        show_reasons: user.show_reasons,
+        issue: typed.format != "articles",
+        explore: typed.explore,
+        most_per_subject: typed.most_per_subject,
+        show_reasons: typed.show_reasons,
+        interests: typed.interests,
+        daily_stories: typed.daily_stories,
         learn: user.learn,
         rewritten: now.learned_at.as_deref().map(day),
         notes: now.notes,

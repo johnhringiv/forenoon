@@ -1374,7 +1374,14 @@ pub async fn set_reading(
         (problem, ..) => problem.unwrap_or_default(),
     };
     // Shown again as typed, so a slip does not lose the rest.
-    let typed = (interests.to_owned(), form.daily_stories.trim().to_owned());
+    let typed = reading::Typed {
+        interests: interests.to_owned(),
+        daily_stories: form.daily_stories.trim().to_owned(),
+        format: form.format.clone().unwrap_or_default(),
+        most_per_subject: form.most_per_subject.as_deref().unwrap_or("").trim().to_owned(),
+        explore: form.explore.is_some(),
+        show_reasons: form.show_reasons.is_some(),
+    };
     reading::render(&state, user, form.csrf, StatusCode::BAD_REQUEST, Some(typed), Some(problem), None).await
 }
 
@@ -1405,6 +1412,9 @@ pub async fn set_kindle(
         }
         Err(problem) => {
             let nav = Nav::new(&state, &user, "account").await?;
+            // Shown again as typed, so a slip in one address loses neither the rest nor the tick.
+            let user =
+                User { kindle_addresses: form.kindle_addresses.clone(), grayscale: form.colour.is_none(), ..user };
             html(
                 StatusCode::BAD_REQUEST,
                 AccountPage {

@@ -469,6 +469,13 @@ async fn account_page_changes_the_profile_and_the_password() {
         reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Stories a day must be a number from 1 to 50.")
     );
     assert!(reply.text.contains("Compilers.</textarea>") && reply.text.contains(r#"value="0""#), "shown as typed");
+    // The rest of the form too, not the saved values: the reader loses nothing to one slip.
+    assert!(reply.text.contains(r#"<option value="articles" selected>"#), "{}", reply.text);
+    assert!(reply.text.contains(r#"name="most_per_subject" type="number" min="0" max="20" value="4""#));
+    assert!(
+        reply.text.contains(r#"name="show_reasons" value="1" checked"#)
+            && reply.text.contains(r#"name="explore" value="1">"#)
+    );
     let saved = browser.post(&site, "/account/reading", &reading("Compilers.\r\nNot watches. <b>", "16")).await;
     assert_eq!(saved.location, "/reading?saved=reading");
     let page = browser.get(&site, &saved.location).await.text;
@@ -501,9 +508,12 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(!auth::find_user(&site.pool, "john").await.unwrap().unwrap().learn);
     assert!(browser.get(&site, "/reading").await.text.contains("Turned off: the notes below are not rewritten"));
     // Kindle addresses, on the account page: the reader's own, checked for shape.
-    let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", "not an address")];
+    let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", "a@kindle.com\nnot an address"), ("colour", "1")];
     let reply = browser.post(&site, "/account/kindle", &kindle).await;
     assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("not an address is not an email address."));
+    assert!(reply.text.contains("a@kindle.com\nnot an address</textarea>"), "shown as typed: {}", reply.text);
+    assert!(reply.text.contains(r#"name="colour" value="1" checked"#), "and the tick with it");
+    assert!(auth::find_user(&site.pool, "john").await.unwrap().unwrap().grayscale, "nothing saved");
     let kindle = [("csrf", csrf.as_str()), ("kindle_addresses", " a@kindle.com \n\nb@kindle.com")];
     assert_eq!(browser.post(&site, "/account/kindle", &kindle).await.location, "/account?saved=kindle");
     let user = auth::find_user(&site.pool, "john").await.unwrap().unwrap();
