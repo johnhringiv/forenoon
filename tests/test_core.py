@@ -133,7 +133,7 @@ def test_golden_epub_structure_is_stable_and_well_formed():
     for name in ("content.opf", "nav.xhtml", "toc.ncx", "article.xhtml"):
         etree.fromstring(zf.read(f"OEBPS/{name}"))
     article = zf.read("OEBPS/article.xhtml").decode()
-    assert "alert(" not in article and "<pre><code>fn main()" in article
+    assert "alert(" not in article and '<pre><code><span class="ln i0">fn main(' in article
     assert 'src="images/img001.jpg"' in article and "OEBPS/images/img001.jpg" in zf.namelist()
     assert article.count("/f/golden-") == 10
     opf = zf.read("OEBPS/content.opf").decode()
@@ -499,6 +499,74 @@ def test_a_call_is_priced_at_its_models_rates_with_cached_input_apart(tmp_path):
     db.commit()
     db.close()
     assert abs(Store(old).llm_usage_since("2000-01-01")["cost"] - 0.01) < 1e-12
+
+
+def test_code_lines_are_blocks_with_a_hanging_indent():
+    """On the Kindle a wrapped code line starts at the left edge, so each source line is its own
+    block with its indent in CSS, and long tokens get break points instead of a hyphen."""
+    from datetime import UTC, datetime
+
+    import lxml.html
+
+    from app.render import Article, render_epub
+
+    source = [
+        "<b>fn</b> main() {",
+        "    <i>// a comment",  # the <i> spans two lines
+        "    that goes on</i>",
+        "",
+        "\tlet x = foo.bar(baz);",  # a tab
+        "\xa0\xa0done();",  # non-breaking spaces as indent
+        '    <a id="l7"></a>if a == b &amp;&amp; c =&gt; d::e { x[0] }',  # an anchor; two-character operators
+        "}",
+    ]
+    body = lxml.html.fragment_fromstring(
+        "<div><pre><code>" + "\n".join(source) + "\n</code></pre><pre>a<br>  b</pre></div>"
+    )
+    article = Article(id="x", url="https://e.example/a", title="T", source="S", body=body)
+    day = datetime(2026, 10, 15, tzinfo=UTC)
+    book = zipfile.ZipFile(io.BytesIO(render_epub(article, day)))
+    chapter = book.read("OEBPS/article.xhtml").decode()
+    etree.fromstring(chapter.encode())
+    lines = lxml.html.fromstring(chapter.encode()).xpath('//pre//span[starts-with(@class, "ln ")]')
+    texts = [span.text_content().replace("\u200b", "") for span in lines]
+    assert texts == [
+        "fn main() {",
+        "// a comment",
+        "that goes on",
+        "\xa0",
+        "let x = foo.bar(baz);",
+        "done();",
+        "if a == b && c => d::e { x[0] }",
+        "}",
+        "a",
+        "b",
+    ]
+    assert [span.get("class") for span in lines] == [
+        "ln i0",
+        "ln i4",
+        "ln i4",
+        "ln i0",
+        "ln i4",
+        "ln i2",
+        "ln i4",
+        "ln i0",
+        "ln i0",
+        "ln i2",
+    ]
+    assert chapter.count("<i>") == 2, "the comment's highlighting is closed and reopened on the next line"
+    assert "foo.\u200bbar(\u200bbaz);</span>" in chapter, "break points after punctuation, none at the line end"
+    assert '<a id="l7"></a>if a ==\u200b b &amp;&amp;\u200b c =&gt;\u200b d::\u200be {\u200b x[\u200b0] }' in chapter, (
+        "an anchor is kept; a run of break characters breaks after the run, so operators stay whole"
+    )
+    assert "\n" not in chapter[chapter.index("<pre>") : chapter.index("</pre>")]
+    css = book.read("OEBPS/style.css").decode()
+    assert ".ln { display: block; }" in css
+    assert ".i4 { padding-left: 7.2em; text-indent: -3.6em; }" in css
+    assert ".i24 {" in css and ".i25 {" not in css
+
+    again = zipfile.ZipFile(io.BytesIO(render_epub(article, day))).read("OEBPS/article.xhtml").decode()
+    assert again == chapter, "rendering the same body twice does not split the lines again"
 
 
 def test_a_model_that_refuses_a_forced_tool_call_is_asked_for_it_instead():
