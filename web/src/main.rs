@@ -163,7 +163,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                     username: smtp_username,
                     // Only ever from the environment, so it cannot show up in a process list.
                     password: std::env::var("FORENOON_SMTP_PASSWORD").unwrap_or_default(),
-                    sender: smtp_sender,
+                    sender: smtp_sender.clone(),
                 })?,
                 None => {
                     eprintln!("No mail server set (FORENOON_SMTP_HOST): account emails go to this log.");
@@ -192,7 +192,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 }
                 secret => Some(secret.into_bytes()),
             };
-            let options = Options { secure_cookies, mailer, base_url, data_dir, logins_dir, proxy, feedback_secret };
+            let sender = Some(smtp_sender).filter(|sender| !sender.is_empty());
+            let options =
+                Options { secure_cookies, mailer, base_url, data_dir, logins_dir, proxy, feedback_secret, sender };
             let router = app(pool, options).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");
@@ -208,7 +210,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Command::AddUser { id, email, name, role, timezone, kindle, follow_nothing } => {
             if !auth::valid_id(&id) {
-                return Err("the id must be 1 to 64 letters, digits, '_', '.' or '-'".into());
+                return Err(
+                    "the id must be 1 to 64 letters, digits, '_', '.' or '-', with a letter or digit in it".into()
+                );
             }
             let Some(email) = auth::normal_email(&email) else {
                 return Err(format!("{email} is not an email address").into());
@@ -245,6 +249,12 @@ async fn run(cli: Cli) -> Result<(), Error> {
             }
         }
         Command::SetPassword { id } => {
+            if auth::find_user(&pool, &id).await?.is_some_and(|user| user.is_invited()) {
+                return Err(format!(
+                    "{id} is an invitation not yet accepted; send its link again or take it back on the Accounts page"
+                )
+                .into());
+            }
             let hash = auth::hash_password(read_password()?).await?;
             if !db::set_password(&pool, &id, &hash).await? {
                 return Err(format!("no account {id}").into());
@@ -254,10 +264,11 @@ async fn run(cli: Cli) -> Result<(), Error> {
         Command::Users => {
             for user in db::list_users(&pool).await? {
                 let kindle = user.kindle_addresses.lines().collect::<Vec<_>>().join(", ");
-                let email = match (&user.email, &user.email_verified_at) {
-                    (Some(email), Some(_)) => format!("{email} (confirmed)"),
-                    (Some(email), None) => format!("{email} (not confirmed)"),
-                    (None, _) => "no email: cannot sign in".to_owned(),
+                let email = match (&user.email, &user.email_verified_at, &user.invited_at) {
+                    (Some(email), _, Some(_)) => format!("{email} (invited, not yet joined)"),
+                    (Some(email), Some(_), None) => format!("{email} (confirmed)"),
+                    (Some(email), None, None) => format!("{email} (not confirmed)"),
+                    (None, _, _) => "no email: cannot sign in".to_owned(),
                 };
                 println!(
                     "{:<12} {:<7} {}  {}  kindle [{}]  {}",

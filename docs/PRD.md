@@ -18,15 +18,15 @@ links, and the ratings feed the next day's choices. Web pages show what was deli
 what was passed over, take ratings and links added by hand, and hold all the settings.
 
 It runs as containers on a home server. It is not a hosted service: each install fetches only
-what its own users configure and delivers only to the addresses its admin has set.
+what its own users configure and delivers only to the addresses its readers have set.
 
 ## 2. Users and configuration
 
 - An install has one or more **readers**, each with an id, a name, one or more Send to Kindle
   addresses, a daily target of stories (default 8; section 7e) and an interests text. They
   live in the database: a reader is an account of the web pages
-  (section 9a), created with `forenoon-web add-user` and edited on its Reading and account
-  pages. The
+  (section 9a), made by an admin's invitation (or `forenoon-web add-user`) and edited on its
+  Reading and account pages. The
   pipeline reads them at the start of every run. With no readers, or for a reader with no
   Kindle address, nothing is delivered and an alert is sent.
 - **Sources** belong to the household and are read for the readers who **follow** them: a
@@ -634,7 +634,7 @@ shown on the row for a day. At most 30 a day per reader.
 ## 8. Delivery
 
 Books are emailed as attachments through an SMTP relay (STARTTLS, with login) to the user's
-Send to Kindle addresses. Recipients come only from the reader's account, where an admin sets them;
+Send to Kindle addresses. Recipients come only from the reader's own account page;
 nothing in a feed or article can add or change a recipient. The sender address must be on
 the Amazon account's approved sender list.
 
@@ -658,10 +658,21 @@ database with the pipeline.
 
 - **Accounts.** Every page except sign-in and the health check needs a session. An account
   is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
-  reader sees and changes only their own deliveries, ratings, settings and sources (section 2). Accounts are created from the command line
-  (`forenoon-web add-user <id> --email <address>`); there is no sign-up page. The first account is an admin,
-  later ones readers. An admin has the Settings and Problems pages, sets Kindle addresses,
-  sees every source and session, and pauses sources for everyone.
+  reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
+  created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
+  admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
+  sees every source and session, and pauses sources for everyone. Each reader sets their own
+  Kindle addresses.
+- **Invitations.** On the Accounts page an admin invites a reader by email address, with an
+  id (taken from the address when none is given), a name and a role. The account exists from
+  then on, invited: no password, no sign-in, no reset email, and the pipeline delivers nothing
+  to it. The address gets a link that works for seven days, once; the admin is shown the link
+  too, for when the email does not arrive, and can send a fresh one (the old stops working)
+  or take the invitation back, which removes the account. The join page shows the address,
+  asks for a name, password, time zone and Kindle addresses, and signs the reader in; the
+  address counts as confirmed, the account follows every shared source, and the reader lands
+  on the Reading page. Kindle hints name the install's sender address (`FORENOON_SMTP_SENDER`)
+  and link to Amazon's Personal Document Settings, where every Kindle must approve it.
 - **Sign-in is by email address**, stored lowercase so casing and stray spaces cannot make
   two accounts of one address. The account id is separate and never changes: it names the
   reader in the pipeline's records.
@@ -712,8 +723,8 @@ database with the pipeline.
   characters at most), and the last 10 versions with who wrote each and a button to restore
   it. `/learned`, the notes' old address, leads here.
 - **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
-  name: Newsstand, Archive, Reading, Sources, then for an admin Settings and Problems (with
-  the count of reports), then the reader's name, which opens the account page. The current
+  name: Newsstand, Archive, Reading, Sources, then for an admin Settings, Accounts and
+  Problems (with the count of reports), then the reader's name, which opens the account page. The current
   page is marked. Sign out is on the account page. Below the row each page has its own
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.
@@ -743,8 +754,8 @@ database with the pipeline.
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
 - **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
-  out. Only an admin can change Kindle addresses, because they decide where content is
-  emailed. Interests and stories a day are on the Reading page.
+  out. A reader changes only their own row, so the only addresses an account can send to are
+  the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
@@ -800,7 +811,7 @@ The web pages have their own program:
 | `forenoon-web serve [--listen ADDR] [--secure-cookies] [--client-ip-header H] [--trusted-proxies LIST]`   | Serve the pages and answer rating links    |
 | `forenoon-web add-user ID --email ADDR [--kindle ADDR] [--name] [--role] [--timezone] [--follow-nothing]` | Create an account; asks for the password   |
 | `forenoon-web set-password ID`                                                                            | Change a password, signing the account out |
-| `forenoon-web users`                                                                                      | List the accounts                          |
+| `forenoon-web users`                                                                                      | List the accounts, invited ones marked     |
 | `forenoon-web health`                                                                                     | Exit 0 when the local server answers       |
 
 ## 11. Storage
@@ -835,7 +846,8 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 ## 13. Security properties
 
 - Fetched content cannot choose recipients, run code, or reach private network addresses.
-- Rating links accept only signed, expiring tokens and write only ratings.
+- Rating links accept only signed, expiring tokens and write only ratings. Emailed links
+  (confirm, reset, invite) are stored only as hashes, expire, and work once.
 - The web pages need a login and show each reader only their own data. Admin pages are
   public too, behind the same login and an admin role.
 - Secrets are never read from or written to config files, reports or logs.
@@ -862,6 +874,7 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 - The whole archive of a followed blog; full-text search of stored articles; expiring
   articles past their shelf life; a "throwback" section of older pieces worth a second look.
 - A search agent, or an MCP server, over the library.
-- Editing the prompts in the browser; sign-up and admin pages for accounts.
+- Editing the prompts in the browser; changing a reader's role from the Accounts page (a
+  public sign-up page is not wanted).
 - Newsletters by email as a source.
 - E-readers other than Kindle.

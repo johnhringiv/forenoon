@@ -241,6 +241,7 @@ form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--acc
 <a href="/sources"{% if nav.current == "sources" %} aria-current="page"{% endif %}>Sources</a>
 {% if nav.admin %}<span class="sep"></span>
 <a href="/settings"{% if nav.current == "settings" %} aria-current="page"{% endif %}>Settings</a>
+<a href="/accounts"{% if nav.current == "accounts" %} aria-current="page"{% endif %}>Accounts</a>
 <a href="/problems"{% if nav.current == "problems" %} aria-current="page"{% endif %}>Problems{% if nav.problems > 0 %} ({{ nav.problems }}){% endif %}</a>
 {% endif %}<span class="sep"></span>
 <a class="me" href="/account"{% if nav.current == "account" %} aria-current="page"{% endif %}>{{ nav.name }}</a>

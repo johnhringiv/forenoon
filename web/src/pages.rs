@@ -38,7 +38,7 @@ use crate::{
 const ISSUES_PER_PAGE: usize = 14;
 pub(crate) const MAX_DESCRIPTION_CHARS: usize = 260;
 const WORDS_PER_MINUTE: f64 = 230.0;
-const MAX_NAME: usize = 80;
+pub(crate) const MAX_NAME: usize = 80;
 pub(crate) const MAX_INTERESTS: usize = 4000;
 pub(crate) const MAX_DAILY_STORIES: i64 = 50;
 const CSRF_KEY: &str = "csrf";
@@ -61,8 +61,12 @@ const SHOW: [(&str, &str); 3] = [("", "All"), ("rated", "Rated"), ("unrated", "N
 pub struct AppState {
     pub pool: SqlitePool,
     pub sign_ins: Arc<Limiter>,
-    /// Counts emails sent and reset attempts, per hour.
+    /// Counts emails sent per account and invitations per admin, per hour.
     pub mail_limits: Arc<Limiter>,
+    /// Counts the posts anyone may make without a session, per client address and hour:
+    /// reset requests and attempts, join attempts. Evicting, so a flood of addresses there
+    /// cannot fill the table and refuse an account's own emails.
+    pub public_limits: Arc<Limiter>,
     pub mailer: Mailer,
     /// Where the pages are reached, for links in emails; no trailing slash.
     pub base_url: String,
@@ -78,6 +82,8 @@ pub struct AppState {
     pub feedback_secret: Option<Arc<[u8]>>,
     /// Counts rating taps, per minute.
     pub taps: Arc<Limiter>,
+    /// The address issues are sent from, for the Kindle hints; see `Options::sender`.
+    pub sender: Option<String>,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -167,7 +173,7 @@ pub async fn https_only(request: Request, next: Next) -> Response {
 // requests that change something
 
 /// Whether a form post came from one of our own pages, as far as the browser says.
-fn same_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
     let text = |name| headers.get(name).and_then(|value: &HeaderValue| value.to_str().ok());
     // The browser's own verdict, when it gives one (it does on https and localhost).
     if let Some(site) = text(header::HeaderName::from_static("sec-fetch-site")) {
@@ -182,7 +188,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
     }
 }
 
-fn random_token() -> Result<String, AppError> {
+pub(crate) fn random_token() -> Result<String, AppError> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)?;
     Ok(hex::encode(&bytes))
@@ -327,7 +333,7 @@ struct MessagePage {
     text: String,
 }
 
-fn message(status: StatusCode, heading: &'static str, text: impl Into<String>) -> Page {
+pub(crate) fn message(status: StatusCode, heading: &'static str, text: impl Into<String>) -> Page {
     html(status, MessagePage { nav: None, heading, text: text.into() })
 }
 
@@ -422,7 +428,7 @@ pub async fn forgot(
     if !same_origin(&headers) {
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
     }
-    if !state.mail_limits.allow(&format!("forgot client {client}"), RESET_REQUESTS_PER_CLIENT) {
+    if !state.public_limits.allow(&format!("forgot client {client}"), RESET_REQUESTS_PER_CLIENT) {
         return html(
             StatusCode::TOO_MANY_REQUESTS,
             ForgotPage { nav: None, error: Some("Too many requests. Try again in an hour.") },
@@ -489,7 +495,7 @@ pub async fn reset(
     if !same_origin(&headers) {
         return refused(StatusCode::FORBIDDEN, "Refused: this request did not come from this site.");
     }
-    if !state.mail_limits.allow(&format!("reset client {client}"), RESET_ATTEMPTS_PER_CLIENT) {
+    if !state.public_limits.allow(&format!("reset client {client}"), RESET_ATTEMPTS_PER_CLIENT) {
         return message(StatusCode::TOO_MANY_REQUESTS, "Too many attempts", "Try again in an hour.");
     }
     let Some(found) = db::read_token(&state.pool, &token, db::RESET).await? else {
@@ -1011,7 +1017,7 @@ pub async fn send(
         return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
     }
     if user.kindle_addresses.trim().is_empty() {
-        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; an admin sets it.");
+        return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; add one on your account page.");
     }
     if !db::pipeline_ready(&state.pool).await? || !db::in_library(&state.pool, &user.id, &form.article).await? {
         return refused(StatusCode::NOT_FOUND, "No such article.");
@@ -1101,6 +1107,8 @@ struct AccountPage {
     csrf: String,
     error: Option<String>,
     notice: Option<&'static str>,
+    /// For the Kindle hint; see `AppState::sender`.
+    sender: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1124,7 +1132,10 @@ pub async fn account(
     };
     let user = reader(&auth)?;
     let nav = Nav::new(&state, &user, "account").await?;
-    html(StatusCode::OK, AccountPage { nav, user, csrf: csrf_token(&session).await?, error: None, notice })
+    html(
+        StatusCode::OK,
+        AccountPage { nav, user, csrf: csrf_token(&session).await?, error: None, notice, sender: state.sender.clone() },
+    )
 }
 
 #[derive(Deserialize)]
@@ -1163,6 +1174,7 @@ pub async fn set_profile(
                 csrf,
                 error: Some(error),
                 notice: None,
+                sender: state.sender.clone(),
             },
         );
     }
@@ -1227,6 +1239,7 @@ pub async fn set_email(
         csrf: form.csrf,
         error: problem.map(str::to_owned),
         notice: None,
+        sender: state.sender.clone(),
     };
     html(StatusCode::BAD_REQUEST, page)
 }
@@ -1293,8 +1306,8 @@ pub struct KindleForm {
     kindle_addresses: String,
 }
 
-/// Where this reader's books are emailed. Only an admin may change it, because it decides
-/// where content goes; anyone else's form is ignored.
+/// Where this reader's books are emailed. Theirs to set: only the signed-in reader's own
+/// row changes, and only to addresses shaped like email.
 pub async fn set_kindle(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -1306,9 +1319,6 @@ pub async fn set_kindle(
     if !allowed(&headers, &session, &form.csrf).await? {
         return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
     }
-    if !user.is_admin() {
-        return Ok(Redirect::to("/account").into_response());
-    }
     match auth::kindle_addresses(&form.kindle_addresses) {
         Ok(addresses) => {
             db::set_kindle_addresses(&state.pool, &user.id, &addresses.join("\n")).await?;
@@ -1318,7 +1328,14 @@ pub async fn set_kindle(
             let nav = Nav::new(&state, &user, "account").await?;
             html(
                 StatusCode::BAD_REQUEST,
-                AccountPage { nav, user, csrf: form.csrf, error: Some(problem), notice: None },
+                AccountPage {
+                    nav,
+                    user,
+                    csrf: form.csrf,
+                    error: Some(problem),
+                    notice: None,
+                    sender: state.sender.clone(),
+                },
             )
         }
     }
@@ -1365,6 +1382,7 @@ pub async fn set_password(
                 csrf,
                 error: Some(error),
                 notice: None,
+                sender: state.sender.clone(),
             },
         );
     }

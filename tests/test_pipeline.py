@@ -1650,6 +1650,23 @@ def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
     assert "Your blog.example session ends on 2026-03-20." in " ".join(problems(report, cfg))
 
 
+def test_an_invited_reader_gets_no_issue_until_they_join(env):
+    _, store, _ = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, invited_at, role, email)"
+        " VALUES ('jane', 'Jane', '', 'y', 'y', 'admin', 'jane@example.com')"
+    )
+    store.db.commit()
+    assert [user.id for user in store.readers()] == ["john"]
+    assert store.admin_emails() == (), "an invited admin's address is unconfirmed: no alerts to it"
+    store.db.execute("UPDATE users SET invited_at = NULL, password_hash = 'x' WHERE id = 'jane'")
+    assert [user.id for user in store.readers()] == ["john", "jane"]
+    assert store.admin_emails() == ("jane@example.com",)
+
+
 def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(env, monkeypatch):
     from app import cli, pipeline
 

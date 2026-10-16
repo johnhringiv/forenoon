@@ -1,7 +1,7 @@
 """Configuration: defaults here, deploy settings and secrets from the environment, and the
 rest from the settings an admin saves on the web pages (the `settings` table).
 
-Recipients come only from the database, where an admin sets them.
+Recipients come only from the database, where each reader sets their own.
 """
 
 from __future__ import annotations

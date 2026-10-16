@@ -11,7 +11,8 @@ on the reader's account page in the web pages (or `forenoon-web add-user <id> --
 ## 2. Approve the sender
 
 On the same page, under _Approved Personal Document E-mail List_, add the exact address you
-set as `smtp.sender`. Mail from any other address is not delivered. The first time, Amazon
+set as `smtp.sender`. Mail from any other address is not delivered. Every reader's Kindle
+needs this; the Kindle fields in the web pages name the address and link to the page. The first time, Amazon
 may email the account owner asking to verify the request; confirm it within 48 hours.
 
 ## 3. Configure an SMTP relay
