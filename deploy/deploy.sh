@@ -144,13 +144,17 @@ start_browser() {
 }
 
 start_web() {
+    # The image first, and the old pair only once there is one to run: with none (the package
+    # still private, a mistyped tag) they keep serving.
+    docker pull -q "$WEB_IMAGE" >/dev/null ||
+        echo "pull failed; will use local image $WEB_IMAGE if present"
+    docker image inspect "$WEB_IMAGE" >/dev/null 2>&1 ||
+        { echo "no image $WEB_IMAGE; the web and tunnel containers are left as they are"; return 1; }
     # cloudflared lives in this container's network namespace, so it goes too.
     for c in forenoon-cloudflared forenoon-web; do
         docker stop -t 30 "$c" >/dev/null 2>&1 || true
         docker rm -f "$c" >/dev/null 2>&1 || true
     done
-    docker pull -q "$WEB_IMAGE" >/dev/null ||
-        echo "pull failed; will use local image $WEB_IMAGE if present"
     # It shares the data folder for the database: it reads what was delivered, and writes
     # accounts, sessions, sources, settings and ratings. Its secrets from here are the mail
     # password, for the account emails (without FORENOON_SMTP_HOST those are written to its
@@ -246,8 +250,12 @@ wait_web || web_healthy=false
 start_tunnel
 
 echo "$(date -u +%FT%TZ) recreating forenoon from $IMAGE"
-docker stop -t 30 forenoon >/dev/null 2>&1 || true
-docker rm -f forenoon >/dev/null 2>&1 || true
+# forenoon-feedback answered the rating links before the web pages did; an install from
+# before them still has it.
+for c in forenoon forenoon-feedback; do
+    docker stop -t 30 "$c" >/dev/null 2>&1 || true
+    docker rm -f "$c" >/dev/null 2>&1 || true
+done
 
 run_app() {
     name="$1"

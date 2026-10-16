@@ -111,7 +111,7 @@ if docker pull -q "$WEB_IMAGE" >/dev/null 2>&1; then
     web_running=$(docker inspect forenoon-web --format '{{.Image}}' 2>/dev/null || echo none)
     [ "$web_latest" = "$web_running" ] || web_changed=true
 else
-    echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); web container left as it is"
+    echo "$(date -u +%FT%TZ) pull failed for $WEB_IMAGE (package not public yet?); not updating the web container"
 fi
 
 if [ "$latest" = "$running" ]; then

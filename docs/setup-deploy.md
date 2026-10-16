@@ -40,6 +40,9 @@ docker compose build
 docker compose up -d
 ```
 
+An install from before the web pages has a `feedback` container, which answered the rating
+links; `docker compose up -d --remove-orphans` retires it.
+
 Then set up the web pages (below): create your reader and add sources. After that you can
 try a run without sending anything:
 
@@ -92,8 +95,8 @@ silently drops egress from custom bridge networks, which would break feed fetchi
 tunnel. On DSM, run docker with `sudo`; the binary is at `/usr/local/bin/docker`.
 
 After a host reboot `cloudflared` can start before `web` and fail to join its namespace. If
-the health check above fails after a reboot, run `docker compose up -d` again (the poller
-below does this by itself).
+the health check above fails after a reboot, run `docker compose up -d` again. (The deploy
+script's poller, below, does this by itself; docker compose has nothing watching.)
 
 ### Your own reverse proxy
 

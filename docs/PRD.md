@@ -319,8 +319,8 @@ part-way never causes a resend.
   article, signal and expiry (default 60 days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
   small page stating what is now stored ("Rated 4 of 5, finished.") with links to change it.
-  It is the only page besides sign-in and `GET /healthz` that needs no login, and it takes no
-  other input.
+  Besides sign-in, the forgotten-password and email-link pages and `GET /healthz`, it is the
+  only page that needs no login, and it takes no other input.
 - **Why (optional).** After a rating, the page always offers one more tap for the reason.
   For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
   misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
