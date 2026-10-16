@@ -1665,6 +1665,25 @@ def test_a_sign_in_that_ends_soon_is_in_the_alert(env, monkeypatch):
     assert "Your blog.example session ends on 2026-03-20." in " ".join(problems(report, cfg))
 
 
+def test_a_reader_with_no_kindle_address_reads_their_issue_on_the_web_pages(env):
+    from app.alerts import problems
+
+    cfg, store, fetcher = env
+    user = dataclasses.replace(cfg.users[0], kindle_addresses=())
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: pytest.fail("nothing is emailed"))
+    # Built and recorded as for anyone: on their newsstand, counted against the day's cap.
+    assert report.web_only and report.delivered and report.messages == 0
+    assert store.delivered_on(user.id, "2000", "3000") == report.stories
+    assert "No Kindle address: the issue is on the web pages" in report.to_markdown()
+    assert not any("Kindle" in p or "Delivery failed" in p for p in problems(report, cfg))
+    # With an address, the same run emails the issue (a fresh store: nothing delivered yet).
+    fresh = Store(cfg.data_dir / "fresh.sqlite3")
+    sent = []
+    emailed = run(cfg, fresh, Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(handler)),
+                  cfg.users[0], now=NOW, sender=lambda m, s: sent.extend(m))  # fmt: skip
+    assert not emailed.web_only and sent and emailed.messages == len(sent)
+
+
 def test_an_invited_reader_gets_no_issue_until_they_join(env):
     _, store, _ = env
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):

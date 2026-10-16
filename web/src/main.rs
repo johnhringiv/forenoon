@@ -242,7 +242,9 @@ async fn run(cli: Cli) -> Result<(), Error> {
             }
             println!("Created {role} account {id} ({timezone}). Sign in with {email}.");
             if kindle.is_empty() {
-                println!("It has no Kindle address, so nothing will be sent to it; set one on the account page.");
+                println!(
+                    "It has no Kindle address, so its issues are read on the web pages; set one on the account page to have them sent."
+                );
             }
             if !db::pipeline_ready(&pool).await? || db::totals(&pool, &id).await?.articles == 0 {
                 println!("Nothing has been delivered to {id} yet.");

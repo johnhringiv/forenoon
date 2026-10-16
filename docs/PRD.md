@@ -27,8 +27,12 @@ what its own users configure and delivers only to the addresses its readers have
   live in the database: a reader is an account of the web pages
   (section 9a), made by an admin's invitation (or `forenoon-web add-user`) and edited on its
   Reading and account pages. The
-  pipeline reads them at the start of every run. With no readers, or for a reader with no
-  Kindle address, nothing is delivered and an alert is sent.
+  pipeline reads them at the start of every run. With no readers, nothing is delivered and
+  an alert is sent. A reader with no Kindle address reads on the web pages: their issue is
+  built and recorded as for anyone (on their newsstand, counted against their day's cap,
+  rated the same way), nothing is emailed, and no alert is sent; the run report says so.
+  Adding an address sends the next issue to it. Sending one article from the web pages
+  still needs an address and says so.
 - **Sources** belong to the household and are read for the readers who **follow** them: a
   reader's issue is built from the sources they follow, and nothing else. Each reader has
   their own pin on a source. A feed is added **shared** unless the adder unticks it; a
