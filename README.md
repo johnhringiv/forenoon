@@ -76,6 +76,15 @@ On a phone:
   <img src="docs/images/phone-light.webp" alt="The Newsstand on a phone" width="300">
 </picture>
 
+On the Kindle: the day's issue in the library, its contents with stories grouped and the
+reason for each pick, and an article:
+
+<p>
+  <img src="docs/images/kindle-cover.webp" alt="The issue's cover in the Kindle library: the date, the day's size and its lead headlines" width="260">
+  <img src="docs/images/kindle-contents.webp" alt="The issue's contents page: each story with its source, reading time and why it was picked, related articles listed under it" width="260">
+  <img src="docs/images/kindle-article.webp" alt="An article's first page on the Kindle" width="260">
+</p>
+
 ## Run it locally
 
 ```sh
