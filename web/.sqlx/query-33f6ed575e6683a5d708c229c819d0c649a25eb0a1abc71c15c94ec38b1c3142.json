@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sessions (domain, created_at, saved_by) VALUES (?, ?, ?)\n         ON CONFLICT (domain) DO UPDATE SET saved_by = excluded.saved_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "33f6ed575e6683a5d708c229c819d0c649a25eb0a1abc71c15c94ec38b1c3142"
+}

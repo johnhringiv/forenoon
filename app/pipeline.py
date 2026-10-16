@@ -53,6 +53,7 @@ MAX_LINKS_SHOWN = 8  # per article, to the model
 LINK_CONTEXT_CHARS = 220
 THUMB_TRIES = 4
 OLDEST_NEW = timedelta(days=30)  # an article dated earlier than this is never a candidate
+REUSE_PAGE = 6 * 3600  # seconds: a page saved this recently by another reader's run is not fetched again
 SIGN_IN_WARNING = timedelta(days=14)  # the alert says a session's sign-in is ending this soon
 # Never followed as an article's subject: project and package pages, and reference works.
 NOT_A_SUBJECT = ("github.com", "gitlab.com", "npmjs.com", "pypi.org", "crates.io", "wikipedia.org")
@@ -191,24 +192,31 @@ class RunReport:
         return path
 
 
-def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False) -> Extracted:
+def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False, reuse: bool = False) -> Extracted:
     """Fetch and extract one item. Never raises for bad content.
 
-    With `keep`, what it was extracted from is saved for `forenoon replay`.
+    With `keep`, what it was extracted from is saved for `forenoon replay`. With `reuse`, a page
+    another reader's run saved in the last `REUSE_PAGE` seconds is extracted instead of fetched
+    again; the page is the same whoever reads it. "Fetch again" and added links never reuse.
     """
     if item.source.extract == "link":
         # A link-only source: its pages are never fetched, and its picks are shown as links.
         return Extracted(None, "link", ["a link-only source"])
     page_html, fetch_error = None, ""
+    reused = False
     if item.source.extract != "feed":
-        try:
-            if site := sessions.for_url(cfg.sessions, item.url):
-                page_html = sessions.fetch(cfg.sessions_dir, sessions.name(site), item.url)
-            else:
-                page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
-        except FetchError as exc:
-            fetch_error = str(exc)
-    if keep and cfg.keep_pages_days != 0 and (page_html or item.feed_html):
+        if reuse and cfg.keep_pages_days != 0:
+            page_html = archive.recent_page(cfg.pages_dir, item.id, REUSE_PAGE)
+            reused = page_html is not None
+        if not reused:
+            try:
+                if site := sessions.for_url(cfg.sessions, item.url):
+                    page_html = sessions.fetch(cfg.sessions_dir, sessions.name(site), item.url)
+                else:
+                    page_html = fetcher.get(item.url).content.decode("utf-8", "replace")
+            except FetchError as exc:
+                fetch_error = str(exc)
+    if keep and not reused and cfg.keep_pages_days != 0 and (page_html or item.feed_html):
         archive.save(cfg.pages_dir, item, page_html)
     result = extract(item.url, page_html, item.feed_html, item.source.extract, fetch_error)
     if fetch_error.startswith(sessions.SIGNED_OUT):
@@ -589,7 +597,7 @@ def run(
     reports: dict[str, SourceReport] = {}
     by_source: dict[str, Source] = {}
     seen: set[str] = set()
-    for source in cfg.sources_for(user):
+    for source in cfg.sources:
         src = reports[source.name] = SourceReport(source.name)
         by_source[source.name] = source
         report.sources.append(src)
@@ -760,7 +768,7 @@ def run(
         for item in pool:
             if item.id in found_ids:
                 record_found(item)
-            result = extracted[item.id] = _extract(item, fetcher, cfg, keep=not dry_run)
+            result = extracted[item.id] = _extract(item, fetcher, cfg, keep=not dry_run, reuse=True)
             if result.signed_out:
                 report.sign_in_needed[sessions.for_url(cfg.sessions, item.url)] = result.signed_out
             if result.body is None:
@@ -820,7 +828,7 @@ def run(
             # Its session failed earlier in this run: the next page would fail the same way.
             result = Extracted(None, "error", ["the session needs signing in again"])
         if result is None:
-            result = _extract(item, fetcher, cfg, keep=not dry_run)
+            result = _extract(item, fetcher, cfg, keep=not dry_run, reuse=True)
         if result.signed_out:
             report.sign_in_needed[site] = result.signed_out
         pictures = _pictures(result)

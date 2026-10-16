@@ -798,8 +798,10 @@ def test_pointer_post_is_replaced_by_the_articles_it_links_to_as_one_story(env, 
     again = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: pytest.fail("cap reached"))
     assert again.cap_reached and not again.delivered
 
-    # When nothing it links to can be fetched, the short post goes out as before.
+    # When nothing it links to can be fetched, the short post goes out as before. (Its own data
+    # folder: the page saved above would otherwise be reused instead of fetched.)
     routes.pop("https://orig.example/post-7")
+    cfg = dataclasses.replace(cfg, data_dir=tmp_path / "second")
     fresh = Store(tmp_path / "second.sqlite3")
     fetcher = Fetcher("test", fresh, min_host_interval=0, transport=httpx.MockTransport(routed))
     alone = run(cfg, fresh, fetcher, user, now=NOW, dry_run=True)
@@ -1492,6 +1494,67 @@ def test_a_signed_out_session_shows_its_picks_as_links_and_sends_them_once_it_wo
     # Each was picked once, by the first run: the retry did not record a second choice.
     picked_at = {r["article_id"]: r["selected_at"] for r in store.selection_rows(user.id)}
     assert all(picked_at[i] == NOW.isoformat() for i in again.retried)
+
+
+def test_a_page_one_reader_fetched_serves_the_next_reader_within_hours(env, monkeypatch):
+    """Two readers following the same paywalled feed cost the site one page, not two."""
+    import gzip
+    import json
+
+    from app import archive, pipeline
+    from app.adds import refresh_requested
+
+    cfg, store, fetcher = env
+    john, jane = cfg.users[0], dataclasses.replace(cfg.users[0], id="jane", name="Jane")
+    cfg = dataclasses.replace(cfg, users=(john, jane), sessions=("blog.example",))
+    page = f"<html><body><article>{BODY}</article></body></html>"
+    asked = []
+
+    def with_session(sessions_dir, session, url):
+        asked.append(url)
+        return page
+
+    monkeypatch.setattr(pipeline.sessions, "fetch", with_session)
+    first = run(cfg, store, fetcher, john, now=NOW, sender=lambda m, s: None)
+    blog = sorted(store.get_article(i).url for i in first.delivered if "blog.example" in store.get_article(i).url)
+    assert blog and sorted(asked) == blog
+    saved = {p.name for p in cfg.pages_dir.iterdir()}
+
+    # Jane's run, minutes later, picks the same posts: their pages come from the folder.
+    asked.clear()
+    second = run(cfg, store, fetcher, jane, now=NOW + timedelta(minutes=5), sender=lambda m, s: None)
+    janes = sorted(store.get_article(i).url for i in second.delivered if "blog.example" in store.get_article(i).url)
+    assert janes == blog
+    assert asked == [] and {p.name for p in cfg.pages_dir.iterdir()} == saved, "nothing fetched or rewritten"
+
+    # A page saved longer ago than the window is fetched afresh, as is one saved without a page.
+    def rewrite(article_id, **changes):
+        path = cfg.pages_dir / f"{article_id}.json.gz"
+        with gzip.open(path, "rt", encoding="utf-8") as src:
+            record = json.load(src)
+        with gzip.open(path, "wt", encoding="utf-8") as out:
+            json.dump({**record, **changes}, out)
+
+    (one,) = (i for i in second.delivered if "blog.example" in store.get_article(i).url)
+    assert archive.recent_page(cfg.pages_dir, one, pipeline.REUSE_PAGE) == page
+    rewrite(one, fetched_at=(datetime.now(UTC) - timedelta(hours=7)).isoformat(timespec="seconds"))
+    assert archive.recent_page(cfg.pages_dir, one, pipeline.REUSE_PAGE) is None
+    monkeypatch.setattr(pipeline, "REUSE_PAGE", 10 * 365 * 86400)
+    assert archive.recent_page(cfg.pages_dir, one, pipeline.REUSE_PAGE) == page
+    rewrite(one, page_html=None)
+    assert archive.recent_page(cfg.pages_dir, one, pipeline.REUSE_PAGE) is None
+    rewrite(one, page_html=page)
+
+    # "Fetch again" is a request for the page as it is now: it never takes the saved one.
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    ask = "INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES (?, ?, 'x')"
+    store.db.execute(ask, ("john", one))
+    store.db.commit()
+    asked.clear()
+    assert refresh_requested(cfg, store, fetcher) == 1
+    assert asked == [store.get_article(one).url]
 
 
 def test_a_link_only_source_is_never_fetched_and_its_picks_are_links(env):

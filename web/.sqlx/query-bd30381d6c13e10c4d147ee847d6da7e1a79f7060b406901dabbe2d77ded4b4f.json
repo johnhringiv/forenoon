@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id AS \"id!\", s.name, s.kind, s.url, s.builtin, s.extract, s.daily_max,\n           s.enabled AS \"enabled: bool\", s.check_state, s.check_note, s.added_by,\n           COALESCE(u.name, s.added_by) AS \"added_by_name!: String\", s.shared AS \"shared: bool\",\n           f.user_id IS NOT NULL AS \"followed!: bool\", COALESCE(f.pinned, 0) AS \"pinned!: bool\",\n           (SELECT COUNT(*) FROM follows WHERE source_id = s.id) AS \"followers!: i64\"\n           FROM sources s\n           LEFT JOIN follows f ON f.source_id = s.id AND f.user_id = ?\n           LEFT JOIN users u ON u.id = s.added_by\n           WHERE ? OR s.shared = 1 OR s.added_by = ? OR f.user_id IS NOT NULL\n           ORDER BY COALESCE(f.pinned, 0) DESC, s.name COLLATE NOCASE",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "kind",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "builtin",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "extract",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "daily_max",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "enabled: bool",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "check_state",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "check_note",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_by",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_by_name!: String",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "shared: bool",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "followed!: bool",
+        "ordinal": 13,
+        "type_info": "Integer"
+      },
+      {
+        "name": "pinned!: bool",
+        "ordinal": 14,
+        "type_info": "Integer"
+      },
+      {
+        "name": "followers!: i64",
+        "ordinal": 15,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bd30381d6c13e10c4d147ee847d6da7e1a79f7060b406901dabbe2d77ded4b4f"
+}

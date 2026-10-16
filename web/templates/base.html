@@ -196,6 +196,7 @@ details.row > summary::-webkit-details-marker { display:none }
 details.row[open] > summary { border-bottom:1px solid var(--line) }
 details.row > form, details.row > div { padding:.8rem .9rem }
 details.row.paused > summary { opacity:.6 }
+details.row.unfollowed > summary .name { color:var(--soft) }
 details.row .name { font:700 1.02rem Georgia,serif }
 details.row .addr { color:var(--soft); font-size:.82rem; min-width:0; max-width:30rem; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap }
@@ -237,8 +238,8 @@ form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--acc
 <a href="/"{% if nav.current == "newsstand" %} aria-current="page"{% endif %}>Newsstand</a>
 <a href="/archive"{% if nav.current == "archive" %} aria-current="page"{% endif %}>Archive</a>
 <a href="/reading"{% if nav.current == "reading" %} aria-current="page"{% endif %}>Reading</a>
-{% if nav.admin %}<span class="sep"></span>
 <a href="/sources"{% if nav.current == "sources" %} aria-current="page"{% endif %}>Sources</a>
+{% if nav.admin %}<span class="sep"></span>
 <a href="/settings"{% if nav.current == "settings" %} aria-current="page"{% endif %}>Settings</a>
 <a href="/problems"{% if nav.current == "problems" %} aria-current="page"{% endif %}>Problems{% if nav.problems > 0 %} ({{ nav.problems }}){% endif %}</a>
 {% endif %}<span class="sep"></span>

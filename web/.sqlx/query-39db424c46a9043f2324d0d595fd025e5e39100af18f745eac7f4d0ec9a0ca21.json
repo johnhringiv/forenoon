@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET name = ?, url = ?, extract = ?, daily_max = ?, enabled = ?, shared = ?,\n         check_state = 'pending', check_note = '' WHERE id = ? AND kind = 'rss'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "39db424c46a9043f2324d0d595fd025e5e39100af18f745eac7f4d0ec9a0ca21"
+}

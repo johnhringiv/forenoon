@@ -9,13 +9,20 @@
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
 <h2>Built in <span>front pages Forenoon knows how to read</span></h2>
-<p class="hint">Their stories join the day's candidates only when ranking is on, and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0); set one to cap it.</p>
+<p class="hint">Their stories join the day's candidates only when ranking is on, and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0){% if admin %}; set one to cap it{% endif %}. Follow the ones you want in your issue.</p>
 {% for row in builtins %}
-<details class="row{% if !row.enabled %} paused{% endif %}">
+<details class="row{% if !row.enabled %} paused{% endif %}{% if !row.followed %} unfollowed{% endif %}">
 <summary><span class="dot {{ row.state }}" aria-hidden="true"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.about }}</span>
-<span class="tags">{% if !row.enabled %}<span class="tag">Off</span>{% endif %}<span class="tag">{{ row.limit }}</span></span>
-<p class="state{% if row.failing && row.enabled %} failing{% endif %}">{% if !row.enabled %}Off.{% else if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}</p>
+<span class="tags">{% if !row.followed %}<span class="tag">Not followed</span>{% endif %}{% if !row.enabled %}<span class="tag">Off</span>{% endif %}<span class="tag">{{ row.limit }}</span></span>
+<p class="state{% if row.failing && row.enabled %} failing{% endif %}">{% if !row.enabled %}Off for everyone.{% else if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}</p>
 </summary>
+<form class="source" method="post" action="/sources/{{ row.id }}/follow">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<div class="fields">
+{% if row.followed %}<button name="follow" value="0">Unfollow</button>{% else %}<button class="primary" name="follow" value="1">Follow</button>{% endif %}
+</div>
+</form>
+{% if admin %}
 <form class="source" method="post" action="/sources/{{ row.id }}/toggle">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
@@ -23,7 +30,9 @@
 <button class="primary" name="enabled" value="{% if row.enabled %}1{% else %}0{% endif %}">Save</button>
 {% if row.enabled %}<button name="enabled" value="0">Turn off</button>{% else %}<button name="enabled" value="1">Turn on</button>{% endif %}
 </div>
+<p class="hint">On or off is for the whole household; each reader follows it or not.</p>
 </form>
+{% endif %}
 </details>
 {% endfor %}
 
@@ -38,9 +47,10 @@
 <label>Take the text from <select name="extract"><option value="auto">Best of page and feed</option><option value="page">Web page only</option><option value="feed">Feed only</option><option value="link">Nowhere: show picks as links</option></select></label>
 <label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="2"></label>
 <label class="tick"><input type="checkbox" name="pinned" value="1"> Pinned</label>
+<label class="tick"><input type="checkbox" name="shared" value="1" checked> Shared with the household</label>
 <button class="primary">Add</button>
 </div>
-<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. "Places a day" is the most of an issue the source may take (0 for no limit); links you add by hand do not count. A pinned source's articles are all taken, before all others, and past its places a day they are extra: they do not use the day's places. Changes apply from the next run.</p>
+<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. "Places a day" is the most of an issue the source may take (0 for no limit); links you add by hand do not count. A pinned source's articles are all taken, before all others, and past its places a day they are extra: they do not use the day's places. A feed is shared with the household unless you untick it: a private feed is yours alone until you share it. Changes apply from the next run.</p>
 </form>
 </details>
 {% if total > 0 %}
@@ -57,20 +67,23 @@
 {% endfor %}<span class="sep"></span> <span>Open a feed to change it.</span></div>
 {% endif %}
 {% if total == 0 %}<p class="empty">No feeds yet.</p>
-{% else if attention.is_empty() && feeds.is_empty() %}<p class="empty">No feeds match.</p>{% endif %}
+{% else if attention.is_empty() && feeds.is_empty() && available.is_empty() %}<p class="empty">No feeds match.</p>{% endif %}
 {% if !attention.is_empty() %}<p class="more-title">Needs attention</p>
 {% for row in attention %}{% include "_feed.html" %}{% endfor %}
-{% if !feeds.is_empty() %}<p class="more-title">The others</p>{% endif %}
+{% if !feeds.is_empty() %}<p class="more-title">The others you follow</p>{% endif %}
 {% endif %}
 {% for row in feeds %}{% include "_feed.html" %}{% endfor %}
+{% if !available.is_empty() %}<p class="more-title">{% if admin %}Not followed by you{% else %}Shared with the household, not followed{% endif %}</p>
+{% for row in available %}{% include "_feed.html" %}{% endfor %}
+{% endif %}
 
-<h2>Subscriber sessions <span>sites you subscribe to, signed in as you</span></h2>
+<h2>Subscriber sessions <span>sites the household subscribes to, signed in</span></h2>
 {% for row in sessions %}
 <form class="source" method="post" action="/sources/sessions/delete">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="site" value="{{ row.site }}">
 <div class="fields">
 <b class="wide">{{ row.site }}</b>
-<button class="link">Remove</button>
+{% if row.removable %}<button class="link">Remove</button>{% endif %}
 </div>
 <p class="hint{% if row.failed %} failing{% endif %}">{% if let Some(note) = row.note %}{{ note }}{% else %}No page fetched with it yet.{% endif %}</p>
 </form>
@@ -85,7 +98,7 @@
 <label class="wide">Cookie <input name="cookie" type="password" maxlength="16384" autocomplete="off" required></label>
 <button class="primary">Save session</button>
 </div>
-<p class="hint">Every page on the site and its subdomains is then fetched with it: articles from any of its feeds, and links you add by hand. Feeds are read as usual; only the articles the ranking wants read are fetched, one at a time and at least 20 seconds apart, by Chrome signed in as you. Use it only for what your subscription lets you read.</p>
+<p class="hint">Every page on the site and its subdomains is then fetched with it, for everyone in the household: articles from any of its feeds, and links added by hand. Feeds are read as usual; only the articles the ranking wants read are fetched, one at a time and at least 20 seconds apart, by Chrome signed in as you. Use it only for what your subscription lets you read.{% if !admin %} You can save a session for a site you have a feed on.{% endif %}</p>
 <details class="help"><summary>How to get the cookie, and what is done with it</summary>
 <p>Sign in to the site in your browser and either export its cookies as a header string with an extension such as Cookie-Editor, or open the developer tools, pick any request to the site on the Network tab and copy the value of its <code>Cookie</code> request header. Saving a site again replaces its cookie. It is kept where only the browser container can read it, never shown again, and sent to that site only. If it stops working, or the site asks for a CAPTCHA, it says so here and by email, and picks from the site are shown as links until it is replaced.</p>
 </details>

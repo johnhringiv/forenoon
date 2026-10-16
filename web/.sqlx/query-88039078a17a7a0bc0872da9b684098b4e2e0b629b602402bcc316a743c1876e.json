@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared)\n                 VALUES (?, 'rss', ?, ?, ?, 1, ?, 'pending', ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "88039078a17a7a0bc0872da9b684098b4e2e0b629b602402bcc316a743c1876e"
+}

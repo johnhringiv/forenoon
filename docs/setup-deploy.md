@@ -173,7 +173,8 @@ from their own image. Without at least one reader the daily run delivers nothing
    forgotten password can only be reset through a confirmed address.
 6. On **Account**, write your interests and set the stories a day. Changes apply from the
    next run.
-7. On **Sources** (admins only), add the feeds to read; without any, nothing is delivered.
+7. On **Sources**, add the feeds to read; a reader who follows none gets nothing. A feed is
+   the adder's alone until shared with the household; an admin sees every one.
    Hacker News and Lobsters are built in and can be switched off there. Sessions for sites
    you subscribe to are saved there too once the browser container runs
    ([setup-sessions.md](setup-sessions.md)).

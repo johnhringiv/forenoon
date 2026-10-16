@@ -75,6 +75,7 @@ async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
     for (id, name, role) in [("john", "John", "admin"), ("mary", "Mary", "reader")] {
         let hash = auth::hash_password(PASSWORD.to_owned()).await.unwrap();
         db::add_user(&pool, id, &format!("{id}@example.com"), name, &hash, role, "America/New_York").await.unwrap();
+        db::follow_shared(&pool, id).await.unwrap();
     }
     let mail = Arc::new(Mutex::new(Vec::new()));
     let options = Options {
@@ -692,8 +693,14 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
     }
 }
 
+/// The sources page as the admin sees it, and this reader's view of the sources.
+async fn sources_of(site: &Site, id: &str) -> Vec<forenoon_web::sources::Source> {
+    let user = auth::find_user(&site.pool, id).await.unwrap().unwrap();
+    forenoon_web::sources::list(&site.pool, &user).await.unwrap()
+}
+
 #[tokio::test]
-async fn sources_are_managed_by_admins_only() {
+async fn feeds_are_added_checked_filtered_and_changed() {
     let site = site(true).await;
     let mut admin = Browser::default();
     admin.sign_in(&site, "john").await;
@@ -702,14 +709,12 @@ async fn sources_are_managed_by_admins_only() {
     assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/sources">Sources</a>"#));
     let csrf = page.csrf();
 
-    // A reader cannot see or change them, even with a valid token of their own.
+    // Every reader has the page; what they see there is their own (see the household test).
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
-    assert!(!mary.get(&site, "/").await.text.contains("/sources"));
-    assert_eq!(mary.get(&site, "/sources").await.status, StatusCode::FORBIDDEN);
+    assert!(mary.get(&site, "/").await.text.contains(r#"<a href="/sources">Sources</a>"#));
+    assert_eq!(mary.get(&site, "/sources").await.status, StatusCode::OK);
     let token = mary.get(&site, "/account").await.csrf();
-    let form = [("csrf", token.as_str()), ("name", "Evil"), ("address", "https://evil.example/feed")];
-    assert_eq!(mary.post(&site, "/sources", &form).await.status, StatusCode::FORBIDDEN);
 
     let add = |name: &'static str, address: &'static str, extra: &[(&'static str, &'static str)]| {
         [
@@ -752,8 +757,12 @@ async fn sources_are_managed_by_admins_only() {
     let feeds = |all: Vec<forenoon_web::sources::Source>| -> Vec<forenoon_web::sources::Source> {
         all.into_iter().filter(|source| source.kind == "rss").collect()
     };
-    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
+    let stored = feeds(sources_of(&site, "john").await);
     assert!(stored.iter().all(|source| source.check_state == "pending"));
+    // The admin's feeds, private to him as added here: the reader's page does not have them.
+    assert!(stored.iter().all(|source| source.added_by == "john" && source.followed && !source.shared));
+    assert!(!mary.get(&site, "/sources").await.text.contains("blog.example"));
+    assert!(feeds(sources_of(&site, "mary").await).is_empty());
     sqlx::query("UPDATE sources SET check_state = 'ok', check_note = 'Feed found at https://blog.example/rss.xml: 3 articles.' WHERE name != 'Other'")
         .execute(&site.pool).await.unwrap();
     sqlx::query("UPDATE sources SET check_state = 'failed', check_note = 'Not usable: no feed found at this address.' WHERE name = 'Other'")
@@ -798,8 +807,9 @@ async fn sources_are_managed_by_admins_only() {
     assert!(searched.contains(r#"<a href="/sources?show=failing&#38;q=BLOG%2Eexample">Failing (0)</a>"#), "{searched}");
     assert!(admin.get(&site, "/sources?q=nothing").await.text.contains("No feeds match."));
 
-    // Pause one, rename it, then remove the other.
+    // Pause one, rename it, then remove the other. A reader cannot touch what is not theirs.
     let (blog, other) = (stored[0].id, stored[1].id);
+    assert_eq!(mary.post(&site, &format!("/sources/{blog}"), &[("csrf", &token)]).await.status, StatusCode::NOT_FOUND);
     let edit = [
         ("csrf", csrf.as_str()),
         ("name", "The Blog"),
@@ -814,9 +824,9 @@ async fn sources_are_managed_by_admins_only() {
     );
     assert_eq!(
         mary.post(&site, &format!("/sources/{blog}/delete"), &[("csrf", &token)]).await.status,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
-    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
+    let stored = feeds(sources_of(&site, "john").await);
     assert_eq!(stored.len(), 1);
     assert_eq!(
         (stored[0].name.as_str(), stored[0].url.as_str(), stored[0].pinned, stored[0].daily_max, stored[0].enabled),
@@ -828,8 +838,203 @@ async fn sources_are_managed_by_admins_only() {
     let paper = add("Paper", "https://paper.example/feed", &[("extract", "link")]);
     let paper: Vec<(&str, &str)> = paper.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert!(admin.post(&site, "/sources", &paper).await.location.starts_with("/sources?saved=added&new="));
-    let stored = feeds(forenoon_web::sources::list(&site.pool).await.unwrap());
+    let stored = feeds(sources_of(&site, "john").await);
     assert!(stored.iter().any(|s| s.name == "Paper" && s.extract == "link"));
+}
+
+#[tokio::test]
+async fn a_readers_feed_is_private_until_shared_and_the_household_shares_sessions() {
+    let site = site(true).await;
+    let hash = auth::hash_password(PASSWORD.to_owned()).await.unwrap();
+    db::add_user(&site.pool, "carl", "carl@example.com", "Carl", &hash, "reader", "UTC").await.unwrap();
+    db::follow_shared(&site.pool, "carl").await.unwrap();
+    let (mut admin, mut mary, mut carl) = (Browser::default(), Browser::default(), Browser::default());
+    admin.sign_in(&site, "john").await;
+    mary.sign_in(&site, "mary").await;
+    carl.sign_in(&site, "carl").await;
+    let (admin_csrf, mary_csrf, carl_csrf) = (
+        admin.get(&site, "/sources").await.csrf(),
+        mary.get(&site, "/sources").await.csrf(),
+        carl.get(&site, "/sources").await.csrf(),
+    );
+    // A new account follows what is shared: the built-in sources, so far.
+    let text = carl.get(&site, "/sources").await.text;
+    assert!(text.contains("Following 2 of 2 sources, 0 failing.") && !text.contains("Not followed"), "{text}");
+
+    // Mary adds a feed. It is hers: Carl sees nothing of it, and cannot follow or add to it.
+    let form = [("csrf", mary_csrf.as_str()), ("name", "Mine"), ("address", "https://www.paper.example/rss")];
+    let added = mary.post(&site, "/sources", &form).await.location;
+    let mine = sources_of(&site, "mary").await.into_iter().find(|s| s.name == "Mine").unwrap();
+    assert!(added.starts_with("/sources?saved=added") && mine.followed && mine.added_by == "mary" && !mine.shared);
+    let text = mary.get(&site, "/sources").await.text;
+    assert!(
+        text.contains("Following 3 of 3 sources") && text.contains(r#"<span class="tag">Private</span>"#),
+        "{text}"
+    );
+    assert!(!text.contains("Private: "), "the adder is not told their own name");
+    let text = carl.get(&site, "/sources").await.text;
+    assert!(!text.contains("Mine") && !text.contains("paper.example"), "{text}");
+    assert!(sources_of(&site, "carl").await.iter().all(|s| s.id != mine.id));
+    let follow = [("csrf", carl_csrf.as_str()), ("follow", "1")];
+    assert_eq!(carl.post(&site, &format!("/sources/{}/follow", mine.id), &follow).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(carl.post(&site, &format!("/sources/{}", mine.id), &follow).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        carl.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &carl_csrf)]).await.status,
+        StatusCode::NOT_FOUND
+    );
+    // Carl adding the same address gets a feed of his own: Mary's private one is not matched,
+    // so he learns nothing of it, and it stays hers to change.
+    let same = [("csrf", carl_csrf.as_str()), ("name", "Paper"), ("address", "https://paper.example/rss/")];
+    let location = carl.post(&site, "/sources", &same).await.location;
+    assert!(location.starts_with("/sources?saved=added&new=") && !location.contains(&format!("new={}", mine.id)));
+    let count = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sources WHERE kind = 'rss'")
+            .fetch_one(&site.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(count().await, 2);
+    let paper = sources_of(&site, "carl").await.into_iter().find(|s| s.name == "Paper").unwrap();
+    assert!(paper.added_by == "carl" && paper.followed && paper.followers == 1 && !paper.shared);
+    assert!(sources_of(&site, "carl").await.iter().all(|s| s.id != mine.id));
+    assert!(sources_of(&site, "mary").await.iter().all(|s| s.id != paper.id));
+    assert_eq!(sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap().followers, 1);
+    assert_eq!(
+        carl.post(&site, &format!("/sources/{}/delete", paper.id), &[("csrf", &carl_csrf)]).await.location,
+        "/sources?saved=removed"
+    );
+    assert_eq!(count().await, 1);
+
+    // The admin sees Mary's, with whose it is, and shares it with the household.
+    let text = admin.get(&site, "/sources").await.text;
+    assert!(
+        text.contains(r#"<span class="tag">Private: Mary</span>"#) && text.contains("Not followed by you"),
+        "{text}"
+    );
+    assert!(text.contains("3 sources, 0 paused, 0 failing."));
+    let share = [
+        ("csrf", admin_csrf.as_str()),
+        ("name", "Mine"),
+        ("address", "https://www.paper.example/rss"),
+        ("enabled", "1"),
+        ("shared", "1"),
+    ];
+    assert_eq!(admin.post(&site, &format!("/sources/{}", mine.id), &share).await.location, "/sources?saved=saved");
+    let text = carl.get(&site, "/sources").await.text;
+    assert!(
+        text.contains("Shared with the household, not followed") && text.contains(r#"<span class="tag">Shared</span>"#),
+        "{text}"
+    );
+    assert!(text.contains("Following 2 of 3 sources"));
+    // Now that he may see it, adding its address again, however dressed, follows it instead.
+    assert_eq!(
+        carl.post(&site, "/sources", &same).await.location,
+        format!("/sources?saved=followed&new={0}#s-{0}", mine.id)
+    );
+    assert_eq!(count().await, 1);
+    let mine_for_carl = sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap();
+    assert!(mine_for_carl.followed && mine_for_carl.followers == 2 && mine_for_carl.name == "Mine");
+    assert!(carl.get(&site, "/sources").await.text.contains("Following 3 of 3 sources"));
+
+    // With two followers it is no longer Mary's alone to change or remove: she pins it for
+    // herself, and still says whether it is shared.
+    let edit = [
+        ("csrf", mary_csrf.as_str()),
+        ("name", "Renamed"),
+        ("address", "https://elsewhere.example/rss"),
+        ("pinned", "1"),
+    ];
+    let pin = [("csrf", mary_csrf.as_str()), ("pinned", "1")];
+    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &pin).await.location, "/sources?saved=saved");
+    let mine_now = sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap();
+    assert!(mine_now.name == "Mine" && mine_now.url == "https://www.paper.example/rss" && mine_now.pinned);
+    assert!(!mine_now.shared, "the form came back without the shared tick, so it is hers alone again");
+    let for_carl = sources_of(&site, "carl").await.into_iter().find(|s| s.id == mine.id).unwrap();
+    assert!(for_carl.followed && !for_carl.pinned, "a follower keeps following, and pins are each reader's own");
+    let reshare = [("csrf", mary_csrf.as_str()), ("pinned", "1"), ("shared", "1")];
+    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &reshare).await.location, "/sources?saved=saved");
+    assert!(sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap().shared);
+    assert_eq!(
+        mary.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &mary_csrf)]).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let text = mary.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{}""#, mine.id)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(
+        row.contains("only an admin can change its address") && row.contains("so is whether it is shared"),
+        "{row}"
+    );
+    assert!(!row.contains(r#"name="address""#) && row.contains(r#"name="pinned""#) && row.contains(r#"name="shared""#));
+    // Carl, a follower who did not add it, pins and nothing more.
+    let text = carl.get(&site, "/sources").await.text;
+    let row = text.split(&format!(r#"id="s-{}""#, mine.id)).nth(1).unwrap().split("</details>").next().unwrap();
+    assert!(
+        row.contains(r#"name="pinned""#) && !row.contains(r#"name="shared""#) && !row.contains(r#"name="address""#)
+    );
+    assert!(row.contains("Only the reader who added this feed") && !row.contains("Others follow"), "{row}");
+    // A form loaded while the feed was hers alone, sent after someone followed, is refused
+    // rather than half-applied.
+    let stale = mary.post(&site, &format!("/sources/{}", mine.id), &edit).await;
+    assert!(stale.status == StatusCode::FORBIDDEN && stale.text.contains("Someone else follows this feed now"));
+
+    // A session is the household's: Mary, with a feed on the site, saves it; Carl, following
+    // that feed, sees it is there but cannot remove it; an admin can. Nobody without a feed on
+    // the site sees it or may save one.
+    let path = "/sources/sessions";
+    let cookie = [("csrf", mary_csrf.as_str()), ("site", "paper.example"), ("cookie", "id=s3cret")];
+    assert_eq!(mary.post(&site, path, &cookie).await.location, "/sources?saved=session");
+    let text = carl.get(&site, "/sources").await.text;
+    assert!(text.contains("<b class=\"wide\">paper.example</b>"), "{text}");
+    assert!(text.contains("fetched with the household's paper.example session"), "{text}");
+    assert!(!text.contains("Remove</button>"), "nothing on Carl's page is his to remove");
+    let remove = |csrf: &str| [("csrf", csrf.to_owned()), ("site", "paper.example".to_owned())];
+    let form = remove(&carl_csrf);
+    let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    assert_eq!(carl.post(&site, "/sources/sessions/delete", &form).await.status, StatusCode::FORBIDDEN);
+    assert!(site.folder.path().join("logins/site-paper.example.json").exists());
+    let elsewhere = [("csrf", carl_csrf.as_str()), ("site", "nytimes.com"), ("cookie", "id=1")];
+    let reply = carl.post(&site, path, &elsewhere).await;
+    assert!(
+        reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Add or follow a feed on nytimes.com first")
+    );
+    carl.post(&site, &format!("/sources/{}/follow", mine.id), &[("csrf", &carl_csrf), ("follow", "0")]).await;
+    let text = carl.get(&site, "/sources").await.text;
+    assert!(!text.contains("<b class=\"wide\">paper.example</b>"), "no feed on the site: no session shown");
+    assert!(!text.contains("paper.example session"), "nor the tag on the feed he does not follow");
+    // Without a feed on the site, a removal attempt is answered as if there were no session,
+    // whether or not there is one: nothing to probe.
+    for probe in ["paper.example", "nytimes.com"] {
+        let form = [("csrf", carl_csrf.as_str()), ("site", probe)];
+        assert_eq!(carl.post(&site, "/sources/sessions/delete", &form).await.location, "/sources?saved=nosession");
+    }
+    assert!(site.folder.path().join("logins/site-paper.example.json").exists());
+    let form = remove(&admin_csrf);
+    let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    assert_eq!(admin.post(&site, "/sources/sessions/delete", &form).await.location, "/sources?saved=nosession");
+    assert!(!site.folder.path().join("logins/site-paper.example.json").exists());
+
+    // Alone again on the feed she added, Mary may remove it; its follows go with it.
+    assert_eq!(
+        mary.post(&site, &format!("/sources/{}/delete", mine.id), &[("csrf", &mary_csrf)]).await.location,
+        "/sources?saved=removed"
+    );
+    let follows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM follows WHERE source_id = ?")
+        .bind(mine.id)
+        .fetch_one(&site.pool)
+        .await
+        .unwrap();
+    assert_eq!(follows, 0);
+
+    // Built-in sources are followed the same way; switching one off is for the whole household.
+    let hn = sources_of(&site, "carl").await.into_iter().find(|s| s.builtin == "hackernews").unwrap();
+    assert_eq!(
+        carl.post(&site, &format!("/sources/{}/follow", hn.id), &[("csrf", &carl_csrf), ("follow", "0")])
+            .await
+            .location,
+        "/sources?saved=unfollowed"
+    );
+    assert!(!sources_of(&site, "carl").await.into_iter().find(|s| s.id == hn.id).unwrap().followed);
+    assert!(sources_of(&site, "mary").await.into_iter().find(|s| s.id == hn.id).unwrap().followed);
 }
 
 #[tokio::test]
@@ -844,7 +1049,7 @@ async fn a_sites_subscriber_session_is_kept_apart_and_never_shown() {
     let added = admin.post(&site, "/sources", &add).await.location;
     let other = [("csrf", csrf.as_str()), ("name", "Aardvark"), ("address", "https://aardvark.example/rss")];
     admin.post(&site, "/sources", &other).await;
-    let feed = forenoon_web::sources::list(&site.pool).await.unwrap().into_iter().find(|s| s.name == "Paper").unwrap();
+    let feed = sources_of(&site, "john").await.into_iter().find(|s| s.name == "Paper").unwrap();
     assert_eq!(added, format!("/sources?saved=added&new={0}#s-{0}", feed.id));
     let text = admin.get(&site, &format!("/sources?saved=added&new={}", feed.id)).await.text;
     let (paper, aardvark) = (text.find(r#"value="Paper""#).unwrap(), text.find(r#"value="Aardvark""#).unwrap());
@@ -877,7 +1082,9 @@ async fn a_sites_subscriber_session_is_kept_apart_and_never_shown() {
     // Saved for the site, and every feed on it says so; saving it again replaces the cookie.
     let text = admin.get(&site, "/sources").await.text;
     assert!(text.contains("<b class=\"wide\">paper.example</b>") && text.contains("No page fetched with it yet."));
-    assert!(text.contains("Its pages are fetched with your paper.example session.") && !text.contains("s3cret"));
+    assert!(
+        text.contains("Its pages are fetched with the household's paper.example session.") && !text.contains("s3cret")
+    );
     admin.post(&site, path, &[("csrf", &csrf), ("site", "paper.example"), ("cookie", "id=newer")]).await;
     assert!(std::fs::read_to_string(&file).unwrap().contains("id=newer"));
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions").fetch_one(&site.pool).await.unwrap();
@@ -897,12 +1104,13 @@ async fn a_sites_subscriber_session_is_kept_apart_and_never_shown() {
         text.contains("Last page fetched with it: 2026-10-14 06:01. The site&#39;s sign-in lasts until 2027-10-14.")
     );
 
-    // Not for a reader; removing a feed leaves the site's session; removing the session takes it.
+    // Not for a reader with no feed on the site; removing a feed leaves the site's session;
+    // removing the session takes it.
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
     let token = mary.get(&site, "/account").await.csrf();
     let form = [("csrf", token.as_str()), ("site", "evil.example"), ("cookie", "id=mine")];
-    assert_eq!(mary.post(&site, path, &form).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(mary.post(&site, path, &form).await.status, StatusCode::BAD_REQUEST);
     assert!(!logins.join("site-evil.example.json").exists());
     admin.post(&site, &format!("/sources/{}/delete", feed.id), &[("csrf", &csrf)]).await;
     assert!(file.exists());
@@ -922,15 +1130,16 @@ async fn built_in_sources_are_only_switched_on_or_off() {
     let builtin = |all: Vec<forenoon_web::sources::Source>, key: &str| {
         all.into_iter().find(|source| source.builtin == key).expect("a built-in source")
     };
-    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    let hn = builtin(sources_of(&site, "john").await, "hackernews");
     assert!(hn.kind == "builtin" && hn.enabled && hn.daily_max == 0); // many publishers: no limit
+    assert!(hn.shared && hn.followed, "built-in sources are the household's, followed from the start");
 
     let path = format!("/sources/{}/toggle", hn.id);
     let reply = admin.post(&site, &path, &[("csrf", &csrf), ("enabled", "1"), ("daily_max", "x")]).await;
     assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Places a day: give a whole number"));
     let off = [("csrf", csrf.as_str()), ("enabled", "0"), ("daily_max", "4")];
     assert_eq!(admin.post(&site, &path, &off).await.location, "/sources?saved=saved");
-    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    let hn = builtin(sources_of(&site, "john").await, "hackernews");
     assert!(!hn.enabled && hn.daily_max == 4);
     assert!(
         admin
@@ -945,7 +1154,7 @@ async fn built_in_sources_are_only_switched_on_or_off() {
     let edit = [("csrf", csrf.as_str()), ("name", "Mine"), ("address", "https://evil.example/feed"), ("enabled", "1")];
     admin.post(&site, &format!("/sources/{}", hn.id), &edit).await;
     admin.post(&site, &format!("/sources/{}/delete", hn.id), &[("csrf", &csrf)]).await;
-    let hn = builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews");
+    let hn = builtin(sources_of(&site, "john").await, "hackernews");
     assert_eq!((hn.name.as_str(), hn.url.as_str(), hn.enabled), ("Hacker News", "", false));
 
     let mut mary = Browser::default();
@@ -953,7 +1162,7 @@ async fn built_in_sources_are_only_switched_on_or_off() {
     let token = mary.get(&site, "/account").await.csrf();
     assert_eq!(mary.post(&site, &path, &[("csrf", &token), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
     assert_eq!(admin.post(&site, &path, &[("csrf", "wrong"), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
-    assert!(!builtin(forenoon_web::sources::list(&site.pool).await.unwrap(), "hackernews").enabled);
+    assert!(!builtin(sources_of(&site, "john").await, "hackernews").enabled);
 }
 
 #[tokio::test]

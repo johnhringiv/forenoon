@@ -229,19 +229,35 @@ def test_sources_come_from_the_web_apps_sources_table(tmp_path):
     assert store.sources() == ()  # the web app has not run yet
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
         store.db.executescript(migration.read_text())
-    add = "INSERT INTO sources (name, kind, url, extract, pinned, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 'x')"
-    store.db.execute(add, ("blog", "rss", "https://blog.example/feed", "auto", 0, 1))
-    store.db.execute(add, ("Paused", "rss", "https://paused.example/feed", "auto", 0, 0))
-    store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "page", 1, 1))
+    add = "INSERT INTO sources (name, kind, url, extract, enabled, created_at) VALUES (?, ?, ?, ?, ?, 'x')"
+    store.db.execute(add, ("blog", "rss", "https://blog.example/feed", "auto", 1))
+    store.db.execute(add, ("Paused", "rss", "https://paused.example/feed", "auto", 0))
+    store.db.execute(add, ("Zed", "rss", "https://zed.example/feed", "page", 1))
     store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('zed.example', 'x'), ('ft.com', 'x')")
     assert store.session_sites() == ("ft.com", "zed.example")
     store.builtin_sites({"hackernews": "Hacker News"})
     store.db.execute("UPDATE sources SET daily_max = 3 WHERE builtin = 'hackernews'")
     assert store.builtin_daily_max() == {"hackernews": 3, "lobsters": 0}
+    # Everyone's feeds, for the reports; nobody's pins.
     assert store.sources() == (
-        Source("Zed", "https://zed.example/feed", pinned=True, extract="page", daily_max=2),
         Source("blog", "https://blog.example/feed", daily_max=2),
+        Source("Zed", "https://zed.example/feed", extract="page", daily_max=2),
     )
+    # Each reader's own: the feeds and built-in front pages they follow, pinned as they pinned them.
+    follow = (
+        "INSERT INTO follows (user_id, source_id, pinned, created_at) SELECT ?, id, ?, 'x' FROM sources WHERE name = ?"
+    )
+    store.db.execute(follow, ("john", 1, "Zed"))
+    store.db.execute(follow, ("john", 0, "Paused"))
+    store.db.execute(follow, ("john", 0, "Lobsters"))
+    store.db.execute(follow, ("mary", 0, "blog"))
+    assert store.sources("john") == (
+        Source("Zed", "https://zed.example/feed", pinned=True, extract="page", daily_max=2),
+    )
+    assert store.sources("mary") == (Source("blog", "https://blog.example/feed", daily_max=2),)
+    assert store.sources("nobody") == ()
+    assert store.followed_builtins("john", ("hackernews", "lobsters")) == ("lobsters",)
+    assert store.followed_builtins("mary", ("hackernews", "lobsters")) == ()
 
 
 def test_a_book_has_no_self_closed_empty_elements():
