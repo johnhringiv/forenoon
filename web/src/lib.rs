@@ -41,7 +41,8 @@ const SIGN_IN_WINDOW: Duration = Duration::from_secs(300);
 pub struct Options {
     /// The pages are served over https: the session cookie is sent only that way (as
     /// `__Host-forenoon_session`), and browsers are told to use nothing else. With it on,
-    /// signing in over plain http does not work.
+    /// signing in over plain http does not work, so when `base_url` is an https address a
+    /// request for any other host is redirected there.
     pub secure_cookies: bool,
     pub mailer: mail::Mailer,
     /// Where the pages are reached, for links in emails.
@@ -131,5 +132,11 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         // Text only: images are already compressed, and tiny answers are not worth it.
         .layer(CompressionLayer::new());
     let router = if options.secure_cookies { router.layer(middleware::from_fn(pages::https_only)) } else { router };
+    // Outermost, so a request for another host is sent on before anything else looks at it.
+    let public = options.secure_cookies.then(|| pages::PublicAddress::new(&options.base_url, state.proxy.clone()));
+    let router = match public.flatten() {
+        Some(public) => router.layer(middleware::from_fn_with_state(public, pages::to_public_address)),
+        None => router,
+    };
     Ok(router.with_state(state))
 }
