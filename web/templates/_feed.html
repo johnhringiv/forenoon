@@ -21,6 +21,6 @@
 {% if row.can_edit %}<button class="link" formaction="/sources/{{ row.id }}/delete">Remove</button>{% endif %}
 </div>
 {% if let Some(site) = row.session %}<p class="hint">Its pages are fetched with the household's {{ site }} session.</p>{% endif %}
-{% if !row.can_edit && row.followed %}<p class="hint">Others follow this feed too, so only an admin can change its address and settings now. Pinning is yours{% if row.can_share %}, and so is whether it is shared{% endif %}.</p>{% endif %}
+{% if !row.can_edit && row.followed %}<p class="hint">{% if row.can_share %}Others follow this feed too, so only an admin can change its address and settings now. Pinning is yours, and so is whether it is shared.{% else %}Only the reader who added this feed, or an admin, changes its address and settings. Pinning is yours.{% endif %}</p>{% endif %}
 </form>
 </details>

@@ -419,7 +419,8 @@ async fn render(
                 }
                 feeds.push(FeedRow {
                     id: source.id,
-                    session: covered,
+                    // Said only where the reader sees the session itself: on feeds they follow.
+                    session: if admin || source.followed { covered } else { None },
                     new: sieve.new == Some(source.id),
                     open: sieve.new == Some(source.id),
                     address: source.url.clone(),
@@ -744,6 +745,13 @@ pub async fn update(
         if !source.followed && !source.shareable_by(&user) {
             return refused(StatusCode::FORBIDDEN, NOT_YOURS);
         }
+        if form.name.is_some() || form.address.is_some() {
+            // The page was loaded while the feed was still theirs alone to edit.
+            return refused(
+                StatusCode::FORBIDDEN,
+                "Someone else follows this feed now, so only an admin changes its address and settings. Reload the page.",
+            );
+        }
         if source.followed {
             follow(pool, &user.id, id, pinned).await?;
         }
@@ -1017,7 +1025,15 @@ pub async fn remove_session(
     match saved_by {
         None => return saved("nosession"),
         Some(saved_by) if saved_by != user.id && !user.is_admin() => {
-            return refused(StatusCode::FORBIDDEN, "That session was saved by someone else; an admin can remove it.");
+            // Told apart only by a reader who sees the session anyway; to anyone else there
+            // is no session to speak of.
+            if has_feed_on(&state.pool, &user, &site).await? {
+                return refused(
+                    StatusCode::FORBIDDEN,
+                    "That session was saved by someone else; an admin can remove it.",
+                );
+            }
+            return saved("nosession");
         }
         Some(_) => {}
     }

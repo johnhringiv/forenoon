@@ -944,7 +944,8 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
         ("address", "https://elsewhere.example/rss"),
         ("pinned", "1"),
     ];
-    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &edit).await.location, "/sources?saved=saved");
+    let pin = [("csrf", mary_csrf.as_str()), ("pinned", "1")];
+    assert_eq!(mary.post(&site, &format!("/sources/{}", mine.id), &pin).await.location, "/sources?saved=saved");
     let mine_now = sources_of(&site, "mary").await.into_iter().find(|s| s.id == mine.id).unwrap();
     assert!(mine_now.name == "Mine" && mine_now.url == "https://www.paper.example/rss" && mine_now.pinned);
     assert!(!mine_now.shared, "the form came back without the shared tick, so it is hers alone again");
@@ -970,6 +971,11 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     assert!(
         row.contains(r#"name="pinned""#) && !row.contains(r#"name="shared""#) && !row.contains(r#"name="address""#)
     );
+    assert!(row.contains("Only the reader who added this feed") && !row.contains("Others follow"), "{row}");
+    // A form loaded while the feed was hers alone, sent after someone followed, is refused
+    // rather than half-applied.
+    let stale = mary.post(&site, &format!("/sources/{}", mine.id), &edit).await;
+    assert!(stale.status == StatusCode::FORBIDDEN && stale.text.contains("Someone else follows this feed now"));
 
     // A session is the household's: Mary, with a feed on the site, saves it; Carl, following
     // that feed, sees it is there but cannot remove it; an admin can. Nobody without a feed on
@@ -994,6 +1000,14 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     carl.post(&site, &format!("/sources/{}/follow", mine.id), &[("csrf", &carl_csrf), ("follow", "0")]).await;
     let text = carl.get(&site, "/sources").await.text;
     assert!(!text.contains("<b class=\"wide\">paper.example</b>"), "no feed on the site: no session shown");
+    assert!(!text.contains("paper.example session"), "nor the tag on the feed he does not follow");
+    // Without a feed on the site, a removal attempt is answered as if there were no session,
+    // whether or not there is one: nothing to probe.
+    for probe in ["paper.example", "nytimes.com"] {
+        let form = [("csrf", carl_csrf.as_str()), ("site", probe)];
+        assert_eq!(carl.post(&site, "/sources/sessions/delete", &form).await.location, "/sources?saved=nosession");
+    }
+    assert!(site.folder.path().join("logins/site-paper.example.json").exists());
     let form = remove(&admin_csrf);
     let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
     assert_eq!(admin.post(&site, "/sources/sessions/delete", &form).await.location, "/sources?saved=nosession");

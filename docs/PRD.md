@@ -41,7 +41,8 @@ what its own users configure and delivers only to the addresses its admin has se
   the same feed may then exist twice, once each, and the address check's rewriting of a
   site's address to its feed's can have the same effect. Names are unique across the
   install, since articles and health records refer to a source by name; a reader who picks
-  a taken name is told so, which is accepted as the one small leak.
+  a taken name is told so, and an article two such feeds carry is named for whichever
+  reader's run saw it first. Both are accepted as the one small leak.
   - Who may do what: anyone adds feeds, follows, unfollows and pins; the reader who added
     a feed changes, shares or removes it while nobody else follows it, and shares or
     unshares it at any time; an admin does all of that to any source; pausing a source,
