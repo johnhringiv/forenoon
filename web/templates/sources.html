@@ -12,7 +12,7 @@
 <p class="hint">Their stories join the day's candidates and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0){% if admin %}; set one to cap it{% endif %}. Follow the ones you want in your issue.</p>
 {% for row in builtins %}
 <details class="row{% if !row.enabled %} paused{% endif %}{% if !row.followed %} unfollowed{% endif %}">
-<summary><span class="dot {{ row.state }}" aria-hidden="true"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.about }}</span>
+<summary><span class="dot {{ row.state }}" role="img" title="{{ row.dot }}" aria-label="{{ row.dot }}"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.about }}</span>
 <span class="tags">{% if !row.followed %}<span class="tag">Not followed</span>{% endif %}{% if !row.enabled %}<span class="tag">Off</span>{% endif %}<span class="tag">{{ row.limit }}</span></span>
 <p class="state{% if row.failing && row.enabled %} failing{% endif %}">{% if !row.enabled %}Off for everyone.{% else if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}</p>
 </summary>
@@ -66,6 +66,7 @@
 <div class="views">
 {% for view in views %}{% if view.current %}<b>{{ view.label }} ({{ view.count }})</b>{% else %}<a href="{{ view.href }}">{{ view.label }} ({{ view.count }})</a>{% endif %}
 {% endfor %}<span class="sep"></span> <span>Open a feed to change it.</span></div>
+<p class="hint"><span class="key"><span class="dot" aria-hidden="true"></span> following</span> · <span class="key"><span class="dot ring" aria-hidden="true"></span> added for you: open it and keep it to make it yours</span> · the colour is how its last run went</p>
 {% endif %}
 {% if total == 0 %}<p class="empty">No feeds yet.</p>
 {% else if attention.is_empty() && feeds.is_empty() && available.is_empty() %}<p class="empty">No feeds match.</p>{% endif %}

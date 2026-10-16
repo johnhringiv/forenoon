@@ -44,9 +44,10 @@ what its own users configure and delivers only to the addresses its readers have
   shared feed a reader does not follow is tagged New for two weeks after it was shared.
   A new account follows every shared source (`add-user --follow-nothing` for none).
   A follow is **chosen** or **made**: made for the reader (a new account's, or a feed being
-  shared) until they click its "Added for you" button, follow it by its address, or pin it;
-  chosen from then on, and when they follow it themselves. Each feed row starts with that
-  state: "+ Follow", "Added for you" or "✓ Following"; unfollowing is in the opened row.
+  shared) until they press "Keep it" in its opened row, follow it by its address, or pin it;
+  chosen from then on, and when they follow it themselves. A feed row's dot shows it: filled
+  for chosen, a ring for made, and a "+ Follow" button in its place for a feed the reader
+  does not follow; a key above the list says so. Unfollowing is in the opened row.
   Follows from before this distinction count as chosen. A feed
   added by an address the reader can already see (shared, their own or followed; case, the
   scheme, `www.` and a trailing slash aside) is followed, not added again. Another reader's
@@ -66,7 +67,8 @@ what its own users configure and delivers only to the addresses its readers have
 
   Sources come in two kinds, each with its own section on the web pages' Sources page,
   which also shows how each source's last runs went. A source is one compact row (a
-  coloured dot for its state, name, address, and tags for new, pinned, paused,
+  dot, its colour how the source's last run went and its shape how the reader follows it,
+  with both in its tooltip; name, address, and tags for new, pinned, paused,
   places a day, where its text comes from, and shared or private, with the adder's name
   for an admin), opened to change it; feeds that are failing or whose address could not be
   checked are listed first under "Needs attention" (for a reader, only the ones they
