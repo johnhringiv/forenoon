@@ -85,6 +85,10 @@ reason for each pick, and an article:
   <img src="docs/images/kindle-article.webp" alt="An article's first page on the Kindle" width="260">
 </p>
 
+Code in a monospaced font, with long lines wrapped under their own indent rather than cut off:
+
+<img src="docs/images/kindle-code.webp" alt="A Rust function on the Kindle, its long lines wrapped with a hanging indent" width="400">
+
 ## Run it locally
 
 ```sh
