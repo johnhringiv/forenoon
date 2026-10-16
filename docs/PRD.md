@@ -864,5 +864,9 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 - A reader's own cookie for a site that already has a household session: they would see
   that one is set and save their own over it for their fetches only, leaving the household's
   in place for everyone else. Today saving replaces the household's for all.
+- Session rights by exact site rather than site and subdomains: a feed on
+  `alice.substack.com` lets a reader see and save the session for `substack.com`, which covers
+  every Substack the household reads. Right for Substack, whose sign-in is site-wide; too
+  broad for a site whose subdomains are separate publications with separate logins.
 - Newsletters by email as a source.
 - E-readers other than Kindle.
