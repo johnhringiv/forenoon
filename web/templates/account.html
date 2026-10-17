@@ -21,6 +21,8 @@
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label>Kindle addresses <textarea name="kindle_addresses" rows="2" maxlength="1300">{{ user.kindle_addresses }}</textarea></label>
 {% include "_kindle_hint.html" %}
+<label class="tick"><input type="checkbox" name="daily" value="1"{% if user.daily_to_kindle %} checked{% endif %}> Email my daily issue to my Kindle</label>
+<p class="hint">Off, your issue is read here on the web pages, and only what you send with Send to Kindle goes to your Kindle.</p>
 <label class="tick"><input type="checkbox" name="colour" value="1"{% if !user.grayscale %} checked{% endif %}> My Kindle has a colour screen</label>
 <p class="hint">Pictures and covers are sent in colour. Otherwise they are made gray, which looks better on e-ink.</p>
 <button class="primary">Save</button>

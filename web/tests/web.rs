@@ -523,6 +523,18 @@ async fn account_page_changes_the_profile_and_the_password() {
     browser.post(&site, "/account/kindle", &colour).await;
     assert!(!auth::find_user(&site.pool, "john").await.unwrap().unwrap().grayscale);
     assert!(browser.get(&site, "/account").await.text.contains(r#"name="colour" value="1" checked"#));
+    // The daily email is a tick of its own: off, the issue is read on the web pages only.
+    assert!(auth::find_user(&site.pool, "mary").await.unwrap().unwrap().daily_to_kindle, "on for a new account");
+    assert!(!auth::find_user(&site.pool, "john").await.unwrap().unwrap().daily_to_kindle, "the form above left it off");
+    let daily = [("csrf", csrf.as_str()), ("kindle_addresses", "a@kindle.com\nb@kindle.com"), ("daily", "1")];
+    browser.post(&site, "/account/kindle", &daily).await;
+    assert!(auth::find_user(&site.pool, "john").await.unwrap().unwrap().daily_to_kindle);
+    assert!(browser.get(&site, "/account").await.text.contains(r#"name="daily" value="1" checked"#));
+    // Refused, the form comes back with the tick as sent, and nothing is saved.
+    let slip = [("csrf", csrf.as_str()), ("kindle_addresses", "a@kindle.com\nnot an address")];
+    let reply = browser.post(&site, "/account/kindle", &slip).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && !reply.text.contains(r#"name="daily" value="1" checked"#));
+    assert!(auth::find_user(&site.pool, "john").await.unwrap().unwrap().daily_to_kindle, "nothing saved");
 
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
@@ -699,8 +711,13 @@ async fn an_admin_invites_a_reader_by_email_and_the_link_lets_them_join_once() {
     // Admins only, from the nav; a reader is refused and does not see the page.
     assert_eq!(mary.get(&site, "/accounts").await.status, StatusCode::FORBIDDEN);
     assert!(!mary.get(&site, "/").await.text.contains(r#"href="/accounts""#));
+    // Each reader's Kindle addresses, marked when their daily issue stays on the web pages.
+    db::set_kindle(&site.pool, "john", "john@kindle.com", true, true).await.unwrap();
+    db::set_kindle(&site.pool, "mary", "mary@kindle.com", true, false).await.unwrap();
     let page = john.get(&site, "/accounts").await;
     assert!(page.status == StatusCode::OK && page.text.contains("Mary") && page.text.contains("Added "));
+    assert!(page.text.contains("Kindle: mary@kindle.com (daily issue on the web only)"), "{}", page.text);
+    assert!(page.text.contains("Kindle: john@kindle.com ·"), "no mark while the daily email is on");
     let csrf = page.csrf();
     let invite = |email: &'static str, id: &'static str, role: &'static str| {
         vec![
@@ -871,7 +888,7 @@ async fn a_storys_articles_share_one_card_with_the_lead_first() {
 
     // The story can be sent as one book: one request, apart from any for a single article.
     assert!(!text.contains("Send story to Kindle"), "no Kindle address yet");
-    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true, true).await.unwrap();
     let text = browser.get(&site, "/").await.text;
     assert_eq!(text.matches("Send story to Kindle").count(), 1, "offered on the story, not on a lone article");
     let csrf = text.split(r#"name="csrf" value=""#).nth(1).unwrap().split('"').next().unwrap().to_owned();
@@ -1670,7 +1687,7 @@ async fn send_to_kindle_only_queues_the_readers_own_delivered_articles() {
     let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::BAD_REQUEST);
 
-    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true, true).await.unwrap();
     assert!(browser.get(&site, "/").await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
     assert_eq!(browser.post(&site, "/send", &form).await.location, "/#a-a1");
     browser.post(&site, "/send", &form).await; // pressed twice: still one request
@@ -1729,7 +1746,7 @@ async fn a_pick_shown_only_as_a_link_is_grayed_and_never_sent() {
     article(pool, "a1", "https://blog.example/1", "Blog", "Post 1", "john", sent).await;
     article(pool, "p1", "https://paper.example/1", "Paper", "Behind the paywall", "john", sent).await;
     sqlx::query("UPDATE deliveries SET link_only = 1 WHERE article_id = 'p1'").execute(pool).await.unwrap();
-    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true, true).await.unwrap();
     let mut browser = Browser::default();
     browser.sign_in(&site, "john").await;
 
@@ -1744,7 +1761,12 @@ async fn a_pick_shown_only_as_a_link_is_grayed_and_never_sent() {
     // It can still be rated, but not sent by hand.
     let csrf = page.csrf();
     let form = [("csrf", csrf.as_str()), ("article", "p1"), ("back", "/")];
-    assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::CONFLICT);
+    let reply = browser.post(&site, "/send", &form).await;
+    assert!(reply.status == StatusCode::CONFLICT && reply.text.contains("It goes with your next issue once it can."));
+    // With the daily email off, the next issue is read here, so the refusal says that instead.
+    db::set_kindle(pool, "john", "john@kindle.com", true, false).await.unwrap();
+    let reply = browser.post(&site, "/send", &form).await;
+    assert!(reply.status == StatusCode::CONFLICT && reply.text.contains("It is in your next issue here once it can."));
     let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM send_requests").fetch_one(pool).await.unwrap();
     assert_eq!(queued, 0);
 }
@@ -1913,7 +1935,7 @@ async fn the_archive_lists_the_readers_library_and_filters_it() {
     let rate = [("csrf", csrf.as_str()), ("article", "n1"), ("rating", "5"), ("back", back)];
     assert_eq!(browser.post(&site, "/rate", &rate).await.location, "/archive?show=near#a-n1");
     assert!(browser.get(&site, "/archive?rating=high").await.text.contains("Rated 5 of 5"));
-    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true, true).await.unwrap();
     assert!(browser.get(&site, back).await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
     let send = [("csrf", csrf.as_str()), ("article", "n1"), ("story", "1"), ("back", back)];
     assert_eq!(browser.post(&site, "/send", &send).await.location, "/archive?show=near#a-n1");
@@ -2008,7 +2030,7 @@ async fn a_link_added_by_hand_is_only_queued_and_then_shown_as_the_readers_own()
     // Kept as read needs no Kindle; anything to be sent does. Only web addresses are taken.
     assert_eq!(send!(add("https://blog.example/read", "keep", "4")).location, "/archive?show=added");
     assert_eq!(send!(add("https://blog.example/x", "next", "")).status, StatusCode::BAD_REQUEST);
-    db::set_kindle(pool, "john", "john@kindle.com", true).await.unwrap();
+    db::set_kindle(pool, "john", "john@kindle.com", true, true).await.unwrap();
     assert_eq!(send!(add("https://blog.example/next", "next", "5")).location, "/archive?show=added");
     for bad in ["javascript:alert(1)", "file:///etc/passwd", "blog.example/no-scheme"] {
         assert_eq!(send!(add(bad, "next", "")).location, "/archive?show=added&error=link");

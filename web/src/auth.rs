@@ -100,6 +100,8 @@ pub struct User {
     pub most_per_subject: i64,
     pub show_reasons: bool,
     pub learn: bool,
+    /// The daily issue is emailed to their Kindle; off, it is read on the web pages only.
+    pub daily_to_kindle: bool,
 }
 
 // Written by hand so that a logged user never includes the password hash.
@@ -213,7 +215,8 @@ pub async fn find_user(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
            email, email_verified_at, pending_email, invited_at, format, grayscale AS "grayscale: bool",
-           explore AS "explore: bool", most_per_subject, show_reasons AS "show_reasons: bool", learn AS "learn: bool"
+           explore AS "explore: bool", most_per_subject, show_reasons AS "show_reasons: bool", learn AS "learn: bool",
+           daily_to_kindle AS "daily_to_kindle: bool"
            FROM users WHERE id = ?"#,
         id
     )
@@ -227,7 +230,8 @@ pub async fn find_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option
         User,
         r#"SELECT id AS "id!", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,
            email, email_verified_at, pending_email, invited_at, format, grayscale AS "grayscale: bool",
-           explore AS "explore: bool", most_per_subject, show_reasons AS "show_reasons: bool", learn AS "learn: bool"
+           explore AS "explore: bool", most_per_subject, show_reasons AS "show_reasons: bool", learn AS "learn: bool",
+           daily_to_kindle AS "daily_to_kindle: bool"
            FROM users WHERE email = ?"#,
         email
     )

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT users.id AS \"id!\", name, role, timezone, users.created_at, kindle_addresses, users.email, email_verified_at,\n           invited_at, invite.expires_at AS \"invite_expires_at?\"\n           FROM users LEFT JOIN email_tokens invite ON invite.user_id = users.id AND invite.purpose = 'invite'\n           ORDER BY users.created_at, users.id",
+  "query": "SELECT users.id AS \"id!\", name, role, timezone, users.created_at, kindle_addresses,\n           daily_to_kindle AS \"daily_to_kindle: bool\", users.email, email_verified_at, invited_at, invite.expires_at AS \"invite_expires_at?\"\n           FROM users LEFT JOIN email_tokens invite ON invite.user_id = users.id AND invite.purpose = 'invite'\n           ORDER BY users.created_at, users.id",
   "describe": {
     "columns": [
       {
@@ -34,23 +34,28 @@
         "type_info": "Text"
       },
       {
-        "name": "email",
+        "name": "daily_to_kindle: bool",
         "ordinal": 6,
-        "type_info": "Text"
+        "type_info": "Integer"
       },
       {
-        "name": "email_verified_at",
+        "name": "email",
         "ordinal": 7,
         "type_info": "Text"
       },
       {
-        "name": "invited_at",
+        "name": "email_verified_at",
         "ordinal": 8,
         "type_info": "Text"
       },
       {
-        "name": "invite_expires_at?",
+        "name": "invited_at",
         "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "invite_expires_at?",
+        "ordinal": 10,
         "type_info": "Text"
       }
     ],
@@ -64,11 +69,12 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "f3398c3ac2e98b245c753887b2054beb52e9d8ac57c4e0f059ca944868c3074e"
+  "hash": "e13b08affa837b091dc8bade4ebc9db4db7e2130a81caa3400dbc5d1601a959a"
 }

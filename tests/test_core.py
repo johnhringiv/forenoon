@@ -241,8 +241,11 @@ def test_each_readers_own_settings_start_from_the_installs_and_apply_to_their_ru
     )
     store.db.executescript(moved.read_text())
     assert [row[0] for row in store.db.execute("SELECT key FROM settings")] == ["delivery_time"]
-    store.db.execute("UPDATE users SET learn = 0 WHERE id = 'mary'")
+    for migration in migrations[migrations.index(moved) + 1 :]:
+        store.db.executescript(migration.read_text())
+    store.db.execute("UPDATE users SET learn = 0, daily_to_kindle = 0 WHERE id = 'mary'")
     john, mary = store.readers()
+    assert john.daily_to_kindle and not mary.daily_to_kindle, "on unless the reader turned it off"
     assert (john.format, john.grayscale, john.explore, john.most_per_subject) == ("articles", False, False, 5)
     assert (john.show_reasons, john.learn, john.learned) == (False, True, "Likes long reads.")
     assert not mary.learn and mary.learned == "", "notes turned off are kept but not given to the model"

@@ -196,7 +196,7 @@ class Store:
         # An account an admin has invited is nobody's until its reader joins: no issue for it.
         rows = self.db.execute(
             "SELECT id, name, kindle_addresses, daily_stories, interests, learned, format, grayscale, explore,"
-            " most_per_subject, show_reasons, learn FROM users WHERE invited_at IS NULL ORDER BY created_at, id"
+            " most_per_subject, show_reasons, learn, daily_to_kindle FROM users WHERE invited_at IS NULL ORDER BY created_at, id"
         ).fetchall()
         return tuple(
             User(
@@ -209,6 +209,7 @@ class Store:
                 learned=row["learned"] if row["learn"] else "",
                 format=row["format"],
                 grayscale=bool(row["grayscale"]),
+                daily_to_kindle=bool(row["daily_to_kindle"]),
                 explore=bool(row["explore"]),
                 most_per_subject=row["most_per_subject"],
                 show_reasons=bool(row["show_reasons"]),
