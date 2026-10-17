@@ -66,6 +66,11 @@ enum Command {
         /// container can read, never one inside the data folder. Without it, sessions cannot be saved.
         #[arg(long, env = "FORENOON_LOGINS_DIR")]
         logins_dir: Option<PathBuf>,
+        /// For a public demo: hostnames at which a reader's Newsstand, Archive and Sources are
+        /// shown read-only to anyone, as host=reader pairs separated by commas:
+        /// alice.forenoon.example=alice,bob.forenoon.example=bob. Route them here as well.
+        #[arg(long, env = "FORENOON_WEB_DEMO", default_value = "")]
+        demo: String,
     },
     /// Create an account. The id names the reader in the pipeline's records and never changes.
     AddUser {
@@ -151,6 +156,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             smtp_username,
             smtp_sender,
             logins_dir,
+            demo,
         } => {
             if db::user_count(&pool).await? == 0 {
                 eprintln!("No accounts yet. Create one with: forenoon-web add-user <id> --email <address>");
@@ -193,8 +199,29 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 secret => Some(secret.into_bytes()),
             };
             let sender = Some(smtp_sender).filter(|sender| !sender.is_empty());
-            let options =
-                Options { secure_cookies, mailer, base_url, data_dir, logins_dir, proxy, feedback_secret, sender };
+            let demo = forenoon_web::demo::parse(&demo).map_err(|problem| format!("FORENOON_WEB_DEMO: {problem}"))?;
+            if !demo.is_empty() {
+                // The personas and their feeds: whatever is still missing, so the first start
+                // makes them all and a later one makes nothing.
+                let zone = std::env::var("TZ").ok().filter(|zone| Tz::from_str(zone).is_ok());
+                let made = forenoon_web::demo::seed(&pool, &demo, zone.as_deref().unwrap_or("UTC"))
+                    .await
+                    .map_err(|error| format!("making the demo's readers and feeds: {error}"))?;
+                for line in made {
+                    eprintln!("{line}");
+                }
+            }
+            let options = Options {
+                secure_cookies,
+                mailer,
+                base_url,
+                data_dir,
+                logins_dir,
+                proxy,
+                feedback_secret,
+                sender,
+                demo,
+            };
             let router = app(pool, options).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");
