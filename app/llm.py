@@ -49,9 +49,9 @@ class Unreachable(LlmError):
     refused, or the start-of-run look at its model list failed): then it is not tried again in
     the run. A slow answer or a server error loses only the one call."""
 
-    def __init__(self, message: str, *args, down: bool = False, **kwargs):
+    def __init__(self, message: str, *args, down: bool = False, timeout: bool = False, **kwargs):
         super().__init__(message, *args, **kwargs)
-        self.down = down
+        self.down, self.timeout = down, timeout
 
 
 class BadAnswer(LlmError):
@@ -136,7 +136,8 @@ class AnthropicBackend:
             raise Unreachable(f"{type(exc).__name__}: {exc}", down=True) from exc
         except self._anthropic.APIConnectionError as exc:
             # Timeouts and dropped connections included: the API is up, this call is lost.
-            raise Unreachable(f"{type(exc).__name__}: {exc}") from exc
+            slow = isinstance(exc, self._anthropic.APITimeoutError)
+            raise Unreachable(f"{type(exc).__name__}: {exc}", timeout=slow) from exc
         except self._anthropic.APIStatusError as exc:
             # Overloaded or rate limited: this call is lost, the next may go through.
             busy = exc.status_code in (429, 529)
@@ -231,7 +232,8 @@ class OpenAIBackend:
             # Refused or not there at all is down; a server too slow for this request is not.
             unreached = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol)
             down = isinstance(exc, (*unreached, httpx.InvalidURL))
-            raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}", down=down) from exc
+            slow = isinstance(exc, httpx.TimeoutException) and not down
+            raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}", down=down, timeout=slow) from exc
         if response.status_code >= 400:
             detail = response.text[:300]
             # A server that is up but turns the request down is a bad answer, except for the
@@ -354,8 +356,10 @@ class Router:
     def __init__(self, backends: dict[str, Backend]):
         self._backends = backends
         # Connections found unreachable in this run, with why: not tried again until the next,
-        # so a server that is off costs one time limit, not one per call.
+        # so a server that is off costs one time limit, not one per call. A connection whose
+        # calls time out twice in a row joins them: too slow for this run's requests.
         self._down: dict[str, str] = {}
+        self._timeouts: dict[str, int] = {}
 
     def backend(self, model: str) -> Backend:
         try:
@@ -373,11 +377,18 @@ class Router:
         if connection in self._down:
             raise Unreachable(f"{self._down[connection]} (not tried again this run)", down=True)
         try:
-            return backend.structured(system, user, schema, model=model, shared=shared)
+            reply = backend.structured(system, user, schema, model=model, shared=shared)
         except Unreachable as exc:
-            if exc.down:
-                self._down[connection] = str(exc)
+            self._timeouts[connection] = self._timeouts.get(connection, 0) + 1 if exc.timeout else 0
+            if exc.down or self._timeouts[connection] >= 2:
+                self._down[connection] = str(exc) if exc.down else f"{exc}; timed out twice in a row"
+                exc.down = True
             raise
+        except LlmError:
+            self._timeouts[connection] = 0
+            raise
+        self._timeouts[connection] = 0
+        return reply
 
     def check(self, model: str) -> str:
         """Why `model` cannot be used now, or "" when it can: a quick look at its connection's

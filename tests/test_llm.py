@@ -384,23 +384,29 @@ def test_a_connection_found_down_is_not_tried_again_in_the_run():
             router.structured("s", "u", SCHEMA, model="lan/qwen")
     assert len(calls) == 1, "the first refused call is the last"
 
-    # A server error or a call too slow loses only that call: the next is tried.
+    # A server error loses only that call: the next is tried.
+    erring = Server(status=503)
+    router = Router({"lan": backend(erring)})
+    for _ in range(2):
+        with pytest.raises(Unreachable) as lost:
+            router.structured("s", "u", SCHEMA, model="lan/qwen")
+        assert not lost.value.down
+    assert len(erring.requests) == 2
+
+    # One call too slow loses only itself; a second in a row means too slow for this run.
     slow = []
 
     def timeout(request):
         slow.append(request)
         raise httpx.ReadTimeout("slow")
 
-    erring = Server(status=503)
-    for router, sent in (
-        (Router({"lan": backend(erring)}), erring.requests),
-        (Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))}), slow),
-    ):
-        for _ in range(2):
-            with pytest.raises(Unreachable) as lost:
-                router.structured("s", "u", SCHEMA, model="lan/qwen")
-            assert not lost.value.down
-        assert len(sent) == 2
+    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))})
+    downs = []
+    for _ in range(3):
+        with pytest.raises(Unreachable) as lost:
+            router.structured("s", "u", SCHEMA, model="lan/qwen")
+        downs.append(lost.value.down)
+    assert downs == [False, True, True] and len(slow) == 2
 
 
 def test_a_rate_limit_loses_one_call_not_the_connection():
@@ -528,7 +534,7 @@ def test_a_pass_stops_after_two_calls_in_a_row_that_could_not_reach_the_model(tm
         slots=3,
         today_start="2026-10-17",
     )
-    assert len(slow) == 2, "stopped after two of the five batches"
+    assert len(slow) == 2, "stopped after two of the five batches: too slow for this run"
     assert ranking.choices == {} and "model call failed" in ranking.note, "newest first, saying why"
 
 
@@ -537,3 +543,41 @@ def test_the_start_of_run_check_sees_the_whole_model_list():
     lan = backend(Server(models=many))
     assert len(lan.model_ids()) == 500, "the page keeps at most 500"
     assert Router({"lan": backend(Server(models=many))}).check("lan/m550") == ""
+
+
+def test_two_timeouts_in_a_row_end_the_reading_pass_too_and_only_timeouts_count(tmp_path):
+    from app.config import User
+    from app.read import Reading, read
+
+    slow = []
+
+    def timeout(request):
+        slow.append(request)
+        raise httpx.ReadTimeout("slow")
+
+    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))})
+    readings = [Reading(f"r{n}", f"T{n}", "S", 900, " ".join(["word"] * 900)) for n in range(30)]
+    store = Store(tmp_path / "f.sqlite3")
+    assert read(Llm(model="lan/qwen"), router, store, User("john", "John", ()), readings, "2026-10-17") == {}
+    assert len(slow) == 2, "three batches of ten: stopped after two"
+    with pytest.raises(Unreachable, match="timed out twice in a row"):
+        router.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert len(slow) == 2, "and the rest of the run does not try it"
+
+    # Server errors are not slowness: each call is tried.
+    erring = Server(status=503)
+    router = Router({"lan": backend(erring)})
+    for _ in range(3):
+        with pytest.raises(Unreachable):
+            router.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert len(erring.requests) == 3
+
+
+def test_an_article_cut_to_fit_leaves_room_for_its_links():
+    from app.read import CHARS_PER_TOKEN, TOKENS_PER_ARTICLE, Reading, _batches, _tokens
+
+    links = [{"site": "example.com", "text": "the paper " * 5, "context": "as shown in " * 20} for _ in range(8)]
+    long = Reading("a", "A", "S", 5000, " ".join(["word"] * 5000), links)
+    ((cut,),) = _batches([long], limit=3000)
+    sent = _tokens(cut.text) + len(json.dumps(cut.links)) // CHARS_PER_TOKEN + TOKENS_PER_ARTICLE
+    assert sent <= 3000 and len(cut.links) == 8

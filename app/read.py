@@ -205,7 +205,6 @@ def read(
     limit = BATCH_TOKENS
     if budget is not None:
         limit = max(1000, min(limit, budget - TOKENS_OVERHEAD - (len(SYSTEM) + len(profile)) // CHARS_PER_TOKEN))
-    unreached = 0  # calls in a row that could not reach the model
     for batch in _batches(readings, limit):
         estimate = (
             TOKENS_OVERHEAD
@@ -221,11 +220,9 @@ def read(
         except LlmError as exc:
             store.log_llm_error("read", cfg.model, exc)
             log.warning("reading pass batch failed: %s", exc)
-            unreached = unreached + 1 if isinstance(exc, Unreachable) else 0
-            if isinstance(exc, Unreachable) and (exc.down or unreached >= 2):
-                break  # gone, or too slow twice running: the other batches would fare the same
+            if isinstance(exc, Unreachable) and exc.down:
+                break  # gone, or too slow twice running (see Router): the other batches would fare the same
             continue
-        unreached = 0
         got = _validated(reply.data, batch)
         store.log_llm_reply("read", cfg.model, reply, "ok" if got else "invalid")
         out.update(got)

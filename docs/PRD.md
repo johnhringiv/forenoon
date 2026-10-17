@@ -461,7 +461,7 @@ source).
   the whole answer limit: a local server may drop what does not fit without saying. The other
   calls are not batched and fit 16,384 tokens, the smallest context allowed, at the default
   settings; choosing the issue grows with the articles read in full, so reading many more
-  than 40 needs a larger context. A connection that cannot be reached is not tried again for the rest of the run; a
+  than 40 needs a larger context. A connection that cannot be reached (refused, a key refused, or no model list at the start), or whose calls time out twice in a row, is not tried again for the rest of the run; a single timeout or server error loses only that call; a
   rate limit loses only the one call.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page, unless the reader turned that off on their Reading page.
