@@ -5,6 +5,7 @@ pub mod accounts;
 pub mod archive;
 pub mod auth;
 pub mod db;
+pub mod demo;
 pub mod feedback;
 mod hex;
 pub mod icons;
@@ -61,6 +62,9 @@ pub struct Options {
     /// The address issues are sent from (`FORENOON_SMTP_SENDER`), which every Kindle must
     /// approve; shown beside the Kindle address fields. `None` when it is not set.
     pub sender: Option<String>,
+    /// Hostnames at which a reader's pages are shown read-only to anyone, for a public demo
+    /// (`FORENOON_WEB_DEMO`); see `demo`. Empty for an ordinary install.
+    pub demo: Vec<demo::Persona>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -155,6 +159,11 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     let router = match public.flatten() {
         Some(public) => router.layer(middleware::from_fn_with_state(public, pages::to_public_address)),
         None => router,
+    };
+    // Outside everything: a demo host is decided on before any other layer sees the request.
+    let router = match options.demo.is_empty() {
+        true => router,
+        false => router.layer(middleware::from_fn_with_state(Arc::from(options.demo), demo::gate)),
     };
     Ok(router.with_state(state))
 }

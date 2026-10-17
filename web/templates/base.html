@@ -165,8 +165,10 @@ button.primary:hover, button.kindle:hover { filter:brightness(1.1) }
 section.learned { max-width:44rem; margin:2rem 0 }
 section.learned > p.notes { margin:.8rem 0; padding:.1rem 0 .1rem .9rem; border-left:3px solid var(--line) }
 section.learned form.sheet { margin:.6rem 0 0; font-size:.9rem; color:var(--ink) }
-form.rate { margin:0; display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; font-size:.78rem }
-form.rate button.on { background:var(--ink); color:var(--card); border-color:var(--ink) }
+.rate { margin:0; display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; font-size:.78rem }
+.rate button.on { background:var(--ink); color:var(--card); border-color:var(--ink) }
+/* On a demo host the buttons are shown as they are, and do nothing. */
+button.inert { cursor:default }
 .extra { display:flex; flex-wrap:wrap; gap:.3rem .9rem; align-items:center; font-size:.78rem; color:var(--soft) }
 .extra form { margin:0 }
 form.send { margin:0; display:flex; flex-wrap:wrap; gap:.3rem .6rem; align-items:center; font-size:.78rem; color:var(--soft) }
@@ -204,26 +206,27 @@ details.add > summary::before { content:"+ " }
 details.add[open] > summary::before { content:"− " }
 details.add[open] > summary { border-bottom:1px solid var(--line) }
 details.add form.source, details.row form.source { margin:0; border:0; border-radius:0 }
-/* One compact row per source, opened to edit it. */
-details.row { margin:.5rem 0; background:var(--card); border:1px solid var(--line); border-radius:6px }
-details.row > summary { list-style:none; display:flex; flex-wrap:wrap; align-items:center; gap:.3rem .8rem;
-  padding:.55rem .9rem; cursor:pointer }
-details.row > summary::-webkit-details-marker { display:none }
+/* One compact row per source, opened to edit it; on a demo host a plain row, with nothing to open. */
+.row { margin:.5rem 0; background:var(--card); border:1px solid var(--line); border-radius:6px }
+.row > summary, .row > .summary { list-style:none; display:flex; flex-wrap:wrap; align-items:center; gap:.3rem .8rem;
+  padding:.55rem .9rem }
+.row > summary { cursor:pointer }
+.row > summary::-webkit-details-marker { display:none }
 details.row[open] > summary { border-bottom:1px solid var(--line) }
 details.row > form, details.row > div { padding:.8rem .9rem }
-details.row.paused > summary { opacity:.6 }
-details.row.unfollowed > summary .name { color:var(--soft) }
+.row.paused > summary, .row.paused > .summary { opacity:.6 }
+.row.unfollowed .name { color:var(--soft) }
 /* A feed this reader does not follow starts with a button to follow it, in place of its dot. */
-details.row > summary form.follow { margin:0 }
+.row > summary form.follow { margin:0 }
 .follow { font-size:.75rem; padding:.1rem .45rem; border-radius:3px }
 button.follow.none { border:1.5px solid var(--accent); color:var(--accent); font-weight:600 }
 .tag.new { border-color:var(--accent); color:var(--accent) }
 form.switch { display:flex; flex-wrap:wrap; gap:.4rem .8rem; align-items:center; margin:.6rem 0; font-size:.85rem }
-details.row .name { font:700 1.02rem Georgia,serif }
-details.row .addr { color:var(--soft); font-size:.82rem; min-width:0; max-width:30rem; overflow:hidden;
+.row .name { font:700 1.02rem Georgia,serif }
+.row .addr { color:var(--soft); font-size:.82rem; min-width:0; max-width:30rem; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap }
-details.row .tags { margin-left:auto; display:flex; flex-wrap:wrap; gap:.3rem; font-size:.74rem; color:var(--soft) }
-details.row .state { flex-basis:100%; margin:0; font-size:.8rem; color:var(--soft) }
+.row .tags { margin-left:auto; display:flex; flex-wrap:wrap; gap:.3rem; font-size:.74rem; color:var(--soft) }
+.row .state { flex-basis:100%; margin:0; font-size:.8rem; color:var(--soft) }
 /* A source's dot: its colour is how its last run went, its shape whether this reader follows it
    by choice (filled) or had it followed for them (a ring). Its tooltip says both. */
 .dot { flex:none; width:.7rem; height:.7rem; border-radius:50%; color:var(--ok); background:currentColor }
@@ -254,6 +257,12 @@ details.help summary { cursor:pointer; color:var(--accent) }
 details.help p { margin:.4rem 0 0 }
 form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--accent); border-radius:6px;
   display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:center; font-size:.9rem }
+/* A demo host: what this is, under the masthead, with the persona's interests behind a click. */
+.demo { margin:.6rem 0 0; font-size:.9rem; color:var(--soft) }
+details.demo summary { list-style:none; cursor:pointer }
+details.demo summary::-webkit-details-marker { display:none }
+details.demo summary span { color:var(--accent); text-decoration:underline }
+details.demo p.notes { margin:.5rem 0 0; max-width:44rem; padding:.1rem 0 .1rem .9rem; border-left:3px solid var(--line) }
 </style>
 </head>
 <body>
@@ -263,7 +272,10 @@ form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--acc
 {% if let Some(nav) = nav %}<nav class="site" aria-label="Pages">
 <a href="/"{% if nav.current == "newsstand" %} aria-current="page"{% endif %}>Newsstand</a>
 <a href="/archive"{% if nav.current == "archive" %} aria-current="page"{% endif %}>Archive</a>
-<a href="/reading"{% if nav.current == "reading" %} aria-current="page"{% endif %}>Reading</a>
+{% if let Some(demo) = nav.demo %}<a href="/sources"{% if nav.current == "sources" %} aria-current="page"{% endif %}>Sources</a>
+<span class="sep"></span><span class="me">Reading as</span>
+{% for persona in demo.personas %}<a href="{{ persona.href }}"{% if persona.current %} aria-current="true"{% endif %}>{{ persona.name }}</a>
+{% endfor %}{% else %}<a href="/reading"{% if nav.current == "reading" %} aria-current="page"{% endif %}>Reading</a>
 <a href="/sources"{% if nav.current == "sources" %} aria-current="page"{% endif %}>Sources</a>
 {% if nav.admin %}<span class="sep"></span>
 <a href="/settings"{% if nav.current == "settings" %} aria-current="page"{% endif %}>Settings</a>
@@ -271,9 +283,14 @@ form.banner { margin:1.2rem 0 0; padding:.6rem .8rem; border:1px solid var(--acc
 <a href="/problems"{% if nav.current == "problems" %} aria-current="page"{% endif %}>Problems{% if nav.problems > 0 %} ({{ nav.problems }}){% endif %}</a>
 {% endif %}<span class="sep"></span>
 <a class="me" href="/account"{% if nav.current == "account" %} aria-current="page"{% endif %}>{{ nav.name }}</a>
-</nav>{% endif %}
+{% endif %}</nav>{% endif %}
 <button class="theme" type="button" hidden aria-label="Switch to dark mode"><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
 </div>
+{% if let Some(nav) = nav %}{% if let Some(demo) = nav.demo %}
+{% if demo.interests.is_empty() %}<p class="demo">A demo, read only: Forenoon's pages as <b>{{ nav.name }}</b> sees them, with the issue chosen for them each morning. Nothing here can be changed; in your own install, every button works.</p>
+{% else %}<details class="demo"><summary>A demo, read only: Forenoon's pages as <b>{{ nav.name }}</b> sees them, with the issue chosen for them each morning from <span>these interests</span>. Nothing here can be changed; in your own install, every button works.</summary>
+<p class="notes">{{ demo.interests }}</p></details>
+{% endif %}{% endif %}{% endif %}
 {% block header %}{% endblock %}
 </header>
 <main>

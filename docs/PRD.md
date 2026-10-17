@@ -816,6 +816,17 @@ database with the pipeline.
   serve it, only to a reader the article was delivered to. A card falls back to the
   article's own lead image address when there is no thumbnail, and has no picture when the
   article has none. `forenoon thumbs` makes thumbnails for articles delivered earlier.
+- **Demo hosts** (`FORENOON_WEB_DEMO`, `host=reader` pairs). For a public demo, an
+  ordinary install's pages are also reached at one hostname per persona, each a reader of
+  the install. A request for such a host needs no sign-in and sees that reader's Newsstand,
+  Archive and Sources, as they are, with a banner saying so and links to the other personas
+  in place of the reader's own pages; the persona's interests text is shown behind a click.
+  The rating and Send to Kindle buttons are shown and do nothing; the forms that add, follow,
+  edit or rate are left out, as are the Subscriber sessions. Every other address on a demo
+  host, the sign-in page included, is 404, and so is any post. No session is started for a
+  visitor and the pages carry `Cache-Control: public, max-age=300`, so a cache in front
+  serves a busy day. A persona is shown as a reader whatever its role. The install's own
+  hostname is unchanged.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the

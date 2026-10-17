@@ -1,4 +1,5 @@
-<div class="extra">
+{% if demo %}<div class="extra"><button type="button" class="kindle inert" title="In your own install this sends the article to your Kindle, as a book of its own with fresh rating links">Send to Kindle</button></div>
+{% else %}<div class="extra">
 {% if card.sendable || card.sent.is_some() %}<form class="send" method="post" action="/send">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 {% if card.sendable %}<button class="kindle">Send to Kindle</button>{% endif %}
@@ -7,4 +8,4 @@
 {% if card.reported %}<span>Reported as broken or incomplete.</span>{% else %}<form method="post" action="/report">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 <button class="link" title="Tell the admin this article came out broken or incomplete">Report a problem</button></form>{% endif %}
-</div>
+</div>{% endif %}

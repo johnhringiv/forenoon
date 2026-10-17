@@ -24,8 +24,8 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, allowed, back_to, csrf_token,
-        html, length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, Viewer, allowed, back_to, html,
+        length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
     },
     ratings,
 };
@@ -121,6 +121,8 @@ struct Row {
 struct ArchivePage {
     nav: Option<Nav>,
     csrf: String,
+    /// A demo host: nothing is added or fetched, and the buttons do nothing.
+    demo: bool,
     /// False until the pipeline keeps what it weighs: only then is there more than deliveries.
     ready: bool,
     search: String,
@@ -270,13 +272,8 @@ fn row(found: Shelved, zone: Tz) -> Row {
     }
 }
 
-pub async fn page(
-    State(state): State<AppState>,
-    auth: AuthSession,
-    session: Session,
-    Query(query): Query<ArchiveQuery>,
-) -> Page {
-    let user = reader(&auth)?;
+pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Query<ArchiveQuery>) -> Page {
+    let user = &viewer.user;
     let zone = Tz::from_str(&user.timezone).unwrap_or(Tz::UTC);
     let pool = &state.pool;
     let search: String = query.q.as_deref().unwrap_or_default().trim().chars().take(MAX_SEARCH).collect();
@@ -305,8 +302,9 @@ pub async fn page(
         ("sort", sort),
     ];
     let mut page = ArchivePage {
-        nav: Nav::new(&state, &user, "archive").await?,
-        csrf: csrf_token(&session).await?,
+        nav: viewer.nav(&state, "archive").await?,
+        csrf: viewer.csrf.clone(),
+        demo: viewer.is_demo(),
         ready,
         filtered: parts.iter().any(|(_, value)| !value.is_empty()),
         selects: vec![

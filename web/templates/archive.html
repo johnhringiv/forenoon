@@ -2,11 +2,11 @@
 {% block title %}Archive · Forenoon{% endblock %}
 {% block head %}{% if fetching %}<meta http-equiv="refresh" content="20">{% endif %}{% endblock %}
 {% block header %}
-<p class="intro">Everything delivered to you, and what the model weighed for you and passed over.</p>
+<p class="intro">{% if demo %}Everything delivered to this persona, and what the model weighed for them and passed over.{% else %}Everything delivered to you, and what the model weighed for you and passed over.{% endif %}</p>
 {% endblock %}
 {% block main %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
-<details class="add"{% if error.is_some() || !pending.is_empty() %} open{% endif %}>
+{% if !demo %}<details class="add"{% if error.is_some() || !pending.is_empty() %} open{% endif %}>
 <summary>Add a link</summary>
 <form class="source" method="post" action="/archive">
 <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -20,7 +20,7 @@
 {% for add in pending %}<p class="hint{% if add.failed %} failing{% endif %}">{{ add.url }}: {{ add.note }}</p>{% endfor %}
 {% if failed %}<p><button class="link" formaction="/archive/added/clear" formnovalidate>Clear the links that could not be added</button></p>{% endif %}
 </form>
-</details>
+</details>{% endif %}
 <form class="source filters" method="get" action="/archive">
 <div class="fields">
 <label class="wide">Title contains <input name="q" value="{{ search }}" maxlength="100"></label>
@@ -47,7 +47,8 @@
 {% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
 </div>
 {% include "_rate.html" %}
-{% if card.sendable || card.sent.is_some() %}<form class="send apart" method="post" action="/send">
+{% if demo %}<div class="extra"><button type="button" class="kindle inert" title="In your own install this sends the article to your Kindle, as a book of its own with fresh rating links">Send to Kindle</button></div>
+{% else %}{% if card.sendable || card.sent.is_some() %}<form class="send apart" method="post" action="/send">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 {% if card.sendable %}<button class="kindle">Send to Kindle</button>{% endif %}
 {% if let Some(sent) = card.sent %}<span>{{ sent }}</span>{% endif %}
@@ -56,7 +57,7 @@
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 {% if !card.refreshing %}<button class="link">Fetch again</button>{% endif %}
 {% if let Some(refreshed) = card.refreshed %}<span>{{ refreshed }}</span>{% endif %}
-</form>
+</form>{% endif %}
 </div>
 {% endfor %}
 {% if newer.is_some() || older.is_some() %}<nav class="pager">
