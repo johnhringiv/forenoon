@@ -28,8 +28,10 @@ from .config import Llm
 API_KEY_ENV = "FORENOON_ANTHROPIC_API_KEY"
 KEY_ENV_PREFIX = "FORENOON_LLM_KEY_"
 MAX_OUTPUT_TOKENS = 8192  # a batch of 80 candidates needs about 3,300
+MAX_LISTED = 500  # model ids kept from a server's list
 CHECK_TIMEOUT = 2.0  # seconds for a connection's model list, at the start of a run
 CHARS_PER_TOKEN = 4  # a rough count of a prompt's tokens, the same everywhere it is estimated
+TAILNET = ipaddress.ip_network("100.64.0.0/10")  # carrier-grade NAT, as Tailscale uses: your own devices
 CONTEXT_MARGIN = 512  # tokens kept spare in a request, for the estimate's error and the template
 
 
@@ -42,7 +44,13 @@ class LlmError(Exception):
 
 
 class Unreachable(LlmError):
-    """The connection could not be used: down, timed out, refused the key. A fallback may help."""
+    """The connection could not be used for this call: down, timed out, refused the key, or the
+    server failed. `down` when it cannot be used at all (refused the connection or the key):
+    then it is not tried again in the run. A timeout or a server error loses only the one call."""
+
+    def __init__(self, message: str, *args, down: bool = False, **kwargs):
+        super().__init__(message, *args, **kwargs)
+        self.down = down
 
 
 class BadAnswer(LlmError):
@@ -123,8 +131,10 @@ class AnthropicBackend:
                 tools=[tool],
                 tool_choice=choice,
             )
-        except (self._anthropic.APIConnectionError, self._anthropic.AuthenticationError) as exc:
+        except self._anthropic.APITimeoutError as exc:
             raise Unreachable(f"{type(exc).__name__}: {exc}") from exc
+        except (self._anthropic.APIConnectionError, self._anthropic.AuthenticationError) as exc:
+            raise Unreachable(f"{type(exc).__name__}: {exc}", down=True) from exc
         except self._anthropic.APIStatusError as exc:
             # Overloaded or rate limited: this call is lost, the next may go through.
             busy = exc.status_code in (429, 529)
@@ -216,15 +226,20 @@ class OpenAIBackend:
                 f"{self._base}/chat/completions", json=body, headers=self._headers, timeout=self.connection.timeout
             )
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
-            raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}") from exc
+            # Refused or not there at all is down; a server too slow for this request is not.
+            down = isinstance(exc, (httpx.ConnectError, httpx.UnsupportedProtocol, httpx.InvalidURL))
+            raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}", down=down) from exc
         if response.status_code >= 400:
             detail = response.text[:300]
             # A server that is up but turns the request down is a bad answer, except for the
             # refusals that another connection would not get: the key, the server's own trouble.
             # A rate limit is neither: this call is lost, the next may go through.
             unusable = response.status_code in (401, 403, 404) or response.status_code >= 500
+            message = f"{self.connection.name}: HTTP {response.status_code}: {detail}"
+            if response.status_code in (401, 403):
+                raise Unreachable(message, down=True)  # the key: no call will get through
             kind = LlmError if response.status_code == 429 else Unreachable if unusable else BadAnswer
-            raise kind(f"{self.connection.name}: HTTP {response.status_code}: {detail}")
+            raise kind(message)
         try:
             reply = response.json()
         except ValueError as exc:
@@ -324,7 +339,9 @@ class OpenAIBackend:
                 raise TypeError("no list of models")
         except (httpx.HTTPError, httpx.InvalidURL, ValueError, TypeError, AttributeError) as exc:
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}") from exc
-        return [m["id"] for m in listed if isinstance(m, dict) and isinstance(m.get("id"), str)]
+        ids = [m["id"] for m in listed if isinstance(m, dict) and isinstance(m.get("id"), str)]
+        # A model setting cannot name one with a space in it; and the page lists them all.
+        return [i for i in ids if i and not any(c.isspace() for c in i) and len(i) <= 150][:MAX_LISTED]
 
 
 class Router:
@@ -354,7 +371,8 @@ class Router:
         try:
             return backend.structured(system, user, schema, model=model, shared=shared)
         except Unreachable as exc:
-            self._down[connection] = str(exc)
+            if exc.down:
+                self._down[connection] = str(exc)
             raise
 
     def check(self, model: str) -> str:
@@ -409,14 +427,17 @@ def input_budget(backend: Backend | None, model: str) -> int | None:
 
 
 def private_host(address: str) -> bool:
-    """Whether an address is on this network: a private, loopback or link-local IP, a name
-    without a dot (gpu-box, localhost), or one under .local, .lan, .home.arpa or .internal."""
+    """Whether an address is on this network: a private, loopback or link-local IP or one on a
+    Tailscale network, a name without a dot (gpu-box, localhost), or one under .local, .lan,
+    .home.arpa, .internal or .ts.net."""
     host = (urlsplit(address).hostname or "").lower()
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return bool(host) and ("." not in host or host.endswith((".local", ".lan", ".home.arpa", ".internal")))
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+        return bool(host) and (
+            "." not in host or host.endswith((".local", ".lan", ".home.arpa", ".internal", ".ts.net"))
+        )
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip in TAILNET
 
 
 def models_for_run(cfg: Llm, backend: Backend | None) -> tuple[Llm, str]:

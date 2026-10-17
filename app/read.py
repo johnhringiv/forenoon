@@ -132,7 +132,7 @@ def _batches(readings: list[Reading], limit: int = BATCH_TOKENS) -> list[list[Re
     out: list[list[Reading]] = [[]]
     size = 0
     for reading in readings:
-        cost = _tokens(reading.text) + TOKENS_PER_ARTICLE
+        cost = _tokens(reading.text) + len(json.dumps(reading.links)) // CHARS_PER_TOKEN + TOKENS_PER_ARTICLE
         if cost > limit:
             words = max(1, int((limit - TOKENS_PER_ARTICLE) / TOKENS_PER_WORD))
             text = " ".join(reading.text.split()[:words])[: (limit - TOKENS_PER_ARTICLE) * CHARS_PER_TOKEN]
@@ -153,7 +153,7 @@ def _listing(batch: list[Reading], limit: int) -> str:
             "title": r.title,
             "source": r.source,
             "words": r.words,
-            "truncated": r.words > limit,
+            "truncated": len(r.text.split()) < r.words,  # cut at read_words, or to fit the context
             "text": r.text,
             "links": [{"n": n, **link} for n, link in enumerate(r.links, 1)],
         }
@@ -205,7 +205,11 @@ def read(
     if budget is not None:
         limit = max(1000, min(limit, budget - TOKENS_OVERHEAD - (len(SYSTEM) + len(profile)) // CHARS_PER_TOKEN))
     for batch in _batches(readings, limit):
-        estimate = TOKENS_OVERHEAD + sum(_tokens(r.text) for r in batch) + TOKENS_PER_ARTICLE * len(batch)
+        estimate = (
+            TOKENS_OVERHEAD
+            + sum(_tokens(r.text) + len(json.dumps(r.links)) // CHARS_PER_TOKEN for r in batch)
+            + TOKENS_PER_ARTICLE * len(batch)
+        )
         used = store.llm_tokens_since(today_start)
         if not unlimited and used + estimate > cfg.daily_token_cap:
             log.warning("reading pass stopped: daily token cap reached (%d of %d used)", used, cfg.daily_token_cap)
@@ -215,8 +219,8 @@ def read(
         except LlmError as exc:
             store.log_llm_error("read", cfg.model, exc)
             log.warning("reading pass batch failed: %s", exc)
-            if isinstance(exc, Unreachable):
-                break  # gone: the other batches would each wait out the time limit too
+            if isinstance(exc, Unreachable) and exc.down:
+                break  # gone: the other batches would fail the same way
             continue
         got = _validated(reply.data, batch)
         store.log_llm_reply("read", cfg.model, reply, "ok" if got else "invalid")

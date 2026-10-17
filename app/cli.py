@@ -278,6 +278,10 @@ def _usage(cfg: Config, args: argparse.Namespace) -> int:
     month = store.llm_usage_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
     print(f"\nToday: {today['tokens']} of {cfg.llm.daily_token_cap} tokens, about ${today['cost']:.4f}.")
     print(f"This month: {month['tokens']} tokens, about ${month['cost']:.2f}.")
+    if month["free_tokens"]:
+        print(
+            f"Also {today['free_tokens']} today and {month['free_tokens']} this month on servers you run, at no cost."
+        )
     if month["unpriced"]:
         print(f"{month['unpriced']} calls this month were to a model with no known price, and are not counted.")
     print(

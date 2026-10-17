@@ -231,8 +231,8 @@ def rank(
         except LlmError as exc:
             store.log_llm_error("rank", cfg.model, exc)
             problem = f"model call failed: {exc}"[:200]
-            if isinstance(exc, Unreachable):
-                break  # gone: the other batches would each wait out the time limit too
+            if isinstance(exc, Unreachable) and exc.down:
+                break  # gone: the other batches would fail the same way
             continue
         got = _validated(reply.data, batch)
         ok = len(got) >= max(1, len(batch) // 2)

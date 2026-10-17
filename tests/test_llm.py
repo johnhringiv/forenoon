@@ -371,12 +371,36 @@ def test_a_connection_found_down_is_not_tried_again_in_the_run():
         router.structured("s", "u", SCHEMA, model="lan/qwen")
     assert len(server.requests) == 1, "only the start-of-run look reached it"
 
-    flaky = Server(status=503)
-    router = Router({"lan": backend(flaky)})
+    # Refused: down for the rest of the run, for every reader.
+    calls = []
+
+    def refused(request):
+        calls.append(request)
+        raise httpx.ConnectError("refused")
+
+    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(refused)))})
     for _ in range(3):
         with pytest.raises(Unreachable):
             router.structured("s", "u", SCHEMA, model="lan/qwen")
-    assert len(flaky.requests) == 1, "the first failed call is the last"
+    assert len(calls) == 1, "the first refused call is the last"
+
+    # A server error or a call too slow loses only that call: the next is tried.
+    slow = []
+
+    def timeout(request):
+        slow.append(request)
+        raise httpx.ReadTimeout("slow")
+
+    erring = Server(status=503)
+    for router, sent in (
+        (Router({"lan": backend(erring)}), erring.requests),
+        (Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))}), slow),
+    ):
+        for _ in range(2):
+            with pytest.raises(Unreachable) as lost:
+                router.structured("s", "u", SCHEMA, model="lan/qwen")
+            assert not lost.value.down
+        assert len(sent) == 2
 
 
 def test_a_rate_limit_loses_one_call_not_the_connection():
@@ -431,3 +455,22 @@ def test_a_check_does_not_overwrite_an_address_saved_while_it_ran(tmp_path):
     store.record_connection_check("lan", "http://old/v1", True, "", ["qwen"], "2026-10-17T12:00:00+00:00")
     (row,) = store.connection_rows()
     assert row["checked_at"] == "" and row["models"] == "[]", "the row's address had changed"
+
+
+def test_an_article_cut_to_fit_a_small_context_is_marked_as_cut():
+    from app.read import Reading, _batches, _listing
+
+    long = Reading("a", "A", "S", 2000, " ".join(["word"] * 2000))
+    (batch,) = _batches([long], limit=1000)
+    listed = json.loads(_listing(batch, 2500).removeprefix("<reading>\n").removesuffix("\n</reading>"))
+    assert listed[0]["truncated"] is True and listed[0]["words"] == 2000
+    whole = Reading("b", "B", "S", 10, " ".join(["word"] * 10))
+    listed = json.loads(_listing([whole], 2500).removeprefix("<reading>\n").removesuffix("\n</reading>"))
+    assert listed[0]["truncated"] is False
+
+
+def test_a_tailnet_server_can_be_free_and_model_ids_with_spaces_are_left_out():
+    from app.llm import private_host
+
+    assert private_host("http://100.101.102.103:8080/v1") and private_host("http://gpu.tail1234.ts.net/v1")
+    assert backend(Server(models=["qwen", "my model", "llama"])).model_ids() == ["qwen", "llama"]

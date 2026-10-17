@@ -876,9 +876,13 @@ class Store:
         return row["n"]
 
     def llm_usage_since(self, start: str) -> sqlite3.Row:
-        """Tokens and cost since `start`. `unpriced` counts calls to a model with no known price."""
+        """Tokens and cost since `start`: `tokens` are the priced ones the daily cap counts,
+        `free_tokens` those on servers you run. `unpriced` counts calls to a model with no known price."""
         return self.db.execute(
-            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS tokens,"
+            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
+            " FILTER (WHERE cost IS NULL OR cost > 0), 0) AS tokens,"
+            " COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
+            " FILTER (WHERE cost = 0), 0) AS free_tokens,"
             " COALESCE(SUM(cost), 0) AS cost, COUNT(*) FILTER (WHERE cost IS NULL AND status NOT IN ('error', 'unreachable')) AS unpriced"
             " FROM llm_calls WHERE created_at >= ?",
             (start,),

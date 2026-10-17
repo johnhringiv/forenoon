@@ -459,8 +459,9 @@ source).
   for once more, saying what was wrong; an answer cut off at the answer limit is a bad
   answer. Ranking and reading-pass batches are sized to the connection's context size, less
   the whole answer limit: a local server may drop what does not fit without saying. The other
-  calls are small (under about 12,000 tokens), so a connection needs a context of at least
-  16,384. A connection that cannot be reached is not tried again for the rest of the run; a
+  calls are not batched and fit 16,384 tokens, the smallest context allowed, at the default
+  settings; choosing the issue grows with the articles read in full, so reading many more
+  than 40 needs a larger context. A connection that cannot be reached is not tried again for the rest of the run; a
   rate limit loses only the one call.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page, unless the reader turned that off on their Reading page.
