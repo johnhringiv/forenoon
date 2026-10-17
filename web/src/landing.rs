@@ -4,7 +4,7 @@
 //! Nothing but the page, its pictures, the icons and the health check answers on that host.
 //! When the deploy is down, a Cloudflare Worker (`deploy/cloudflare`) shows a page saying so.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::{
     extract::{Request, State},
@@ -15,7 +15,10 @@ use axum::{
 
 use crate::{demo::hosts, icons, pages};
 
-const PAGE: &str = include_str!("../site/index.html");
+/// The page, naming the share card by its versioned address (`icons::SHARE_CARD`). The outage
+/// Worker's copy keeps the plain `/og.png`, which is served too.
+static PAGE: LazyLock<String> =
+    LazyLock::new(|| include_str!("../site/index.html").replace("/og.png\"", &format!("{}\"", *icons::SHARE_CARD)));
 /// (path, contents): the pictures the page names, all WebP.
 const IMAGES: &[(&str, &[u8])] = &[
     ("/images/kindle-cover.webp", include_bytes!("../site/images/kindle-cover.webp")),
@@ -86,6 +89,12 @@ mod tests {
         assert_eq!(host(" Forenoon.Example:443 "), Ok(Some("forenoon.example".to_owned())));
         assert_eq!(host("forenoon.example:8081"), Ok(Some("forenoon.example:8081".to_owned())));
         assert!(host("https://forenoon.example").is_err());
+    }
+
+    #[test]
+    fn the_page_names_its_share_card_by_the_versioned_address() {
+        assert!(PAGE.contains(&format!("content=\"https://forenoon.dev{}\"", *icons::SHARE_CARD)));
+        assert!(!PAGE.contains("/og.png\""));
     }
 
     #[test]

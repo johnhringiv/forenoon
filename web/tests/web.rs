@@ -2463,11 +2463,17 @@ async fn a_shared_link_previews_with_the_sites_card() {
     for tag in [
         r#"<meta property="og:title" content="Forenoon">"#,
         r#"<meta property="og:url" content="http://nas:8787/login">"#,
-        r#"<meta property="og:image" content="http://nas:8787/og.png">"#,
         r#"<meta name="twitter:card" content="summary_large_image">"#,
     ] {
         assert!(page.text.contains(tag), "{tag}");
     }
+    // The card by its versioned address, which serves the same picture as the plain one.
+    let (_, card) = page.text.split_once(r#"<meta property="og:image" content="http://nas:8787"#).unwrap();
+    let card = card.split('"').next().unwrap();
+    assert!(card.starts_with("/og.png?v="), "{card}");
+    let versioned = Browser::default().get(&site, card).await;
+    assert_eq!(versioned.status, StatusCode::OK);
+    assert_eq!(versioned.text, Browser::default().get(&site, "/og.png").await.text);
 }
 
 #[tokio::test]
