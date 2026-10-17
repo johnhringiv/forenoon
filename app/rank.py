@@ -220,6 +220,7 @@ def rank(
     mixed = list(candidates)
     if len(mixed) > size:
         Random(today_start).shuffle(mixed)
+    unreached = 0  # calls in a row that could not reach the model
     for start in range(0, len(mixed), size):
         batch = mixed[start : start + size]
         used = store.llm_tokens_since(today_start)
@@ -231,9 +232,11 @@ def rank(
         except LlmError as exc:
             store.log_llm_error("rank", cfg.model, exc)
             problem = f"model call failed: {exc}"[:200]
-            if isinstance(exc, Unreachable) and exc.down:
-                break  # gone: the other batches would fail the same way
+            unreached = unreached + 1 if isinstance(exc, Unreachable) else 0
+            if isinstance(exc, Unreachable) and (exc.down or unreached >= 2):
+                break  # gone, or too slow twice running: the other batches would fare the same
             continue
+        unreached = 0
         got = _validated(reply.data, batch)
         ok = len(got) >= max(1, len(batch) // 2)
         store.log_llm_reply("rank", cfg.model, reply, "ok" if ok else "invalid")

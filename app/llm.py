@@ -45,8 +45,9 @@ class LlmError(Exception):
 
 class Unreachable(LlmError):
     """The connection could not be used for this call: down, timed out, refused the key, or the
-    server failed. `down` when it cannot be used at all (refused the connection or the key):
-    then it is not tried again in the run. A timeout or a server error loses only the one call."""
+    server failed. `down` when it cannot be used at all (the host cannot be reached, the key is
+    refused, or the start-of-run look at its model list failed): then it is not tried again in
+    the run. A slow answer or a server error loses only the one call."""
 
     def __init__(self, message: str, *args, down: bool = False, **kwargs):
         super().__init__(message, *args, **kwargs)
@@ -131,10 +132,11 @@ class AnthropicBackend:
                 tools=[tool],
                 tool_choice=choice,
             )
-        except self._anthropic.APITimeoutError as exc:
-            raise Unreachable(f"{type(exc).__name__}: {exc}") from exc
-        except (self._anthropic.APIConnectionError, self._anthropic.AuthenticationError) as exc:
+        except self._anthropic.AuthenticationError as exc:
             raise Unreachable(f"{type(exc).__name__}: {exc}", down=True) from exc
+        except self._anthropic.APIConnectionError as exc:
+            # Timeouts and dropped connections included: the API is up, this call is lost.
+            raise Unreachable(f"{type(exc).__name__}: {exc}") from exc
         except self._anthropic.APIStatusError as exc:
             # Overloaded or rate limited: this call is lost, the next may go through.
             busy = exc.status_code in (429, 529)
@@ -227,17 +229,19 @@ class OpenAIBackend:
             )
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
             # Refused or not there at all is down; a server too slow for this request is not.
-            down = isinstance(exc, (httpx.ConnectError, httpx.UnsupportedProtocol, httpx.InvalidURL))
+            unreached = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol)
+            down = isinstance(exc, (*unreached, httpx.InvalidURL))
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}", down=down) from exc
         if response.status_code >= 400:
             detail = response.text[:300]
             # A server that is up but turns the request down is a bad answer, except for the
             # refusals that another connection would not get: the key, the server's own trouble.
             # A rate limit is neither: this call is lost, the next may go through.
-            unusable = response.status_code in (401, 403, 404) or response.status_code >= 500
+            unusable = response.status_code in (403, 404) or response.status_code >= 500
             message = f"{self.connection.name}: HTTP {response.status_code}: {detail}"
-            if response.status_code in (401, 403):
+            if response.status_code == 401:
                 raise Unreachable(message, down=True)  # the key: no call will get through
+            # 403 is often about this request (moderation) or this model, not the connection.
             kind = LlmError if response.status_code == 429 else Unreachable if unusable else BadAnswer
             raise kind(message)
         try:
@@ -329,7 +333,7 @@ class OpenAIBackend:
             return Reply(_without_nulls(data, schema), input_tokens, output_tokens, 0, cached, self.priced)
         raise BadAnswer(f"{self.connection.name}: {problem}", *spent())
 
-    def model_ids(self, timeout: float = CHECK_TIMEOUT) -> list[str]:
+    def model_ids(self, timeout: float = CHECK_TIMEOUT, limit: int | None = MAX_LISTED) -> list[str]:
         """The models the server lists, by the ids it knows them by. Raises Unreachable."""
         try:
             response = self._client.get(f"{self._base}/models", headers=self._headers, timeout=timeout)
@@ -341,7 +345,7 @@ class OpenAIBackend:
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}") from exc
         ids = [m["id"] for m in listed if isinstance(m, dict) and isinstance(m.get("id"), str)]
         # A model setting cannot name one with a space in it; and the page lists them all.
-        return [i for i in ids if i and not any(c.isspace() for c in i) and len(i) <= 150][:MAX_LISTED]
+        return [i for i in ids if i and not any(c.isspace() for c in i) and len(i) <= 150][:limit]
 
 
 class Router:
@@ -360,14 +364,14 @@ class Router:
             raise LlmError(str(exc)) from exc
         backend = self._backends.get(connection)
         if backend is None:
-            raise Unreachable(f"no connection named {connection!r} for the model {model}")
+            raise Unreachable(f"no connection named {connection!r} for the model {model}", down=True)
         return backend
 
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
         backend = self.backend(model)
         connection = models.split(model)[0]
         if connection in self._down:
-            raise Unreachable(f"{self._down[connection]} (not tried again this run)")
+            raise Unreachable(f"{self._down[connection]} (not tried again this run)", down=True)
         try:
             return backend.structured(system, user, schema, model=model, shared=shared)
         except Unreachable as exc:
@@ -389,7 +393,7 @@ class Router:
         if not isinstance(backend, OpenAIBackend):
             return ""
         try:
-            listed = backend.model_ids()
+            listed = backend.model_ids(limit=None)
         except Unreachable as exc:
             self._down[connection] = str(exc)
             return str(exc)

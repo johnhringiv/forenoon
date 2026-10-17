@@ -474,3 +474,66 @@ def test_a_tailnet_server_can_be_free_and_model_ids_with_spaces_are_left_out():
 
     assert private_host("http://100.101.102.103:8080/v1") and private_host("http://gpu.tail1234.ts.net/v1")
     assert backend(Server(models=["qwen", "my model", "llama"])).model_ids() == ["qwen", "llama"]
+
+
+def test_which_failures_take_a_connection_out_for_the_run():
+    def raising(exc):
+        def handler(request):
+            raise exc
+
+        return OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(handler)))
+
+    for exc, down in (
+        (httpx.ConnectTimeout("dropped"), True),
+        (httpx.ConnectError("refused"), True),
+        (httpx.ReadTimeout("slow"), False),
+        (httpx.RemoteProtocolError("cut"), False),
+    ):
+        with pytest.raises(Unreachable) as failed:
+            raising(exc).structured("s", "u", SCHEMA, model="lan/qwen")
+        assert failed.value.down is down, type(exc).__name__
+    with pytest.raises(Unreachable) as refused_key:
+        backend(Server(status=401)).structured("s", "u", SCHEMA, model="lan/qwen")
+    assert refused_key.value.down
+    with pytest.raises(Unreachable) as forbidden:
+        backend(Server(status=403)).structured("s", "u", SCHEMA, model="lan/qwen")
+    assert not forbidden.value.down, "a 403 is often about the request, such as moderation"
+    # Once down, every later call says so, flagged down too.
+    router = Router({"lan": raising(httpx.ConnectError("refused"))})
+    for _ in range(2):
+        with pytest.raises(Unreachable) as again:
+            router.structured("s", "u", SCHEMA, model="lan/qwen")
+        assert again.value.down
+
+
+def test_a_pass_stops_after_two_calls_in_a_row_that_could_not_reach_the_model(tmp_path):
+    from app.config import Source, User
+    from app.rank import rank
+    from app.sources import Item
+
+    slow = []
+
+    def timeout(request):
+        slow.append(request)
+        raise httpx.ReadTimeout("slow")
+
+    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))})
+    items = [Item(f"i{n}", f"https://x/{n}", Source("S"), f"T{n}", "", None, "") for n in range(10)]
+    ranking = rank(
+        Llm(model="lan/qwen", batch_size=2),
+        router,
+        Store(tmp_path / "f.sqlite3"),
+        User("john", "John", ()),
+        items,
+        slots=3,
+        today_start="2026-10-17",
+    )
+    assert len(slow) == 2, "stopped after two of the five batches"
+    assert ranking.choices == {} and "model call failed" in ranking.note, "newest first, saying why"
+
+
+def test_the_start_of_run_check_sees_the_whole_model_list():
+    many = [f"m{n}" for n in range(600)]
+    lan = backend(Server(models=many))
+    assert len(lan.model_ids()) == 500, "the page keeps at most 500"
+    assert Router({"lan": backend(Server(models=many))}).check("lan/m550") == ""
