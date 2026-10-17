@@ -248,10 +248,22 @@ pub async fn set_learn(pool: &SqlitePool, id: &str, on: bool) -> Result<(), sqlx
 
 /// Where the reader's books are sent, `addresses` one per line, and whether their images are
 /// made gray for an e-ink screen.
-pub async fn set_kindle(pool: &SqlitePool, id: &str, addresses: &str, grayscale: bool) -> Result<(), sqlx::Error> {
-    sqlx::query!("UPDATE users SET kindle_addresses = ?, grayscale = ? WHERE id = ?", addresses, grayscale, id)
-        .execute(pool)
-        .await?;
+pub async fn set_kindle(
+    pool: &SqlitePool,
+    id: &str,
+    addresses: &str,
+    grayscale: bool,
+    daily: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE users SET kindle_addresses = ?, grayscale = ?, daily_to_kindle = ? WHERE id = ?",
+        addresses,
+        grayscale,
+        daily,
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -262,6 +274,7 @@ pub struct UserLine {
     pub timezone: String,
     pub created_at: String,
     pub kindle_addresses: String,
+    pub daily_to_kindle: bool,
     pub email: Option<String>,
     pub email_verified_at: Option<String>,
     pub invited_at: Option<String>,
@@ -270,11 +283,21 @@ pub struct UserLine {
     pub invite_expires_at: Option<String>,
 }
 
+/// A reader's Kindle addresses on one line, for the admin's views, with whether the daily
+/// issue goes to them: an admin asked why someone got no issue sees it here.
+pub fn kindle_line(user: &UserLine) -> String {
+    let addresses = user.kindle_addresses.lines().collect::<Vec<_>>().join(", ");
+    if !addresses.is_empty() && !user.daily_to_kindle {
+        return format!("{addresses} (daily issue on the web only)");
+    }
+    addresses
+}
+
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserLine>, sqlx::Error> {
     sqlx::query_as!(
         UserLine,
-        r#"SELECT users.id AS "id!", name, role, timezone, users.created_at, kindle_addresses, users.email, email_verified_at,
-           invited_at, invite.expires_at AS "invite_expires_at?"
+        r#"SELECT users.id AS "id!", name, role, timezone, users.created_at, kindle_addresses,
+           daily_to_kindle AS "daily_to_kindle: bool", users.email, email_verified_at, invited_at, invite.expires_at AS "invite_expires_at?"
            FROM users LEFT JOIN email_tokens invite ON invite.user_id = users.id AND invite.purpose = 'invite'
            ORDER BY users.created_at, users.id"#
     )
@@ -658,6 +681,7 @@ pub struct Shelved {
     pub author: String,
     pub word_count: i64,
     pub description: String,
+    pub image_url: String,
     pub delivered_at: Option<String>,
     /// When the reader added it by hand, and what they asked for: next, now or keep.
     pub added_at: Option<String>,
@@ -726,7 +750,7 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
     on_shelf!(
         query_as!(Shelved,),
         shelf,
-        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description,
+        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description, a.image_url,
            d.delivered_at AS "delivered_at?",
            (SELECT m.requested_at FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
                      AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_at?: String",

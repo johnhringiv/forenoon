@@ -31,7 +31,10 @@ what its own users configure and delivers only to the addresses its readers have
   an alert is sent. A reader with no Kindle address reads on the web pages: their issue is
   built and recorded as for anyone (on their newsstand, counted against their day's cap,
   rated the same way), nothing is emailed, and no alert is sent; the run report says so.
-  Adding an address sends the next issue to it. Sending one article from the web pages
+  Adding an address sends the next issue to it (with the daily email on, the default). A reader with an address can turn the daily
+  email off on their Account page ("Email my daily issue to my Kindle", on for a new account):
+  their issue is then read on the web pages the same way, and Send to Kindle still sends what
+  they pick there. Sending one article from the web pages
   still needs an address and says so.
 - **Sources** belong to the household and are read for the readers who **follow** them: a
   reader's issue is built from the sources they follow, and nothing else. Each reader has
@@ -139,7 +142,8 @@ what its own users configure and delivers only to the addresses its readers have
   article, the most articles on one broad subject (2; 0 for no limit), room for a surprise
   (the exploration pick, on), the model's reason printed in the book (on), and notes kept
   from their ratings (on). Whether their Kindle has a colour screen (images and covers in
-  colour; otherwise gray) is on their Account page beside their Kindle addresses. A new
+  colour; otherwise gray) and whether their daily issue is emailed to it (on) are on their
+  Account page beside their Kindle addresses. A new
   account starts with the defaults; migration 0024 started every reader from the values
   the install had.
 - An admin setting has a default in the code; only
@@ -700,9 +704,9 @@ database with the pipeline.
 
 - **Accounts.** Every page needs a session except sign-in, password reset (`/forgot`,
   `/reset`), email confirmation (`/verify`), joining by invitation (`/join`), rating links
-  (`/f/`), the health check and a demo host's pages (below). An account is a reader: the pipeline makes an issue for each
-  account that has joined, emailed to its Kindle addresses or, with none, read on the web
-  pages. A signed-in
+  (`/f/`), the health check and a demo host's pages (below). An account is a reader: the
+  pipeline makes an issue for each account that has joined, emailed to its Kindle addresses
+  or, with none or with the daily email turned off, read on the web pages. A signed-in
   reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
   created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
   admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
@@ -800,8 +804,8 @@ database with the pipeline.
   **Send story to Kindle**: every article delivered in the story as one book with a contents
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
-- **Account page.** Display name, time zone, Kindle addresses with "My Kindle has a colour
-  screen", email, password, and sign out. A reader changes only their own row, so the only addresses an account can send to are
+- **Account page.** Display name, time zone, Kindle addresses with "Email my daily issue to
+  my Kindle" and "My Kindle has a colour screen", email, password, and sign out. A reader changes only their own row, so the only addresses an account can send to are
   the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says
   where the form came from, must come from the site itself, so another site open in the same

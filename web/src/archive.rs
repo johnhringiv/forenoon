@@ -99,6 +99,8 @@ struct Row {
     link: Option<String>,
     title: String,
     kicker: String,
+    /// Our own thumbnail when the pipeline made one; otherwise the article's lead image.
+    image: Option<String>,
     desc: Option<String>,
     /// What the model said of it, with whether it had read it.
     said: Option<String>,
@@ -255,6 +257,7 @@ fn row(found: Shelved, zone: Tz) -> Row {
         link: web_url(&found.url),
         title: if found.title.is_empty() { found.url.clone() } else { found.title },
         kicker,
+        image: web_url(&found.image_url),
         desc: (!found.description.is_empty()).then(|| shorten(&found.description, MAX_DESCRIPTION_CHARS)),
         said,
         facts,
@@ -378,6 +381,9 @@ pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Q
         .into_iter()
         .map(|found| {
             let mut row = row(found, zone);
+            if state.thumbs_dir.join(format!("{}.jpg", row.id)).is_file() {
+                row.image = Some(format!("/thumb/{}", row.id));
+            }
             let last = requests.iter().rev().find(|request| !request.story && request.article_id == row.id);
             row.sendable = can_send && last.is_none_or(|request| request.status != "queued");
             row.sent = last.map(|request| send_outcome(request, zone));

@@ -1176,8 +1176,11 @@ pub async fn send(
         return refused(StatusCode::NOT_FOUND, "No such article.");
     }
     if db::is_link_only(&state.pool, &user.id, &form.article).await? {
-        let why =
-            "Its page could not be had, so there is nothing to send yet. It goes with your next issue once it can.";
+        let why = if user.daily_to_kindle {
+            "Its page could not be had, so there is nothing to send yet. It goes with your next issue once it can."
+        } else {
+            "Its page could not be had, so there is nothing to send yet. It is in your next issue here once it can."
+        };
         return refused(StatusCode::CONFLICT, why);
     }
     // A story is something that was delivered; an article passed over is sent on its own.
@@ -1486,6 +1489,7 @@ pub struct KindleForm {
     csrf: String,
     kindle_addresses: String,
     colour: Option<String>,
+    daily: Option<String>,
 }
 
 /// Where this reader's books are emailed. Theirs to set: only the signed-in reader's own
@@ -1503,14 +1507,19 @@ pub async fn set_kindle(
     }
     match auth::kindle_addresses(&form.kindle_addresses) {
         Ok(addresses) => {
-            db::set_kindle(&state.pool, &user.id, &addresses.join("\n"), form.colour.is_none()).await?;
+            db::set_kindle(&state.pool, &user.id, &addresses.join("\n"), form.colour.is_none(), form.daily.is_some())
+                .await?;
             Ok(Redirect::to("/account?saved=kindle").into_response())
         }
         Err(problem) => {
             let nav = Nav::new(&state, &user, "account").await?;
             // Shown again as typed, so a slip in one address loses neither the rest nor the tick.
-            let user =
-                User { kindle_addresses: form.kindle_addresses.clone(), grayscale: form.colour.is_none(), ..user };
+            let user = User {
+                kindle_addresses: form.kindle_addresses.clone(),
+                grayscale: form.colour.is_none(),
+                daily_to_kindle: form.daily.is_some(),
+                ..user
+            };
             html(
                 StatusCode::BAD_REQUEST,
                 AccountPage {

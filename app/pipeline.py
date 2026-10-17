@@ -111,7 +111,9 @@ class RunReport:
     delivered: list[str] = field(default_factory=list)
     stories: int = 0  # what the daily cap counts; several delivered articles can share one
     messages: int = 0
-    web_only: bool = False  # the reader has no Kindle address: the issue is read on the web pages
+    # The issue is read on the web pages: the reader has no Kindle address, or asked for that.
+    web_only: bool = False
+    no_address: bool = False
     delivery_error: str = ""
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
@@ -134,7 +136,8 @@ class RunReport:
                 count = f"{self.stories} stories delivered ({len(self.delivered)} articles)"
             lines += [f"User `{self.user}`: {count}{mode}.", ""]
         if self.web_only:
-            lines += ["No Kindle address: the issue is on the web pages, and nothing was emailed.", ""]
+            why = "No Kindle address" if self.no_address else "The reader reads it on the web"
+            lines += [f"{why}: the issue is on the web pages, and nothing was emailed.", ""]
         if self.delivery_error:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
         if self.ranking:
@@ -1102,9 +1105,11 @@ def run(
         if by_source[name].url:
             store.set_validators(by_source[name].url, None, None)
 
-    # A reader with no Kindle address reads on the web pages: the issue is built and recorded
-    # as for anyone, so it is on their newsstand and their ratings count, and nothing is emailed.
-    report.web_only = not user.kindle_addresses
+    # A reader with no Kindle address, or who turned the daily email off, reads on the web pages:
+    # the issue is built and recorded as for anyone, so it is on their newsstand and their
+    # ratings count, and nothing is emailed. Send to Kindle still works for an address they have.
+    report.no_address = not user.kindle_addresses
+    report.web_only = report.no_address or not user.daily_to_kindle
     if attachments:
         try:
             messages = [(None, attachments)] if report.web_only else build_messages(user, attachments, cfg.smtp)
