@@ -31,7 +31,7 @@ what its own users configure and delivers only to the addresses its readers have
   an alert is sent. A reader with no Kindle address reads on the web pages: their issue is
   built and recorded as for anyone (on their newsstand, counted against their day's cap,
   rated the same way), nothing is emailed, and no alert is sent; the run report says so.
-  Adding an address sends the next issue to it. A reader with an address can turn the daily
+  Adding an address sends the next issue to it (with the daily email on, the default). A reader with an address can turn the daily
   email off on their Account page ("Email my daily issue to my Kindle", on for a new account):
   their issue is then read on the web pages the same way, and Send to Kindle still sends what
   they pick there. Sending one article from the web pages

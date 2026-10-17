@@ -711,8 +711,13 @@ async fn an_admin_invites_a_reader_by_email_and_the_link_lets_them_join_once() {
     // Admins only, from the nav; a reader is refused and does not see the page.
     assert_eq!(mary.get(&site, "/accounts").await.status, StatusCode::FORBIDDEN);
     assert!(!mary.get(&site, "/").await.text.contains(r#"href="/accounts""#));
+    // Each reader's Kindle addresses, marked when their daily issue stays on the web pages.
+    db::set_kindle(&site.pool, "john", "john@kindle.com", true, true).await.unwrap();
+    db::set_kindle(&site.pool, "mary", "mary@kindle.com", true, false).await.unwrap();
     let page = john.get(&site, "/accounts").await;
     assert!(page.status == StatusCode::OK && page.text.contains("Mary") && page.text.contains("Added "));
+    assert!(page.text.contains("Kindle: mary@kindle.com (daily issue on the web only)"), "{}", page.text);
+    assert!(page.text.contains("Kindle: john@kindle.com ·"), "no mark while the daily email is on");
     let csrf = page.csrf();
     let invite = |email: &'static str, id: &'static str, role: &'static str| {
         vec![
@@ -1756,7 +1761,12 @@ async fn a_pick_shown_only_as_a_link_is_grayed_and_never_sent() {
     // It can still be rated, but not sent by hand.
     let csrf = page.csrf();
     let form = [("csrf", csrf.as_str()), ("article", "p1"), ("back", "/")];
-    assert_eq!(browser.post(&site, "/send", &form).await.status, StatusCode::CONFLICT);
+    let reply = browser.post(&site, "/send", &form).await;
+    assert!(reply.status == StatusCode::CONFLICT && reply.text.contains("It goes with your next issue once it can."));
+    // With the daily email off, the next issue is read here, so the refusal says that instead.
+    db::set_kindle(pool, "john", "john@kindle.com", true, false).await.unwrap();
+    let reply = browser.post(&site, "/send", &form).await;
+    assert!(reply.status == StatusCode::CONFLICT && reply.text.contains("It is in your next issue here once it can."));
     let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM send_requests").fetch_one(pool).await.unwrap();
     assert_eq!(queued, 0);
 }
