@@ -35,13 +35,16 @@ async function outage(request, env) {
     const headers = new Headers(asset.headers);
     headers.set("cache-control", "no-store");
     if (url.pathname !== "/") {
+      // A picture keeps its 200: a browser drops an image that comes with any other status.
       return new Response(asset.body, { status: asset.status, headers });
     }
+    // The page itself goes out as a 503, so a monitor sees the outage while a reader sees
+    // the page; browsers render a 503's body as they would a 200's.
+    headers.set("retry-after", "120");
     const notice = `<p class="demo" style="max-width:1120px;margin:.8rem auto 0;padding:0 20px;font:.95rem/1.5 system-ui,sans-serif;color:#8a3b12">The demo behind the links below is away for a few minutes: the machine that runs it is not answering. This page is served from Cloudflare's copy.</p>`;
-    const rewritten = new HTMLRewriter()
+    return new HTMLRewriter()
       .on("header.mast", { element(header) { header.after(notice, { html: true }); } })
-      .transform(new Response(asset.body, { status: asset.status, headers }));
-    return rewritten;
+      .transform(new Response(asset.body, { status: 503, headers }));
   }
   // A persona host, or the admin's: a page for a browser going somewhere, a bare status for
   // a picture or a script it asked for.
