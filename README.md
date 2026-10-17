@@ -1,6 +1,7 @@
 # Forenoon
 
-**A morning paper for your e-reader, edited for one reader: you.**
+**A morning paper edited for one reader: you.** A book on your Kindle and a newsstand on the
+web. Run your own AI-powered news aggregator for about two cents a day.
 
 Forenoon is made to cut the time you spend scrolling, find the writing you actually care
 about, and make your e-reader useful for more than books. Reading on e-ink, away from a
