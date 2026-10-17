@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Forenoon: a morning paper for your e-reader</title>
-<meta name="description" content="Forenoon reads your feeds and the front pages each morning, has a model choose what you would want to read, and sends it to your Kindle as one book. Self-hosted and open source; bring a model API key, about two cents a day.">
+<title>Forenoon: a morning paper edited for one reader</title>
+<meta name="description" content="A self-hosted news aggregator where the AI reads the slop, not you. Forenoon reads your feeds each morning, has a model choose what you would want to read, and makes it the day's issue: a book on your Kindle, a newsstand on the web. Open source; bring a model API key, about two cents a day.">
 <link rel="canonical" href="https://forenoon.dev/">
 <meta property="og:title" content="Forenoon">
-<meta property="og:description" content="A morning paper for your e-reader, edited for one reader: you. Self-hosted and open source.">
+<meta property="og:description" content="A morning paper edited for one reader: you. A book on your Kindle and a newsstand on the web. Run your own AI-powered news aggregator for about two cents a day.">
 <meta property="og:image" content="https://forenoon.dev/og.png">
 <meta property="og:url" content="https://forenoon.dev/">
 <meta property="og:type" content="website">
@@ -49,12 +49,17 @@ header.mast .wrap { display:flex; flex-wrap:wrap; align-items:center; gap:.8rem 
 nav.top { margin-left:auto; display:flex; gap:1.4rem; font:1rem system-ui,sans-serif }
 nav.top a { color:var(--ink); text-decoration:none; border-bottom:2px solid transparent; padding:.15rem 0 }
 nav.top a:hover { border-bottom-color:var(--line) }
+/* The one link that leaves the page: GitHub's mark before it, and the outward arrow after. */
+a.ext { display:inline-flex; align-items:center; gap:.4em }
+a.ext .gh { width:1.1em; height:1.1em; fill:currentColor }
+a.ext .out { width:.8em; height:.8em; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; opacity:.6; margin-left:-.1em }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap }
 
 /* The front page: the pitch beside the book as it arrives. */
-.hero { padding:56px 0 24px }
+.hero { padding:56px 0 48px }
 .hero .wrap { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,6fr); gap:40px 56px; align-items:center }
 .hero h1 { font-size:clamp(2.1rem,4.2vw,3.1rem); margin-bottom:.55em; text-wrap:balance }
-.hero p { font-size:1.1rem; max-width:32em }
+.hero p { max-width:32em }
 .hero .actions { margin-top:1.6rem; display:flex; flex-wrap:wrap; gap:.7rem 1rem; align-items:center; font:1rem system-ui,sans-serif }
 .btn { display:inline-block; padding:.6rem 1.1rem; border-radius:4px; text-decoration:none; font-weight:600; border:1.5px solid var(--accent) }
 .btn.fill { background:var(--accent); color:var(--card) }
@@ -66,10 +71,40 @@ nav.top a:hover { border-bottom-color:var(--line) }
 .kindle { margin:0; background:var(--bezel); border:1px solid var(--bezel-edge); border-radius:16px; padding:16px 16px 46px;
   box-shadow:0 18px 40px -22px rgba(0,0,0,.55) }
 .kindle img { width:100%; border-radius:3px; background:#fff }
-.kindle figcaption { color:var(--soft); font:.85rem/1.45 system-ui,sans-serif; margin:.7rem 0 0 }
-.stack { position:relative; padding:0 0 0 12% }
-.stack .kindle.front { position:relative; z-index:1; width:72% }
-.stack .kindle.back { position:absolute; top:7%; right:0; width:62%; filter:brightness(.92) }
+.kindle figcaption { color:#a39e93; font:.85rem/1.45 system-ui,sans-serif; margin:.7rem 0 0 }
+/* A phone: a thin black frame with round corners and, on the screen, what a phone shows above
+   a page: the status bar with the camera island, then the browser's address bar. All of it is
+   sized from the frame's width, and drawn in the app's own paper and ink in both schemes. */
+.phone { margin:0; background:#0b0b0c; border:1px solid #45454a; border-radius:14% / 6.4%; padding:2.6%;
+  box-shadow:0 18px 40px -22px rgba(0,0,0,.6), inset 0 0 0 1px #1e1e21; container-type:inline-size }
+.phone .screen { position:relative; overflow:hidden; border-radius:11.5% / 5.2%; background:var(--bg); --pill:rgba(0,0,0,.07) }
+@media (prefers-color-scheme:dark) { .phone .screen { --pill:rgba(255,255,255,.1) } }
+.phone .chrome { font-family:system-ui,sans-serif; color:var(--ink); line-height:1 }
+.phone .status { position:relative; height:13cqw; display:flex; align-items:center; justify-content:space-between; padding:0 7cqw 0 9cqw }
+.phone .status .time { font-weight:600; font-size:4.3cqw; padding-top:1.5cqw }
+.phone .island { position:absolute; left:50%; top:2.8cqw; width:28cqw; height:7.5cqw; transform:translateX(-50%); background:#0b0b0c; border-radius:999px }
+.phone .status .signs { display:flex; align-items:center; gap:1.6cqw; padding-top:1.5cqw }
+.phone .status svg { display:block; height:3.6cqw; width:auto; fill:currentColor }
+.phone .battery { position:relative; width:7.2cqw; height:3.5cqw; border:.35cqw solid currentColor; border-radius:1.1cqw; opacity:.9 }
+.phone .battery::before { content:""; position:absolute; inset:.5cqw; width:55%; background:currentColor; border-radius:.4cqw }
+.phone .battery::after { content:""; position:absolute; right:-1.1cqw; top:50%; width:.5cqw; height:1.4cqw; transform:translateY(-50%); background:currentColor; border-radius:0 .3cqw .3cqw 0 }
+.phone .urlbar { height:12cqw; display:flex; align-items:center; gap:3.2cqw; padding:0 4cqw 1cqw }
+.phone .urlbar svg { display:block; height:5.2cqw; width:auto; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; flex:none }
+.phone .pill { flex:1; min-width:0; display:flex; align-items:center; gap:2.2cqw; height:9.2cqw; padding:0 3.2cqw; border-radius:999px;
+  background:var(--pill); font-size:3.9cqw; white-space:nowrap; overflow:hidden }
+.phone .pill svg { height:4cqw }
+.phone .plus { font-size:6.4cqw; font-weight:300; margin-top:-.6cqw }
+.phone .tabs { width:5.3cqw; height:5.3cqw; border:.45cqw solid currentColor; border-radius:1.2cqw; font-size:2.6cqw; font-weight:600;
+  display:flex; align-items:center; justify-content:center }
+.phone .menu { width:1cqw; height:5cqw; display:flex; flex-direction:column; justify-content:space-between; margin:0 .6cqw }
+.phone .menu i { display:block; width:1cqw; height:1cqw; border-radius:50%; background:currentColor }
+.phone img { width:100%; display:block }
+/* The same morning on both: the phone stands in front of the Kindle's lower corner. */
+.duo { margin:0; position:relative; display:flex; flex-wrap:wrap; align-items:flex-end; padding:0 4% 0 0 }
+.duo .kindle { width:66%; flex:none }
+.duo .phone { width:37%; flex:none; margin-left:-8%; position:relative; z-index:1; transform:translateY(4%) }
+.duo figcaption { flex:0 0 100%; margin:1.4rem 0 0; color:var(--soft);
+  font:.9rem/1.5 system-ui,sans-serif; text-align:center }
 
 /* Sections: a rule above each, and prose kept to a readable measure. */
 section { padding:48px 0 }
@@ -77,54 +112,99 @@ section + section .wrap { border-top:1px solid var(--line); padding-top:48px }
 .prose { max-width:38em }
 .lead { font-size:1.15rem }
 
-/* The morning, step by step: a real sequence, so numbered. */
-ol.morning { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:28px }
-ol.morning li { border-top:2px solid var(--ink); padding-top:.8rem }
-ol.morning b { display:block; font-size:1.05rem; margin-bottom:.3rem }
-ol.morning .n { font:700 2.2rem/1 Georgia,serif; color:var(--accent); display:block; margin:0 0 .5rem }
-ol.morning p { margin:0; font-size:.98rem }
 
 /* The demo: the newsstand as a reader sees it, and the readers to look in on. */
-.shot { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card);
+img.shot { border:1px solid var(--line); border-radius:8px; background:var(--card);
   box-shadow:0 18px 40px -26px rgba(0,0,0,.5) }
-.readers { margin:2.2rem 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:28px }
-.readers li { border-top:2px solid var(--ink); padding-top:.8rem }
-.readers h3 { margin-bottom:.25rem }
-.readers p { font-size:.98rem; margin-bottom:.6rem }
-.readers a { font:1rem system-ui,sans-serif; font-weight:600; text-decoration:none; border-bottom:1.5px solid var(--accent) }
-.readers a:hover { border-bottom-width:2px }
+.readers { margin:1.6rem 0 2.2rem; padding:0; list-style:none; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px }
+.readers li { display:flex; flex-direction:column; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1.1rem 1.2rem 1.2rem }
+.readers h3 { margin-bottom:.3rem }
+.readers p { font-size:.98rem; margin-bottom:1rem; flex:1 }
+.readers .btn { align-self:flex-start; font:600 .95rem system-ui,sans-serif }
 
-/* What arrives: three pages of the book. */
+/* Three pages of the book. */
 .pages { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:28px; margin-top:1.6rem }
 
-/* What it does: the points, as prose. */
-ul.points { margin:0; padding:0; list-style:none; columns:2; column-gap:48px }
-ul.points li { break-inside:avoid; margin:0 0 1.1rem; max-width:34em }
-ul.points b { display:block }
+/* How articles are chosen: five stages across, each with its glyph and its count, the arrows
+   between them, and a line from the last back under the row to the filter. One column on a phone. */
+ol.funnel { list-style:none; margin:1.6rem 0 0; padding:0 0 3.8rem; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); --gap:36px; gap:0 var(--gap); position:relative }
+ol.funnel li { position:relative; text-align:center; font-size:.93rem; display:flex; flex-direction:column }
+ol.funnel .stat { display:block; font:700 1.25rem/1.2 Georgia,serif; color:var(--accent); margin-bottom:.4rem }
+ol.funnel .glyph { display:block; position:relative; max-width:200px; margin:0 auto .7rem }
+ol.funnel svg { display:block; width:100%; height:auto; fill:none }
+ol.funnel b { display:block; font-size:1.02rem; line-height:1.25; margin-bottom:.35rem }
+ol.funnel p { margin:0; color:var(--soft); text-align:left }
+ol.funnel li:not(:last-child) .glyph::after { content:"\2192"; position:absolute; left:100%; top:50%; transform:translate(calc(-50% + var(--gap) / 2), -50%); font:1.6rem/1 system-ui,sans-serif; color:var(--accent); width:0; text-align:center; white-space:nowrap }
+ol.funnel li.you .stat { color:var(--ink) }
+/* The return: from under the rating's text, down and back along a line beneath the row, and up
+   to an arrowhead under the filter's text. The legs fill each column from its text to the row's
+   foot, which is how they meet the line whatever the columns' heights. */
+ol.funnel .leg { flex:1; position:relative; min-height:26px; margin-top:.6rem }
+ol.funnel .leg::after { content:""; position:absolute; top:0; bottom:0; left:50%; border-left:2px solid var(--accent); margin-left:-1px }
+/* The arrowhead is the line's own end: a chevron the leg runs up into. */
+ol.funnel .leg.up::before { content:""; position:absolute; top:3px; left:50%; width:11px; height:11px; border-top:2px solid var(--accent); border-left:2px solid var(--accent);
+  transform:translateX(-50%) rotate(45deg) }
+ol.funnel .leg.up::after { top:2px }
+ol.funnel .back { position:absolute; top:100%; right:50%; width:calc(300% + 3 * var(--gap) + 2px); height:30px; margin-right:-1px;
+  border:2px solid var(--accent); border-top:0; border-radius:0 0 14px 14px; pointer-events:none }
 
-/* Running it. */
+/* The household: four points in a row, each under its rule. */
+ul.household { list-style:none; margin:1.4rem 0 0; padding:0; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:28px }
+ul.household li { border-top:2px solid var(--ink); padding-top:.8rem }
+ul.household b { display:block; font-size:1.05rem; margin-bottom:.3rem }
+ul.household p { margin:0; font-size:.98rem }
+
+/* What you get: one line a feature, opened for the detail, no script needed. */
+.groups { margin-top:1.2rem; border-bottom:1px solid var(--line) }
+details.group { border-top:1px solid var(--line) }
+details.group summary { cursor:pointer; list-style:none; padding:.9rem 0 .9rem 1.7rem; position:relative; max-width:44em }
+details.group summary::-webkit-details-marker { display:none }
+details.group summary::before { content:"+"; position:absolute; left:0; top:.78rem; color:var(--accent);
+  font:700 1.35rem/1 system-ui,sans-serif; width:1em; text-align:center }
+details[open].group summary::before { content:"\2212" }
+details.group summary:hover b { text-decoration:underline; text-decoration-thickness:1.5px; text-underline-offset:.15em }
+details.group summary b { font-size:1.08rem }
+details.group summary span { display:block; color:var(--soft); font-size:.98rem }
+details.group .body { padding:0 0 1.2rem 1.7rem; max-width:44em }
+details.group .body > p:last-child { margin-bottom:0 }
+details.group .pages { max-width:none; margin-top:.4rem }
+details.group:has(.pages) .body { max-width:none }
+details.group .pages figure { max-width:44em }
+
+/* Running it: what it needs, as a list, and the commands. */
+ul.needs { margin:0 0 1em; padding-left:1.2em }
+ul.needs li { margin:0 0 .4em }
 pre { margin:1.2rem 0; padding:1rem 1.2rem; background:var(--card); border:1px solid var(--line); border-radius:6px;
   font:.92rem/1.55 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace; overflow-x:auto; color:var(--ink) }
 pre .c { color:var(--soft) }
 footer { padding:36px 0 56px; border-top:3px double var(--line); font:.95rem/1.6 system-ui,sans-serif; color:var(--soft) }
-footer .wrap { display:flex; flex-wrap:wrap; gap:.6rem 2rem; justify-content:space-between }
+footer .wrap { display:flex; flex-wrap:wrap; gap:.6rem 2rem; justify-content:space-between; align-items:center }
 footer a { color:var(--ink) }
+/* The credit is one flex line, so its words, the burgee and the arrow share a centre. */
+footer .credit { display:inline-flex; align-items:center; gap:.35em }
+footer .by .iv { width:1.3em; height:1.3em; margin-right:.1em }
+footer .by { line-height:1 }
 
 @media (max-width:900px) {
   .hero .wrap { grid-template-columns:1fr }
-  .stack { padding:0 }
-  .stack .kindle.front { width:min(100%,440px); margin:0 auto }
-  .stack .kindle.back { display:none }
-  ol.morning, .readers, .pages { grid-template-columns:repeat(2,minmax(0,1fr)) }
-  ul.points { columns:1 }
+  .duo { max-width:520px; margin:0 auto }
+  ul.household { grid-template-columns:repeat(2,minmax(0,1fr)) }
+  ol.funnel { grid-template-columns:1fr; gap:40px; padding-bottom:1.8rem; max-width:420px; margin-left:auto; margin-right:auto }
+  ol.funnel li:not(:last-child) .glyph::after { display:none }
+  ol.funnel li:not(:last-child)::after { content:"\2193"; position:absolute; left:50%; bottom:-36px; transform:translateX(-50%); font:1.6rem/1 system-ui,sans-serif; color:var(--accent) }
+  ol.funnel svg { max-width:180px }
+  ol.funnel .back, ol.funnel .leg { display:none }
 }
 @media (max-width:560px) {
   body { font-size:16px }
   .hero { padding-top:36px }
-  ol.morning, .readers, .pages { grid-template-columns:1fr }
+  .kindle { padding:12px 12px 34px; border-radius:12px }
+  .duo .kindle { padding:8px 8px 22px; border-radius:10px }
+  .duo figcaption { margin-top:1rem }
+  .readers, .pages, ul.household { grid-template-columns:1fr }
+  details.group summary, details.group .body { padding-left:1.5rem }
   section { padding:36px 0 }
   section + section .wrap { padding-top:36px }
-  .kindle { padding:12px 12px 34px; border-radius:12px }
 }
 </style>
 </head>
@@ -136,32 +216,32 @@ footer a { color:var(--ink) }
 <nav class="top" aria-label="Site">
 <a href="#demo">Demo</a>
 <a href="#run">Run it</a>
-<a href="https://github.com/johnhringiv/forenoon">Source</a>
+<a class="ext" href="https://github.com/johnhringiv/forenoon"><svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Source<svg class="out" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg><span class="sr">(GitHub, opens the repository)</span></a>
 </nav>
 </div>
 </header>
 
 <main>
+
 <section class="hero">
 <div class="wrap">
 <div>
-<h1>A morning paper for your e-reader, edited for one reader: you.</h1>
-<p class="lead">Every morning Forenoon reads your feeds and the front pages you follow, has a model choose what you would want to read, and sends it to your Kindle as one book with a contents page. Rate each article from the device, and tomorrow's choices learn from it.</p>
-<p>It runs on your own machine. The one thing it needs from outside is a model's API key, and a day's choosing costs about two cents of it.</p>
+<h1>A morning paper edited for one reader: you.</h1>
+<p class="lead">Every morning Forenoon reads your feeds and the front pages you follow, has a model choose what you would want to read, and makes it the day's issue: a book on your Kindle, a newsstand on the web. Rate what you read, and tomorrow learns from it.</p>
 <div class="actions">
 <a class="btn fill" href="#demo">See what it chose today</a>
-<a class="btn line" href="https://github.com/johnhringiv/forenoon">Run your own</a>
-<p class="small">Open source, MIT. One container and one SQLite file. No account with us, nothing phoning home.</p>
+<a class="btn line" href="#run">Run your own</a>
+<p class="small">Open source, MIT. Run your own AI-powered news aggregator for about two cents a day.</p>
 </div>
 </div>
-<div class="stack" aria-label="Two pages of an issue on a Kindle">
-<figure class="kindle front">
-<img src="images/kindle-cover.webp" width="1264" height="1680" alt="The issue's cover on a Kindle: the Forenoon sun, Friday 16 October 2026, 8 stories, 11 articles, about 75 minutes, and the first headlines" fetchpriority="high">
+<figure class="duo">
+<div class="kindle" aria-hidden="true"><img src="images/kindle-cover.webp" width="1264" height="1680" alt=""></div>
+<div class="phone"><div class="screen"><div class="chrome" aria-hidden="true">
+<div class="status"><span class="time">7:12</span><span class="island"></span><span class="signs"><svg viewBox="0 0 20 12"><rect x="0" y="8" width="3" height="4" rx=".6"/><rect x="5" y="5.5" width="3" height="6.5" rx=".6" opacity=".35"/><rect x="10" y="3" width="3" height="9" rx=".6" opacity=".35"/><rect x="15" y="0" width="3" height="12" rx=".6" opacity=".35"/></svg><svg viewBox="0 0 24 17"><path d="M12 3.5a14 14 0 0 1 9.6 3.8l-1.9 2A11.3 11.3 0 0 0 12 6.2a11.3 11.3 0 0 0-7.7 3.1l-1.9-2A14 14 0 0 1 12 3.5zm0 5.4a8.6 8.6 0 0 1 5.9 2.3l-1.9 2a5.9 5.9 0 0 0-8 0l-1.9-2A8.6 8.6 0 0 1 12 8.9zm0 5.4c1.1 0 2.1.4 2.8 1.1L12 18.5l-2.8-3.1c.7-.7 1.7-1.1 2.8-1.1z"/></svg><span class="battery"></span></span></div>
+<div class="urlbar"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-6h4v6"/></svg><span class="pill"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="2.5"/><path d="M13 8h8M3 16h8M16 16a2.5 2.5 0 1 0 0-.01"/></svg>forenoon.yourdomain.com</span><span class="plus">+</span><span class="tabs">7</span><span class="menu"><i></i><i></i><i></i></span></div>
+</div><picture><source media="(prefers-color-scheme: dark)" srcset="images/phone-dark.webp"><img src="images/phone-light.webp" width="780" height="1688" fetchpriority="high" alt="The same issue on a Kindle, as a book with a cover, and on a phone, as the newsstand page with the first story's card"></picture></div></div>
+<figcaption>One morning, two ways to read it: a book on the Kindle, a newsstand on your phone or computer.</figcaption>
 </figure>
-<figure class="kindle back" aria-hidden="true">
-<img src="images/kindle-contents.webp" width="1264" height="1680" alt="" loading="lazy">
-</figure>
-</div>
 </div>
 </section>
 
@@ -169,22 +249,10 @@ footer a { color:var(--ink) }
 <div class="wrap">
 <h2>Why</h2>
 <div class="prose">
-<p class="lead">Forenoon exists to cut the time spent scrolling, to find the writing you actually care about, and to make an e-reader useful for more than books.</p>
-<p>Feeds serve whatever keeps you on them. Aggregators are paid for by advertisers or pushed along by an agenda, and they know far less about you than you could tell them in a paragraph. Forenoon has one job: find what you would choose to read yourself, and put it where you read best. Away from a feed, on e-ink, the scrolling takes care of itself.</p>
+<p class="lead">A self-hosted news aggregator where the AI reads the slop, not you.</p>
+<p>Forenoon exists to cut the time spent scrolling, to find the writing you actually care about, and to make an e-reader useful for more than books.</p>
+<p>Feeds serve whatever keeps you on them. Aggregators are paid for by advertisers or pushed along by an agenda, and they know far less about you than you could say in a paragraph. Forenoon has one job: find what you would choose to read yourself, and put it where you read best.</p>
 </div>
-</div>
-</section>
-
-<section>
-<div class="wrap">
-<h2>How a morning goes</h2>
-<ol class="morning">
-<li><span class="n">1</span><b>Read everything</b><p>Your RSS feeds, including the publications you subscribe to, and the front pages of Hacker News and Lobsters. One day's pool is a few hundred articles.</p></li>
-<li><span class="n">2</span><b>Rank from the opening</b><p>Each candidate is scored against your interests, written in your own words, from its title and first paragraphs. A pointer post is swapped for the article it points at.</p></li>
-<li><span class="n">3</span><b>Read the best in full</b><p>The forty strongest are fetched and read whole, so a teaser with a good title loses to an article with something in it. Several reports of one event become one story.</p></li>
-<li><span class="n">4</span><b>Choose the day and send it</b><p>Eight stories or so, with a reason for each, as one clean book with a contents page. Your ratings from the device shape the next morning.</p></li>
-</ol>
-<p class="small" style="margin-top:1.6rem">One measured day: 23 sources including a whole Financial Times, about 165 candidates ranked, 40 read in full, 16 stories delivered in 80 seconds, for about two cents of Claude Haiku.</p>
 </div>
 </section>
 
@@ -192,48 +260,119 @@ footer a { color:var(--ink) }
 <div class="wrap">
 <h2>See what it chose today</h2>
 <div class="prose">
-<p class="lead">Three readers with different interests share one set of sources. Each morning the same pool becomes a different issue. Their newsstands are open to look at, read only, with the model's reason on every card and the archive of everything it weighed and passed over.</p>
+<p class="lead">Three readers with different interests share one set of sources, and each morning the same pool becomes three different issues. Their newsstands are open to look at, read only: the web side of Forenoon, with the model's reason on every card and an archive of everything it weighed and passed over.</p>
 </div>
-<picture class="shot">
+<!-- The personas: their hostnames are set in FORENOON_WEB_DEMO on the demo install. -->
+<ul class="readers">
+<li><h3>Mara</h3><p>Systems programming, databases and compilers, and the people who build them. Long technical posts over news.</p><a class="btn line" href="https://mara.forenoon.dev/">Open Mara's newsstand</a></li>
+<li><h3>Theo</h3><p>Economics, housing and energy policy, and reported pieces on how institutions actually work.</p><a class="btn line" href="https://theo.forenoon.dev/">Open Theo's newsstand</a></li>
+<li><h3>June</h3><p>Science writing, natural history and long reported features; a little news when it matters.</p><a class="btn line" href="https://june.forenoon.dev/">Open June's newsstand</a></li>
+</ul>
+<picture>
 <source media="(prefers-color-scheme: dark)" srcset="images/newsstand-dark.webp">
 <img class="shot" src="images/newsstand-light.webp" width="2400" height="2200" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and rating buttons" loading="lazy">
 </picture>
-<!-- The personas: their hostnames are set in FORENOON_WEB_DEMO on the demo install. -->
-<ul class="readers">
-<li><h3>Mara</h3><p>Systems programming, databases and compilers, and the people who build them. Long technical posts over news.</p><a href="https://mara.forenoon.dev/">Open Mara's newsstand</a></li>
-<li><h3>Theo</h3><p>Economics, housing and energy policy, and reported pieces on how institutions actually work.</p><a href="https://theo.forenoon.dev/">Open Theo's newsstand</a></li>
-<li><h3>June</h3><p>Science writing, natural history and long reported features; a little news when it matters.</p><a href="https://june.forenoon.dev/">Open June's newsstand</a></li>
+</div>
+</section>
+
+<section id="how">
+<div class="wrap">
+<h2>How articles are chosen</h2>
+<div class="prose"><p class="lead">A few hundred articles go in each morning and eight or so come out, each with its reason. What you rate changes the next morning's choosing.</p></div>
+<ol class="funnel" aria-label="From sources to the day's issue">
+<li><span class="stat">A few hundred</span><span class="glyph"><svg viewBox="0 0 120 80" aria-hidden="true"><g transform="rotate(-14 18.0 43.0)"><rect x="6" y="30" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="6" y="30" width="24" height="5" rx="1" fill="var(--accent)"/><path d="M9 40h18M9 44h14M9 48h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(-8 32.0 27.0)"><rect x="20" y="14" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="20" y="14" width="24" height="5" rx="1" fill="var(--ink)"/><path d="M23 24h18M23 28h14M23 32h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(6 48.0 47.0)"><rect x="36" y="34" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="36" y="34" width="24" height="5" rx="1" fill="var(--soft)"/><path d="M39 44h18M39 48h14M39 52h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(-4 62.0 21.0)"><rect x="50" y="8" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="50" y="8" width="24" height="5" rx="1" fill="var(--accent)"/><path d="M53 18h18M53 22h14M53 26h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(10 78.0 41.0)"><rect x="66" y="28" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="66" y="28" width="24" height="5" rx="1" fill="var(--ink)"/><path d="M69 38h18M69 42h14M69 46h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(-10 92.0 25.0)"><rect x="80" y="12" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="80" y="12" width="24" height="5" rx="1" fill="var(--soft)"/><path d="M83 22h18M83 26h14M83 30h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(4 106.0 49.0)"><rect x="94" y="36" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="94" y="36" width="24" height="5" rx="1" fill="var(--accent)"/><path d="M97 46h18M97 50h14M97 54h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(12 42.0 61.0)"><rect x="30" y="48" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="30" y="48" width="24" height="5" rx="1" fill="var(--ink)"/><path d="M33 58h18M33 62h14M33 66h16" stroke="var(--soft)" stroke-width="1"/></g><g transform="rotate(-6 74.0 63.0)"><rect x="62" y="50" width="24" height="26" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><rect x="62" y="50" width="24" height="5" rx="1" fill="var(--soft)"/><path d="M65 60h18M65 64h14M65 68h16" stroke="var(--soft)" stroke-width="1"/></g></svg></span><b>Your sources</b><p>Your feeds, your premium subscriptions, and the top of aggregators like Hacker News and Lobsters: every morning, titles and openings from all of them.</p></li>
+<li><span class="stat">Every one scored</span><span class="glyph"><svg viewBox="0 0 120 80" aria-hidden="true"><path d="M12 4h96l-36 36v30l-24 8V40z" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round"/><circle cx="28" cy="6" r="2.6" fill="var(--ink)"/><circle cx="44" cy="10" r="2.6" fill="var(--ink)"/><circle cx="60" cy="5" r="2.6" fill="var(--ink)"/><circle cx="76" cy="11" r="2.6" fill="var(--ink)"/><circle cx="92" cy="6" r="2.6" fill="var(--ink)"/><circle cx="36" cy="20" r="2.6" fill="var(--ink)"/><circle cx="68" cy="22" r="2.6" fill="var(--ink)"/><circle cx="52" cy="30" r="2.6" fill="var(--ink)"/><circle cx="60" cy="52" r="3" fill="var(--accent)"/><circle cx="60" cy="64" r="3" fill="var(--accent)"/></svg></span><b>Filtered by your interests</b><p>A paragraph in your own words is the filter. Each article is ranked against it from its title and opening.</p><span class="leg up" aria-hidden="true"></span></li>
+<li><span class="stat">40 read whole</span><span class="glyph"><svg viewBox="0 0 120 80" aria-hidden="true"><rect x="14" y="14" width="46" height="60" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.5"/><path d="M20 22h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 28h28" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 34h22" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 40h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 46h28" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 52h22" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 58h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M20 64h28" stroke="var(--soft)" stroke-width="1.3"/><rect x="32" y="10" width="46" height="60" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.5"/><path d="M38 18h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 24h28" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 30h22" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 36h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 42h28" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 48h22" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 54h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M38 60h28" stroke="var(--soft)" stroke-width="1.3"/><rect x="50" y="6" width="46" height="60" rx="2" fill="var(--card)" stroke="var(--accent)" stroke-width="1.5"/><path d="M56 14h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 20h28" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 26h22" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 32h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 38h28" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 44h22" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 50h34" stroke="var(--soft)" stroke-width="1.3"/><path d="M56 56h28" stroke="var(--soft)" stroke-width="1.3"/><rect x="52" y="29" width="42" height="9" rx="1.5" fill="var(--accent)" opacity=".28"/><path d="M52 33.5h42" stroke="var(--accent)" stroke-width="1.6"/><path d="M100 4l2.6 7.4L110 14l-7.4 2.6L100 24l-2.6-7.4L90 14l7.4-2.6z" fill="var(--accent)"/><path d="M110 26l1.4 3.6 3.6 1.4-3.6 1.4L110 36l-1.4-3.6L105 31l3.6-1.4z" fill="var(--accent)"/></svg></span><b>The model reads the best in full</b><p>The forty strongest are fetched and the model reads them whole, so a good title with nothing behind it loses.</p></li>
+<li><span class="stat">8 delivered</span><span class="glyph"><svg viewBox="0 0 120 80" aria-hidden="true"><rect x="18" y="6" width="56" height="68" rx="5" fill="var(--bezel)"/><rect x="23" y="11" width="46" height="52" rx="1.5" fill="#fff"/><path d="M38 26a8 8 0 0 1 16 0z" fill="#1c1b19"/><path d="M34 29h24" stroke="#1c1b19" stroke-width="1.2"/><path d="M29 38h34M29 44h28M29 50h32M29 56h24" stroke="#6b675f" stroke-width="1.4"/><rect x="76" y="26" width="30" height="52" rx="5" fill="#0b0b0c"/><rect x="79" y="30" width="24" height="44" rx="3" fill="var(--bg)"/><rect x="82" y="36" width="18" height="12" rx="1" fill="var(--accent)"/><path d="M82 52h18M82 56h14M82 60h16" stroke="var(--soft)" stroke-width="1.2"/></svg></span><b>The day's issue</b><p>Eight stories or so, chosen with a reason each: a book on the Kindle, a newsstand on the web.</p></li>
+<li class="you"><span class="stat">Rated by you</span><span class="glyph"><svg viewBox="0 0 120 80" aria-hidden="true"><rect x="10" y="26" width="15" height="15" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><text x="17.5" y="37" font-size="9" font-family="system-ui,sans-serif" text-anchor="middle" fill="var(--ink)">1</text><rect x="28" y="26" width="15" height="15" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><text x="35.5" y="37" font-size="9" font-family="system-ui,sans-serif" text-anchor="middle" fill="var(--ink)">2</text><rect x="46" y="26" width="15" height="15" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><text x="53.5" y="37" font-size="9" font-family="system-ui,sans-serif" text-anchor="middle" fill="var(--ink)">3</text><rect x="64" y="26" width="15" height="15" rx="2" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.2"/><text x="71.5" y="37" font-size="9" font-family="system-ui,sans-serif" text-anchor="middle" fill="var(--card)">4</text><rect x="82" y="26" width="15" height="15" rx="2" fill="var(--card)" stroke="var(--ink)" stroke-width="1.2"/><text x="89.5" y="37" font-size="9" font-family="system-ui,sans-serif" text-anchor="middle" fill="var(--ink)">5</text><rect x="34" y="50" width="52" height="15" rx="7.5" fill="none" stroke="var(--ink)" stroke-width="1.2"/><text x="60" y="61" font-size="9" font-family="system-ui,sans-serif" text-anchor="middle" fill="var(--ink)">Finished</text></svg></span><b>You rate what you read</b><p>1 to 5 from the Kindle or the web, with an optional one-tap reason. Tomorrow's filter learns from it.</p><span class="leg" aria-hidden="true"></span><span class="back" aria-hidden="true"></span></li>
+</ol>
+<p class="small">One measured day: 23 sources including a whole Financial Times, about 165 candidates ranked, 40 read in full, 8 stories delivered in 80 seconds, for about two cents of Claude Haiku.</p>
+</div>
+</section>
+
+<section id="household">
+<div class="wrap">
+<h2>Every reader gets their own paper</h2>
+<div class="prose"><p class="lead">One install serves a household. The sources are shared; the taste, the ratings and the morning issue are each reader's own. Mara, Theo and June above are one install and one pool of articles.</p></div>
+<ul class="household">
+<li><b>Their own interests, ratings and issue</b><p>Each reader writes their own interests, rates their own articles and gets their own book and newsstand each morning. What one reader rates changes only their own choosing.</p></li>
+<li><b>Shared sources, followed or not</b><p>A feed added to the household is followed by everyone until a reader unfollows it. A feed can also stay private to whoever added it, and each reader pins what they never want to miss.</p></li>
+<li><b>Invited by email</b><p>An admin invites a reader by address. They choose a name, a password and their Kindle, follow every shared source from the start, and their first issue arrives the next morning.</p></li>
+<li><b>About two cents a reader</b><p>Ranking and reading run for each reader, so a household of four is about eight cents a day. A page fetched for one reader is kept and reused when another reader's morning picks the same article.</p></li>
 </ul>
 </div>
 </section>
 
-<section>
+<section id="features">
 <div class="wrap">
-<h2>What arrives</h2>
-<div class="prose">
-<p class="lead">Articles stripped to their text and pictures, set for e-ink. Code keeps its font and wraps under its own indent; tables stay tables. No scripts, trackers or remote content reach the device, and each article ends with a row of rating links.</p>
-</div>
+<h2>Features you may care about</h2>
+<p class="small">A line each. Open one for the detail.</p>
+<div class="groups">
+
+<details class="group">
+<summary><b>Advanced ebook typesetting.</b><span>One book a day with a contents page, set for e-ink.</span></summary>
+<div class="body">
+<p>Articles stripped to their text and pictures. Code is set in an embedded monospaced font and long lines wrap under their own indent; tables stay tables; emoji are drawn from an embedded font, since the Kindle's own have none.</p>
 <div class="pages">
-<figure class="kindle"><img src="images/kindle-contents.webp" width="1264" height="1680" alt="The contents page: each story with its source, reading time and why it was picked, with related articles listed under it"><figcaption>The contents page: every story with its source, length and the reason it was picked.</figcaption></figure>
-<figure class="kindle"><img src="images/kindle-article.webp" width="1264" height="1680" alt="An article's first page on the Kindle: title, author, source, reading time, a link to the original, and the opening paragraphs"><figcaption>An article's first page, with a link back to the original.</figcaption></figure>
-<figure class="kindle"><img src="images/kindle-code.webp" width="1264" height="1680" alt="A page mixing prose and Rust code on the Kindle, long lines wrapped under their own indent"><figcaption>Code in a monospaced font, long lines wrapped with a hanging indent rather than cut off.</figcaption></figure>
+<figure class="kindle"><img src="images/kindle-contents.webp" width="1264" height="1680" alt="The contents page: each story with its source, reading time and why it was picked, with related articles listed under it" loading="lazy"><figcaption>The contents page: every story with its source, length and the reason it was picked.</figcaption></figure>
+<figure class="kindle"><img src="images/kindle-article.webp" width="1264" height="1680" alt="An article's first page on the Kindle: title, author, source, reading time, a link to the original, and the opening paragraphs" loading="lazy"><figcaption>An article's first page, with a link back to the original.</figcaption></figure>
+<figure class="kindle"><img src="images/kindle-code.webp" width="1264" height="1680" alt="A page mixing prose and Rust code on the Kindle, long lines wrapped under their own indent" loading="lazy"><figcaption>Code in a monospaced font, long lines wrapped with a hanging indent rather than cut off.</figcaption></figure>
+</div>
+</div>
+</details>
+
+<details class="group">
+<summary><b>Supports exploration.</b><span>One place a day goes to an article from below the cut.</span></summary>
+<div class="body">
+<p>Every issue gives its last place to an article picked at random from those the model scored too low to deliver, and records the odds it had. Without it, your ratings could only confirm what the model already likes; with it, they can correct it.</p>
+</div>
+</details>
+
+<details class="group">
+<summary><b>Cents a day, by design.</b><span>Only the forty strongest articles are read whole, each cut at 2,500 words.</span></summary>
+<div class="body">
+<p>Ranking works from titles and openings; only the best forty are fetched and read in full, each cut at 2,500 words. A daily token cap you set stops a bad day from costing more, every call is logged with its price on the web pages, and the model for each step is a setting, so a stronger one for choosing the issue costs cents rather than dollars.</p>
+</div>
+</details>
+
+<details class="group">
+<summary><b>Premium subscriptions.</b><span>Most work out of the box with your own cookie.</span></summary>
+<div class="body">
+<p>Add the site's feeds like any other and paste the cookie your browser holds for it. The articles chosen are fetched signed in as you, a few a day and no faster than a reader would, so they arrive whole rather than as a headline and a teaser. A site that is not read correctly? <a href="https://github.com/johnhringiv/forenoon/issues/new">File an issue</a>.</p>
+</div>
+</details>
+
+<details class="group">
+<summary><b>Your own links.</b><span>Paste a link for tomorrow's issue, or send it to the Kindle now.</span></summary>
+<div class="body">
+<p>The web pages take any link: into tomorrow's issue, to the Kindle now as a book of its own, or filed as already read along with your rating. Any article or story on the newsstand can be sent again the same way.</p>
+</div>
+</details>
+
+<details class="group">
+<summary><b>Link-only sources.</b><span>A feed you want as headlines only shows its picks as links.</span></summary>
+<div class="body">
+<p>A paywalled site with no cookie, or any feed you only want to glance at, can be set to show its picks as links on the newsstand instead of fetching their pages. They still compete for a place on merit.</p>
+</div>
+</details>
+
 </div>
 </div>
 </section>
 
-<section>
+<section id="yours">
 <div class="wrap">
-<h2>What it does</h2>
-<ul class="points">
-<li><b>Chooses by reading, not by headline.</b> Every candidate is ranked from its title and opening; the best forty are read in full before the day is chosen.</li>
-<li><b>Learns from you.</b> Rate 1 to 5 from the Kindle or the web pages, with an optional one-tap reason. Describe your interests in your own words and change them whenever you like.</li>
-<li><b>Stories, not links.</b> A short post that only points at an article is replaced by the article. Several reports of one event share one place in the day.</li>
-<li><b>Your subscriptions.</b> Publications you pay for come in through their feeds; the articles chosen are read signed in as you, with your own browser's cookie for the site.</li>
-<li><b>A newsstand and an archive.</b> Web pages show each day's issue and everything the model considered and passed over, with its reasons. Filter by source, rating or date; send anything to the Kindle as a book of its own.</li>
-<li><b>Add your own.</b> Paste a link to put it in tomorrow's issue, send it now, or file something you have already read along with your rating.</li>
-<li><b>Clean books.</b> Text and pictures only, with code and tables kept readable on e-ink. Nothing in an article can reach your device or your network.</li>
-<li><b>No one else's incentives.</b> No ads, no engagement metrics, no telemetry. Your sources, ratings and articles are one SQLite file and a folder on your own machine. What leaves it is what the choosing needs: your interests and the articles' text, sent to the model provider you hold the key for, Claude today. The web pages sit behind a login; only the signed rating links in each book work without one.</li>
+<h2>Yours to run</h2>
+<div class="prose">
+<p class="lead">Forenoon is an application you run yourself and share with your household and friends. No ads, no engagement metrics, no telemetry.</p>
+<p>What it needs:</p>
+<ul class="needs">
+<li>A machine that runs Docker and is on in the morning. A NAS is plenty.</li>
+<li>An Anthropic API key. A day's choosing costs about two cents. Without one it still delivers: pinned sources first, then the newest articles in turn across sources.</li>
+<li>A mail relay your Kindle accepts, to deliver the book.</li>
+<li>A Cloudflare tunnel, if you want the pages and the rating links reachable away from home.</li>
 </ul>
+</div>
 </div>
 </section>
 
@@ -241,7 +380,7 @@ footer a { color:var(--ink) }
 <div class="wrap">
 <h2>Run it</h2>
 <div class="prose">
-<p class="lead">Three containers on any machine that runs Docker: the pipeline, the web pages, and a tunnel if you want the pages and the rating links reachable from outside. A NAS is plenty. You bring an Anthropic API key and a mail relay that your Kindle accepts.</p>
+<p class="lead">Two containers, the pipeline and the web pages, with the tunnel beside them if you want one. Everything is kept in one SQLite file and a folder.</p>
 <pre>git clone https://github.com/johnhringiv/forenoon
 cd forenoon/deploy
 cp .env.example .env    <span class="c"># the mail server, the API key, your time zone</span>
@@ -250,12 +389,14 @@ docker compose up -d</pre>
 </div>
 </div>
 </section>
+
 </main>
 
 <footer>
 <div class="wrap">
 <span>Forenoon is open source under the MIT licence.</span>
-<span><a href="https://github.com/johnhringiv/forenoon">Source on GitHub</a></span>
+<span class="credit">Created by <a class="ext by" href="https://johnhringiv.com/"><svg class="iv" viewBox="80 80 352 352" aria-hidden="true"><path d="M96 116 L416 116 L256 396 Z" fill="#f5c518" stroke="#f5c518" stroke-width="36" stroke-linejoin="round"/><path d="M96 116 L256 396 L416 116" fill="none" stroke="#0b6b3a" stroke-width="36" stroke-linejoin="round" stroke-linecap="round"/><path d="M 176 100 H 336 V 134 H 278 V 278 H 304 V 312 H 208 V 278 H 234 V 134 H 176 Z" fill="#0b6b3a" stroke="#0b6b3a" stroke-width="4" stroke-linejoin="round"/></svg>John Ring<svg class="out" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg></a></span>
+<span><a class="ext" href="https://github.com/johnhringiv/forenoon"><svg class="gh" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Source on GitHub<svg class="out" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg></a></span>
 </div>
 </footer>
 </body>

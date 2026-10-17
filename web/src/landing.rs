@@ -24,6 +24,8 @@ const IMAGES: &[(&str, &[u8])] = &[
     ("/images/kindle-code.webp", include_bytes!("../site/images/kindle-code.webp")),
     ("/images/newsstand-light.webp", include_bytes!("../site/images/newsstand-light.webp")),
     ("/images/newsstand-dark.webp", include_bytes!("../site/images/newsstand-dark.webp")),
+    ("/images/phone-light.webp", include_bytes!("../site/images/phone-light.webp")),
+    ("/images/phone-dark.webp", include_bytes!("../site/images/phone-dark.webp")),
 ];
 
 /// The hostname the page answers at, lowercase and without a default port, as browsers send

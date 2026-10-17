@@ -163,7 +163,8 @@ names and one-line descriptions there in step with this page.
 
 The landing page is served by the web program itself, at the hostname in
 `FORENOON_WEB_LANDING` (`forenoon.dev`), so the public site is the same deploy as the demo
-behind it and needs nothing else running. It is one HTML page with its styles inline and no
+behind it and needs nothing else running. On a persona host the wordmark at the top left
+leads back to it, so a visitor who came in from the landing page can return. It is one HTML page with its styles inline and no
 scripts, built into the binary from `web/site` with its pictures: a merge to `main` that
 changes it reaches the site with the next image. Only the page, its pictures, the icons and
 the health check answer on that host; everything else there is 404. The Kindle pictures are the
@@ -177,6 +178,9 @@ deploy is down (the NAS rebooting, the tunnel gone), a Cloudflare Worker,
 `deploy/cloudflare/outage-worker.js`, steps in as gotflashes's does: on `forenoon.dev` it
 serves the landing page itself from a copy of `web/site` bundled with the Worker, with a line
 under the masthead saying the demo behind its links is away; on a persona host it shows a
-short notice. It passes every other answer through, the pages' own errors included. Deploy it
-with `npx wrangler deploy` from that folder, and again when the page changes, since the copy
-is taken at deploy time; its routes cover `forenoon.dev` and every subdomain.
+short notice. It passes every other answer through, the pages' own errors included. The copy is
+taken at deploy time, so a merge to `main` that changes `web/site`, `web/icons` or
+`deploy/cloudflare` deploys the Worker again (`.github/workflows/outage-worker.yml`, with the
+Cloudflare API token and account id as repository secrets; the token needs Workers Scripts: Edit
+on the account, and Workers Routes: Edit and Zone: Read on the forenoon.dev zone); `npx wrangler deploy` from that folder does the same by
+hand. Its routes cover `forenoon.dev` and every subdomain.

@@ -2592,6 +2592,28 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
 }
 
 #[tokio::test]
+async fn a_demo_hosts_wordmark_leads_back_to_the_landing_page() {
+    const DEMO: &str = "john.forenoon.test=john";
+    let page = async |site: &Site, host: &str| {
+        let request = Request::get("/").header(header::HOST, host).body(Body::empty()).unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8_lossy(&body).into_owned()
+    };
+    // A visitor came from the landing page: the wordmark goes back there, scheme-relative.
+    let site = site_full(true, false, DEMO, Some("forenoon.test")).await;
+    assert!(page(&site, "john.forenoon.test").await.contains(r#"<a href="//forenoon.test/">Forenoon</a>"#));
+    // On the install's own pages it is the newsstand, as ever.
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    assert!(browser.get(&site, "/archive").await.text.contains(r#"<a href="/">Forenoon</a>"#));
+    // A demo with no landing page has nowhere else to go.
+    let site = site_full(true, false, DEMO, None).await;
+    assert!(page(&site, "john.forenoon.test").await.contains(r#"<a href="/">Forenoon</a>"#));
+}
+
+#[tokio::test]
 async fn demo_personas_and_their_feeds_are_made_on_start_and_only_once() {
     // Mary is a reader made by hand, named as a persona too; she has stopped following Lobsters.
     const DEMO: &str = "mara.forenoon.test=mara,theo.forenoon.test=theo,june.forenoon.test=june,m.forenoon.test=mary,x.forenoon.test=nobody";
@@ -2659,7 +2681,7 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     let (status, (kind, cache, robots, cookie), csp, page) = get("Forenoon.Test:443", "/").await;
     assert_eq!(status, StatusCode::OK);
     assert!(kind.starts_with("text/html") && cache == "public, max-age=300" && robots.is_empty() && cookie.is_empty());
-    assert!(csp && page.contains("A morning paper for your e-reader"), "{page}");
+    assert!(csp && page.contains("A morning paper edited for one reader"), "{page}");
     // Its pictures, and the icons it names.
     let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;
     assert!(status == StatusCode::OK && kind == "image/webp" && cache.starts_with("public"));

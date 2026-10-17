@@ -1,0 +1,4 @@
+# The README's screenshots (tools/screenshots.py) share this folder but are not the landing
+# page's; the outage Worker (deploy/cloudflare) leaves them out of its copy.
+images/reading-*.webp
+images/sources-*.webp
