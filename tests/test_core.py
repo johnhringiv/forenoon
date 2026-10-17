@@ -624,4 +624,5 @@ def test_generated_icons_match_the_mark():
     spec.loader.exec_module(make)
     assert (root / "web/templates/_mark.html").read_text() == make.header_html()
     assert (root / "web/icons/icon.svg").read_text() == mark.svg_tile()
-    assert Image.open(root / "web/icons/og.png").convert("RGB").tobytes() == make.share_card().tobytes()
+    # The share card is rendered from the landing page by tools/og_card.py, with a browser.
+    assert Image.open(root / "web/icons/og.png").size == (1200, 630)
