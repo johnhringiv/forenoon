@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forenoon: a morning paper for your e-reader</title>
+<meta name="description" content="Forenoon reads your feeds and the front pages each morning, has a model choose what you would want to read, and sends it to your Kindle as one book. Self-hosted and open source; bring a model API key, about two cents a day.">
+<link rel="canonical" href="https://forenoon.dev/">
+<meta property="og:title" content="Forenoon">
+<meta property="og:description" content="A morning paper for your e-reader, edited for one reader: you. Self-hosted and open source.">
+<meta property="og:image" content="https://forenoon.dev/og.png">
+<meta property="og:url" content="https://forenoon.dev/">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161513" media="(prefers-color-scheme: dark)">
+<style>
+/* The same paper as the web pages (web/templates/base.html): the demo opens in the same colours. */
+:root { color-scheme:light; --bg:#f6f4ef; --card:#fff; --ink:#1c1b19; --soft:#6b675f; --line:#dedad0; --accent:#8a3b12;
+  --bezel:#2a2824; --bezel-edge:#3b3833;
+  --mk-sun1:#f7c75a; --mk-sun2:#e58a34; --mk-sun3:#b5531c; --mk-ray1:#b5531c; --mk-ray2:#1c1b19; --mk-hatch:#6e2a0a }
+@media (prefers-color-scheme:dark) {
+  :root { color-scheme:dark; --bg:#161513; --card:#201f1c; --ink:#ece8df; --soft:#a39e93; --line:#35332e; --accent:#e0a074;
+    --bezel:#0d0c0b; --bezel-edge:#2a2824;
+    --mk-sun1:#ffd877; --mk-sun2:#f0a04a; --mk-sun3:#d06a2c; --mk-ray1:#f0b56a; --mk-ray2:#c4622d; --mk-hatch:#2a1508 }
+}
+* { box-sizing:border-box }
+html { scroll-behavior:smooth }
+@media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto } }
+body { margin:0; background:var(--bg); color:var(--ink); font:17px/1.6 Georgia,"Times New Roman",serif }
+a { color:var(--accent) }
+a:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:3px }
+img { display:block; max-width:100%; height:auto }
+.wrap { max-width:1120px; margin:0 auto; padding:0 20px }
+p { margin:0 0 1em }
+h1, h2, h3 { font-weight:700; line-height:1.15; margin:0; letter-spacing:-.005em }
+h2 { font-size:1.75rem; margin:0 0 .6em }
+h3 { font-size:1.15rem }
+.small { font:.9rem/1.5 system-ui,sans-serif; color:var(--soft) }
+
+/* Masthead: the app's nameplate, with the two places to go. */
+header.mast { padding:26px 0 14px; border-bottom:3px double var(--line) }
+header.mast .wrap { display:flex; flex-wrap:wrap; align-items:center; gap:.8rem 1.6rem }
+.plate { display:flex; align-items:center; gap:.9rem; color:inherit; text-decoration:none; font-size:1.9rem; font-weight:700 }
+.plate span { text-transform:uppercase; letter-spacing:.16em; border-top:1.5px solid; border-bottom:4px double; padding:.12em 0 .1em .16em }
+.plate svg { flex:none }
+nav.top { margin-left:auto; display:flex; gap:1.4rem; font:1rem system-ui,sans-serif }
+nav.top a { color:var(--ink); text-decoration:none; border-bottom:2px solid transparent; padding:.15rem 0 }
+nav.top a:hover { border-bottom-color:var(--line) }
+
+/* The front page: the pitch beside the book as it arrives. */
+.hero { padding:56px 0 24px }
+.hero .wrap { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,6fr); gap:40px 56px; align-items:center }
+.hero h1 { font-size:clamp(2.1rem,4.2vw,3.1rem); margin-bottom:.55em; text-wrap:balance }
+.hero p { font-size:1.1rem; max-width:32em }
+.hero .actions { margin-top:1.6rem; display:flex; flex-wrap:wrap; gap:.7rem 1rem; align-items:center; font:1rem system-ui,sans-serif }
+.btn { display:inline-block; padding:.6rem 1.1rem; border-radius:4px; text-decoration:none; font-weight:600; border:1.5px solid var(--accent) }
+.btn.fill { background:var(--accent); color:var(--card) }
+.btn.line { color:var(--accent) }
+.btn:hover { filter:brightness(1.08) }
+.actions .small { flex-basis:100%; margin:0 }
+
+/* A Kindle: the real screen in a plain bezel, with the chin below the glass. */
+.kindle { margin:0; background:var(--bezel); border:1px solid var(--bezel-edge); border-radius:16px; padding:16px 16px 46px;
+  box-shadow:0 18px 40px -22px rgba(0,0,0,.55) }
+.kindle img { width:100%; border-radius:3px; background:#fff }
+.kindle figcaption { color:var(--soft); font:.85rem/1.45 system-ui,sans-serif; margin:.7rem 0 0 }
+.stack { position:relative; padding:0 0 0 12% }
+.stack .kindle.front { position:relative; z-index:1; width:72% }
+.stack .kindle.back { position:absolute; top:7%; right:0; width:62%; filter:brightness(.92) }
+
+/* Sections: a rule above each, and prose kept to a readable measure. */
+section { padding:48px 0 }
+section + section .wrap { border-top:1px solid var(--line); padding-top:48px }
+.prose { max-width:38em }
+.lead { font-size:1.15rem }
+
+/* The morning, step by step: a real sequence, so numbered. */
+ol.morning { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:28px }
+ol.morning li { border-top:2px solid var(--ink); padding-top:.8rem }
+ol.morning b { display:block; font-size:1.05rem; margin-bottom:.3rem }
+ol.morning .n { font:700 2.2rem/1 Georgia,serif; color:var(--accent); display:block; margin:0 0 .5rem }
+ol.morning p { margin:0; font-size:.98rem }
+
+/* The demo: the newsstand as a reader sees it, and the readers to look in on. */
+.shot { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--card);
+  box-shadow:0 18px 40px -26px rgba(0,0,0,.5) }
+.readers { margin:2.2rem 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:28px }
+.readers li { border-top:2px solid var(--ink); padding-top:.8rem }
+.readers h3 { margin-bottom:.25rem }
+.readers p { font-size:.98rem; margin-bottom:.6rem }
+.readers a { font:1rem system-ui,sans-serif; font-weight:600; text-decoration:none; border-bottom:1.5px solid var(--accent) }
+.readers a:hover { border-bottom-width:2px }
+
+/* What arrives: three pages of the book. */
+.pages { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:28px; margin-top:1.6rem }
+
+/* What it does: the points, as prose. */
+ul.points { margin:0; padding:0; list-style:none; columns:2; column-gap:48px }
+ul.points li { break-inside:avoid; margin:0 0 1.1rem; max-width:34em }
+ul.points b { display:block }
+
+/* Running it. */
+pre { margin:1.2rem 0; padding:1rem 1.2rem; background:var(--card); border:1px solid var(--line); border-radius:6px;
+  font:.92rem/1.55 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace; overflow-x:auto; color:var(--ink) }
+pre .c { color:var(--soft) }
+footer { padding:36px 0 56px; border-top:3px double var(--line); font:.95rem/1.6 system-ui,sans-serif; color:var(--soft) }
+footer .wrap { display:flex; flex-wrap:wrap; gap:.6rem 2rem; justify-content:space-between }
+footer a { color:var(--ink) }
+
+@media (max-width:900px) {
+  .hero .wrap { grid-template-columns:1fr }
+  .stack { padding:0 }
+  .stack .kindle.front { width:min(100%,440px); margin:0 auto }
+  .stack .kindle.back { display:none }
+  ol.morning, .readers, .pages { grid-template-columns:repeat(2,minmax(0,1fr)) }
+  ul.points { columns:1 }
+}
+@media (max-width:560px) {
+  body { font-size:16px }
+  .hero { padding-top:36px }
+  ol.morning, .readers, .pages { grid-template-columns:1fr }
+  section { padding:36px 0 }
+  section + section .wrap { padding-top:36px }
+  .kindle { padding:12px 12px 34px; border-radius:12px }
+}
+</style>
+</head>
+<body>
+
+<header class="mast">
+<div class="wrap">
+<a class="plate" href="/"><svg class="mark" width="84" height="61" aria-hidden="true" viewBox="2 9 60 44"><defs><radialGradient id="mkr" gradientUnits="userSpaceOnUse" cx="32" cy="40" r="30"><stop offset=".55" style="stop-color:var(--mk-ray1)"/><stop offset="1" style="stop-color:var(--mk-ray2)"/></radialGradient><linearGradient id="mks" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--mk-sun1)"/><stop offset=".5" style="stop-color:var(--mk-sun2)"/><stop offset="1" style="stop-color:var(--mk-sun3)"/></linearGradient><clipPath id="mkc"><path d="M17 40a15 15 0 0 1 30 0z"/></clipPath></defs><path d="M14.37 36.38L3.51 32.36L14.92 34.32ZM15.91 31.94L10.78 27.75L16.97 30.09ZM18.54 28.05L11.14 19.14L20.05 26.54ZM22.09 24.97L19.75 18.78L23.94 23.91ZM26.32 22.92L24.36 11.51L28.38 22.37ZM30.93 22.03L32 15.5L33.07 22.03ZM35.62 22.37L39.64 11.51L37.68 22.92ZM40.06 23.91L44.25 18.78L41.91 24.97ZM43.95 26.54L52.86 19.14L45.46 28.05ZM47.03 30.09L53.22 27.75L48.09 31.94ZM49.08 34.32L60.49 32.36L49.63 36.38Z" fill="url(#mkr)"/><path d="M17 40a15 15 0 0 1 30 0z" fill="url(#mks)"/><g clip-path="url(#mkc)"><path d="M14 26h36" style="stroke:var(--mk-hatch)" stroke-width="0.22"/><path d="M14 27.5h36" style="stroke:var(--mk-hatch)" stroke-width="0.29"/><path d="M14 29h36" style="stroke:var(--mk-hatch)" stroke-width="0.35"/><path d="M14 30.5h36" style="stroke:var(--mk-hatch)" stroke-width="0.42"/><path d="M14 32h36" style="stroke:var(--mk-hatch)" stroke-width="0.48"/><path d="M14 33.5h36" style="stroke:var(--mk-hatch)" stroke-width="0.55"/><path d="M14 35h36" style="stroke:var(--mk-hatch)" stroke-width="0.61"/><path d="M14 36.5h36" style="stroke:var(--mk-hatch)" stroke-width="0.68"/><path d="M14 38h36" style="stroke:var(--mk-hatch)" stroke-width="0.74"/><path d="M14 39.5h36" style="stroke:var(--mk-hatch)" stroke-width="0.8"/></g><path d="M17 40a15 15 0 0 1 30 0z" fill="none" style="stroke:var(--ink)" stroke-width="1.3"/><path d="M3 40H61" style="stroke:var(--ink)" stroke-width="2"/><path d="M9 43.5H55" style="stroke:var(--ink)" stroke-width="1.1"/><path d="M15 46.5H49" style="stroke:var(--ink)" stroke-width="0.8"/><path d="M21 49H43" style="stroke:var(--ink)" stroke-width="0.55"/><path d="M27 51.2H37" style="stroke:var(--ink)" stroke-width="0.4"/></svg><span>Forenoon</span></a>
+<nav class="top" aria-label="Site">
+<a href="#demo">Demo</a>
+<a href="#run">Run it</a>
+<a href="https://github.com/johnhringiv/forenoon">Source</a>
+</nav>
+</div>
+</header>
+
+<main>
+<section class="hero">
+<div class="wrap">
+<div>
+<h1>A morning paper for your e-reader, edited for one reader: you.</h1>
+<p class="lead">Every morning Forenoon reads your feeds and the front pages you follow, has a model choose what you would want to read, and sends it to your Kindle as one book with a contents page. Rate each article from the device, and tomorrow's choices learn from it.</p>
+<p>It runs on your own machine. The one thing it needs from outside is a model's API key, and a day's choosing costs about two cents of it.</p>
+<div class="actions">
+<a class="btn fill" href="#demo">See what it chose today</a>
+<a class="btn line" href="https://github.com/johnhringiv/forenoon">Run your own</a>
+<p class="small">Open source, MIT. One container and one SQLite file. No account with us, nothing phoning home.</p>
+</div>
+</div>
+<div class="stack" aria-label="Two pages of an issue on a Kindle">
+<figure class="kindle front">
+<img src="images/kindle-cover.webp" width="1264" height="1680" alt="The issue's cover on a Kindle: the Forenoon sun, Friday 16 October 2026, 8 stories, 11 articles, about 75 minutes, and the first headlines" fetchpriority="high">
+</figure>
+<figure class="kindle back" aria-hidden="true">
+<img src="images/kindle-contents.webp" width="1264" height="1680" alt="" loading="lazy">
+</figure>
+</div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<h2>Why</h2>
+<div class="prose">
+<p class="lead">Forenoon exists to cut the time spent scrolling, to find the writing you actually care about, and to make an e-reader useful for more than books.</p>
+<p>Feeds serve whatever keeps you on them. Aggregators are paid for by advertisers or pushed along by an agenda, and they know far less about you than you could tell them in a paragraph. Forenoon has one job: find what you would choose to read yourself, and put it where you read best. Away from a feed, on e-ink, the scrolling takes care of itself.</p>
+</div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<h2>How a morning goes</h2>
+<ol class="morning">
+<li><span class="n">1</span><b>Read everything</b><p>Your RSS feeds, including the publications you subscribe to, and the front pages of Hacker News and Lobsters. One day's pool is a few hundred articles.</p></li>
+<li><span class="n">2</span><b>Rank from the opening</b><p>Each candidate is scored against your interests, written in your own words, from its title and first paragraphs. A pointer post is swapped for the article it points at.</p></li>
+<li><span class="n">3</span><b>Read the best in full</b><p>The forty strongest are fetched and read whole, so a teaser with a good title loses to an article with something in it. Several reports of one event become one story.</p></li>
+<li><span class="n">4</span><b>Choose the day and send it</b><p>Eight stories or so, with a reason for each, as one clean book with a contents page. Your ratings from the device shape the next morning.</p></li>
+</ol>
+<p class="small" style="margin-top:1.6rem">One measured day: 23 sources including a whole Financial Times, about 165 candidates ranked, 40 read in full, 16 stories delivered in 80 seconds, for about two cents of Claude Haiku.</p>
+</div>
+</section>
+
+<section id="demo">
+<div class="wrap">
+<h2>See what it chose today</h2>
+<div class="prose">
+<p class="lead">Three readers with different interests share one set of sources. Each morning the same pool becomes a different issue. Their newsstands are open to look at, read only, with the model's reason on every card and the archive of everything it weighed and passed over.</p>
+</div>
+<picture class="shot">
+<source media="(prefers-color-scheme: dark)" srcset="images/newsstand-dark.webp">
+<img class="shot" src="images/newsstand-light.webp" width="2400" height="2200" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and rating buttons" loading="lazy">
+</picture>
+<!-- The personas: their hostnames are set in FORENOON_WEB_DEMO on the demo install. -->
+<ul class="readers">
+<li><h3>Mara</h3><p>Systems programming, databases and compilers, and the people who build them. Long technical posts over news.</p><a href="https://mara.forenoon.dev/">Open Mara's newsstand</a></li>
+<li><h3>Theo</h3><p>Economics, housing and energy policy, and reported pieces on how institutions actually work.</p><a href="https://theo.forenoon.dev/">Open Theo's newsstand</a></li>
+<li><h3>June</h3><p>Science writing, natural history and long reported features; a little news when it matters.</p><a href="https://june.forenoon.dev/">Open June's newsstand</a></li>
+</ul>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<h2>What arrives</h2>
+<div class="prose">
+<p class="lead">Articles stripped to their text and pictures, set for e-ink. Code keeps its font and wraps under its own indent; tables stay tables. No scripts, trackers or remote content reach the device, and each article ends with a row of rating links.</p>
+</div>
+<div class="pages">
+<figure class="kindle"><img src="images/kindle-contents.webp" width="1264" height="1680" alt="The contents page: each story with its source, reading time and why it was picked, with related articles listed under it"><figcaption>The contents page: every story with its source, length and the reason it was picked.</figcaption></figure>
+<figure class="kindle"><img src="images/kindle-article.webp" width="1264" height="1680" alt="An article's first page on the Kindle: title, author, source, reading time, a link to the original, and the opening paragraphs"><figcaption>An article's first page, with a link back to the original.</figcaption></figure>
+<figure class="kindle"><img src="images/kindle-code.webp" width="1264" height="1680" alt="A page mixing prose and Rust code on the Kindle, long lines wrapped under their own indent"><figcaption>Code in a monospaced font, long lines wrapped with a hanging indent rather than cut off.</figcaption></figure>
+</div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<h2>What it does</h2>
+<ul class="points">
+<li><b>Chooses by reading, not by headline.</b> Every candidate is ranked from its title and opening; the best forty are read in full before the day is chosen.</li>
+<li><b>Learns from you.</b> Rate 1 to 5 from the Kindle or the web pages, with an optional one-tap reason. Describe your interests in your own words and change them whenever you like.</li>
+<li><b>Stories, not links.</b> A short post that only points at an article is replaced by the article. Several reports of one event share one place in the day.</li>
+<li><b>Your subscriptions.</b> Publications you pay for come in through their feeds; the articles chosen are read signed in as you, with your own browser's cookie for the site.</li>
+<li><b>A newsstand and an archive.</b> Web pages show each day's issue and everything the model considered and passed over, with its reasons. Filter by source, rating or date; send anything to the Kindle as a book of its own.</li>
+<li><b>Add your own.</b> Paste a link to put it in tomorrow's issue, send it now, or file something you have already read along with your rating.</li>
+<li><b>Clean books.</b> Text and pictures only, with code and tables kept readable on e-ink. Nothing in an article can reach your device or your network.</li>
+<li><b>No one else's incentives.</b> No ads, no engagement metrics, no telemetry. Your sources, ratings and articles are one SQLite file and a folder on your own machine. What leaves it is what the choosing needs: your interests and the articles' text, sent to the model provider you hold the key for, Claude today. The web pages sit behind a login; only the signed rating links in each book work without one.</li>
+</ul>
+</div>
+</section>
+
+<section id="run">
+<div class="wrap">
+<h2>Run it</h2>
+<div class="prose">
+<p class="lead">Three containers on any machine that runs Docker: the pipeline, the web pages, and a tunnel if you want the pages and the rating links reachable from outside. A NAS is plenty. You bring an Anthropic API key and a mail relay that your Kindle accepts.</p>
+<pre>git clone https://github.com/johnhringiv/forenoon
+cd forenoon/deploy
+cp .env.example .env    <span class="c"># the mail server, the API key, your time zone</span>
+docker compose up -d</pre>
+<p>Then create your reader, add your feeds and write your interests in the browser. The <a href="https://github.com/johnhringiv/forenoon/blob/main/docs/setup-deploy.md">setup guide</a> covers the mail relay, Amazon's approved sender list and the tunnel; the <a href="https://github.com/johnhringiv/forenoon/blob/main/docs/PRD.md">product document</a> describes everything it does today.</p>
+</div>
+</div>
+</section>
+</main>
+
+<footer>
+<div class="wrap">
+<span>Forenoon is open source under the MIT licence.</span>
+<span><a href="https://github.com/johnhringiv/forenoon">Source on GitHub</a></span>
+</div>
+</footer>
+</body>
+</html>

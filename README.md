@@ -44,9 +44,11 @@ day's choices.
   165 candidates ranked, 40 read in full, 16 stories delivered in 80 seconds, for **about
   two cents** of Claude Haiku. If the model is unreachable or the day's tokens are spent it
   still delivers: pinned sources first, then the newest articles in turn across sources.
-- **No one else's incentives.** No ads, no engagement metrics, no account with anybody. One
-  SQLite file and a folder on your own machine. The web pages are public behind a login;
-  only the signed rating links in each book work without one.
+- **No one else's incentives.** No ads, no engagement metrics, no telemetry. Your sources,
+  ratings and articles are one SQLite file and a folder on your own machine. What leaves it
+  is what the choosing needs: your interests and the articles' text, sent to the model
+  provider you hold the key for. The web pages are public behind a login; only the signed
+  rating links in each book work without one.
 
 Everything is set up in the browser: sources, interests, delivery time and the rest.
 
