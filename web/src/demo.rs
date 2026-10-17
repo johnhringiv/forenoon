@@ -105,7 +105,11 @@ pub async fn gate(State(personas): State<Arc<[Persona]>>, request: Request, next
         pages::secured(pages::not_found().await.unwrap_or_else(IntoResponse::into_response))
     };
     // The same answer for everyone, so a cache in front may keep it. This replaces the
-    // no-store the inner layers gave it.
+    // no-store the inner layers gave it. Nothing here starts a session, but a visitor may
+    // carry a stale cookie for this host (one from the install's own address on another
+    // port, say), which the session layer would answer by clearing it: not on a page a
+    // cache may keep.
+    response.headers_mut().remove(header::SET_COOKIE);
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_str(&format!("public, max-age={CACHE_SECONDS}")).expect("a plain header"),

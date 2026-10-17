@@ -2445,7 +2445,8 @@ async fn a_shared_link_previews_with_the_sites_card() {
 
 #[tokio::test]
 async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session() {
-    const DEMO: &str = "john.forenoon.test=john,mary.forenoon.test=mary,nobody.forenoon.test=nobody";
+    const DEMO: &str =
+        "john.forenoon.test=john,mary.forenoon.test=mary,nobody.forenoon.test=nobody,port.forenoon.test:8081=mary";
     let site = site_full(true, false, DEMO).await;
     let pool = &site.pool;
     let sent = "2026-10-10T10:00:00+00:00";
@@ -2488,9 +2489,12 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     assert!(page.contains(r#"<button type="button" class="inert">1</button>"#));
     assert!(page.contains(r#"class="kindle inert""#) && page.contains(r#"<img src="/thumb/a1""#));
     assert!(!page.contains("/account") && !page.contains("/settings") && !page.contains("Sign out"));
-    // Mary's host, however the browser spells it, shows hers.
+    // Mary's host, however the browser spells it, shows hers; so does one configured with its port.
     let (status, _, _, page) = get("Mary.Forenoon.test:8081", "/").await;
     assert!(status == StatusCode::OK && page.contains("Marys article") && !page.contains("Johns article"));
+    assert!(get("port.forenoon.test:8081", "/").await.3.contains("Marys article"));
+    // A host that is not quite one of them is the install's own: a sign-in is needed.
+    assert!(get("john.forenoon.test.", "/").await.0.is_redirection());
 
     // The Archive's filters are links, so they work; the Sources page is the list alone, and
     // though John is an admin, the persona is a reader: Mary's private feed is not on it.
@@ -2548,6 +2552,14 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
         page.text.contains(r#"method="post""#) && page.text.contains("/account") && !page.text.contains("Reading as")
     );
     assert!(browser.get(&site, "/sources").await.text.contains("Marys private feed"));
+    // John's own cookie on a demo host changes nothing: the persona is shown, no cookie is set.
+    let mut request = Request::get("/").header(header::HOST, "mary.forenoon.test").body(Body::empty()).unwrap();
+    request.headers_mut().insert(header::COOKIE, browser.cookie.clone().unwrap().parse().unwrap());
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert!(!response.headers().contains_key(header::SET_COOKIE));
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("Marys article") && !text.contains("Johns article") && !text.contains(r#"method="post""#));
 
     // Over https, a demo host is an address of its own, not sent to the public one.
     let secure = site_full(true, true, DEMO).await;

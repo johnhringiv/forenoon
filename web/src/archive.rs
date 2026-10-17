@@ -303,7 +303,7 @@ pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Q
     ];
     let mut page = ArchivePage {
         nav: viewer.nav(&state, "archive").await?,
-        csrf: viewer.csrf.clone(),
+        csrf: viewer.csrf().await?,
         demo: viewer.is_demo(),
         ready,
         filtered: parts.iter().any(|(_, value)| !value.is_empty()),

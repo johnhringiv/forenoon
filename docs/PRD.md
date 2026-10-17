@@ -700,7 +700,7 @@ database with the pipeline.
 
 - **Accounts.** Every page needs a session except sign-in, password reset (`/forgot`,
   `/reset`), email confirmation (`/verify`), joining by invitation (`/join`), rating links
-  (`/f/`) and the health check. An account is a reader: the pipeline makes an issue for each
+  (`/f/`), the health check and a demo host's pages (below). An account is a reader: the pipeline makes an issue for each
   account that has joined, emailed to its Kindle addresses or, with none, read on the web
   pages. A signed-in
   reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is

@@ -581,7 +581,7 @@ async fn render(
     let checking = attention.iter().chain(&feeds).chain(&available).any(|row| row.state == "wait");
     let page = SourcesPage {
         nav: viewer.nav(state, "sources").await?,
-        csrf: viewer.csrf.clone(),
+        csrf: viewer.csrf().await?,
         demo: viewer.is_demo(),
         admin,
         follow_new: db::follows_new(&state.pool, &user.id).await?,
@@ -632,7 +632,9 @@ pub struct PageQuery {
 }
 
 pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Query<PageQuery>) -> Page {
-    let notice = match query.saved.as_deref() {
+    // A demo host's page says nothing was just done, whatever the address claims.
+    let saved = if viewer.is_demo() { None } else { query.saved.as_deref() };
+    let notice = match saved {
         Some("added") => Some("Source added. Its address is being checked; it is read from the next run."),
         Some("followed") => Some("Followed. It is read for you from the next run."),
         Some("unfollowed") => Some("Unfollowed. It is kept for whoever else follows it."),
@@ -646,7 +648,7 @@ pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Q
     let sieve = Sieve {
         search: query.q.as_deref().unwrap_or_default().trim().chars().take(MAX_SEARCH).collect(),
         show: SHOW.iter().map(|(key, _)| *key).find(|key| Some(*key) == query.show.as_deref()).unwrap_or(""),
-        new: query.new,
+        new: query.new.filter(|_| !viewer.is_demo()),
     };
     render(&state, &viewer, StatusCode::OK, None, notice, sieve).await
 }

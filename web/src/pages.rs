@@ -145,19 +145,28 @@ impl Nav {
 /// their forms carry, or, on a demo host, the persona, who has no session and no forms.
 pub struct Viewer {
     pub(crate) user: User,
-    /// Empty on a demo host: its pages post nothing, and asking the session for a token
-    /// would start one for every visitor.
-    pub(crate) csrf: String,
+    /// The signed-in reader's session, for the token their forms carry. `None` on a demo
+    /// host, which has no session: asking for one would start one for every visitor.
+    session: Option<Session>,
     pub(crate) demo: Option<Demo>,
 }
 
 impl Viewer {
     pub(crate) async fn signed_in(auth: &AuthSession, session: &Session) -> Result<Viewer, AppError> {
-        Ok(Viewer { user: reader(auth)?, csrf: csrf_token(session).await?, demo: None })
+        Ok(Viewer { user: reader(auth)?, session: Some(session.clone()), demo: None })
     }
 
     pub(crate) fn is_demo(&self) -> bool {
         self.demo.is_some()
+    }
+
+    /// The token this page's forms carry; empty on a demo host, whose pages post nothing.
+    /// Asked for only by pages with forms: a thumbnail must not start a session.
+    pub(crate) async fn csrf(&self) -> Result<String, AppError> {
+        match &self.session {
+            Some(session) => csrf_token(session).await,
+            None => Ok(String::new()),
+        }
     }
 
     /// The page's row of pages: the reader's own, or on a demo host the personas.
@@ -196,7 +205,7 @@ impl FromRequestParts<AppState> for Viewer {
             // A persona is a reader whatever its role, on every page: an admin sees other
             // readers' private feeds, and a visitor must not.
             user.role = "reader".to_owned();
-            return Ok(Viewer { user, csrf: String::new(), demo: Some(demo) });
+            return Ok(Viewer { user, session: None, demo: Some(demo) });
         }
         let auth = AuthSession::from_request_parts(parts, state).await.map_err(IntoResponse::into_response)?;
         let session = Session::from_request_parts(parts, state).await.map_err(IntoResponse::into_response)?;
@@ -934,7 +943,7 @@ pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(quer
         SHOW.iter().map(|(key, label)| Filter { href: page_url(key, None), label, current: *key == show }).collect();
     let mut page = NewsstandPage {
         nav: viewer.nav(&state, "newsstand").await?,
-        csrf: viewer.csrf.clone(),
+        csrf: viewer.csrf().await?,
         demo: viewer.is_demo(),
         unconfirmed: if viewer.is_demo() { None } else { user.unconfirmed_email().map(str::to_owned) },
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),
