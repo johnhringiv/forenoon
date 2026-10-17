@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at, chosen) VALUES (?, ?, 0, ?, 0)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a08d54ccdef31db075928f2a2510e2faa2c54e3340d528407b3657b675de132c"
+}

@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{icons, pages};
+use crate::{demo::hosts, icons, pages};
 
 const PAGE: &str = include_str!("../site/index.html");
 /// (path, contents): the pictures the page names, all WebP.
@@ -39,16 +39,6 @@ pub fn host(text: &str) -> Result<Option<String>, String> {
         return Err(format!("{host}: not a hostname; give it without a scheme or a path"));
     }
     Ok(Some(host))
-}
-
-/// The host a request names, lowercase, with and without its port.
-fn hosts(request: &Request) -> Option<(String, String)> {
-    let host = request.headers().get(header::HOST)?.to_str().ok()?.trim().to_ascii_lowercase();
-    let bare = match host.rsplit_once(':') {
-        Some((bare, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => bare.to_owned(),
-        _ => host.clone(),
-    };
-    Some((host, bare))
 }
 
 /// Served from the binary, dressed as every response is, and kept by a cache in front for a

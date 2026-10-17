@@ -1,0 +1,46 @@
+{
+  "_": "The public demo's readers and their shared feeds, made by the web program on start when FORENOON_WEB_DEMO names a persona that is not an account yet. docs/demo.md says why each is here.",
+  "personas": [
+    {
+      "id": "mara",
+      "name": "Mara",
+      "interests": "I write systems software: Rust mostly, some C and Zig, and I spend a lot of time inside databases and compilers. I want long technical posts that explain how something actually works: a storage engine's write path, a borrow checker's rules, a GC pause traced to its cause, a benchmark with the methodology shown. Postmortems and debugging stories are my favourite genre. Hardware is interesting when it changes how software is written (new memory hierarchies, SIMD, GPU programming models). I like the people side of this world too: how a team maintains a large codebase, how open source projects make decisions.\n\nSkip: product launches and funding news, listicles, beginner tutorials, \"10 tips\" posts, anything about AI that is not a concrete engineering result, and general tech news unless it is about a security hole with real technical detail. One good 30-minute read beats five short ones."
+    },
+    {
+      "id": "theo",
+      "name": "Theo",
+      "interests": "I follow economics and public policy the way other people follow sport: housing and land use, energy and the grid, industrial policy, trade, central banks, how cities and institutions actually work. I want reported pieces and well-argued essays with data in them, from any side, and I like a long explainer on something unglamorous (permitting, transmission lines, procurement, pensions). History of institutions and infrastructure is very welcome. I will read a good piece on technology when it is about its economics or regulation rather than the technology itself.\n\nSkip: hot takes, partisan point-scoring, market wraps and daily price moves, personal finance, and anything about crypto. A few genuinely major news events a week are enough; I am not trying to keep up with the day."
+    },
+    {
+      "id": "june",
+      "name": "June",
+      "interests": "I read for pleasure: science writing, natural history, medicine, the history of ideas, and long reported features about people and places. I like a piece that follows one researcher or one question for a few thousand words, essays that take an unexpected angle, and good explanations of new results in physics, biology, climate or neuroscience written for an intelligent non-specialist. Book-length thinking in article form. Some technology is fine when it is about what it does to people.\n\nSkip: press-release science (\"study finds\"), health advice, productivity and self-help, and anything that needs me to already follow a field's gossip. I want one or two important news stories only when something has really happened; otherwise no news at all."
+    }
+  ],
+  "feeds": [
+    { "name": "Simon Willison's Weblog", "url": "https://simonwillison.net/atom/everything/" },
+    { "name": "Julia Evans", "url": "https://jvns.ca/atom.xml" },
+    { "name": "Dan Luu", "url": "https://danluu.com/atom.xml" },
+    { "name": "fasterthanli.me", "url": "https://fasterthanli.me/index.xml" },
+    { "name": "Chips and Cheese", "url": "https://chipsandcheese.com/feed" },
+    { "name": "LWN.net", "url": "https://lwn.net/headlines/rss" },
+    { "name": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index" },
+    { "name": "Construction Physics", "url": "https://www.construction-physics.com/feed" },
+    { "name": "Works in Progress", "url": "https://worksinprogress.co/feed" },
+    { "name": "Noahpinion", "url": "https://www.noahpinion.blog/feed" },
+    { "name": "Marginal Revolution", "url": "https://marginalrevolution.com/feed" },
+    { "name": "Apricitas Economics", "url": "https://www.apricitas.io/feed" },
+    { "name": "Statecraft", "url": "https://www.statecraft.pub/feed" },
+    { "name": "The Guardian: Long Read", "url": "https://www.theguardian.com/news/series/the-long-read/rss" },
+    { "name": "Quanta Magazine", "url": "https://www.quantamagazine.org/feed/" },
+    { "name": "Nautilus", "url": "https://nautil.us/feed/" },
+    { "name": "Aeon", "url": "https://aeon.co/feed.rss" },
+    { "name": "Undark", "url": "https://undark.org/feed/" },
+    { "name": "Knowable Magazine", "url": "https://knowablemagazine.org/rss" },
+    { "name": "Longreads", "url": "https://longreads.com/feed/" },
+    { "name": "John H. Ring IV", "url": "https://johnhringiv.com/feed" },
+    { "name": "A Cathedral in the Wild", "url": "https://shearerp.substack.com/feed" },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/rss.xml" },
+    { "name": "The Guardian: World", "url": "https://www.theguardian.com/world/rss" }
+  ]
+}

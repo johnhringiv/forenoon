@@ -204,6 +204,32 @@ The deploy gives the container two secrets: the mail password and the feedback s
 checks the rating links. Session cookies pasted into the Sources page are written to the
 `forenoon-logins` Docker volume.
 
+## A public demo (optional)
+
+An install can show a few readers' pages to anyone, read-only, each at a hostname of its own:
+the pages a visitor sees are the product's, so a demo cannot drift from what you deploy.
+
+1. In `.env`, list the personas as `host=reader` pairs:
+   `FORENOON_WEB_DEMO=mara.forenoon.example=mara,theo.forenoon.example=theo`
+   On start, the web program makes any persona named in `web/demo.json` that is not an
+   account yet, with its interests and no Kindle address, and on an install with no feeds it
+   adds the file's shared feeds, followed by every persona. A persona not in the file is an
+   ordinary reader you create yourself (`add-user`, no `--kindle`) and write interests for.
+2. Nothing already there is touched on later starts, so change interests and feeds on the
+   pages as usual, signed in on the install's own hostname.
+3. Route each hostname to the web pages as well: on a tunnel, another public hostname to
+   `http://localhost:8081`; on your own proxy, another server name to the same upstream.
+   Cloudflare's proxy may cache these pages: they carry `Cache-Control: public, max-age=300`
+   and set no cookie.
+
+A demo host serves that persona's Newsstand, Archive and Sources, with a banner that names
+the demo, links to the other personas and shows the persona's interests. Nothing on it can be
+changed, and every other address there, the sign-in page included, is 404. Like every page,
+these ask search engines not to index them; a landing page of your own is what gets found.
+Your own hostname is unchanged: sign in there to look after the personas. Keep your own
+account off the list: a persona is shown as a reader whatever its role, but its Archive shows
+everything weighed for it, so a persona should hold nothing you would not publish.
+
 ## Backups
 
 Everything is in the data folder: `forenoon.sqlite3` (plus its `-wal` file), which holds

@@ -704,9 +704,9 @@ database with the pipeline.
 
 - **Accounts.** Every page needs a session except sign-in, password reset (`/forgot`,
   `/reset`), email confirmation (`/verify`), joining by invitation (`/join`), rating links
-  (`/f/`) and the health check. An account is a reader: the pipeline makes an issue for each
-  account that has joined, emailed to its Kindle addresses or, with none or with the daily
-  email turned off, read on the web pages. A signed-in
+  (`/f/`), the health check and a demo host's pages (below). An account is a reader: the
+  pipeline makes an issue for each account that has joined, emailed to its Kindle addresses
+  or, with none or with the daily email turned off, read on the web pages. A signed-in
   reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
   created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
   admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,
@@ -820,6 +820,21 @@ database with the pipeline.
   serve it, only to a reader the article was delivered to. A card falls back to the
   article's own lead image address when there is no thumbnail, and has no picture when the
   article has none. `forenoon thumbs` makes thumbnails for articles delivered earlier.
+- **Demo hosts** (`FORENOON_WEB_DEMO`, `host=reader` pairs). For a public demo, an
+  ordinary install's pages are also reached at one hostname per persona, each a reader of
+  the install. A request for such a host needs no sign-in and sees that reader's Newsstand,
+  Archive and Sources, as they are, with a banner saying so and links to the other personas
+  in place of the reader's own pages; the persona's interests text is shown behind a click.
+  The rating and Send to Kindle buttons are shown and do nothing; the forms that add, follow,
+  edit or rate are left out, as are the Subscriber sessions. Every other address on a demo
+  host, the sign-in page included, is 404, and so is any post. No session is started for a
+  visitor and the pages carry `Cache-Control: public, max-age=300`, so a cache in front
+  serves a busy day. A persona is shown as a reader whatever its role. The install's own
+  hostname is unchanged. On start, a configured persona that is not an account yet is made
+  from `web/demo.json` (a reader with its interests, no Kindle address and a password nobody
+  knows), and when the install has no feeds at all the file's shared feeds are added and
+  followed by every persona; nothing already there is touched, so later changes on the
+  pages stand.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
   icons and the health check; everything else there is 404. It is the one page meant to be

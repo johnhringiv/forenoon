@@ -32,7 +32,7 @@ use tower_sessions::Session;
 use crate::{
     auth::{AuthSession, User},
     db::{self, now_iso},
-    pages::{AppError, AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, web_url},
+    pages::{AppError, AppState, NOT_FROM_HERE, Nav, Page, Viewer, allowed, html, reader, refused, web_url},
 };
 
 const MAX_NAME: usize = 80;
@@ -303,6 +303,8 @@ struct View {
 struct SourcesPage {
     nav: Option<Nav>,
     csrf: String,
+    /// A demo host: the list alone, with no form on it.
+    demo: bool,
     admin: bool,
     /// This reader has feeds followed for them when they are shared.
     follow_new: bool,
@@ -411,17 +413,16 @@ impl Sieve {
 
 async fn render(
     state: &AppState,
-    auth: &AuthSession,
-    session: &Session,
+    viewer: &Viewer,
     status: StatusCode,
     error: Option<String>,
     notice: Option<&'static str>,
     sieve: Sieve,
 ) -> Page {
-    let user = reader(auth)?;
+    let user = &viewer.user;
     let admin = user.is_admin();
     let health = health(&state.pool).await?;
-    let sources = list(&state.pool, &user).await?;
+    let sources = list(&state.pool, user).await?;
     let sites = sessions(&state.pool).await?;
     let runs: std::collections::HashMap<String, Run> =
         read_json(&state.sessions_dir.join("status.json")).unwrap_or_default();
@@ -510,9 +511,9 @@ async fn render(
                     } else {
                         String::new()
                     },
-                    can_edit: source.editable_by(&user),
-                    can_remove: source.removable_by(&user),
-                    can_share: source.shareable_by(&user),
+                    can_edit: source.editable_by(user),
+                    can_remove: source.removable_by(user),
+                    can_share: source.shareable_by(user),
                     kept: source.chosen_by_others > 0,
                     daily_max: source.daily_max,
                     limit: limit(source.daily_max),
@@ -579,8 +580,9 @@ async fn render(
     };
     let checking = attention.iter().chain(&feeds).chain(&available).any(|row| row.state == "wait");
     let page = SourcesPage {
-        nav: Nav::new(state, &user, "sources").await?,
-        csrf: csrf_token(session).await?,
+        nav: viewer.nav(state, "sources").await?,
+        csrf: viewer.csrf().await?,
+        demo: viewer.is_demo(),
         admin,
         follow_new: db::follows_new(&state.pool, &user.id).await?,
         builtins,
@@ -616,7 +618,8 @@ const KEPT_FOR_REMOVAL: &str =
 /// Refused, though asked from the page itself (one loaded before someone else followed the feed,
 /// say): the page again, with why at the top, rather than a bare error.
 async fn kept(state: &AppState, auth: &AuthSession, session: &Session, why: &str) -> Page {
-    render(state, auth, session, StatusCode::FORBIDDEN, Some(why.to_owned()), None, Sieve::all()).await
+    let viewer = Viewer::signed_in(auth, session).await?;
+    render(state, &viewer, StatusCode::FORBIDDEN, Some(why.to_owned()), None, Sieve::all()).await
 }
 
 #[derive(Deserialize)]
@@ -628,13 +631,10 @@ pub struct PageQuery {
     show: Option<String>,
 }
 
-pub async fn page(
-    State(state): State<AppState>,
-    auth: AuthSession,
-    session: Session,
-    Query(query): Query<PageQuery>,
-) -> Page {
-    let notice = match query.saved.as_deref() {
+pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Query<PageQuery>) -> Page {
+    // A demo host's page says nothing was just done, whatever the address claims.
+    let saved = if viewer.is_demo() { None } else { query.saved.as_deref() };
+    let notice = match saved {
         Some("added") => Some("Source added. Its address is being checked; it is read from the next run."),
         Some("followed") => Some("Followed. It is read for you from the next run."),
         Some("unfollowed") => Some("Unfollowed. It is kept for whoever else follows it."),
@@ -648,9 +648,9 @@ pub async fn page(
     let sieve = Sieve {
         search: query.q.as_deref().unwrap_or_default().trim().chars().take(MAX_SEARCH).collect(),
         show: SHOW.iter().map(|(key, _)| *key).find(|key| Some(*key) == query.show.as_deref()).unwrap_or(""),
-        new: query.new,
+        new: query.new.filter(|_| !viewer.is_demo()),
     };
-    render(&state, &auth, &session, StatusCode::OK, None, notice, sieve).await
+    render(&state, &viewer, StatusCode::OK, None, notice, sieve).await
 }
 
 /// `None` when the form may be acted on; otherwise the response that refuses it.
@@ -728,7 +728,8 @@ async fn finish(
         Err(error) if name_taken(&error) => format!("There is already a source named {name}."),
         Err(error) => return Err(error.into()),
     };
-    render(state, auth, session, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
+    let viewer = Viewer::signed_in(auth, session).await?;
+    render(state, &viewer, StatusCode::BAD_REQUEST, Some(problem), None, Sieve::all()).await
 }
 
 /// A feed just shared with the household: it is followed, unpinned and not chosen, for every

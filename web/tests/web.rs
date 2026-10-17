@@ -67,11 +67,12 @@ async fn site(with_pipeline: bool) -> Site {
 }
 
 async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
-    site_landing(with_pipeline, secure_cookies, None).await
+    site_full(with_pipeline, secure_cookies, "", None).await
 }
 
-/// `landing`: the hostname the landing page is served at, as `FORENOON_WEB_LANDING` names it.
-async fn site_landing(with_pipeline: bool, secure_cookies: bool, landing: Option<&str>) -> Site {
+/// `demo`: the demo hosts, as `FORENOON_WEB_DEMO` is written; `landing`: the hostname the
+/// landing page is served at, as `FORENOON_WEB_LANDING` names it.
+async fn site_full(with_pipeline: bool, secure_cookies: bool, demo: &str, landing: Option<&str>) -> Site {
     let folder = tempfile::tempdir().unwrap();
     let pool = db::open(&folder.path().join("forenoon.sqlite3")).await.unwrap();
     if with_pipeline {
@@ -98,6 +99,7 @@ async fn site_landing(with_pipeline: bool, secure_cookies: bool, landing: Option
         },
         feedback_secret: Some(FEEDBACK_SECRET.to_vec()),
         sender: Some("issues@example.com".to_owned()),
+        demo: forenoon_web::demo::parse(demo).unwrap(),
         landing: landing.map(str::to_owned),
     };
     let router = app(pool.clone(), options).await.unwrap();
@@ -2466,8 +2468,179 @@ async fn a_shared_link_previews_with_the_sites_card() {
 }
 
 #[tokio::test]
+async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session() {
+    const DEMO: &str =
+        "john.forenoon.test=john,mary.forenoon.test=mary,nobody.forenoon.test=nobody,port.forenoon.test:8081=mary";
+    let site = site_full(true, false, DEMO, None).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    article(pool, "a1", "https://blog.example/1", "Blog", "Johns article", "john", sent).await;
+    article(pool, "a2", "https://blog.example/2", "Blog", "Marys article", "mary", sent).await;
+    sqlx::query("UPDATE users SET interests = 'Compilers and old maps' WHERE id = 'john'").execute(pool).await.unwrap();
+    // A feed of Mary's own, shared with nobody: an admin sees it on the Sources page.
+    sqlx::query(
+        "INSERT INTO sources (name, kind, url, created_at, added_by, shared) VALUES ('Marys private feed', 'rss', 'https://m.example/feed', '2026-10-01T00:00:00+00:00', 'mary', 0)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let thumbs = site.folder.path().join("thumbs");
+    std::fs::create_dir_all(&thumbs).unwrap();
+    std::fs::write(thumbs.join("a1.jpg"), b"\xff\xd8\xff jpeg bytes").unwrap();
+    // Anyone, with no cookie.
+    let get = async |host: &str, path: &str| {
+        let request = Request::get(path).header(header::HOST, host).body(Body::empty()).unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        let text = |name: header::HeaderName| {
+            response.headers().get(name).map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default()
+        };
+        let (status, cookie, cache) = (response.status(), text(header::SET_COOKIE), text(header::CACHE_CONTROL));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, cookie, cache, String::from_utf8_lossy(&body).into_owned())
+    };
+
+    // John's newsstand, to anyone: no sign-in, no session started, and a page a cache may keep.
+    let (status, cookie, cache, page) = get("john.forenoon.test", "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cookie.is_empty(), "no session for a visitor: {cookie}");
+    assert_eq!(cache, "public, max-age=300");
+    assert!(page.contains("Johns article") && !page.contains("Marys article"));
+    // The personas to switch between, the persona's interests, and the buttons shown but inert.
+    assert!(page.contains(r#"<span class="me">Reading as</span>"#), "{page}");
+    assert!(page.contains(r#"href="//mary.forenoon.test/""#) && page.contains(r#"aria-current="true">John</a>"#));
+    assert!(page.contains("Compilers and old maps") && page.contains("A demo, read only"));
+    assert!(!page.contains(r#"method="post""#) && !page.contains(r#"name="csrf""#), "{page}");
+    assert!(page.contains(r#"<button type="button" class="inert">1</button>"#));
+    assert!(page.contains(r#"class="kindle inert""#) && page.contains(r#"<img src="/thumb/a1""#));
+    assert!(!page.contains("/account") && !page.contains("/settings") && !page.contains("Sign out"));
+    // Mary's host, however the browser spells it, shows hers; so does one configured with its port.
+    let (status, _, _, page) = get("Mary.Forenoon.test:8081", "/").await;
+    assert!(status == StatusCode::OK && page.contains("Marys article") && !page.contains("Johns article"));
+    assert!(get("port.forenoon.test:8081", "/").await.3.contains("Marys article"));
+    // A host that is not quite one of them is the install's own: a sign-in is needed.
+    assert!(get("john.forenoon.test.", "/").await.0.is_redirection());
+
+    // The Archive's filters are links, so they work; the Sources page is the list alone, and
+    // though John is an admin, the persona is a reader: Mary's private feed is not on it.
+    let (status, cookie, _, page) = get("john.forenoon.test", "/archive?q=Johns").await;
+    assert!(status == StatusCode::OK && page.contains("Johns article") && !page.contains(r#"method="post""#));
+    assert!(!page.contains("Add a link") && !page.contains("Fetch again") && cookie.is_empty());
+    let (status, cookie, _, page) = get("john.forenoon.test", "/sources").await;
+    assert!(status == StatusCode::OK && page.contains("Hacker News") && cookie.is_empty(), "{page}");
+    assert!(!page.contains("Marys private feed"), "{page}");
+    assert!(
+        !page.contains(r#"method="post""#) && !page.contains("Subscriber sessions") && !page.contains("Add a feed")
+    );
+    assert!(page.contains(r#"<div class="row"#) && !page.contains(r#"<details class="row"#), "{page}");
+    assert!(!page.contains(r#"<details class="add"#) && !page.contains("Open a feed to change it"));
+
+    // A picture, on the host whose persona it was delivered to; kept by a cache too.
+    let (status, cookie, cache, body) = get("john.forenoon.test", "/thumb/a1").await;
+    assert!(
+        status == StatusCode::OK && body.contains("jpeg bytes") && cache.starts_with("public") && cookie.is_empty()
+    );
+    let head = Request::head("/").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(site.router.clone().oneshot(head).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(get("mary.forenoon.test", "/thumb/a1").await.0, StatusCode::NOT_FOUND);
+    // Icons and the health check answer there as anywhere.
+    assert_eq!(get("john.forenoon.test", "/icon.svg").await.0, StatusCode::OK);
+    assert_eq!(get("john.forenoon.test", "/healthz").await.0, StatusCode::OK);
+
+    // Nothing else exists on a demo host, the sign-in page included; John is an admin, and the
+    // demo shows none of it.
+    for path in ["/login", "/forgot", "/account", "/settings", "/accounts", "/problems", "/reading", "/learned", "/f/x"]
+    {
+        assert_eq!(get("john.forenoon.test", path).await.0, StatusCode::NOT_FOUND, "{path}");
+    }
+    // That answer is dressed like every other.
+    let request = Request::get("/login").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert!(response.headers().contains_key(header::CONTENT_SECURITY_POLICY));
+    let post = Request::post("/rate")
+        .header(header::HOST, "john.forenoon.test")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("csrf=x&article=a1&rating=5"))
+        .unwrap();
+    assert_eq!(site.router.clone().oneshot(post).await.unwrap().status(), StatusCode::NOT_FOUND);
+    let rated: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM feedback_events").fetch_one(pool).await.unwrap();
+    assert_eq!(rated, 0);
+    // A host whose reader is not an account yet has nothing to show, and is not an error.
+    assert_eq!(get("nobody.forenoon.test", "/").await.0, StatusCode::NOT_FOUND);
+
+    // The install's own address is as it was: a sign-in is needed, and the pages post.
+    assert!(Browser::default().get(&site, "/").await.status.is_redirection());
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let page = browser.get(&site, "/").await;
+    assert!(
+        page.text.contains(r#"method="post""#) && page.text.contains("/account") && !page.text.contains("Reading as")
+    );
+    assert!(browser.get(&site, "/sources").await.text.contains("Marys private feed"));
+    // John's own cookie on a demo host changes nothing: the persona is shown, no cookie is set.
+    let mut request = Request::get("/").header(header::HOST, "mary.forenoon.test").body(Body::empty()).unwrap();
+    request.headers_mut().insert(header::COOKIE, browser.cookie.clone().unwrap().parse().unwrap());
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert!(!response.headers().contains_key(header::SET_COOKIE));
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("Marys article") && !text.contains("Johns article") && !text.contains(r#"method="post""#));
+
+    // Over https, a demo host is an address of its own, not sent to the public one.
+    let secure = site_full(true, true, DEMO, None).await;
+    let request = Request::get("/").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn demo_personas_and_their_feeds_are_made_on_start_and_only_once() {
+    // Mary is a reader made by hand, named as a persona too; she has stopped following Lobsters.
+    const DEMO: &str = "mara.forenoon.test=mara,theo.forenoon.test=theo,june.forenoon.test=june,m.forenoon.test=mary,x.forenoon.test=nobody";
+    let site = site_full(true, false, DEMO, None).await;
+    let pool = &site.pool;
+    let count = async |sql: &str| sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap();
+    sqlx::query(
+        "DELETE FROM follows WHERE user_id = 'mary' AND source_id = (SELECT id FROM sources WHERE name = 'Lobsters')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let marys = count("SELECT COUNT(*) FROM follows WHERE user_id = 'mary'").await;
+    let personas = forenoon_web::demo::parse(DEMO).unwrap();
+    let made = forenoon_web::demo::seed(pool, &personas, "America/New_York").await.unwrap();
+    // Three readers, the feeds, and a word about the host whose reader the file does not know.
+    assert_eq!(made.len(), 5, "{made:?}");
+    assert_eq!(
+        count("SELECT COUNT(*) FROM sources WHERE kind = 'rss' AND shared = 1 AND check_state = 'pending'").await,
+        24
+    );
+    let shared = count("SELECT COUNT(*) FROM sources WHERE shared = 1").await;
+    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'june'").await, shared);
+    // Mary follows the new feeds and is otherwise left as she was; John, no persona, gets nothing.
+    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'mary'").await, marys + 24);
+    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'john'").await, 2);
+    let theo = auth::find_user(pool, "theo").await.unwrap().unwrap();
+    assert!(theo.interests.contains("housing") && theo.kindle_addresses.is_empty() && theo.role == "reader");
+    assert_eq!(theo.timezone, "America/New_York");
+    // Again: nothing to make, and an unfollow and a rewrite made since stand.
+    sqlx::query(
+        "DELETE FROM follows WHERE user_id = 'june' AND source_id = (SELECT id FROM sources WHERE name = 'BBC News')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE users SET interests = 'Only trains.' WHERE id = 'theo'").execute(pool).await.unwrap();
+    let again = forenoon_web::demo::seed(pool, &personas, "UTC").await.unwrap();
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'june'").await, shared - 1);
+    assert_eq!(auth::find_user(pool, "theo").await.unwrap().unwrap().interests, "Only trains.");
+    // The persona's Sources page lists them on its host.
+    let request = Request::get("/sources").header(header::HOST, "mara.forenoon.test").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("Quanta Magazine"));
+}
 async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
-    let site = site_landing(true, false, Some("forenoon.test")).await;
+    let site = site_full(true, false, "", Some("forenoon.test")).await;
     let get = async |host: &str, path: &str| {
         let request = Request::get(path).header(header::HOST, host).body(Body::empty()).unwrap();
         let response = site.router.clone().oneshot(request).await.unwrap();
@@ -2500,7 +2673,7 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     // The install's own address is as it was.
     assert!(Browser::default().get(&site, "/").await.status.is_redirection());
     // Over https, the landing host is an address of its own, not sent to the public one.
-    let secure = site_landing(true, true, Some("forenoon.test")).await;
+    let secure = site_full(true, true, "", Some("forenoon.test")).await;
     let request = Request::get("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
     assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }

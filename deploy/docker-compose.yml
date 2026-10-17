@@ -78,6 +78,8 @@ services:
       FORENOON_SMTP_SENDER: ${FORENOON_SMTP_SENDER:-}
       FORENOON_SMTP_PASSWORD: ${FORENOON_SMTP_PASSWORD:-}
       FORENOON_SMTP_IMPLICIT_TLS: ${FORENOON_SMTP_IMPLICIT_TLS:-false}
+      # A public demo: hostnames at which a reader's pages are shown read-only to anyone.
+      FORENOON_WEB_DEMO: ${FORENOON_WEB_DEMO:-}
       # The public site: the hostname the project's landing page is served at.
       FORENOON_WEB_LANDING: ${FORENOON_WEB_LANDING:-}
 

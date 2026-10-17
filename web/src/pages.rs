@@ -27,6 +27,7 @@ use tower_sessions::Session;
 use crate::{
     auth::{self, AuthSession, Credentials, User},
     db::{self, Delivered},
+    demo::Demo,
     hex,
     limit::Limiter,
     mail::{Mailer, Message},
@@ -114,6 +115,21 @@ pub(crate) struct Nav {
     pub(crate) problems: i64,
     /// This page: newsstand, archive, reading, sources, settings, problems or account.
     pub(crate) current: &'static str,
+    /// On a demo host: the other personas to switch to, in place of the reader's own pages.
+    pub(crate) demo: Option<DemoNav>,
+}
+
+pub(crate) struct DemoNav {
+    pub(crate) personas: Vec<Switch>,
+    /// This persona's interests, as the model is given them: the demo's explanation of its picks.
+    pub(crate) interests: String,
+}
+
+pub(crate) struct Switch {
+    pub(crate) name: String,
+    /// Scheme-relative, so it follows http or https: `//bob.forenoon.example/`.
+    pub(crate) href: String,
+    pub(crate) current: bool,
 }
 
 impl Nav {
@@ -121,7 +137,79 @@ impl Nav {
         let admin = user.is_admin();
         let problems =
             if admin && db::pipeline_ready(&state.pool).await? { db::problem_count(&state.pool).await? } else { 0 };
-        Ok(Some(Nav { name: user.name.clone(), admin, problems, current }))
+        Ok(Some(Nav { name: user.name.clone(), admin, problems, current, demo: None }))
+    }
+}
+
+/// Who is looking at a page that any reader may see: the signed-in reader with the token
+/// their forms carry, or, on a demo host, the persona, who has no session and no forms.
+pub struct Viewer {
+    pub(crate) user: User,
+    /// The signed-in reader's session, for the token their forms carry. `None` on a demo
+    /// host, which has no session: asking for one would start one for every visitor.
+    session: Option<Session>,
+    pub(crate) demo: Option<Demo>,
+}
+
+impl Viewer {
+    pub(crate) async fn signed_in(auth: &AuthSession, session: &Session) -> Result<Viewer, AppError> {
+        Ok(Viewer { user: reader(auth)?, session: Some(session.clone()), demo: None })
+    }
+
+    pub(crate) fn is_demo(&self) -> bool {
+        self.demo.is_some()
+    }
+
+    /// The token this page's forms carry; empty on a demo host, whose pages post nothing.
+    /// Asked for only by pages with forms: a thumbnail must not start a session.
+    pub(crate) async fn csrf(&self) -> Result<String, AppError> {
+        match &self.session {
+            Some(session) => csrf_token(session).await,
+            None => Ok(String::new()),
+        }
+    }
+
+    /// The page's row of pages: the reader's own, or on a demo host the personas.
+    pub(crate) async fn nav(&self, state: &AppState, current: &'static str) -> Result<Option<Nav>, AppError> {
+        let Some(demo) = &self.demo else { return Nav::new(state, &self.user, current).await };
+        let users = db::list_users(&state.pool).await?;
+        let personas = demo
+            .personas
+            .iter()
+            .map(|persona| Switch {
+                name: users
+                    .iter()
+                    .find(|user| user.id == persona.id)
+                    .map_or(persona.id.clone(), |user| user.name.clone()),
+                href: format!("//{}/", persona.host),
+                current: persona.id == self.user.id,
+            })
+            .collect();
+        let demo = DemoNav { personas, interests: self.user.interests.trim().to_owned() };
+        Ok(Some(Nav { name: self.user.name.clone(), admin: false, problems: 0, current, demo: Some(demo) }))
+    }
+}
+
+impl FromRequestParts<AppState> for Viewer {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        if let Some(demo) = parts.extensions.get::<Demo>().cloned() {
+            let user = auth::find_user(&state.pool, &demo.reader)
+                .await
+                .map_err(|error| AppError::from(error).into_response())?;
+            // Named in the demo's configuration but not an account (yet): the host has nothing to show.
+            let Some(mut user) = user else {
+                return Err(not_found().await.unwrap_or_else(IntoResponse::into_response));
+            };
+            // A persona is a reader whatever its role, on every page: an admin sees other
+            // readers' private feeds, and a visitor must not.
+            user.role = "reader".to_owned();
+            return Ok(Viewer { user, session: None, demo: Some(demo) });
+        }
+        let auth = AuthSession::from_request_parts(parts, state).await.map_err(IntoResponse::into_response)?;
+        let session = Session::from_request_parts(parts, state).await.map_err(IntoResponse::into_response)?;
+        Viewer::signed_in(&auth, &session).await.map_err(IntoResponse::into_response)
     }
 }
 
@@ -206,8 +294,10 @@ pub async fn to_public_address(State(public): State<PublicAddress>, request: Req
     let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).map(str::to_ascii_lowercase);
     let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
     match host {
+        // A demo host is its own address, served as it is asked for.
         Some(host)
             if host != public.host
+                && request.extensions().get::<Demo>().is_none()
                 && request.uri().path() != "/healthz"
                 && !peer.is_some_and(|peer| public.proxy.trusts(peer)) =>
         {
@@ -300,6 +390,10 @@ pub(crate) fn reader(auth: &AuthSession) -> Result<User, AppError> {
 /// Sends anyone without a session to the sign-in page. A 303, so a form posted from a page
 /// whose session has ended becomes a plain visit to sign-in instead of being posted there.
 pub async fn require_login(auth: AuthSession, session: Session, request: Request, next: Next) -> Response {
+    // A demo host's pages are the persona's, for anyone; the host allows no other.
+    if request.extensions().get::<Demo>().is_some() {
+        return next.run(request).await;
+    }
     if auth.user.is_none() {
         return Redirect::to("/login").into_response();
     }
@@ -705,6 +799,8 @@ struct Story {
 struct NewsstandPage {
     nav: Option<Nav>,
     csrf: String,
+    /// A demo host: the buttons are shown, and do nothing.
+    demo: bool,
     /// The address still to be confirmed, for the banner.
     unconfirmed: Option<String>,
     summary: String,
@@ -838,22 +934,18 @@ pub struct NewsstandQuery {
     show: Option<String>,
 }
 
-pub async fn newsstand(
-    State(state): State<AppState>,
-    auth: AuthSession,
-    session: Session,
-    Query(query): Query<NewsstandQuery>,
-) -> Page {
-    let user = reader(&auth)?;
+pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(query): Query<NewsstandQuery>) -> Page {
+    let user = &viewer.user;
     let zone = Tz::from_str(&user.timezone).unwrap_or(Tz::UTC);
     let show = SHOW.iter().map(|(key, _)| *key).find(|key| Some(*key) == query.show.as_deref()).unwrap_or("");
     let before = query.before.filter(|stamp| DateTime::<FixedOffset>::parse_from_rfc3339(stamp).is_ok());
     let filters =
         SHOW.iter().map(|(key, label)| Filter { href: page_url(key, None), label, current: *key == show }).collect();
     let mut page = NewsstandPage {
-        nav: Nav::new(&state, &user, "newsstand").await?,
-        csrf: csrf_token(&session).await?,
-        unconfirmed: user.unconfirmed_email().map(str::to_owned),
+        nav: viewer.nav(&state, "newsstand").await?,
+        csrf: viewer.csrf().await?,
+        demo: viewer.is_demo(),
+        unconfirmed: if viewer.is_demo() { None } else { user.unconfirmed_email().map(str::to_owned) },
         summary: "0 articles in 0 issues. 0 rated.".to_owned(),
         filters,
         issues: Vec::new(),
@@ -969,8 +1061,8 @@ pub struct RateForm {
 }
 
 /// An article's thumbnail, for a reader it was delivered to.
-pub async fn thumb(State(state): State<AppState>, auth: AuthSession, Path(id): Path<String>) -> Page {
-    let user = reader(&auth)?;
+pub async fn thumb(State(state): State<AppState>, viewer: Viewer, Path(id): Path<String>) -> Page {
+    let user = &viewer.user;
     let plain = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric());
     if !plain || !db::pipeline_ready(&state.pool).await? || !db::is_delivered(&state.pool, &user.id, &id).await? {
         return refused(StatusCode::NOT_FOUND, "No such picture.");
