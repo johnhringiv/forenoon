@@ -82,7 +82,7 @@ model drawing lines, not sorting by category.
 
 ## The sources
 
-One shared pool, 22 feeds plus the two built-in front pages. All plain RSS or Atom, free to
+One shared pool, 24 feeds plus the two built-in front pages. All plain RSS or Atom, free to
 read, with full text on the page; no subscriber sessions. Each feed is shared with the
 household and followed by all three personas, at the default of two places a day, so no single
 source can fill an issue. The built-in front pages have no limit, as usual.
@@ -123,6 +123,13 @@ Science and long form (mostly June's):
 | Undark            | https://undark.org/feed/             | Reported science and its politics          |
 | Knowable Magazine | https://knowablemagazine.org/rss     | Reviews of a field for non-specialists     |
 | Longreads         | https://longreads.com/feed/          | Pointers to long features: tests following |
+
+Close to home, both essayists whose pieces cross the personas' lines:
+
+| Feed                    | Address                            | Why                                                    |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------ |
+| John H. Ring IV         | https://johnhringiv.com/feed       | Forenoon's author: homelab, networking, software       |
+| A Cathedral in the Wild | https://shearerp.substack.com/feed | Paul Shearer's essays on ideas and culture, free posts |
 
 News, for the "only when it matters" rule all three share:
 
