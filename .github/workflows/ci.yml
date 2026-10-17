@@ -48,6 +48,12 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          # No build time or commit in the labels: an image whose layers did not change keeps its
+          # digest, so the host's poller leaves its container running. The :sha-<commit> tag
+          # still says which commit it was built from.
+          labels: |
+            org.opencontainers.image.created=
+            org.opencontainers.image.revision=
       - uses: docker/setup-buildx-action@v4 # container driver; required for the gha build cache
       - uses: docker/build-push-action@v7
         with:
@@ -95,6 +101,12 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}-browser
+          # No build time or commit in the labels: an image whose layers did not change keeps its
+          # digest, so the host's poller leaves its container running. The :sha-<commit> tag
+          # still says which commit it was built from.
+          labels: |
+            org.opencontainers.image.created=
+            org.opencontainers.image.revision=
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
@@ -167,6 +179,12 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}-web
+          # No build time or commit in the labels: an image whose layers did not change keeps its
+          # digest, so the host's poller leaves its container running. The :sha-<commit> tag
+          # still says which commit it was built from.
+          labels: |
+            org.opencontainers.image.created=
+            org.opencontainers.image.revision=
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
