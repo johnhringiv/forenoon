@@ -18,7 +18,7 @@ from random import Random
 import lxml.html
 
 from .config import Llm, User
-from .llm import Backend, LlmError, input_budget
+from .llm import Backend, LlmError, Unreachable, free, input_budget
 from .sources import Item
 from .store import Store
 from .tokens import reason_labels
@@ -32,7 +32,6 @@ RECENT_RATINGS = 40
 # Rough size of one ranking request, used to refuse a call that would cross the daily cap.
 TOKENS_PER_CANDIDATE = 260
 TOKENS_OVERHEAD = 2500  # per call: instructions, interests and recent ratings
-TOKENS_PER_SCORE = 60  # of the answer, per candidate
 CHARS_PER_TOKEN = 4
 
 SYSTEM = """\
@@ -212,6 +211,7 @@ def rank(
     # more care than a long one. A batch that fails leaves its candidates unscored.
     reader = reader_profile(user, store)
     size = batch_size(cfg, backend, reader)
+    unlimited = free(backend, cfg.model)  # a server you run is not held to the daily tokens
     scores: dict[str, tuple[float, str]] = {}
     batches: list[list[str]] = []  # the ids each batch scored
     problem = ""
@@ -224,7 +224,7 @@ def rank(
     for start in range(0, len(mixed), size):
         batch = mixed[start : start + size]
         used = store.llm_tokens_since(today_start)
-        if used + TOKENS_OVERHEAD + TOKENS_PER_CANDIDATE * len(batch) > cfg.daily_token_cap:
+        if not unlimited and used + TOKENS_OVERHEAD + TOKENS_PER_CANDIDATE * len(batch) > cfg.daily_token_cap:
             problem = f"daily token cap reached ({used} of {cfg.daily_token_cap} used)"
             break
         try:
@@ -232,6 +232,8 @@ def rank(
         except LlmError as exc:
             store.log_llm_error("rank", cfg.model, exc)
             problem = f"model call failed: {exc}"[:200]
+            if isinstance(exc, Unreachable):
+                break  # gone: the other batches would each wait out the time limit too
             continue
         got = _validated(reply.data, batch)
         ok = len(got) >= max(1, len(batch) // 2)
@@ -351,7 +353,7 @@ def group_stories(
     if backend is None or len(top) < 2:
         return {}
     estimate = GROUP_TOKENS_OVERHEAD + GROUP_TOKENS_PER_CANDIDATE * len(top)
-    if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
+    if not free(backend, cfg.model) and store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
         return {}
     listed = [
         {
@@ -438,7 +440,7 @@ def subject_links(
     if backend is None or not articles:
         return None
     estimate = LINK_TOKENS_OVERHEAD + LINK_TOKENS_PER_ARTICLE * len(articles)
-    if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
+    if not free(backend, cfg.model) and store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
         return None
     listed = [{**a, "links": [{"n": n, **link} for n, link in enumerate(a["links"], 1)]} for a in articles]
     prompt = f"<chosen>\n{json.dumps(listed, ensure_ascii=False)}\n</chosen>"

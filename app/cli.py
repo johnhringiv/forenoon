@@ -90,7 +90,9 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             print(f"Report written to {path}", file=sys.stderr)
             if not args.dry_run:
                 notify_run(cfg, report)
-                _learn(own, store, backend, user)
+                # On the model the run used: the fallback, when the first could not be reached.
+                used = dataclasses.replace(own.llm, model=report.model or own.llm.model)
+                _learn(dataclasses.replace(own, llm=used), store, backend, user)
             failed += bool(report.delivery_error)
     finally:
         fetcher.close()

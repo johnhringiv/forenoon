@@ -24,5 +24,6 @@ CREATE TABLE connections (
     test_model TEXT NOT NULL DEFAULT '',
     test_requested_at TEXT NOT NULL DEFAULT '',
     tested_at TEXT NOT NULL DEFAULT '',
-    test_result TEXT NOT NULL DEFAULT ''  -- one line for the page
+    test_result TEXT NOT NULL DEFAULT '',  -- one line for the page
+    CHECK (output_tokens < context_tokens)  -- the context holds the prompt too
 );

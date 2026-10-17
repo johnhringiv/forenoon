@@ -282,3 +282,82 @@ def test_a_test_reports_an_answer_that_was_not_as_asked(tmp_path):
     cut = Server([reply("{", finish="length")])
     assert test_connection(backend(cut), "qwen").startswith("Failed (the answer was unusable)")
     assert test_connection(backend(Server(status=503)), "qwen").startswith("Failed (could not reach it)")
+
+
+def test_a_server_you_run_is_not_held_back_by_the_daily_token_cap(tmp_path):
+    from app.config import Source, User
+    from app.llm import free
+    from app.rank import rank
+    from app.sources import Item
+
+    answer = {"scores": [{"id": "a", "score": 9, "reason": "Compilers."}, {"id": "b", "score": 1, "reason": "No."}]}
+    server = Server([reply(json.dumps(answer))])
+    router = Router({"lan": backend(server)})
+    paid = Router({"openai": backend(Server(), Connection("openai", "https://api.openai.com/v1"))})
+    assert free(router, "lan/qwen") and not free(paid, "openai/gpt-6-mini"), "OpenAI itself is always paid"
+    assert not free(router, "anthropic/claude-haiku-5-5") and not free(None, "lan/qwen")
+    store = Store(tmp_path / "forenoon.sqlite3")
+    items = [Item(i, f"https://x/{i}", Source("S"), i.upper(), "", None, "") for i in ("a", "b")]
+    cfg = Llm(model="lan/qwen", daily_token_cap=0)
+    ranking = rank(cfg, router, store, User("john", "John", ()), items, slots=1, today_start="2026-10-17")
+    assert ranking.choices["a"].score == 9 and not ranking.note, "a cap of 0 does not stop a free server"
+
+
+def test_a_malformed_address_or_model_list_is_unreachable_not_a_crash():
+    bad = OpenAIBackend(Connection("lan", "http://192.168.1.20:80o0/v1"))
+    with pytest.raises(Unreachable):
+        bad.model_ids()
+    with pytest.raises(Unreachable):
+        bad.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert Router({"lan": bad}).check("lan/qwen").startswith("lan:")
+
+    class Null(Server):
+        def __call__(self, request):
+            return httpx.Response(200, json={"object": "list", "data": None})
+
+    assert backend(Null()).model_ids() == []
+
+    class Odd(Server):
+        def __call__(self, request):
+            return httpx.Response(200, json={"data": "qwen"})
+
+    with pytest.raises(Unreachable, match="no list of models"):
+        backend(Odd()).model_ids()
+
+
+def test_openai_gets_no_temperature_and_a_local_answer_limit_leaves_room_for_the_prompt():
+    server = Server([reply('{"scores": []}')])
+    backend(server, Connection("openai", "https://api.openai.com/v1"), "k").structured(
+        "s", "u", SCHEMA, model="openai/o5"
+    )
+    assert "temperature" not in server.body()
+
+    small = Connection("lan", "http://x/v1", context_tokens=8192, output_tokens=4096)
+    server = Server([reply('{"scores": []}')])
+    backend(server, small).structured("s", "x" * 18000, SCHEMA, model="lan/qwen")
+    body = server.body()
+    assert body["temperature"] == 0 and 256 <= body["max_tokens"] < 4096, "prompt and answer fit the context"
+
+
+def test_a_failed_call_logs_the_tokens_it_used(tmp_path):
+    server = Server([reply("no", prompt=500, completion=40), reply("still no", prompt=600, completion=50)])
+    with pytest.raises(BadAnswer) as failed:
+        backend(server).structured("s", "u", SCHEMA, model="lan/qwen")
+    assert (failed.value.input_tokens, failed.value.output_tokens, failed.value.priced) == (1100, 90, False)
+    store = _migrated(tmp_path)
+    store.log_llm_error("rank", "lan/qwen", failed.value)
+    (row,) = store.llm_call_rows()
+    assert (row["input_tokens"], row["output_tokens"], row["status"], row["cost"]) == (1100, 90, "error", 0.0)
+
+
+def test_a_test_asked_for_while_one_runs_is_not_answered_by_the_older_one(tmp_path):
+    store = _migrated(tmp_path)
+    store.db.execute("UPDATE connections SET test_requested_at = '2026-10-17T12:00:00+00:00'")
+    store.db.commit()
+    (asked,) = store.connection_tests()
+    # Clicked again while the first ran.
+    store.db.execute("UPDATE connections SET test_requested_at = '2026-10-17T12:00:30+00:00', test_result = ''")
+    store.db.commit()
+    store.record_connection_test("lan", "OK: first", asked["test_requested_at"])
+    (row,) = store.connection_rows()
+    assert row["test_result"] == "" and len(store.connection_tests()) == 1, "the second is still to run"

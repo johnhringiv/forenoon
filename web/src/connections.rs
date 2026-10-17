@@ -123,6 +123,39 @@ struct Checked {
     reasoning_off: bool,
 }
 
+/// An http or https address with a host and, if given, a port that is a number: what the
+/// pipeline's HTTP client can parse. No user name or password in it, as it is shown on the page.
+fn web_address(address: &str) -> bool {
+    let Some(rest) = address.strip_prefix("http://").or_else(|| address.strip_prefix("https://")) else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let (host, port) = match authority.strip_prefix('[') {
+        // [::1]:8080
+        Some(v6) => match v6.split_once(']') {
+            Some((inside, after))
+                if !inside.is_empty() && inside.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.') =>
+            {
+                (inside, after.strip_prefix(':'))
+            }
+            _ => return false,
+        },
+        None => match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        },
+    };
+    let host_ok = authority.starts_with('[')
+        || !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let port_ok = port.is_none_or(|p| {
+        !p.is_empty()
+            && p.len() <= 5
+            && p.chars().all(|c| c.is_ascii_digit())
+            && p.parse::<u32>().is_ok_and(|n| n > 0 && n < 65536)
+    });
+    host_ok && port_ok && !rest.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// A name for a new connection, or what is wrong with it.
 fn checked_name(name: &str) -> Result<String, String> {
     let name = name.trim().to_lowercase();
@@ -140,11 +173,7 @@ fn checked_name(name: &str) -> Result<String, String> {
 impl ConnectionForm {
     fn checked(&self) -> Result<Checked, String> {
         let address = self.address.trim().trim_end_matches('/').to_owned();
-        let web = address.strip_prefix("http://").or_else(|| address.strip_prefix("https://"));
-        if web.is_none_or(|rest| rest.is_empty())
-            || address.len() > MAX_ADDRESS
-            || address.chars().any(|c| c.is_whitespace() || c.is_control())
-        {
+        if address.len() > MAX_ADDRESS || !web_address(&address) {
             return Err("Address: the API's base, as in http://192.168.1.20:8080/v1.".to_owned());
         }
         let number = |text: &str, label: &str, min: i64, max: i64| {
@@ -154,10 +183,15 @@ impl ConnectionForm {
                 .filter(|n| (min..=max).contains(n))
                 .ok_or_else(|| format!("{label}: give a whole number from {min} to {max}."))
         };
+        let context_tokens = number(&self.context_tokens, "Context size", 2048, 2_000_000)?;
+        let output_tokens = number(&self.output_tokens, "Answer limit", 1024, 200_000)?;
+        if output_tokens >= context_tokens {
+            return Err("Answer limit: it must be less than the context size, which holds the prompt too.".to_owned());
+        }
         Ok(Checked {
             address,
-            context_tokens: number(&self.context_tokens, "Context size", 2048, 2_000_000)?,
-            output_tokens: number(&self.output_tokens, "Answer limit", 1024, 200_000)?,
+            context_tokens,
+            output_tokens,
             timeout_seconds: number(&self.timeout_seconds, "Time limit", 5, 3600)?,
             free: self.free.is_some(),
             reasoning_off: self.reasoning_off.is_some(),
@@ -343,10 +377,26 @@ mod tests {
         let ok = form("http://192.168.1.20:8080/v1/", "32768").checked().unwrap();
         assert_eq!(ok.address, "http://192.168.1.20:8080/v1");
         assert!(ok.free && !ok.reasoning_off);
-        for bad in ["192.168.1.20:8080", "ftp://x", "http://", "http://a b"] {
+        for bad in [
+            "192.168.1.20:8080",
+            "ftp://x",
+            "http://",
+            "http://a b",
+            "http://a:port/v1",
+            "http://192.168.1.20:80o0/v1",
+            "http://[::1/v1",
+            "http://user:pw@host/v1",
+            "http://h:99999/v1",
+        ] {
             assert!(form(bad, "32768").checked().is_err(), "{bad}");
         }
         assert!(form("http://x/v1", "1000").checked().is_err() && form("http://x/v1", "lots").checked().is_err());
+        assert!(form("http://x/v1", "16384").checked().is_err(), "the answer limit must leave room for the prompt");
+        for good in
+            ["https://api.openai.com/v1", "http://[::1]:8080/v1", "http://lan-box.local:11434/v1", "http://h/v1?x"]
+        {
+            assert!(form(good, "65536").checked().is_ok(), "{good}");
+        }
         assert_eq!(key_env("lan-box"), "FORENOON_LLM_KEY_LAN_BOX");
     }
 }

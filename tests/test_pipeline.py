@@ -359,6 +359,7 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     rank_module.random = random
 
     assert report.ranking == "model" and len(report.delivered) == 3
+    assert report.model == cfg.llm.model and report.models == "", "no fallback was needed"
     system, prompt = backend.prompts[0]
     assert "untrusted" in system and "Compilers. Not watches." in prompt
     assert '"title": "An old favourite"' in prompt and '"rating": 5' in prompt

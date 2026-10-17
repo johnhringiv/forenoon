@@ -1593,6 +1593,25 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     let text = admin.get(&site, "/settings").await.text;
     assert!(text.contains("Today: 103,000 of 600,000 tokens, about $0.0125.") && text.contains("This month: 103,000"));
     assert!(text.contains("1 calls this month were to a model with no known price"));
+    // A server you run costs nothing and is outside the cap; a call that never got through is not "unpriced".
+    for (model, tokens, status, cost) in [("lan/qwen", 9000, "ok", Some(0.0)), ("lan/qwen", 0, "unreachable", None)] {
+        sqlx::query(
+            "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, cost)
+             VALUES (?, 'rank', ?, ?, 0, ?, ?)",
+        )
+        .bind(&now)
+        .bind(model)
+        .bind(tokens)
+        .bind(status)
+        .bind(cost)
+        .execute(&site.pool)
+        .await
+        .unwrap();
+    }
+    let text = admin.get(&site, "/settings").await.text;
+    assert!(text.contains("Today: 103,000 of 600,000 tokens") && text.contains("1 calls this month were to a model"));
+    assert!(text.contains("Also 9,000 tokens today and 9,000 this month on servers you run"));
+    sqlx::query("DELETE FROM llm_calls WHERE model = 'lan/qwen'").execute(&site.pool).await.unwrap();
     // The model settings list the shipped models; only the others can be left to follow the first.
     assert!(text.contains(r#"<option value="anthropic/claude-haiku-5-5" selected>Claude Haiku 5.5</option>"#));
     assert_eq!(text.matches(r#"<option value="anthropic/claude-sonnet-5-5">Claude Sonnet 5.5</option>"#).count(), 3);

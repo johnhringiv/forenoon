@@ -43,7 +43,9 @@ delivers, newest first, and the alert says so. Never commit `.env`.
 For a server on your network: it must listen on an address the pipeline's container can
 reach (not only `127.0.0.1`), and the context size you give the connection must be what the
 server is really set to; Forenoon sizes its batches to it, and some servers drop what does
-not fit without saying. Turn reasoning off (the default) unless you have time to spare: in a
+not fit without saying. Ollama in particular ignores what a client asks for and uses its own
+default, often 4,096 tokens: set `OLLAMA_CONTEXT_LENGTH` (or the model's `num_ctx`) to at
+least 32,768 and give the same number here. Turn reasoning off (the default) unless you have time to spare: in a
 test it made ranking five times slower for no better picks.
 Changing `FORENOON_FEEDBACK_SECRET` invalidates every rating link already delivered.
 

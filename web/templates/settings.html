@@ -52,7 +52,7 @@
 <label>Time limit (seconds) <input name="timeout_seconds" type="number" step="1" min="5" max="3600" value="{{ c.timeout_seconds }}" required></label>
 <label class="tick"><input type="checkbox" name="free" value="1"{% if c.free %} checked{% endif %}> A server you run: its calls cost nothing and do not count toward the daily tokens</label>
 <label class="tick"><input type="checkbox" name="reasoning_off" value="1"{% if c.reasoning_off %} checked{% endif %}> Ask the model not to reason first</label>
-<p class="hint">Reasoning made ranking five times slower in a test on a local Qwen model, for no better picks. Not sent to OpenAI itself.</p>
+<p class="hint">Untick the first for a paid service such as OpenRouter; OpenAI itself is always counted as paid. Reasoning made ranking five times slower in a test on a local Qwen model, for no better picks; the request is not sent to OpenAI itself.</p>
 <button class="primary">Save</button> <button formaction="/settings/connections/{{ c.name }}/delete">Delete</button>
 </form>
 <form class="sheet wide settings" method="post" action="/settings/connections/{{ c.name }}/test">

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -22,6 +23,7 @@ from .store import Store
 log = logging.getLogger("forenoon")
 
 CHECK_EVERY = timedelta(minutes=10)
+TEST_TIMEOUT = 120.0  # seconds
 
 TEST_SYSTEM = "You are checking that a model server works. Follow the instruction exactly."
 TEST_PROMPT = 'Answer with the word "ready" as `word` and the number 7 as `number`.'
@@ -67,26 +69,33 @@ def test_connection(backend: OpenAIBackend, model: str) -> str:
 
 
 def look_after(store: Store, now: datetime | None = None, client: httpx.Client | None = None) -> int:
-    """Check the connections that are due and run the tests asked for. How many were looked at."""
+    """Check the connections that are due and run the tests asked for. How many were looked at.
+    One that fails in a way not foreseen is logged and the others are still looked after."""
     now = now or datetime.now(UTC)
     rows = {r["name"]: r for r in store.connection_rows()}
-    tests = {r["name"]: r["test_model"] for r in store.connection_tests()}
+    tests = {r["name"]: r for r in store.connection_tests()}
     done = 0
     for connection in store.connections():
         row = rows.get(connection.name)
         if row is None or (connection.name not in tests and not _due(row["checked_at"], now)):
             continue
-        key = os.environ.get(connection.key_env, "")
-        backend = OpenAIBackend(connection, key, client)
-        error, listed = "", []
         try:
-            listed = backend.model_ids()
-        except LlmError as exc:
-            error = str(exc)
-        store.record_connection_check(connection.name, bool(key), error, listed)
-        if connection.name in tests:
-            result = test_connection(backend, tests[connection.name])
-            store.record_connection_test(connection.name, result)
-            log.info("connection %s tested: %s", connection.name, result)
+            key = os.environ.get(connection.key_env, "")
+            backend = OpenAIBackend(connection, key, client)
+            error, listed = "", []
+            try:
+                listed = backend.model_ids()
+            except LlmError as exc:
+                error = str(exc)
+            stamp = now.astimezone(UTC).isoformat(timespec="seconds")
+            store.record_connection_check(connection.name, bool(key), error, listed, stamp)
+            if test := tests.get(connection.name):
+                # Bounded, so a slow server does not hold up the scheduler's other work for long.
+                quick = OpenAIBackend(replace(connection, timeout=min(connection.timeout, TEST_TIMEOUT)), key, client)
+                result = test_connection(quick, test["test_model"])
+                store.record_connection_test(connection.name, result, test["test_requested_at"])
+                log.info("connection %s tested: %s", connection.name, result)
+        except Exception:
+            log.exception("connection %s could not be checked", connection.name)
         done += 1
     return done

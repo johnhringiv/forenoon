@@ -32,7 +32,11 @@ CHECK_TIMEOUT = 2.0  # seconds for a connection's model list, at the start of a 
 
 
 class LlmError(Exception):
-    pass
+    """A call that gave no usable answer. The tokens it used anyway are logged with it."""
+
+    def __init__(self, message: str, input_tokens: int = 0, output_tokens: int = 0, priced: bool = True):
+        super().__init__(message)
+        self.input_tokens, self.output_tokens, self.priced = input_tokens, output_tokens, priced
 
 
 class Unreachable(LlmError):
@@ -194,13 +198,19 @@ class OpenAIBackend:
         self._client = client or httpx.Client(timeout=connection.timeout)
         self._headers = headers
         self._base = connection.address.rstrip("/")
+        self._openai = urlsplit(self._base).hostname == "api.openai.com"
+
+    @property
+    def priced(self) -> bool:
+        """Whether its calls cost money: not for a server you run. OpenAI itself always does."""
+        return self._openai or not self.connection.free
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
             response = self._client.post(
                 f"{self._base}/chat/completions", json=body, headers=self._headers, timeout=self.connection.timeout
             )
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
             detail = response.text[:300]
@@ -230,22 +240,30 @@ class OpenAIBackend:
         body: dict[str, Any] = {
             "model": name,
             "messages": messages,
-            "temperature": 0,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": "answer", "strict": True, "schema": strict},
             },
         }
-        # OpenAI's reasoning models take only max_completion_tokens; the local servers know max_tokens.
-        if urlsplit(self._base).hostname == "api.openai.com":
+        # OpenAI's reasoning models take only max_completion_tokens and the default temperature.
+        if self._openai:
             body["max_completion_tokens"] = self.connection.output_tokens
         else:
-            body["max_tokens"] = self.connection.output_tokens
+            body["temperature"] = 0
+            # A server may refuse a request whose prompt and answer limit together pass its
+            # context, so the limit is what the prompt leaves (estimated, with a margin).
+            prompt = sum(len(m["content"]) for m in messages) // 3
+            room = self.connection.context_tokens - prompt - 256
+            body["max_tokens"] = max(256, min(self.connection.output_tokens, room))
             if self.connection.reasoning_off:
                 # Read by llama.cpp, vLLM and LM Studio's chat templates (Qwen, DeepSeek and the like).
                 body["chat_template_kwargs"] = {"enable_thinking": False}
         input_tokens = output_tokens = cached = 0
         problem = ""
+
+        def spent() -> tuple[int, int, bool]:
+            return input_tokens + cached, output_tokens, self.priced
+
         for attempt in range(2):
             reply = self._post(body)
             usage = reply.get("usage") or {}
@@ -257,12 +275,14 @@ class OpenAIBackend:
                 choice = reply["choices"][0]
                 content = choice["message"].get("content") or ""
             except (KeyError, IndexError, TypeError, AttributeError) as exc:
-                raise BadAnswer(f"{self.connection.name}: no answer in the reply") from exc
+                raise BadAnswer(f"{self.connection.name}: no answer in the reply", *spent()) from exc
             if choice.get("finish_reason") == "length":
                 # Asking again would stop in the same place.
+                limit = body.get("max_tokens", body.get("max_completion_tokens"))
                 raise BadAnswer(
                     f"{self.connection.name}: the answer was cut off at the output limit"
-                    f" ({self.connection.output_tokens} tokens); raise it on the Settings page"
+                    f" ({limit} tokens); raise the answer limit or the context size on the Settings page",
+                    *spent(),
                 )
             try:
                 data = json.loads(_answer_text(content))
@@ -278,16 +298,18 @@ class OpenAIBackend:
                         {"role": "user", "content": f"That is not valid: {problem}. Answer again with the JSON only."},
                     ]
                 continue
-            return Reply(_without_nulls(data, schema), input_tokens, output_tokens, 0, cached, not self.connection.free)
-        raise BadAnswer(f"{self.connection.name}: {problem}")
+            return Reply(_without_nulls(data, schema), input_tokens, output_tokens, 0, cached, self.priced)
+        raise BadAnswer(f"{self.connection.name}: {problem}", *spent())
 
     def model_ids(self, timeout: float = CHECK_TIMEOUT) -> list[str]:
         """The models the server lists, by the ids it knows them by. Raises Unreachable."""
         try:
             response = self._client.get(f"{self._base}/models", headers=self._headers, timeout=timeout)
             response.raise_for_status()
-            listed = response.json().get("data", [])
-        except (httpx.HTTPError, ValueError, AttributeError) as exc:
+            listed = response.json().get("data") or []
+            if not isinstance(listed, list):
+                raise TypeError("no list of models")
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, TypeError, AttributeError) as exc:
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}") from exc
         return [m["id"] for m in listed if isinstance(m, dict) and isinstance(m.get("id"), str)]
 
@@ -326,6 +348,18 @@ class Router:
             return str(exc)
         name = models.split(model)[1]
         return "" if not listed or name in listed else f"{backend.connection.name} does not list the model {name}"
+
+
+def free(backend: Backend | None, model: str) -> bool:
+    """Calls to `model` cost nothing (its connection is a server you run), so the daily token
+    cap, which guards spending, does not hold them back."""
+    if not isinstance(backend, Router):
+        return False
+    try:
+        connection = backend.backend(model)
+    except LlmError:
+        return False
+    return isinstance(connection, OpenAIBackend) and not connection.priced
 
 
 def input_budget(backend: Backend | None, model: str) -> int | None:

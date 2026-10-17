@@ -388,14 +388,16 @@ class Store:
             for r in rows
         )  # fmt: skip
 
-    def record_connection_check(self, name: str, key_set: bool, error: str, model_ids: list[str]) -> None:
+    def record_connection_check(
+        self, name: str, key_set: bool, error: str, model_ids: list[str], when: str | None = None
+    ) -> None:
         """What the pipeline found at a connection, for the Settings page. A failed check keeps the
         model list from the last one that worked."""
         with self.db:
             self.db.execute(
                 "UPDATE connections SET checked_at = ?, key_set = ?, error = ?,"
                 " models = CASE WHEN ? = '' THEN ? ELSE models END WHERE name = ?",
-                (now_iso(), int(key_set), error[:300], error, json.dumps(model_ids), name),
+                (when or now_iso(), int(key_set), error[:300], error, json.dumps(model_ids), name),
             )
 
     def connection_rows(self) -> list[sqlite3.Row]:
@@ -409,13 +411,17 @@ class Store:
         if not self._has_table("connections"):
             return []
         return self.db.execute(
-            "SELECT name, test_model FROM connections WHERE test_requested_at != '' AND test_requested_at > tested_at"
+            "SELECT name, test_model, test_requested_at FROM connections"
+            " WHERE test_requested_at != '' AND test_requested_at > tested_at"
         ).fetchall()
 
-    def record_connection_test(self, name: str, result: str) -> None:
+    def record_connection_test(self, name: str, result: str, requested_at: str) -> None:
+        """The result of the test asked for at `requested_at`. Dropped when another was asked for
+        while it ran: that one is run next."""
         with self.db:
             self.db.execute(
-                "UPDATE connections SET tested_at = ?, test_result = ? WHERE name = ?", (now_iso(), result[:300], name)
+                "UPDATE connections SET tested_at = ?, test_result = ? WHERE name = ? AND test_requested_at = ?",
+                (requested_at, result[:300], name, requested_at),
             )
 
     def send_requests(self) -> list[sqlite3.Row]:
@@ -854,7 +860,9 @@ class Store:
         """A call that got no usable answer: "unreachable" when the connection could not be used,
         "error" when the model answered with something unusable."""
         status = "unreachable" if isinstance(exc, Unreachable) else "error"
-        self.log_llm_call(purpose, model, 0, 0, status, str(exc)[:300])
+        self.log_llm_call(
+            purpose, model, exc.input_tokens, exc.output_tokens, status, str(exc)[:300], priced=exc.priced
+        )
 
     def llm_tokens_since(self, start: str) -> int:
         """Every priced token since `start`, cached ones too: what the daily cap counts. Calls to a

@@ -118,6 +118,7 @@ class RunReport:
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
     models: str = ""  # a model whose connection could not be reached, and what was used instead
+    model: str = ""  # the model the run used for its routine work, after any fallback
     reviews: dict[str, int] = field(default_factory=dict)  # model extraction verdicts, counted
     sign_in_needed: dict[str, str] = field(default_factory=dict)  # site -> why its session failed
     link_only: list[str] = field(default_factory=list)  # picked, but only the link could be had
@@ -600,6 +601,7 @@ def run(
     # Decided once, at the start: a connection that cannot be reached now gives way to the fallback.
     llm_cfg, report.models = models_for_run(cfg.llm, backend)
     cfg = replace(cfg, llm=llm_cfg)
+    report.model = llm_cfg.model
     cutoff = now - timedelta(days=cfg.max_age_days)
     sent_today = store.delivered_on(
         user.id,

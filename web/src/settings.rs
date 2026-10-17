@@ -204,6 +204,13 @@ async fn usage(state: &AppState, stored: &HashMap<String, String>) -> Result<Vec
         ),
         format!("This month: {} tokens, about ${:.2}.", thousands(month.tokens), month.cost),
     ];
+    if month.free_tokens > 0 {
+        lines.push(format!(
+            "Also {} tokens today and {} this month on servers you run, which cost nothing and are not capped.",
+            thousands(day.free_tokens),
+            thousands(month.free_tokens)
+        ));
+    }
     if month.unpriced > 0 {
         lines.push(format!(
             "{} calls this month were to a model with no known price and are not in the cost.",
@@ -300,7 +307,9 @@ pub async fn page(
     let notice = match query.connection.as_deref() {
         Some("added") => Some("Connection added. The pipeline checks it within a minute: reload to see what it found."),
         Some("saved") => Some("Connection saved. The pipeline checks it again within a minute."),
-        Some("deleted") => Some("Connection deleted. A model setting that named it is kept but cannot be reached: choose another."),
+        Some("deleted") => {
+            Some("Connection deleted. A model setting that named it is kept but cannot be reached: choose another.")
+        }
         Some("testing") => Some("Test asked for. The pipeline runs it within a minute: reload to see the result."),
         _ => None,
     };
