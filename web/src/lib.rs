@@ -99,7 +99,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         proxy: Arc::new(options.proxy),
         feedback_secret: options.feedback_secret.map(Arc::from),
         sender: options.sender.filter(|sender| !sender.is_empty()),
-        landing: options.landing.clone(),
+        landing: options.landing.as_ref().map(|host| Arc::from(format!("//{host}/"))),
         // Evicting: these links are public, and a flood of addresses must not stop a Kindle.
         taps: Arc::new(Limiter::evicting(Duration::from_secs(60))),
     };

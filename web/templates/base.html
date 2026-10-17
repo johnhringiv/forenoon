@@ -280,7 +280,7 @@ details.demo p.notes { margin:.5rem 0 0; max-width:44rem; padding:.1rem 0 .1rem 
 <body>
 <header>
 <div class="masthead">
-<h1>{% include "_mark.html" %}<a href="{% if let Some(nav) = nav %}{{ nav.home }}{% else %}/{% endif %}">Forenoon</a></h1>
+<h1>{% include "_mark.html" %}<a href="{% if let Some(nav) = nav %}{{ nav.home.as_deref().unwrap_or("/") }}{% else %}/{% endif %}">Forenoon</a></h1>
 {% if let Some(nav) = nav %}<nav class="site" aria-label="Pages">
 <a href="/"{% if nav.current == "newsstand" %} aria-current="page"{% endif %}>Newsstand</a>
 <a href="/archive"{% if nav.current == "archive" %} aria-current="page"{% endif %}>Archive</a>

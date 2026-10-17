@@ -13,6 +13,9 @@ on:
       - ".github/workflows/outage-worker.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: outage-worker
   cancel-in-progress: true
@@ -28,3 +31,5 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: deploy/cloudflare
+          # The action's own default is wrangler 3, which does not know [assets] run_worker_first.
+          wranglerVersion: "4"

@@ -100,10 +100,10 @@ a.ext .out { width:.8em; height:.8em; fill:none; stroke:currentColor; stroke-wid
 .phone .menu i { display:block; width:1cqw; height:1cqw; border-radius:50%; background:currentColor }
 .phone img { width:100%; display:block }
 /* The same morning on both: the phone stands in front of the Kindle's lower corner. */
-.duo { margin:0; position:relative; display:flex; align-items:flex-end; padding:0 4% 0 0 }
+.duo { margin:0; position:relative; display:flex; flex-wrap:wrap; align-items:flex-end; padding:0 4% 0 0 }
 .duo .kindle { width:66%; flex:none }
 .duo .phone { width:37%; flex:none; margin-left:-8%; position:relative; z-index:1; transform:translateY(4%) }
-.duo figcaption { position:absolute; left:0; right:0; top:100%; margin:1.4rem 0 0; color:var(--soft);
+.duo figcaption { flex:0 0 100%; margin:1.4rem 0 0; color:var(--soft);
   font:.9rem/1.5 system-ui,sans-serif; text-align:center }
 
 /* Sections: a rule above each, and prose kept to a readable measure. */
@@ -112,12 +112,6 @@ section + section .wrap { border-top:1px solid var(--line); padding-top:48px }
 .prose { max-width:38em }
 .lead { font-size:1.15rem }
 
-/* The morning, step by step: a real sequence, so numbered. */
-ol.morning { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:28px }
-ol.morning li { border-top:2px solid var(--ink); padding-top:.8rem }
-ol.morning b { display:block; font-size:1.05rem; margin-bottom:.3rem }
-ol.morning .n { font:700 2.2rem/1 Georgia,serif; color:var(--accent); display:block; margin:0 0 .5rem }
-ol.morning p { margin:0; font-size:.98rem }
 
 /* The demo: the newsstand as a reader sees it, and the readers to look in on. */
 img.shot { border:1px solid var(--line); border-radius:8px; background:var(--card);
@@ -133,14 +127,14 @@ img.shot { border:1px solid var(--line); border-radius:8px; background:var(--car
 
 /* How articles are chosen: five stages across, each with its glyph and its count, the arrows
    between them, and a line from the last back under the row to the filter. One column on a phone. */
-ol.funnel { list-style:none; margin:1.6rem 0 0; padding:0 0 3.8rem; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:0 36px; position:relative }
+ol.funnel { list-style:none; margin:1.6rem 0 0; padding:0 0 3.8rem; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); --gap:36px; gap:0 var(--gap); position:relative }
 ol.funnel li { position:relative; text-align:center; font-size:.93rem; display:flex; flex-direction:column }
 ol.funnel .stat { display:block; font:700 1.25rem/1.2 Georgia,serif; color:var(--accent); margin-bottom:.4rem }
 ol.funnel .glyph { display:block; position:relative; max-width:200px; margin:0 auto .7rem }
 ol.funnel svg { display:block; width:100%; height:auto; fill:none }
 ol.funnel b { display:block; font-size:1.02rem; line-height:1.25; margin-bottom:.35rem }
 ol.funnel p { margin:0; color:var(--soft); text-align:left }
-ol.funnel li:not(:last-child) .glyph::after { content:"\2192"; position:absolute; left:100%; top:50%; transform:translate(calc(-50% + (100% * 0) + 18px), -50%); font:1.6rem/1 system-ui,sans-serif; color:var(--accent); width:0; text-align:center; white-space:nowrap }
+ol.funnel li:not(:last-child) .glyph::after { content:"\2192"; position:absolute; left:100%; top:50%; transform:translate(calc(-50% + var(--gap) / 2), -50%); font:1.6rem/1 system-ui,sans-serif; color:var(--accent); width:0; text-align:center; white-space:nowrap }
 ol.funnel li.you .stat { color:var(--ink) }
 /* The return: from under the rating's text, down and back along a line beneath the row, and up
    to an arrowhead under the filter's text. The legs fill each column from its text to the row's
@@ -151,10 +145,10 @@ ol.funnel .leg::after { content:""; position:absolute; top:0; bottom:0; left:50%
 ol.funnel .leg.up::before { content:""; position:absolute; top:3px; left:50%; width:11px; height:11px; border-top:2px solid var(--accent); border-left:2px solid var(--accent);
   transform:translateX(-50%) rotate(45deg) }
 ol.funnel .leg.up::after { top:2px }
-ol.funnel .back { position:absolute; top:100%; right:50%; width:calc(300% + 110px); height:30px; margin-right:-1px;
+ol.funnel .back { position:absolute; top:100%; right:50%; width:calc(300% + 3 * var(--gap) + 2px); height:30px; margin-right:-1px;
   border:2px solid var(--accent); border-top:0; border-radius:0 0 14px 14px; pointer-events:none }
 
-/* The household: four points in a row, each under its rule, like the steps of a morning. */
+/* The household: four points in a row, each under its rule. */
 ul.household { list-style:none; margin:1.4rem 0 0; padding:0; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:28px }
 ul.household li { border-top:2px solid var(--ink); padding-top:.8rem }
 ul.household b { display:block; font-size:1.05rem; margin-bottom:.3rem }
@@ -173,16 +167,13 @@ details.group summary b { font-size:1.08rem }
 details.group summary span { display:block; color:var(--soft); font-size:.98rem }
 details.group .body { padding:0 0 1.2rem 1.7rem; max-width:44em }
 details.group .body > p:last-child { margin-bottom:0 }
-details.group ol.morning { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px 28px; margin-bottom:1.2rem }
 details.group .pages { max-width:none; margin-top:.4rem }
 details.group:has(.pages) .body { max-width:none }
 details.group .pages figure { max-width:44em }
 
-/* Running it: what it needs, as a list. */
+/* Running it: what it needs, as a list, and the commands. */
 ul.needs { margin:0 0 1em; padding-left:1.2em }
 ul.needs li { margin:0 0 .4em }
-
-/* Running it. */
 pre { margin:1.2rem 0; padding:1rem 1.2rem; background:var(--card); border:1px solid var(--line); border-radius:6px;
   font:.92rem/1.55 ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace; overflow-x:auto; color:var(--ink) }
 pre .c { color:var(--soft) }
@@ -196,9 +187,8 @@ footer .by { line-height:1 }
 
 @media (max-width:900px) {
   .hero .wrap { grid-template-columns:1fr }
-  .hero { padding-bottom:64px }
   .duo { max-width:520px; margin:0 auto }
-  ol.morning, .readers, .pages, ul.household { grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .readers, .pages, ul.household { grid-template-columns:repeat(2,minmax(0,1fr)) }
   ol.funnel { grid-template-columns:1fr; gap:40px; padding-bottom:1.8rem; max-width:420px }
   ol.funnel li:not(:last-child) .glyph::after { display:none }
   ol.funnel li:not(:last-child)::after { content:"\2193"; position:absolute; left:50%; bottom:-36px; transform:translateX(-50%); font:1.6rem/1 system-ui,sans-serif; color:var(--accent) }
@@ -211,7 +201,7 @@ footer .by { line-height:1 }
   .kindle { padding:12px 12px 34px; border-radius:12px }
   .duo .kindle { padding:8px 8px 22px; border-radius:10px }
   .duo figcaption { margin-top:1rem }
-  ol.morning, .readers, .pages, ul.household, details.group ol.morning { grid-template-columns:1fr }
+  .readers, .pages, ul.household { grid-template-columns:1fr }
   details.group summary, details.group .body { padding-left:1.5rem }
   section { padding:36px 0 }
   section + section .wrap { padding-top:36px }
@@ -245,11 +235,11 @@ footer .by { line-height:1 }
 </div>
 </div>
 <figure class="duo">
-<div class="kindle" aria-hidden="true"><img src="images/kindle-cover.webp" width="1264" height="1680" alt="" fetchpriority="high"></div>
+<div class="kindle" aria-hidden="true"><img src="images/kindle-cover.webp" width="1264" height="1680" alt=""></div>
 <div class="phone"><div class="screen"><div class="chrome" aria-hidden="true">
 <div class="status"><span class="time">7:12</span><span class="island"></span><span class="signs"><svg viewBox="0 0 20 12"><rect x="0" y="8" width="3" height="4" rx=".6"/><rect x="5" y="5.5" width="3" height="6.5" rx=".6" opacity=".35"/><rect x="10" y="3" width="3" height="9" rx=".6" opacity=".35"/><rect x="15" y="0" width="3" height="12" rx=".6" opacity=".35"/></svg><svg viewBox="0 0 24 17"><path d="M12 3.5a14 14 0 0 1 9.6 3.8l-1.9 2A11.3 11.3 0 0 0 12 6.2a11.3 11.3 0 0 0-7.7 3.1l-1.9-2A14 14 0 0 1 12 3.5zm0 5.4a8.6 8.6 0 0 1 5.9 2.3l-1.9 2a5.9 5.9 0 0 0-8 0l-1.9-2A8.6 8.6 0 0 1 12 8.9zm0 5.4c1.1 0 2.1.4 2.8 1.1L12 18.5l-2.8-3.1c.7-.7 1.7-1.1 2.8-1.1z"/></svg><span class="battery"></span></span></div>
 <div class="urlbar"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-6h4v6"/></svg><span class="pill"><svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="2.5"/><path d="M13 8h8M3 16h8M16 16a2.5 2.5 0 1 0 0-.01"/></svg>forenoon.yourdomain.com</span><span class="plus">+</span><span class="tabs">7</span><span class="menu"><i></i><i></i><i></i></span></div>
-</div><picture><source media="(prefers-color-scheme: dark)" srcset="images/phone-dark.webp"><img src="images/phone-light.webp" width="780" height="1688" alt="The same issue on a Kindle, as a book with a cover, and on a phone, as the newsstand page with the first story's card"></picture></div></div>
+</div><picture><source media="(prefers-color-scheme: dark)" srcset="images/phone-dark.webp"><img src="images/phone-light.webp" width="780" height="1688" fetchpriority="high" alt="The same issue on a Kindle, as a book with a cover, and on a phone, as the newsstand page with the first story's card"></picture></div></div>
 <figcaption>One morning, two ways to read it: a book on the Kindle, a newsstand on your phone or computer.</figcaption>
 </figure>
 </div>
