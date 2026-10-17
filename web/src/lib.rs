@@ -148,7 +148,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/healthz", get(pages::health))
         .route("/f/{token}", get(feedback::tap));
     let router = icons::FILES.iter().fold(router, |router, &(path, media_type, body)| {
-        router.route(path, get(move || async move { icons::serve(media_type, body) }))
+        router.route(path, get(move || async move { icons::serve(path, media_type, body) }))
     });
     let router = router
         // Signed in or not: it names no page, so it gives nothing away.

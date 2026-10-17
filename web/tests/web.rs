@@ -2430,6 +2430,9 @@ async fn icons_and_the_manifest_need_no_session() {
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         assert_eq!(header(header::CONTENT_TYPE), media_type, "{path}");
         assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400", "{path}");
+        // The share card may be shown on another site's page; nothing else may.
+        let policy = if path == "/og.png" { "cross-origin" } else { "same-origin" };
+        assert_eq!(header(header::HeaderName::from_static("cross-origin-resource-policy")), policy, "{path}");
     }
     // Every icon the manifest names is served, and the page lets the browser load the manifest.
     let manifest = Browser::default().get(&site, "/manifest.webmanifest").await.text;
