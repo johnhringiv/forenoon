@@ -1111,11 +1111,16 @@ async fn a_follow_made_for_a_reader_holds_nothing_until_they_choose_it() {
     );
     let text = carl.get(&site, "/sources").await.text;
     let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
-    assert!(row.contains(">New</span>") && row.contains("+ Follow") && !row.contains("Added for you"), "{row}");
+    assert!(
+        row.contains(">New</span>") && row.contains("+ Follow</button>") && !row.contains(r#"class="dot"#),
+        "{row}"
+    );
     assert!(!text.contains(r#"name="follow_new" value="1" checked"#));
     let text = admin.get(&site, "/sources").await.text;
     let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
-    assert!(row.contains("Added for you") && !row.contains(">New</span>"), "{row}");
+    // A follow made for him: a ring, its tooltip saying so, and Keep it in the opened row.
+    assert!(row.contains(r#" ring" role="img" title="Added for you: open it and keep it to make it yours. "#), "{row}");
+    assert!(row.contains("Keep it</button>") && !row.contains(">New</span>") && !row.contains("+ Follow"), "{row}");
 
     // A follow made for the admin holds nothing: Mary still changes her feed.
     let rename =
@@ -1130,9 +1135,16 @@ async fn a_follow_made_for_a_reader_holds_nothing_until_they_choose_it() {
     assert_eq!(chosen("carl", id).await, Some(true));
     let text = carl.get(&site, "/sources").await.text;
     let row = text.split(&format!(r#"id="s-{id}""#)).nth(1).unwrap().split("</details>").next().unwrap();
-    assert!(row.contains("✓ Following") && !row.contains(">New</span>"), "{row}");
+    assert!(
+        row.contains(r#"role="img" title="Following. "#) && !row.contains(" ring\"") && !row.contains("Keep it"),
+        "{row}"
+    );
     let gone = mary.post(&site, &format!("/sources/{id}/delete"), &[("csrf", &mary_csrf)]).await;
     assert!(gone.status == StatusCode::FORBIDDEN && gone.text.contains("Another reader follows this feed"));
+    assert!(
+        gone.text.contains(r#"<p class="error">"#) && gone.text.contains("Add a feed"),
+        "the page, not a bare error"
+    );
     assert_eq!(mary.post(&site, &format!("/sources/{id}"), &rename).await.status, StatusCode::FORBIDDEN);
     let gone = admin.post(&site, &format!("/sources/{id}/delete"), &[("csrf", &admin_csrf)]).await;
     assert_eq!(gone.status, StatusCode::FORBIDDEN);
@@ -1340,7 +1352,11 @@ async fn a_readers_feed_is_private_until_shared_and_the_household_shares_session
     // A form loaded while the feed was hers alone, sent after someone followed, is refused
     // rather than half-applied.
     let stale = mary.post(&site, &format!("/sources/{}", mine.id), &edit).await;
-    assert!(stale.status == StatusCode::FORBIDDEN && stale.text.contains("Someone else follows this feed now"));
+    assert!(stale.status == StatusCode::FORBIDDEN && stale.text.contains("Another reader chose to follow this feed"));
+    assert!(
+        stale.text.contains(r#"<p class="error">"#) && stale.text.contains("Add a feed"),
+        "the page, not a bare error"
+    );
 
     // A session is the household's: Mary, with a feed on the site, saves it; Carl, following
     // that feed, sees it is there but cannot remove it; an admin can. Nobody without a feed on

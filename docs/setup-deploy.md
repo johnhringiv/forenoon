@@ -1,7 +1,9 @@
 # Deployment (docker compose)
 
-Target: a NAS or any small x86-64 Linux box. These steps were written for Phase 0 and have
-not yet been run on a NAS; report anything that does not match.
+Target: a NAS or any small x86-64 Linux box. These steps use docker compose;
+`deploy/deploy.sh` starts the same containers with plain `docker run` (named `forenoon`,
+`forenoon-web`, `forenoon-browser`, `forenoon-cloudflared`) for hosts where compose is not an
+option. Report anything that does not match.
 
 ## 1. Folder and user
 
@@ -170,10 +172,11 @@ from their own image. Without at least one reader the daily run delivers nothing
 3. So the pages can email you (to confirm your address and to reset a forgotten password),
    `FORENOON_WEB_URL` in `.env` is the address you open the pages at. They go through the
    mail server already set there. Without one these emails are written to the container's
-   log (`docker logs forenoon-web`), which is enough on a one-person install.
+   log (`docker compose logs web`), which is enough on a one-person install.
 4. Create your reader. You sign in with the email address; the id names you in the
    pipeline's records. You are asked for a password of at least 10 characters:
-   `sudo docker exec -it forenoon-web forenoon-web add-user <id> --email <you>@example.com --kindle <you>@kindle.com`
+   `sudo docker compose exec web forenoon-web add-user <id> --email <you>@example.com --kindle <you>@kindle.com`
+   (under `deploy.sh`: `sudo docker exec -it forenoon-web forenoon-web add-user …`)
    The first account is an admin. Dates are shown in the container's `TZ` unless you pass
    `--timezone`. Everyone else is invited from the **Accounts** page once you are signed in:
    they get an emailed link, choose their own password and Kindle address, and start by
@@ -182,8 +185,8 @@ from their own image. Without at least one reader the daily run delivers nothing
 5. Open the public address and sign in. A banner asks you to confirm your address: press
    **Send it again** and open the link in the email. Everything works before you do, but a
    forgotten password can only be reset through a confirmed address.
-6. On **Account**, write your interests and set the stories a day. Changes apply from the
-   next run.
+6. On **Reading**, write your interests, set the stories a day and how your issue is made.
+   Changes apply from the next run.
 7. On **Sources**, add the feeds to read; a reader who follows none gets nothing. A feed is
    the adder's alone until shared with the household; an admin sees every one.
    Hacker News and Lobsters are built in and can be switched off there. Sessions for sites

@@ -77,6 +77,7 @@ picks are links on the newsstand.
 ## When something goes wrong
 
 - The session's row on the Sources page shows how its last page went.
-  `sudo docker logs forenoon-browser` shows every page fetched.
+  `sudo docker compose logs browser` (`sudo docker logs forenoon-browser` under
+  `deploy.sh`) shows every page fetched.
 - A run that waits for a page and gets no answer says the browser container is not running,
   and stops asking for ten minutes. Picks from the site are shown as links meanwhile.

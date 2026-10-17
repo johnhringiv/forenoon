@@ -11,7 +11,7 @@ on the reader's account page in the web pages (or `forenoon-web add-user <id> --
 ## 2. Approve the sender
 
 On the same page, under _Approved Personal Document E-mail List_, add the exact address you
-set as `smtp.sender`. Mail from any other address is not delivered. Every reader's Kindle
+set as `FORENOON_SMTP_SENDER` in `.env`. Mail from any other address is not delivered. Every reader's Kindle
 needs this; the Kindle fields in the web pages name the address and link to the page. The first time, Amazon
 may email the account owner asking to verify the request; confirm it within 48 hours.
 
@@ -28,6 +28,9 @@ FORENOON_SMTP_USERNAME=resend   # literally "resend"; the API key is the passwor
 FORENOON_SMTP_SENDER=digest@your-domain.example
 FORENOON_SMTP_PASSWORD=...      # the API key
 ```
+
+Port 587 upgrades the connection with STARTTLS. For a relay that wants TLS from the start
+(port 465), also set `FORENOON_SMTP_IMPLICIT_TLS=true`. Mail is never sent in plain text.
 
 Things to check when choosing a relay (figures as of October 2026; verify before relying on
 them):
@@ -58,9 +61,8 @@ sent either; the failure is still in the container log and the run report.
 
 As of October 2026, Amazon accepts up to 25 attachments per email and 50 MB; sources differ
 on whether 50 MB is per attachment or per email, so Forenoon treats it as per email
-and stays under it (`smtp.max_message_bytes`, default 45 MB after encoding, and
-`smtp.max_attachments`, default 25). Lower `max_message_bytes` if your relay's own limit is
-smaller. A day's articles are packed into as few emails as these limits allow.
+and stays under it: 45 MiB after encoding (`FORENOON_SMTP_MAX_MESSAGE_BYTES` in `.env`
+changes it) and 25 attachments (fixed). Lower the size if your relay's own limit is smaller. A day's articles are packed into as few emails as these limits allow.
 
 ## Test
 

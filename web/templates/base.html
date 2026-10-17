@@ -213,13 +213,10 @@ details.row[open] > summary { border-bottom:1px solid var(--line) }
 details.row > form, details.row > div { padding:.8rem .9rem }
 details.row.paused > summary { opacity:.6 }
 details.row.unfollowed > summary .name { color:var(--soft) }
-/* The follow state before a feed's name: a button to follow, a faint one for a follow made for
-   the reader, plain text once they chose it. Pressing the button does not open the row. */
+/* A feed this reader does not follow starts with a button to follow it, in place of its dot. */
 details.row > summary form.follow { margin:0 }
-.follow { font-size:.75rem; min-width:6.5rem; text-align:center; padding:.1rem .45rem; border-radius:3px }
+.follow { font-size:.75rem; padding:.1rem .45rem; border-radius:3px }
 button.follow.none { border:1.5px solid var(--accent); color:var(--accent); font-weight:600 }
-button.follow.made { border:1px dashed var(--line); color:var(--soft) }
-span.follow.chosen { color:var(--ink); font-weight:600 }
 .tag.new { border-color:var(--accent); color:var(--accent) }
 form.switch { display:flex; flex-wrap:wrap; gap:.4rem .8rem; align-items:center; margin:.6rem 0; font-size:.85rem }
 details.row .name { font:700 1.02rem Georgia,serif }
@@ -227,12 +224,16 @@ details.row .addr { color:var(--soft); font-size:.82rem; min-width:0; max-width:
   text-overflow:ellipsis; white-space:nowrap }
 details.row .tags { margin-left:auto; display:flex; flex-wrap:wrap; gap:.3rem; font-size:.74rem; color:var(--soft) }
 details.row .state { flex-basis:100%; margin:0; font-size:.8rem; color:var(--soft) }
-.dot { flex:none; width:.6rem; height:.6rem; border-radius:50%; background:var(--ok) }
-.dot.bad { background:var(--bad) }
-.dot.wait { background:var(--warn) }
-.dot.off { background:var(--line) }
-.dot.none { background:none; border:1px solid var(--line) }
-form.settings label.tick { flex-direction:row; align-items:center; gap:.45rem }
+/* A source's dot: its colour is how its last run went, its shape whether this reader follows it
+   by choice (filled) or had it followed for them (a ring). Its tooltip says both. */
+.dot { flex:none; width:.7rem; height:.7rem; border-radius:50%; color:var(--ok); background:currentColor }
+.dot.bad { color:var(--bad) }
+.dot.wait { color:var(--warn) }
+.dot.off { color:var(--line) }
+.dot.none { color:var(--soft); opacity:.45 }
+.dot.ring { background:none; box-shadow:inset 0 0 0 2px currentColor }
+.key { display:inline-flex; align-items:center; gap:.3rem }
+form.settings label.tick, form.sheet label.tick { flex-direction:row; align-items:center; gap:.45rem }
 form.settings h2 { margin-top:1.2rem }
 form.settings select { padding:.45rem .55rem }
 .failing { color:var(--bad) }
