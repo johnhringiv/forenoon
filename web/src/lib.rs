@@ -8,6 +8,7 @@ pub mod db;
 pub mod feedback;
 mod hex;
 pub mod icons;
+pub mod landing;
 pub mod limit;
 pub mod mail;
 pub mod pages;
@@ -61,6 +62,9 @@ pub struct Options {
     /// The address issues are sent from (`FORENOON_SMTP_SENDER`), which every Kindle must
     /// approve; shown beside the Kindle address fields. `None` when it is not set.
     pub sender: Option<String>,
+    /// The hostname the landing page is served at (`FORENOON_WEB_LANDING`); see `landing`.
+    /// `None` for an ordinary install.
+    pub landing: Option<String>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -154,6 +158,11 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     let public = options.secure_cookies.then(|| pages::PublicAddress::new(&options.base_url, state.proxy.clone()));
     let router = match public.flatten() {
         Some(public) => router.layer(middleware::from_fn_with_state(public, pages::to_public_address)),
+        None => router,
+    };
+    // Outside everything: the landing host is decided on before any other layer sees the request.
+    let router = match options.landing {
+        Some(host) => router.layer(middleware::from_fn_with_state(Arc::<str>::from(host), landing::gate)),
         None => router,
     };
     Ok(router.with_state(state))

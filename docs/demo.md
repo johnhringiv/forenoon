@@ -161,9 +161,20 @@ names and one-line descriptions there in step with this page.
 
 ## The landing page
 
-`site/` is the whole of forenoon.dev: one HTML file with its styles inline, no scripts, and
-the pictures beside it. It is published by Cloudflare Pages from this repository with no build
-step and `site` as the output directory, so a merge to `main` is a deploy. The Kindle pictures
-are the device's own screenshots (1264 by 1680) saved as WebP; the newsstand picture is the
-README's, taken with `tools/screenshots.py`, and should be retaken from a persona's demo host
-once the demo install runs, so that it shows the persona switcher rather than an admin's pages.
+The landing page is served by the web program itself, at the hostname in
+`FORENOON_WEB_LANDING` (`forenoon.dev`), so the public site is the same deploy as the demo
+behind it and needs nothing else running. It is one HTML page with its styles inline and no
+scripts, built into the binary from `web/site` with its pictures: a merge to `main` that
+changes it reaches the site with the next image. Only the page, its pictures, the icons and
+the health check answer on that host; everything else there is 404. The Kindle pictures are the
+device's own screenshots (1264 by 1680) saved as WebP; the newsstand picture is the README's,
+taken with `tools/screenshots.py`, and should be retaken from a persona's demo host once the
+demo install runs, so that it shows the persona switcher rather than an admin's pages.
+
+Route the landing hostname to the web pages like the persona hostnames. The page and the
+persona pages carry `Cache-Control: public`, so Cloudflare's cache serves a busy day; and when
+the deploy is down (the NAS rebooting, the tunnel gone) a Cloudflare Worker,
+`deploy/cloudflare/outage-worker.js`, shows a page saying so in place of Cloudflare's error
+screen, as gotflashes does. It passes every other answer through, the pages' own errors
+included. Deploy it once with `npx wrangler deploy` from that folder; its routes cover
+`forenoon.dev` and every subdomain.

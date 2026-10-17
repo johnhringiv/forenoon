@@ -67,6 +67,11 @@ async fn site(with_pipeline: bool) -> Site {
 }
 
 async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
+    site_landing(with_pipeline, secure_cookies, None).await
+}
+
+/// `landing`: the hostname the landing page is served at, as `FORENOON_WEB_LANDING` names it.
+async fn site_landing(with_pipeline: bool, secure_cookies: bool, landing: Option<&str>) -> Site {
     let folder = tempfile::tempdir().unwrap();
     let pool = db::open(&folder.path().join("forenoon.sqlite3")).await.unwrap();
     if with_pipeline {
@@ -93,6 +98,7 @@ async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
         },
         feedback_secret: Some(FEEDBACK_SECRET.to_vec()),
         sender: Some("issues@example.com".to_owned()),
+        landing: landing.map(str::to_owned),
     };
     let router = app(pool.clone(), options).await.unwrap();
     Site { router, pool, mail, folder }
@@ -2457,4 +2463,44 @@ async fn a_shared_link_previews_with_the_sites_card() {
     ] {
         assert!(page.text.contains(tag), "{tag}");
     }
+}
+
+#[tokio::test]
+async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
+    let site = site_landing(true, false, Some("forenoon.test")).await;
+    let get = async |host: &str, path: &str| {
+        let request = Request::get(path).header(header::HOST, host).body(Body::empty()).unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        let text = |name: &str| {
+            response.headers().get(name).map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default()
+        };
+        let headers = (text("content-type"), text("cache-control"), text("x-robots-tag"), text("set-cookie"));
+        let has_csp = response.headers().contains_key(header::CONTENT_SECURITY_POLICY);
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, headers, has_csp, String::from_utf8_lossy(&body).into_owned())
+    };
+    // The page, to anyone, meant to be found and kept by a cache; dressed like every other answer.
+    let (status, (kind, cache, robots, cookie), csp, page) = get("Forenoon.Test:443", "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(kind.starts_with("text/html") && cache == "public, max-age=300" && robots.is_empty() && cookie.is_empty());
+    assert!(csp && page.contains("A morning paper for your e-reader"), "{page}");
+    // Its pictures, and the icons it names.
+    let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;
+    assert!(status == StatusCode::OK && kind == "image/webp" && cache.starts_with("public"));
+    assert_eq!(get("forenoon.test", "/favicon.ico").await.0, StatusCode::OK);
+    assert_eq!(get("forenoon.test", "/healthz").await.0, StatusCode::OK);
+    // Nothing else on that host, the sign-in page included.
+    for path in ["/login", "/archive", "/images/nope.webp", "/thumb/a1", "/f/x"] {
+        let (status, _, csp, _) = get("forenoon.test", path).await;
+        assert!(status == StatusCode::NOT_FOUND && csp, "{path}");
+    }
+    let post = Request::post("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(site.router.clone().oneshot(post).await.unwrap().status(), StatusCode::NOT_FOUND);
+    // The install's own address is as it was.
+    assert!(Browser::default().get(&site, "/").await.status.is_redirection());
+    // Over https, the landing host is an address of its own, not sent to the public one.
+    let secure = site_landing(true, true, Some("forenoon.test")).await;
+    let request = Request::get("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }

@@ -1,0 +1,12 @@
+# The outage page for forenoon.dev (outage-worker.js). Deploy with `npx wrangler deploy`
+# from this folder, signed in to the Cloudflare account that holds the zone. The Worker
+# answers for the landing page and every persona host; it passes everything through
+# unless the origin is down.
+name = "forenoon-outage"
+main = "outage-worker.js"
+compatibility_date = "2026-10-01"
+
+routes = [
+  { pattern = "forenoon.dev/*", zone_name = "forenoon.dev" },
+  { pattern = "*.forenoon.dev/*", zone_name = "forenoon.dev" },
+]

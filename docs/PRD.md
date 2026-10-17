@@ -820,6 +820,10 @@ database with the pipeline.
   serve it, only to a reader the article was delivered to. A card falls back to the
   article's own lead image address when there is no thumbnail, and has no picture when the
   article has none. `forenoon thumbs` makes thumbnails for articles delivered earlier.
+- **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
+  built into the program from `web/site`, is served at that hostname with its pictures, the
+  icons and the health check; everything else there is 404. It is the one page meant to be
+  indexed, and it carries `Cache-Control: public, max-age=300`. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the

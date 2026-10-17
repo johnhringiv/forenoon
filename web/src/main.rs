@@ -66,6 +66,10 @@ enum Command {
         /// container can read, never one inside the data folder. Without it, sessions cannot be saved.
         #[arg(long, env = "FORENOON_LOGINS_DIR")]
         logins_dir: Option<PathBuf>,
+        /// The hostname the project's landing page (built into this program) is served at,
+        /// for the public site: forenoon.dev. Route it here as well. Empty for an ordinary install.
+        #[arg(long, env = "FORENOON_WEB_LANDING", default_value = "")]
+        landing: String,
     },
     /// Create an account. The id names the reader in the pipeline's records and never changes.
     AddUser {
@@ -151,6 +155,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             smtp_username,
             smtp_sender,
             logins_dir,
+            landing,
         } => {
             if db::user_count(&pool).await? == 0 {
                 eprintln!("No accounts yet. Create one with: forenoon-web add-user <id> --email <address>");
@@ -193,8 +198,19 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 secret => Some(secret.into_bytes()),
             };
             let sender = Some(smtp_sender).filter(|sender| !sender.is_empty());
-            let options =
-                Options { secure_cookies, mailer, base_url, data_dir, logins_dir, proxy, feedback_secret, sender };
+            let landing =
+                forenoon_web::landing::host(&landing).map_err(|problem| format!("FORENOON_WEB_LANDING: {problem}"))?;
+            let options = Options {
+                secure_cookies,
+                mailer,
+                base_url,
+                data_dir,
+                logins_dir,
+                proxy,
+                feedback_secret,
+                sender,
+                landing,
+            };
             let router = app(pool, options).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             eprintln!("listening on {listen}");

@@ -134,7 +134,11 @@ pub(crate) fn refused(status: StatusCode, message: &'static str) -> Page {
 }
 
 pub async fn security_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
+    secured(next.run(request).await)
+}
+
+/// The response with the headers every one of ours carries.
+pub fn secured(mut response: Response) -> Response {
     let headers = response.headers_mut();
     for (name, value) in [
         (
