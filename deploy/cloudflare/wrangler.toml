@@ -1,5 +1,5 @@
 # The outage page for forenoon.dev (outage-worker.js). CI deploys it on a merge to main that
-# changes web/site or this folder (.github/workflows/outage-worker.yml); by hand, it is
+# changes web/site, web/icons or this folder (.github/workflows/outage-worker.yml); by hand, it is
 # `npx wrangler deploy` from this folder, signed in to the Cloudflare account that holds the
 # zone. The Worker answers for the landing page and every persona host, passes everything
 # through unless the origin is down, and then serves the landing page from the copy of
