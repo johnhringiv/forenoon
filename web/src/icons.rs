@@ -20,7 +20,20 @@ pub const FILES: &[(&str, &str, &[u8])] = &[
     ("/manifest.webmanifest", "application/manifest+json", include_bytes!("../icons/manifest.webmanifest")),
 ];
 
+/// The share card is shown on other sites, by a chat's or a preview tool's page: its response
+/// says so, where every other one of ours refuses (`pages::secured`).
+const SHARED: &[&str] = &["/og.png"];
+
 /// Kept for a day: the addresses never change, so a new icon shows within a day of a release.
-pub fn serve(media_type: &'static str, body: &'static [u8]) -> Response {
-    ([(header::CONTENT_TYPE, media_type), (header::CACHE_CONTROL, "public, max-age=86400")], body).into_response()
+pub fn serve(path: &'static str, media_type: &'static str, body: &'static [u8]) -> Response {
+    let policy = if SHARED.contains(&path) { "cross-origin" } else { "same-origin" };
+    (
+        [
+            (header::CONTENT_TYPE, media_type),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+            (header::HeaderName::from_static("cross-origin-resource-policy"), policy),
+        ],
+        body,
+    )
+        .into_response()
 }

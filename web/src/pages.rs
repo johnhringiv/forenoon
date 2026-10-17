@@ -250,13 +250,14 @@ pub fn secured(mut response: Response) -> Response {
         (header::REFERRER_POLICY, "same-origin"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
-        // No other site's window keeps a handle on ours, and none can load our responses
-        // (thumbnails included) into its own pages.
+        // No other site's window keeps a handle on ours.
         (header::HeaderName::from_static("cross-origin-opener-policy"), "same-origin"),
-        (header::HeaderName::from_static("cross-origin-resource-policy"), "same-origin"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+    // No other site can load our responses (thumbnails included) into its own pages, unless the
+    // handler said so: the share card is for other sites to show.
+    headers.entry("cross-origin-resource-policy").or_insert(HeaderValue::from_static("same-origin"));
     // Pages are never stored; a thumbnail sets its own, so it is not fetched again on every visit.
     headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
