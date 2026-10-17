@@ -658,6 +658,7 @@ pub struct Shelved {
     pub author: String,
     pub word_count: i64,
     pub description: String,
+    pub image_url: String,
     pub delivered_at: Option<String>,
     /// When the reader added it by hand, and what they asked for: next, now or keep.
     pub added_at: Option<String>,
@@ -726,7 +727,7 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
     on_shelf!(
         query_as!(Shelved,),
         shelf,
-        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description,
+        r#"SELECT a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count, a.description, a.image_url,
            d.delivered_at AS "delivered_at?",
            (SELECT m.requested_at FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id
                      AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS "added_at?: String",
