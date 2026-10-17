@@ -5,6 +5,20 @@
 // Everything else, the pages' own errors included, passes through untouched. Deployed with
 // wrangler.toml beside this file; see docs/demo.md.
 
+// The landing page's icons and share card, from web/icons (the rules in wrangler.toml bundle
+// them): the assets folder is web/site alone.
+import favicon from "../../web/icons/favicon.ico";
+import iconSvg from "../../web/icons/icon.svg";
+import appleTouchIcon from "../../web/icons/apple-touch-icon.png";
+import og from "../../web/icons/og.png";
+
+const ICONS = {
+  "/favicon.ico": [favicon, "image/x-icon"],
+  "/icon.svg": [iconSvg, "image/svg+xml"],
+  "/apple-touch-icon.png": [appleTouchIcon, "image/png"],
+  "/og.png": [og, "image/png"],
+};
+
 // What counts as the origin being down, not the application failing: the tunnel or the
 // container gone (Cloudflare answers the fetch with one of its 52x or 530 statuses rather than
 // throwing), or a gateway in front of the pages with no live backend (502 to 504). A 500 is
@@ -27,6 +41,10 @@ export default {
 async function outage(request, env) {
   const url = new URL(request.url);
   if (url.hostname === LANDING_HOST) {
+    const icon = ICONS[url.pathname];
+    if (icon) {
+      return new Response(icon[0], { headers: { "content-type": icon[1], "cache-control": "no-store" } });
+    }
     // The page and its pictures, from the edge's copy; the page with its notice.
     const asset = await env.ASSETS.fetch(request);
     if (!asset.ok) {

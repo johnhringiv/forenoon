@@ -179,7 +179,8 @@ deploy is down (the NAS rebooting, the tunnel gone), a Cloudflare Worker,
 serves the landing page itself from a copy of `web/site` bundled with the Worker, with a line
 under the masthead saying the demo behind its links is away; on a persona host it shows a
 short notice. It passes every other answer through, the pages' own errors included. The copy is
-taken at deploy time, so a merge to `main` that changes `web/site` or `deploy/cloudflare`
-deploys the Worker again (`.github/workflows/outage-worker.yml`, with the Cloudflare API token
-and account id as repository secrets); `npx wrangler deploy` from that folder does the same by
+taken at deploy time, so a merge to `main` that changes `web/site`, `web/icons` or
+`deploy/cloudflare` deploys the Worker again (`.github/workflows/outage-worker.yml`, with the
+Cloudflare API token and account id as repository secrets; the token needs Workers Scripts: Edit
+on the account, and Workers Routes: Edit and Zone: Read on the forenoon.dev zone); `npx wrangler deploy` from that folder does the same by
 hand. Its routes cover `forenoon.dev` and every subdomain.

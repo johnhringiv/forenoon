@@ -1,14 +1,17 @@
 name: Outage Worker
 
 # The outage Worker (deploy/cloudflare) serves a copy of the landing page when the deploy is
-# down, bundled from web/site at deploy time. A merge that changes either folder deploys it
-# again, so the copy never goes stale. Needs two repository secrets: CLOUDFLARE_API_TOKEN (a
-# token with Workers Scripts edit on the one account) and CLOUDFLARE_ACCOUNT_ID.
+# down, bundled from web/site and web/icons at deploy time. A merge that changes any of those
+# folders deploys it again, so the copy never goes stale. Needs two repository secrets:
+# CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN, a token with Account > Workers Scripts: Edit
+# on the one account and, on the forenoon.dev zone, Zone > Workers Routes: Edit and Zone: Read
+# (the deploy writes the Worker's routes).
 on:
   push:
     branches: [main]
     paths:
       - "web/site/**"
+      - "web/icons/**"
       - "deploy/cloudflare/**"
       - ".github/workflows/outage-worker.yml"
   workflow_dispatch:
@@ -31,5 +34,5 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: deploy/cloudflare
-          # The action's own default is wrangler 3, which does not know [assets] run_worker_first.
+          # The action's default (wrangler 3.90) predates [assets] run_worker_first.
           wranglerVersion: "4"
