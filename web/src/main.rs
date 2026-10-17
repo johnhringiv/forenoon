@@ -236,7 +236,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             let kindle = auth::kindle_addresses(&kindle.join("\n"))?;
             let hash = auth::hash_password(read_password()?).await?;
             db::add_user(&pool, &id, &email, name.as_deref().unwrap_or(&id), &hash, &role, &timezone).await?;
-            db::set_kindle(&pool, &id, &kindle.join("\n"), true).await?;
+            db::set_kindle(&pool, &id, &kindle.join("\n"), true, true).await?;
             if !follow_nothing {
                 db::follow_shared(&pool, &id).await?;
             }
@@ -265,7 +265,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
         }
         Command::Users => {
             for user in db::list_users(&pool).await? {
-                let kindle = user.kindle_addresses.lines().collect::<Vec<_>>().join(", ");
+                let kindle = db::kindle_line(&user);
                 let email = match (&user.email, &user.email_verified_at, &user.invited_at) {
                     (Some(email), _, Some(_)) => format!("{email} (invited, not yet joined)"),
                     (Some(email), Some(_), None) => format!("{email} (confirmed)"),

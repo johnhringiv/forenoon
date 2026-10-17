@@ -38,6 +38,8 @@
 {% else if rows.is_empty() %}<p class="empty">{% if filtered %}No articles match.{% else %}Nothing here yet.{% endif %}</p>{% endif %}
 {% for card in rows %}
 <div class="shelf" id="a-{{ card.id }}">
+{% if let Some(image) = card.image %}<img src="{{ image }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<div class="nopic" aria-hidden="true"></div>{% endif %}
+<div class="body">
 <p class="kicker">{{ card.kicker }}</p>
 <h4>{% if let Some(link) = card.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ card.title }}</a>{% else %}{{ card.title }}{% endif %}</h4>
 {% if let Some(desc) = card.desc %}<p class="desc">{{ desc }}</p>{% endif %}
@@ -57,6 +59,7 @@
 {% if !card.refreshing %}<button class="link">Fetch again</button>{% endif %}
 {% if let Some(refreshed) = card.refreshed %}<span>{{ refreshed }}</span>{% endif %}
 </form>
+</div>
 </div>
 {% endfor %}
 {% if newer.is_some() || older.is_some() %}<nav class="pager">
