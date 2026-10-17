@@ -18,8 +18,8 @@ you can say what you thought without leaving your e-reader, and your ratings sha
 day's choices.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/newsstand-dark.webp">
-  <img src="docs/images/newsstand-light.webp" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and 1 to 5 rating buttons">
+  <source media="(prefers-color-scheme: dark)" srcset="web/site/images/newsstand-dark.webp">
+  <img src="web/site/images/newsstand-light.webp" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and 1 to 5 rating buttons">
 </picture>
 
 ## What it does
@@ -59,37 +59,37 @@ What it does today is described in full in [docs/PRD.md](docs/PRD.md).
 What you want to read, in your own words, and how your issue is made:
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/reading-dark.webp">
-  <img src="docs/images/reading-light.webp" alt="The Reading page: interests in plain English, stories a day, one book or one per article, and room for a surprise">
+  <source media="(prefers-color-scheme: dark)" srcset="web/site/images/reading-dark.webp">
+  <img src="web/site/images/reading-light.webp" alt="The Reading page: interests in plain English, stories a day, one book or one per article, and room for a surprise">
 </picture>
 
 Sources: feeds the household shares or keeps private, Hacker News and Lobsters built in,
 and where each article's text comes from:
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/sources-dark.webp">
-  <img src="docs/images/sources-light.webp" alt="The Sources page: built-in front pages, feed rows with their follow state and tags">
+  <source media="(prefers-color-scheme: dark)" srcset="web/site/images/sources-dark.webp">
+  <img src="web/site/images/sources-light.webp" alt="The Sources page: built-in front pages, feed rows with their follow state and tags">
 </picture>
 
 On a phone:
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/phone-dark.webp">
-  <img src="docs/images/phone-light.webp" alt="The Newsstand on a phone" width="300">
+  <source media="(prefers-color-scheme: dark)" srcset="web/site/images/phone-dark.webp">
+  <img src="web/site/images/phone-light.webp" alt="The Newsstand on a phone" width="300">
 </picture>
 
 On the Kindle: the day's issue in the library, its contents with stories grouped and the
 reason for each pick, and an article:
 
 <p>
-  <img src="docs/images/kindle-cover.webp" alt="The issue's cover in the Kindle library: the date, the day's size and its lead headlines" width="260">
-  <img src="docs/images/kindle-contents.webp" alt="The issue's contents page: each story with its source, reading time and why it was picked, related articles listed under it" width="260">
-  <img src="docs/images/kindle-article.webp" alt="An article's first page on the Kindle" width="260">
+  <img src="web/site/images/kindle-cover.webp" alt="The issue's cover in the Kindle library: the date, the day's size and its lead headlines" width="260">
+  <img src="web/site/images/kindle-contents.webp" alt="The issue's contents page: each story with its source, reading time and why it was picked, related articles listed under it" width="260">
+  <img src="web/site/images/kindle-article.webp" alt="An article's first page on the Kindle" width="260">
 </p>
 
 Code in a monospaced font, with long lines wrapped under their own indent rather than cut off:
 
-<img src="docs/images/kindle-code.webp" alt="A Rust function on the Kindle, its long lines wrapped with a hanging indent" width="400">
+<img src="web/site/images/kindle-code.webp" alt="A Rust function on the Kindle, its long lines wrapped with a hanging indent" width="400">
 
 ## Run it locally
 
