@@ -147,8 +147,8 @@ const SEED: &str = include_str!("../demo.json");
 /// Makes what the demo hosts need and the install does not have yet: a reader for each
 /// configured persona the seed file knows, with its interests, and, when the install has no
 /// feeds at all, the shared feeds, followed by every persona. Run on every start, it makes
-/// only what is missing, so a change made later on the pages stands. Returns a line for the
-/// log per thing made or left unmade.
+/// only what is missing and touches nothing else, so a change made later on the pages
+/// stands. Returns a line for the log per thing made or left unmade.
 pub async fn seed(pool: &SqlitePool, personas: &[Persona], timezone: &str) -> Result<Vec<String>, crate::Error> {
     let file: Seed = serde_json::from_str(SEED)?;
     let mut made = Vec::new();
@@ -170,30 +170,17 @@ pub async fn seed(pool: &SqlitePool, personas: &[Persona], timezone: &str) -> Re
         getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
         let hash = auth::hash_password(hex::encode(&bytes)).await?;
         let email = format!("{}@demo.invalid", profile.id);
-        db::add_user(pool, &profile.id, &email, &profile.name, &hash, "reader", timezone).await?;
-        let reading = db::Reading {
-            interests: &profile.interests,
-            daily_stories: 8,
-            format: "issue",
-            explore: true,
-            most_per_subject: 2,
-            show_reasons: true,
-        };
-        db::set_reading(pool, &profile.id, &reading).await?;
-        db::follow_shared(pool, &profile.id).await?;
+        db::add_persona(pool, &profile.id, &email, &profile.name, &hash, timezone, &profile.interests).await?;
         accounts.push(persona.id.as_str());
         made.push(format!("Made reader {} for demo host {}.", profile.id, persona.host));
     }
     if db::feed_count(pool).await? == 0
         && let Some(first) = accounts.first()
     {
-        for feed in &file.feeds {
-            db::add_shared_feed(pool, &feed.name, &feed.url, first).await?;
-        }
-        // Followed for every persona now, once: an unfollow made later on the pages stands.
-        for account in &accounts {
-            db::follow_shared(pool, account).await?;
-        }
+        let feeds: Vec<(&str, &str)> = file.feeds.iter().map(|feed| (feed.name.as_str(), feed.url.as_str())).collect();
+        // Followed by the personas, and only these feeds: a persona made by hand earlier
+        // keeps whatever else it chose to follow or not.
+        db::add_shared_feeds(pool, &feeds, first, &accounts).await?;
         made.push(format!("Added the {} shared feeds from demo.json.", file.feeds.len()));
     }
     Ok(made)

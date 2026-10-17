@@ -193,22 +193,74 @@ pub async fn feed_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar!(r#"SELECT COUNT(*) AS "n: i64" FROM sources WHERE kind = 'rss'"#).fetch_one(pool).await
 }
 
-/// A feed shared with the household from the start, as the demo's are. Its address is
-/// checked by the scheduler within a minute, like one added on the Sources page.
-pub async fn add_shared_feed(pool: &SqlitePool, name: &str, url: &str, added_by: &str) -> Result<i64, sqlx::Error> {
+/// A demo persona: a reader with its interests, following what the household shares, all
+/// in one transaction so that a failure leaves no half-made account for a later start to
+/// skip over.
+pub async fn add_persona(
+    pool: &SqlitePool,
+    id: &str,
+    email: &str,
+    name: &str,
+    password_hash: &str,
+    timezone: &str,
+    interests: &str,
+) -> Result<(), sqlx::Error> {
     let now = now_iso();
-    let row = sqlx::query!(
-        "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared, shared_at)
-         VALUES (?, 'rss', ?, 'auto', 2, 1, ?, 'pending', ?, 1, ?)",
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        "INSERT INTO users (id, email, name, password_hash, role, timezone, created_at, interests)
+         VALUES (?, ?, ?, ?, 'reader', ?, ?, ?)",
+        id,
+        email,
         name,
-        url,
+        password_hash,
+        timezone,
         now,
-        added_by,
-        now
+        interests
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(row.last_insert_rowid())
+    follow_shared_with(&mut tx, id).await?;
+    tx.commit().await
+}
+
+/// Feeds shared with the household from the start, as the demo's are, followed by the
+/// readers named and by nobody else: an existing reader's own choices stand. One
+/// transaction, so the install has all of them or none. Their addresses are checked by the
+/// scheduler within a minute, like one added on the Sources page.
+pub async fn add_shared_feeds(
+    pool: &SqlitePool,
+    feeds: &[(&str, &str)],
+    added_by: &str,
+    followers: &[&str],
+) -> Result<(), sqlx::Error> {
+    let now = now_iso();
+    let mut tx = pool.begin().await?;
+    for (name, url) in feeds {
+        let row = sqlx::query!(
+            "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared, shared_at)
+             VALUES (?, 'rss', ?, 'auto', 2, 1, ?, 'pending', ?, 1, ?)",
+            name,
+            url,
+            now,
+            added_by,
+            now
+        )
+        .execute(&mut *tx)
+        .await?;
+        let id = row.last_insert_rowid();
+        for follower in followers {
+            sqlx::query!(
+                "INSERT OR IGNORE INTO follows (user_id, source_id, pinned, created_at, chosen) VALUES (?, ?, 0, ?, 0)",
+                follower,
+                id,
+                now
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await
 }
 
 /// Whether feeds are followed for this reader when they are shared with the household.

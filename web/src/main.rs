@@ -201,9 +201,13 @@ async fn run(cli: Cli) -> Result<(), Error> {
             let sender = Some(smtp_sender).filter(|sender| !sender.is_empty());
             let demo = forenoon_web::demo::parse(&demo).map_err(|problem| format!("FORENOON_WEB_DEMO: {problem}"))?;
             if !demo.is_empty() {
-                // The personas and their feeds, made the first time the demo hosts are set.
+                // The personas and their feeds: whatever is still missing, so the first start
+                // makes them all and a later one makes nothing.
                 let zone = std::env::var("TZ").ok().filter(|zone| Tz::from_str(zone).is_ok());
-                for line in forenoon_web::demo::seed(&pool, &demo, zone.as_deref().unwrap_or("UTC")).await? {
+                let made = forenoon_web::demo::seed(&pool, &demo, zone.as_deref().unwrap_or("UTC"))
+                    .await
+                    .map_err(|error| format!("making the demo's readers and feeds: {error}"))?;
+                for line in made {
                     eprintln!("{line}");
                 }
             }
