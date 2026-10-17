@@ -85,6 +85,9 @@ pub struct AppState {
     pub taps: Arc<Limiter>,
     /// The address issues are sent from, for the Kindle hints; see `Options::sender`.
     pub sender: Option<String>,
+    /// The hostname the landing page is served at, when there is one; see `Options::landing`.
+    /// On a demo host the wordmark leads back to it.
+    pub landing: Option<String>,
 }
 
 /// Any failure a reader cannot fix: logged here, shown as a plain 500.
@@ -115,6 +118,9 @@ pub(crate) struct Nav {
     pub(crate) problems: i64,
     /// This page: newsstand, archive, reading, sources, settings, problems or account.
     pub(crate) current: &'static str,
+    /// Where the wordmark leads: the newsstand, or on a demo host the landing page a visitor
+    /// came from, scheme-relative like a persona's link (`//forenoon.example/`).
+    pub(crate) home: String,
     /// On a demo host: the other personas to switch to, in place of the reader's own pages.
     pub(crate) demo: Option<DemoNav>,
 }
@@ -137,7 +143,7 @@ impl Nav {
         let admin = user.is_admin();
         let problems =
             if admin && db::pipeline_ready(&state.pool).await? { db::problem_count(&state.pool).await? } else { 0 };
-        Ok(Some(Nav { name: user.name.clone(), admin, problems, current, demo: None }))
+        Ok(Some(Nav { name: user.name.clone(), admin, problems, current, home: "/".to_owned(), demo: None }))
     }
 }
 
@@ -186,7 +192,9 @@ impl Viewer {
             })
             .collect();
         let demo = DemoNav { personas, interests: self.user.interests.trim().to_owned() };
-        Ok(Some(Nav { name: self.user.name.clone(), admin: false, problems: 0, current, demo: Some(demo) }))
+        // A visitor came from the landing page, so that is where the wordmark goes back to.
+        let home = state.landing.as_ref().map_or_else(|| "/".to_owned(), |host| format!("//{host}/"));
+        Ok(Some(Nav { name: self.user.name.clone(), admin: false, problems: 0, current, home, demo: Some(demo) }))
     }
 }
 

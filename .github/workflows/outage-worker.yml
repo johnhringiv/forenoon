@@ -1,0 +1,30 @@
+name: Outage Worker
+
+# The outage Worker (deploy/cloudflare) serves a copy of the landing page when the deploy is
+# down, bundled from web/site at deploy time. A merge that changes either folder deploys it
+# again, so the copy never goes stale. Needs two repository secrets: CLOUDFLARE_API_TOKEN (a
+# token with Workers Scripts edit on the one account) and CLOUDFLARE_ACCOUNT_ID.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/site/**"
+      - "deploy/cloudflare/**"
+      - ".github/workflows/outage-worker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: outage-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy the outage Worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: deploy/cloudflare
