@@ -1080,8 +1080,11 @@ pub async fn send(
         return refused(StatusCode::NOT_FOUND, "No such article.");
     }
     if db::is_link_only(&state.pool, &user.id, &form.article).await? {
-        let why =
-            "Its page could not be had, so there is nothing to send yet. It goes with your next issue once it can.";
+        let why = if user.daily_to_kindle {
+            "Its page could not be had, so there is nothing to send yet. It goes with your next issue once it can."
+        } else {
+            "Its page could not be had, so there is nothing to send yet. It is in your next issue here once it can."
+        };
         return refused(StatusCode::CONFLICT, why);
     }
     // A story is something that was delivered; an article passed over is sent on its own.

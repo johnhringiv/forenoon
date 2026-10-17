@@ -274,6 +274,7 @@ pub struct UserLine {
     pub timezone: String,
     pub created_at: String,
     pub kindle_addresses: String,
+    pub daily_to_kindle: bool,
     pub email: Option<String>,
     pub email_verified_at: Option<String>,
     pub invited_at: Option<String>,
@@ -282,11 +283,21 @@ pub struct UserLine {
     pub invite_expires_at: Option<String>,
 }
 
+/// A reader's Kindle addresses on one line, for the admin's views, with whether the daily
+/// issue goes to them: an admin asked why someone got no issue sees it here.
+pub fn kindle_line(user: &UserLine) -> String {
+    let addresses = user.kindle_addresses.lines().collect::<Vec<_>>().join(", ");
+    if !addresses.is_empty() && !user.daily_to_kindle {
+        return format!("{addresses} (daily issue on the web only)");
+    }
+    addresses
+}
+
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserLine>, sqlx::Error> {
     sqlx::query_as!(
         UserLine,
-        r#"SELECT users.id AS "id!", name, role, timezone, users.created_at, kindle_addresses, users.email, email_verified_at,
-           invited_at, invite.expires_at AS "invite_expires_at?"
+        r#"SELECT users.id AS "id!", name, role, timezone, users.created_at, kindle_addresses,
+           daily_to_kindle AS "daily_to_kindle: bool", users.email, email_verified_at, invited_at, invite.expires_at AS "invite_expires_at?"
            FROM users LEFT JOIN email_tokens invite ON invite.user_id = users.id AND invite.purpose = 'invite'
            ORDER BY users.created_at, users.id"#
     )

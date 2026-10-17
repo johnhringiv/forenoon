@@ -140,7 +140,8 @@ what its own users configure and delivers only to the addresses its readers have
   article, the most articles on one broad subject (2; 0 for no limit), room for a surprise
   (the exploration pick, on), the model's reason printed in the book (on), and notes kept
   from their ratings (on). Whether their Kindle has a colour screen (images and covers in
-  colour; otherwise gray) is on their Account page beside their Kindle addresses. A new
+  colour; otherwise gray) and whether their daily issue is emailed to it (on) are on their
+  Account page beside their Kindle addresses. A new
   account starts with the defaults; migration 0024 started every reader from the values
   the install had.
 - An admin setting has a default in the code; only
@@ -792,7 +793,8 @@ database with the pipeline.
   **Send story to Kindle**: every article delivered in the story as one book with a contents
   page, named and covered by its first article. It counts as one send. A short post that was
   replaced by the pages it pointed at is left out, as it was from the delivered book.
-- **Account page.** Display name, time zone, Kindle addresses, email, password, and sign
+- **Account page.** Display name, time zone, Kindle addresses (with whether the daily issue
+  is emailed to them, and whether the Kindle has a colour screen), email, password, and sign
   out. A reader changes only their own row, so the only addresses an account can send to are
   the ones its owner typed. Interests and stories a day are on the Reading page.
 - Every change is a form post that must carry the session's token and, when the browser says

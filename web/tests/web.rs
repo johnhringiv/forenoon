@@ -530,6 +530,11 @@ async fn account_page_changes_the_profile_and_the_password() {
     browser.post(&site, "/account/kindle", &daily).await;
     assert!(auth::find_user(&site.pool, "john").await.unwrap().unwrap().daily_to_kindle);
     assert!(browser.get(&site, "/account").await.text.contains(r#"name="daily" value="1" checked"#));
+    // Refused, the form comes back with the tick as sent, and nothing is saved.
+    let slip = [("csrf", csrf.as_str()), ("kindle_addresses", "a@kindle.com\nnot an address")];
+    let reply = browser.post(&site, "/account/kindle", &slip).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && !reply.text.contains(r#"name="daily" value="1" checked"#));
+    assert!(auth::find_user(&site.pool, "john").await.unwrap().unwrap().daily_to_kindle, "nothing saved");
 
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;

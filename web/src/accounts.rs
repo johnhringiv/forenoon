@@ -85,13 +85,14 @@ async fn rows(state: &AppState, viewer: &User) -> Result<Vec<Row>, AppError> {
                 }
                 (Some(_), _) => "Invited; the link has expired".to_owned(),
             };
+            let kindle = db::kindle_line(&user);
             Row {
                 invited: user.invited_at.is_some(),
                 id: user.id,
                 name: user.name,
                 role: user.role,
                 email: user.email.unwrap_or_else(|| "no email: cannot sign in".to_owned()),
-                kindle: user.kindle_addresses.lines().collect::<Vec<_>>().join(", "),
+                kindle,
                 state,
             }
         })
