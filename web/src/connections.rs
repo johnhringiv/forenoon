@@ -129,12 +129,17 @@ fn web_address(address: &str) -> bool {
     let Some(rest) = address.strip_prefix("http://").or_else(|| address.strip_prefix("https://")) else {
         return false;
     };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if rest.contains(['?', '#', '@']) {
+        return false; // a path is joined on, so no query or fragment; no user name or password
+    }
+    let authority = rest.split('/').next().unwrap_or("");
     let (host, port) = match authority.strip_prefix('[') {
         // [::1]:8080
         Some(v6) => match v6.split_once(']') {
             Some((inside, after))
-                if !inside.is_empty() && inside.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.') =>
+                if !inside.is_empty()
+                    && inside.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+                    && (after.is_empty() || after.starts_with(':')) =>
             {
                 (inside, after.strip_prefix(':'))
             }
@@ -183,7 +188,7 @@ impl ConnectionForm {
                 .filter(|n| (min..=max).contains(n))
                 .ok_or_else(|| format!("{label}: give a whole number from {min} to {max}."))
         };
-        let context_tokens = number(&self.context_tokens, "Context size", 2048, 2_000_000)?;
+        let context_tokens = number(&self.context_tokens, "Context size", 16_384, 2_000_000)?;
         let output_tokens = number(&self.output_tokens, "Answer limit", 1024, 200_000)?;
         if output_tokens >= context_tokens {
             return Err("Answer limit: it must be less than the context size, which holds the prompt too.".to_owned());
@@ -392,8 +397,11 @@ mod tests {
         }
         assert!(form("http://x/v1", "1000").checked().is_err() && form("http://x/v1", "lots").checked().is_err());
         assert!(form("http://x/v1", "16384").checked().is_err(), "the answer limit must leave room for the prompt");
+        assert!(
+            form("http://h/v1?x", "65536").checked().is_err() && form("http://[::1]x/v1", "65536").checked().is_err()
+        );
         for good in
-            ["https://api.openai.com/v1", "http://[::1]:8080/v1", "http://lan-box.local:11434/v1", "http://h/v1?x"]
+            ["https://api.openai.com/v1", "http://[::1]:8080/v1", "http://lan-box.local:11434/v1", "http://[::1]/v1"]
         {
             assert!(form(good, "65536").checked().is_ok(), "{good}");
         }

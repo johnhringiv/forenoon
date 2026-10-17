@@ -140,7 +140,7 @@ def test_an_answer_that_is_not_json_is_asked_for_once_more_saying_what_was_wrong
 
 def test_an_answer_cut_off_at_the_limit_is_bad_and_not_asked_again():
     server = Server([reply('{"scores": [{"id": "a"', finish="length")])
-    with pytest.raises(BadAnswer, match="output limit .4096 tokens."):
+    with pytest.raises(BadAnswer, match="cut off at 4096 tokens; raise the answer limit"):
         backend(server).structured("s", "u", SCHEMA, model="lan/qwen")
     assert len(server.requests) == 1
 
@@ -193,7 +193,7 @@ def test_batches_are_sized_to_a_small_context():
         {"lan": backend(Server(), Connection("lan", "http://x/v1", context_tokens=8192, output_tokens=2048))}
     )
     cfg = Llm(model="lan/qwen", batch_size=80)
-    assert input_budget(router, "lan/qwen") == 6144
+    assert input_budget(router, "lan/qwen") == 8192 - 2048 - 512, "the whole answer limit is kept free"
     assert input_budget(router, "anthropic/claude-haiku-5-5") is None
     assert batch_size(cfg, router, "x" * 4000) < 80 and batch_size(cfg, router, "") >= 1
     assert batch_size(cfg, None, "x" * 4000) == 80, "Anthropic keeps the setting"
@@ -361,3 +361,73 @@ def test_a_test_asked_for_while_one_runs_is_not_answered_by_the_older_one(tmp_pa
     store.record_connection_test("lan", "OK: first", asked["test_requested_at"])
     (row,) = store.connection_rows()
     assert row["test_result"] == "" and len(store.connection_tests()) == 1, "the second is still to run"
+
+
+def test_a_connection_found_down_is_not_tried_again_in_the_run():
+    server = Server(status=503)
+    router = Router({"lan": backend(server)})
+    assert router.check("lan/qwen").startswith("lan:")
+    with pytest.raises(Unreachable, match="not tried again this run"):
+        router.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert len(server.requests) == 1, "only the start-of-run look reached it"
+
+    flaky = Server(status=503)
+    router = Router({"lan": backend(flaky)})
+    for _ in range(3):
+        with pytest.raises(Unreachable):
+            router.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert len(flaky.requests) == 1, "the first failed call is the last"
+
+
+def test_a_rate_limit_loses_one_call_not_the_connection():
+    from app.llm import LlmError
+
+    server = Server(status=429)
+    router = Router({"lan": backend(server)})
+    with pytest.raises(LlmError) as limited:
+        router.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert not isinstance(limited.value, (Unreachable, BadAnswer))
+    with pytest.raises(LlmError):
+        router.structured("s", "u", SCHEMA, model="lan/qwen")
+    assert len(server.requests) == 2, "tried again"
+
+
+def test_only_a_server_on_this_network_can_be_free():
+    from app.llm import private_host
+
+    for address in (
+        "http://192.168.1.20:8080/v1",
+        "http://10.0.0.5/v1",
+        "http://localhost:11434/v1",
+        "http://[::1]:8080/v1",
+        "http://gpu-box:8000/v1",
+        "http://studio.local/v1",
+    ):
+        assert private_host(address), address
+    for address in ("https://openrouter.ai/api/v1", "https://api.openai.com/v1", "http://8.8.8.8/v1"):
+        assert not private_host(address), address
+    hosted = OpenAIBackend(Connection("router", "https://openrouter.ai/api/v1", free=True))
+    assert hosted.priced, "ticked free, but on the internet: still counted"
+    assert not OpenAIBackend(LAN).priced
+
+
+def test_replies_that_are_not_objects_or_wrap_the_json_are_handled():
+    class Listy(Server):
+        def __call__(self, request):
+            return httpx.Response(200, json=[])
+
+    with pytest.raises(BadAnswer, match="not a JSON object"):
+        backend(Listy()).structured("s", "u", SCHEMA, model="lan/qwen")
+    odd_usage = reply('{"scores": []}')
+    odd_usage["usage"] = []
+    assert backend(Server([odd_usage])).structured("s", "u", SCHEMA, model="lan/qwen").input_tokens == 0
+    # The opening <think> was in the prompt; prose before a fence.
+    for content in ('which first?</think>\n{"scores": []}', 'Here you go:\n```json\n{"scores": []}\n```'):
+        assert backend(Server([reply(content)])).structured("s", "u", SCHEMA, model="lan/qwen").data == {"scores": []}
+
+
+def test_a_check_does_not_overwrite_an_address_saved_while_it_ran(tmp_path):
+    store = _migrated(tmp_path)
+    store.record_connection_check("lan", "http://old/v1", True, "", ["qwen"], "2026-10-17T12:00:00+00:00")
+    (row,) = store.connection_rows()
+    assert row["checked_at"] == "" and row["models"] == "[]", "the row's address had changed"

@@ -18,7 +18,7 @@ from random import Random
 import lxml.html
 
 from .config import Llm, User
-from .llm import Backend, LlmError, Unreachable, free, input_budget
+from .llm import CHARS_PER_TOKEN, Backend, LlmError, Unreachable, free, input_budget
 from .sources import Item
 from .store import Store
 from .tokens import reason_labels
@@ -32,7 +32,6 @@ RECENT_RATINGS = 40
 # Rough size of one ranking request, used to refuse a call that would cross the daily cap.
 TOKENS_PER_CANDIDATE = 260
 TOKENS_OVERHEAD = 2500  # per call: instructions, interests and recent ratings
-CHARS_PER_TOKEN = 4
 
 SYSTEM = """\
 You rank articles for one reader's daily digest.

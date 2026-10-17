@@ -13,9 +13,9 @@ act on anything, and its output is validated by the caller before use.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 import os
-import re
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -29,6 +29,8 @@ API_KEY_ENV = "FORENOON_ANTHROPIC_API_KEY"
 KEY_ENV_PREFIX = "FORENOON_LLM_KEY_"
 MAX_OUTPUT_TOKENS = 8192  # a batch of 80 candidates needs about 3,300
 CHECK_TIMEOUT = 2.0  # seconds for a connection's model list, at the start of a run
+CHARS_PER_TOKEN = 4  # a rough count of a prompt's tokens, the same everywhere it is estimated
+CONTEXT_MARGIN = 512  # tokens kept spare in a request, for the estimate's error and the template
 
 
 class LlmError(Exception):
@@ -124,7 +126,9 @@ class AnthropicBackend:
         except (self._anthropic.APIConnectionError, self._anthropic.AuthenticationError) as exc:
             raise Unreachable(f"{type(exc).__name__}: {exc}") from exc
         except self._anthropic.APIStatusError as exc:
-            kind = Unreachable if exc.status_code >= 500 or exc.status_code in (403, 429) else BadAnswer
+            # Overloaded or rate limited: this call is lost, the next may go through.
+            busy = exc.status_code in (429, 529)
+            kind = LlmError if busy else Unreachable if exc.status_code >= 500 or exc.status_code == 403 else BadAnswer
             raise kind(f"{type(exc).__name__}: {exc}") from exc
         except self._anthropic.APIError as exc:
             raise LlmError(f"{type(exc).__name__}: {exc}") from exc
@@ -179,14 +183,13 @@ def _without_nulls(data: Any, schema: dict[str, Any]) -> Any:
     return data
 
 
-THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
-
-
 def _answer_text(content: str) -> str:
-    """The JSON in a reply: reasoning a server left in the text, and a Markdown fence, removed."""
-    text = THINKING.sub("", content).strip()
-    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
-    return fenced.group(1) if fenced else text
+    """The JSON in a reply: reasoning a server left in the text (also when the opening <think>
+    was in the prompt, so only the closing one is here), and anything around the object, such
+    as a Markdown fence or a sentence before it, removed."""
+    text = content.rpartition("</think>")[2].strip() if "</think>" in content else content.strip()
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if 0 <= start < end and not text.startswith("{") else text
 
 
 class OpenAIBackend:
@@ -202,8 +205,10 @@ class OpenAIBackend:
 
     @property
     def priced(self) -> bool:
-        """Whether its calls cost money: not for a server you run. OpenAI itself always does."""
-        return self._openai or not self.connection.free
+        """Whether its calls cost money: not for a server you run, which is one on a private,
+        loopback or local address marked free. A service on the internet always counts as paid,
+        whatever the box says, so the daily token cap still guards it."""
+        return not (self.connection.free and private_host(self._base))
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -216,13 +221,17 @@ class OpenAIBackend:
             detail = response.text[:300]
             # A server that is up but turns the request down is a bad answer, except for the
             # refusals that another connection would not get: the key, the server's own trouble.
-            unusable = response.status_code in (401, 403, 404, 429) or response.status_code >= 500
-            kind = Unreachable if unusable else BadAnswer
+            # A rate limit is neither: this call is lost, the next may go through.
+            unusable = response.status_code in (401, 403, 404) or response.status_code >= 500
+            kind = LlmError if response.status_code == 429 else Unreachable if unusable else BadAnswer
             raise kind(f"{self.connection.name}: HTTP {response.status_code}: {detail}")
         try:
-            return response.json()
+            reply = response.json()
         except ValueError as exc:
             raise BadAnswer(f"{self.connection.name}: the reply is not JSON") from exc
+        if not isinstance(reply, dict):
+            raise BadAnswer(f"{self.connection.name}: the reply is not a JSON object")
+        return reply
 
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
         name = models.split(model)[1]
@@ -250,11 +259,6 @@ class OpenAIBackend:
             body["max_completion_tokens"] = self.connection.output_tokens
         else:
             body["temperature"] = 0
-            # A server may refuse a request whose prompt and answer limit together pass its
-            # context, so the limit is what the prompt leaves (estimated, with a margin).
-            prompt = sum(len(m["content"]) for m in messages) // 3
-            room = self.connection.context_tokens - prompt - 256
-            body["max_tokens"] = max(256, min(self.connection.output_tokens, room))
             if self.connection.reasoning_off:
                 # Read by llama.cpp, vLLM and LM Studio's chat templates (Qwen, DeepSeek and the like).
                 body["chat_template_kwargs"] = {"enable_thinking": False}
@@ -265,9 +269,17 @@ class OpenAIBackend:
             return input_tokens + cached, output_tokens, self.priced
 
         for attempt in range(2):
+            if not self._openai:
+                # A server may refuse a request whose prompt and answer limit together pass its
+                # context. Batches leave room for the whole answer limit (input_budget), so this
+                # only shortens it for a prompt longer than its estimate.
+                prompt = sum(len(m["content"]) for m in messages) // CHARS_PER_TOKEN
+                room = self.connection.context_tokens - prompt - CONTEXT_MARGIN
+                body["max_tokens"] = max(256, min(self.connection.output_tokens, room))
             reply = self._post(body)
-            usage = reply.get("usage") or {}
-            hit = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+            usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
+            details = usage.get("prompt_tokens_details")
+            hit = (details.get("cached_tokens") if isinstance(details, dict) else 0) or 0
             input_tokens += (usage.get("prompt_tokens") or 0) - hit
             cached += hit
             output_tokens += usage.get("completion_tokens") or 0
@@ -279,9 +291,10 @@ class OpenAIBackend:
             if choice.get("finish_reason") == "length":
                 # Asking again would stop in the same place.
                 limit = body.get("max_tokens", body.get("max_completion_tokens"))
+                short = limit != self.connection.output_tokens
+                fix = "raise the context size" if short else "raise the answer limit"
                 raise BadAnswer(
-                    f"{self.connection.name}: the answer was cut off at the output limit"
-                    f" ({limit} tokens); raise the answer limit or the context size on the Settings page",
+                    f"{self.connection.name}: the answer was cut off at {limit} tokens; {fix} on the Settings page",
                     *spent(),
                 )
             try:
@@ -319,6 +332,9 @@ class Router:
 
     def __init__(self, backends: dict[str, Backend]):
         self._backends = backends
+        # Connections found unreachable in this run, with why: not tried again until the next,
+        # so a server that is off costs one time limit, not one per call.
+        self._down: dict[str, str] = {}
 
     def backend(self, model: str) -> Backend:
         try:
@@ -331,20 +347,33 @@ class Router:
         return backend
 
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
-        return self.backend(model).structured(system, user, schema, model=model, shared=shared)
+        backend = self.backend(model)
+        connection = models.split(model)[0]
+        if connection in self._down:
+            raise Unreachable(f"{self._down[connection]} (not tried again this run)")
+        try:
+            return backend.structured(system, user, schema, model=model, shared=shared)
+        except Unreachable as exc:
+            self._down[connection] = str(exc)
+            raise
 
     def check(self, model: str) -> str:
         """Why `model` cannot be used now, or "" when it can: a quick look at its connection's
-        model list. Anthropic is taken as reachable when its key is set."""
+        model list. Anthropic is taken as reachable when its key is set; it is only found out
+        by its calls."""
         try:
             backend = self.backend(model)
         except LlmError as exc:
             return str(exc)
+        connection = models.split(model)[0]
+        if connection in self._down:
+            return self._down[connection]
         if not isinstance(backend, OpenAIBackend):
             return ""
         try:
             listed = backend.model_ids()
         except Unreachable as exc:
+            self._down[connection] = str(exc)
             return str(exc)
         name = models.split(model)[1]
         return "" if not listed or name in listed else f"{backend.connection.name} does not list the model {name}"
@@ -375,8 +404,19 @@ def input_budget(backend: Backend | None, model: str) -> int | None:
         return None
     if not isinstance(connection, OpenAIBackend):
         return None
-    context = connection.connection.context_tokens
-    return context - min(connection.connection.output_tokens, context // 2)
+    # The whole answer limit is kept free, the way the request asks for it (see structured).
+    return max(1024, connection.connection.context_tokens - connection.connection.output_tokens - CONTEXT_MARGIN)
+
+
+def private_host(address: str) -> bool:
+    """Whether an address is on this network: a private, loopback or link-local IP, a name
+    without a dot (gpu-box, localhost), or one under .local, .lan, .home.arpa or .internal."""
+    host = (urlsplit(address).hostname or "").lower()
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return bool(host) and ("." not in host or host.endswith((".local", ".lan", ".home.arpa", ".internal")))
+    return ip.is_private or ip.is_loopback or ip.is_link_local
 
 
 def models_for_run(cfg: Llm, backend: Backend | None) -> tuple[Llm, str]:

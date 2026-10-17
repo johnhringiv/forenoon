@@ -15,8 +15,8 @@ import math
 from dataclasses import dataclass, field, replace
 
 from .config import Llm, User
-from .llm import Backend, LlmError, Unreachable, free, input_budget
-from .rank import CHARS_PER_TOKEN, MAX_REASON_CHARS, MAX_SUBJECT_LINKS, reader_profile
+from .llm import CHARS_PER_TOKEN, Backend, LlmError, Unreachable, free, input_budget
+from .rank import MAX_REASON_CHARS, MAX_SUBJECT_LINKS, reader_profile
 from .store import Store
 
 log = logging.getLogger("forenoon")
@@ -120,16 +120,23 @@ class Verdict:
     lasting: str = ""  # days | months | years; "" when the model did not say
 
 
+def _tokens(text: str) -> int:
+    """A text's tokens, estimated: by words, or by characters when its words are long (URLs,
+    code, other languages), so a batch is never larger than the request will be."""
+    return max(int(len(text.split()) * TOKENS_PER_WORD), len(text) // CHARS_PER_TOKEN)
+
+
 def _batches(readings: list[Reading], limit: int = BATCH_TOKENS) -> list[list[Reading]]:
     """The readings in order, in batches of at most BATCH_ARTICLES and about `limit` tokens. An
     article longer than `limit` on its own is cut to fit."""
     out: list[list[Reading]] = [[]]
     size = 0
     for reading in readings:
-        cost = int(len(reading.text.split()) * TOKENS_PER_WORD) + TOKENS_PER_ARTICLE
+        cost = _tokens(reading.text) + TOKENS_PER_ARTICLE
         if cost > limit:
             words = max(1, int((limit - TOKENS_PER_ARTICLE) / TOKENS_PER_WORD))
-            reading = replace(reading, text=" ".join(reading.text.split()[:words]))
+            text = " ".join(reading.text.split()[:words])[: (limit - TOKENS_PER_ARTICLE) * CHARS_PER_TOKEN]
+            reading = replace(reading, text=text)
             cost = limit
         if out[-1] and (len(out[-1]) >= BATCH_ARTICLES or size + cost > limit):
             out.append([])
@@ -198,8 +205,7 @@ def read(
     if budget is not None:
         limit = max(1000, min(limit, budget - TOKENS_OVERHEAD - (len(SYSTEM) + len(profile)) // CHARS_PER_TOKEN))
     for batch in _batches(readings, limit):
-        words = sum(len(r.text.split()) for r in batch)
-        estimate = TOKENS_OVERHEAD + int(words * TOKENS_PER_WORD) + TOKENS_PER_ARTICLE * len(batch)
+        estimate = TOKENS_OVERHEAD + sum(_tokens(r.text) for r in batch) + TOKENS_PER_ARTICLE * len(batch)
         used = store.llm_tokens_since(today_start)
         if not unlimited and used + estimate > cfg.daily_token_cap:
             log.warning("reading pass stopped: daily token cap reached (%d of %d used)", used, cfg.daily_token_cap)

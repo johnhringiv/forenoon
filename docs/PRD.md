@@ -431,7 +431,8 @@ source).
   OpenAI chat completions API (OpenAI itself, or LM Studio, Ollama, llama.cpp or vLLM on the
   network) is added on the Settings page as a connection: a name, its address, the context
   size the server holds, an answer limit, a time limit, whether it is a server you run (its
-  calls cost nothing and stay outside the token cap) and whether to ask the model not to
+  calls cost nothing and stay outside the token cap; only one on a private or local address
+  can be) and whether to ask the model not to
   reason first (on by default; not sent to OpenAI). Its key is `FORENOON_LLM_KEY_<NAME>` in
   the pipeline's environment, never in the database. Its models are then named
   `<connection>/<model>`. The web pages never reach a server: the scheduler checks each
@@ -442,7 +443,8 @@ source).
   5.5), except the choosing of the issue (section 7f), which can have its own
   (`llm.choose_model`): one small call a day that decides what the reader gets, where a
   stronger model costs cents. `llm.fallback_model` replaces a model for the whole run when,
-  at its start, a two-second look at its connection's model list fails or does not list it;
+  at its start, a two-second look at its connection's model list fails or does not list it
+  (Anthropic is taken as reachable when its key is set);
   the report and the alert say so. Only an unreachable connection moves a run on, never a
   bad answer. Every call is logged and priced under the model it used, and logged as
   `unreachable` or `error` when it got no usable answer. The models offered, and their prices, are listed in `web/models.json`,
@@ -455,8 +457,11 @@ source).
   that enforces it by grammar does not show it to the model. Reasoning left in the text
   (`<think>`) and a Markdown fence are removed; an answer that is not a JSON object is asked
   for once more, saying what was wrong; an answer cut off at the answer limit is a bad
-  answer. Batches are sized to the connection's context size: a local server may drop what
-  does not fit without saying.
+  answer. Ranking and reading-pass batches are sized to the connection's context size, less
+  the whole answer limit: a local server may drop what does not fit without saying. The other
+  calls are small (under about 12,000 tokens), so a connection needs a context of at least
+  16,384. A connection that cannot be reached is not tried again for the rest of the run; a
+  rate limit loses only the one call.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page, unless the reader turned that off on their Reading page.
 - **Recorded per delivered article:** policy, the model that scored it, score, reason, rank among the day's candidates,

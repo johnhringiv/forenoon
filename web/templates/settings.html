@@ -46,13 +46,13 @@
 <p>{{ c.status }}</p>
 <p class="hint">Key: <code>{{ c.key_env }}</code> in the env file.</p>
 <label>Address <input name="address" maxlength="200" value="{{ c.address }}" required></label>
-<label>Context size (tokens) <input name="context_tokens" type="number" step="1" min="2048" max="2000000" value="{{ c.context_tokens }}" required></label>
+<label>Context size (tokens) <input name="context_tokens" type="number" step="1" min="16384" max="2000000" value="{{ c.context_tokens }}" required></label>
 <p class="hint">What the server is set to hold in one request, prompt and answer together. Batches are sized to fit, as a server may drop what does not fit without saying.</p>
 <label>Answer limit (tokens) <input name="output_tokens" type="number" step="1" min="1024" max="200000" value="{{ c.output_tokens }}" required></label>
 <label>Time limit (seconds) <input name="timeout_seconds" type="number" step="1" min="5" max="3600" value="{{ c.timeout_seconds }}" required></label>
-<label class="tick"><input type="checkbox" name="free" value="1"{% if c.free %} checked{% endif %}> A server you run: its calls cost nothing and do not count toward the daily tokens</label>
+<label class="tick"><input type="checkbox" name="free" value="1"{% if c.free %} checked{% endif %}> A server you run on your network: its calls cost nothing and do not count toward the daily tokens</label>
 <label class="tick"><input type="checkbox" name="reasoning_off" value="1"{% if c.reasoning_off %} checked{% endif %}> Ask the model not to reason first</label>
-<p class="hint">Untick the first for a paid service such as OpenRouter; OpenAI itself is always counted as paid. Reasoning made ranking five times slower in a test on a local Qwen model, for no better picks; the request is not sent to OpenAI itself.</p>
+<p class="hint">Only a server on your network (a private or local address) can be free; a service on the internet, such as OpenAI or OpenRouter, is always counted, so the daily tokens still guard what it costs. Reasoning made ranking five times slower in a test on a local Qwen model, for no better picks; the request is not sent to OpenAI itself.</p>
 <button class="primary">Save</button> <button formaction="/settings/connections/{{ c.name }}/delete">Delete</button>
 </form>
 <form class="sheet wide settings" method="post" action="/settings/connections/{{ c.name }}/test">
@@ -66,12 +66,12 @@
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <h3>Add a connection</h3>
 <label>Name <input name="name" maxlength="32" pattern="[a-z0-9][a-z0-9\-]*" placeholder="lan" required></label>
-<p class="hint">Lower-case letters, digits and dashes. Its key, if it needs one, is <code>FORENOON_LLM_KEY_</code> and the name in capitals: <code>FORENOON_LLM_KEY_LAN</code>.</p>
+<p class="hint">Lower-case letters, digits and dashes. Its key, if it needs one, is <code>FORENOON_LLM_KEY_</code> and the name in capitals with dashes as underscores: <code>lan-box</code> reads <code>FORENOON_LLM_KEY_LAN_BOX</code>.</p>
 <label>Address <input name="address" maxlength="200" placeholder="http://192.168.1.20:8080/v1" required></label>
-<label>Context size (tokens) <input name="context_tokens" type="number" step="1" min="2048" max="2000000" value="32768" required></label>
+<label>Context size (tokens) <input name="context_tokens" type="number" step="1" min="16384" max="2000000" value="32768" required></label>
 <label>Answer limit (tokens) <input name="output_tokens" type="number" step="1" min="1024" max="200000" value="16384" required></label>
 <label>Time limit (seconds) <input name="timeout_seconds" type="number" step="1" min="5" max="3600" value="300" required></label>
-<label class="tick"><input type="checkbox" name="free" value="1" checked> A server you run: its calls cost nothing and do not count toward the daily tokens</label>
+<label class="tick"><input type="checkbox" name="free" value="1" checked> A server you run on your network: its calls cost nothing and do not count toward the daily tokens</label>
 <label class="tick"><input type="checkbox" name="reasoning_off" value="1" checked> Ask the model not to reason first</label>
 <button class="primary">Add</button>
 </form>

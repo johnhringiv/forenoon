@@ -389,15 +389,16 @@ class Store:
         )  # fmt: skip
 
     def record_connection_check(
-        self, name: str, key_set: bool, error: str, model_ids: list[str], when: str | None = None
+        self, name: str, address: str, key_set: bool, error: str, model_ids: list[str], when: str | None = None
     ) -> None:
         """What the pipeline found at a connection, for the Settings page. A failed check keeps the
-        model list from the last one that worked."""
+        model list from the last one that worked. Dropped when the address was changed while the
+        check ran: the new one is checked next."""
         with self.db:
             self.db.execute(
                 "UPDATE connections SET checked_at = ?, key_set = ?, error = ?,"
-                " models = CASE WHEN ? = '' THEN ? ELSE models END WHERE name = ?",
-                (when or now_iso(), int(key_set), error[:300], error, json.dumps(model_ids), name),
+                " models = CASE WHEN ? = '' THEN ? ELSE models END WHERE name = ? AND address = ?",
+                (when or now_iso(), int(key_set), error[:300], error, json.dumps(model_ids), name, address),
             )
 
     def connection_rows(self) -> list[sqlite3.Row]:

@@ -45,8 +45,8 @@ day's choices.
   165 candidates ranked, 40 read in full, 8 stories delivered in 80 seconds, for **about
   two cents** of Claude Haiku. Or nothing: any OpenAI-compatible server works too (Ollama,
   LM Studio, llama.cpp, vLLM, or OpenAI itself), and a local Qwen3.8-27B on one RTX 4090
-  ranks and reads that day in about five minutes. If the model is unreachable it moves to a
-  fallback model; with none, or when the day's tokens are spent, it still delivers: pinned
+  ranks and reads that day in about five minutes. If a model server cannot be reached as a
+  run starts, it moves to a fallback model; with none, or when the day's tokens are spent, it still delivers: pinned
   sources first, then the newest articles in turn across sources.
 - **No one else's incentives.** No ads, no engagement metrics, no telemetry. Your sources,
   ratings and articles are one SQLite file and a folder on your own machine. What leaves it
