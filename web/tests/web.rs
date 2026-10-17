@@ -2639,6 +2639,7 @@ async fn demo_personas_and_their_feeds_are_made_on_start_and_only_once() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("Quanta Magazine"));
 }
+
 #[tokio::test]
 async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     let site = site_full(true, false, "", Some("forenoon.test")).await;
