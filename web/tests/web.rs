@@ -2452,6 +2452,13 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     article(pool, "a1", "https://blog.example/1", "Blog", "Johns article", "john", sent).await;
     article(pool, "a2", "https://blog.example/2", "Blog", "Marys article", "mary", sent).await;
     sqlx::query("UPDATE users SET interests = 'Compilers and old maps' WHERE id = 'john'").execute(pool).await.unwrap();
+    // A feed of Mary's own, shared with nobody: an admin sees it on the Sources page.
+    sqlx::query(
+        "INSERT INTO sources (name, kind, url, created_at, added_by, shared) VALUES ('Marys private feed', 'rss', 'https://m.example/feed', '2026-10-01T00:00:00+00:00', 'mary', 0)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     let thumbs = site.folder.path().join("thumbs");
     std::fs::create_dir_all(&thumbs).unwrap();
     std::fs::write(thumbs.join("a1.jpg"), b"\xff\xd8\xff jpeg bytes").unwrap();
@@ -2485,12 +2492,14 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     let (status, _, _, page) = get("Mary.Forenoon.test:8081", "/").await;
     assert!(status == StatusCode::OK && page.contains("Marys article") && !page.contains("Johns article"));
 
-    // The Archive's filters are links, so they work; the Sources page is the list alone.
-    let (status, _, _, page) = get("john.forenoon.test", "/archive?q=Johns").await;
+    // The Archive's filters are links, so they work; the Sources page is the list alone, and
+    // though John is an admin, the persona is a reader: Mary's private feed is not on it.
+    let (status, cookie, _, page) = get("john.forenoon.test", "/archive?q=Johns").await;
     assert!(status == StatusCode::OK && page.contains("Johns article") && !page.contains(r#"method="post""#));
-    assert!(!page.contains("Add a link") && !page.contains("Fetch again"));
-    let (status, _, _, page) = get("john.forenoon.test", "/sources").await;
-    assert!(status == StatusCode::OK && page.contains("Hacker News"), "{page}");
+    assert!(!page.contains("Add a link") && !page.contains("Fetch again") && cookie.is_empty());
+    let (status, cookie, _, page) = get("john.forenoon.test", "/sources").await;
+    assert!(status == StatusCode::OK && page.contains("Hacker News") && cookie.is_empty(), "{page}");
+    assert!(!page.contains("Marys private feed"), "{page}");
     assert!(
         !page.contains(r#"method="post""#) && !page.contains("Subscriber sessions") && !page.contains("Add a feed")
     );
@@ -2498,8 +2507,12 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     assert!(!page.contains(r#"<details class="add"#) && !page.contains("Open a feed to change it"));
 
     // A picture, on the host whose persona it was delivered to; kept by a cache too.
-    let (status, _, cache, body) = get("john.forenoon.test", "/thumb/a1").await;
-    assert!(status == StatusCode::OK && body.contains("jpeg bytes") && cache.starts_with("public"));
+    let (status, cookie, cache, body) = get("john.forenoon.test", "/thumb/a1").await;
+    assert!(
+        status == StatusCode::OK && body.contains("jpeg bytes") && cache.starts_with("public") && cookie.is_empty()
+    );
+    let head = Request::head("/").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(site.router.clone().oneshot(head).await.unwrap().status(), StatusCode::OK);
     assert_eq!(get("mary.forenoon.test", "/thumb/a1").await.0, StatusCode::NOT_FOUND);
     // Icons and the health check answer there as anywhere.
     assert_eq!(get("john.forenoon.test", "/icon.svg").await.0, StatusCode::OK);
@@ -2511,6 +2524,10 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     {
         assert_eq!(get("john.forenoon.test", path).await.0, StatusCode::NOT_FOUND, "{path}");
     }
+    // That answer is dressed like every other.
+    let request = Request::get("/login").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    assert!(response.headers().contains_key(header::CONTENT_SECURITY_POLICY));
     let post = Request::post("/rate")
         .header(header::HOST, "john.forenoon.test")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -2530,6 +2547,7 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     assert!(
         page.text.contains(r#"method="post""#) && page.text.contains("/account") && !page.text.contains("Reading as")
     );
+    assert!(browser.get(&site, "/sources").await.text.contains("Marys private feed"));
 
     // Over https, a demo host is an address of its own, not sent to the public one.
     let secure = site_full(true, true, DEMO).await;

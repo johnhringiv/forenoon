@@ -190,10 +190,13 @@ impl FromRequestParts<AppState> for Viewer {
                 .await
                 .map_err(|error| AppError::from(error).into_response())?;
             // Named in the demo's configuration but not an account (yet): the host has nothing to show.
-            return match user {
-                Some(user) => Ok(Viewer { user, csrf: String::new(), demo: Some(demo) }),
-                None => Err(not_found().await.unwrap_or_else(IntoResponse::into_response)),
+            let Some(mut user) = user else {
+                return Err(not_found().await.unwrap_or_else(IntoResponse::into_response));
             };
+            // A persona is a reader whatever its role, on every page: an admin sees other
+            // readers' private feeds, and a visitor must not.
+            user.role = "reader".to_owned();
+            return Ok(Viewer { user, csrf: String::new(), demo: Some(demo) });
         }
         let auth = AuthSession::from_request_parts(parts, state).await.map_err(IntoResponse::into_response)?;
         let session = Session::from_request_parts(parts, state).await.map_err(IntoResponse::into_response)?;
@@ -210,7 +213,11 @@ pub(crate) fn refused(status: StatusCode, message: &'static str) -> Page {
 }
 
 pub async fn security_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
+    secured(next.run(request).await)
+}
+
+/// The response with the headers every one of ours carries.
+pub fn secured(mut response: Response) -> Response {
     let headers = response.headers_mut();
     for (name, value) in [
         (

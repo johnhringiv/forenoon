@@ -420,8 +420,7 @@ async fn render(
     sieve: Sieve,
 ) -> Page {
     let user = &viewer.user;
-    // A persona is shown as a reader whatever its role: the demo has no admin.
-    let admin = user.is_admin() && !viewer.is_demo();
+    let admin = user.is_admin();
     let health = health(&state.pool).await?;
     let sources = list(&state.pool, user).await?;
     let sites = sessions(&state.pool).await?;

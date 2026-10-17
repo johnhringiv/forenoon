@@ -21,7 +21,8 @@ use crate::{auth, icons, pages};
 /// One reader shown at one hostname.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Persona {
-    /// Lowercase, as browsers send it in `Host`; with its port only when it is not the default.
+    /// Lowercase, as browsers send it in `Host`: with its port only when that is not 80 or 443,
+    /// which browsers leave out.
     pub host: String,
     /// The reader's account id.
     pub id: String,
@@ -35,6 +36,7 @@ pub fn parse(text: &str) -> Result<Vec<Persona>, String> {
             return Err(format!("{entry}: expected host=reader, such as alice.forenoon.example=alice"));
         };
         let host = host.trim().to_ascii_lowercase();
+        let host = host.strip_suffix(":443").or_else(|| host.strip_suffix(":80")).map_or(host.clone(), str::to_owned);
         let plain = !host.is_empty()
             && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
         if !plain {
@@ -94,14 +96,16 @@ pub async fn gate(State(personas): State<Arc<[Persona]>>, request: Request, next
     let Some(persona) = persona else {
         return next.run(request).await;
     };
-    if !allowed(&request) {
-        return pages::not_found().await.unwrap_or_else(IntoResponse::into_response);
-    }
-    let mut request = request;
-    request.extensions_mut().insert(Demo { reader: persona.id.clone(), personas: personas.clone() });
-    let mut response = next.run(request).await;
-    // The same page for everyone, so a cache in front may keep it; the no-store the other
-    // pages get is set later and leaves this one standing.
+    let mut response = if allowed(&request) {
+        let mut request = request;
+        request.extensions_mut().insert(Demo { reader: persona.id.clone(), personas: personas.clone() });
+        next.run(request).await
+    } else {
+        // Answered here, outside the layers that dress every response, so dressed by hand.
+        pages::secured(pages::not_found().await.unwrap_or_else(IntoResponse::into_response))
+    };
+    // The same answer for everyone, so a cache in front may keep it. This replaces the
+    // no-store the inner layers gave it.
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_str(&format!("public, max-age={CACHE_SECONDS}")).expect("a plain header"),
@@ -115,12 +119,14 @@ mod tests {
 
     #[test]
     fn personas_are_parsed_from_host_reader_pairs() {
-        let personas = parse(" Alice.Forenoon.example=alice, bob.forenoon.example:8081=bob ,").unwrap();
+        let personas =
+            parse(" Alice.Forenoon.example:443=alice, bob.forenoon.example:8081=bob ,carol.example:80=carol").unwrap();
         assert_eq!(
             personas,
             [
                 Persona { host: "alice.forenoon.example".to_owned(), id: "alice".to_owned() },
                 Persona { host: "bob.forenoon.example:8081".to_owned(), id: "bob".to_owned() },
+                Persona { host: "carol.example".to_owned(), id: "carol".to_owned() },
             ]
         );
         assert!(parse("").unwrap().is_empty());
