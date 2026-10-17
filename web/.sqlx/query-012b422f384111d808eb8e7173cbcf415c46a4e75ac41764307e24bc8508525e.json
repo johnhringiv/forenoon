@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,\n           email, email_verified_at, pending_email, invited_at, format, grayscale AS \"grayscale: bool\",\n           explore AS \"explore: bool\", most_per_subject, show_reasons AS \"show_reasons: bool\", learn AS \"learn: bool\"\n           FROM users WHERE id = ?",
+  "query": "SELECT id AS \"id!\", name, password_hash, role, timezone, kindle_addresses, daily_stories, interests,\n           email, email_verified_at, pending_email, invited_at, format, grayscale AS \"grayscale: bool\",\n           explore AS \"explore: bool\", most_per_subject, show_reasons AS \"show_reasons: bool\", learn AS \"learn: bool\",\n           daily_to_kindle AS \"daily_to_kindle: bool\"\n           FROM users WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -92,6 +92,11 @@
         "name": "learn: bool",
         "ordinal": 17,
         "type_info": "Integer"
+      },
+      {
+        "name": "daily_to_kindle: bool",
+        "ordinal": 18,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -115,8 +120,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "bb1caf77898b456c7f2141fc69b93a9ee571eb5e05dfa70257ccfa40ed676fbb"
+  "hash": "012b422f384111d808eb8e7173cbcf415c46a4e75ac41764307e24bc8508525e"
 }

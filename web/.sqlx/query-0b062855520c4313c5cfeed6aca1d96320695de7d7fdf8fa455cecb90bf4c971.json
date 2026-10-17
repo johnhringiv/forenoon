@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET kindle_addresses = ?, grayscale = ?, daily_to_kindle = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "0b062855520c4313c5cfeed6aca1d96320695de7d7fdf8fa455cecb90bf4c971"
+}

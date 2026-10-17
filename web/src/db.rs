@@ -248,10 +248,22 @@ pub async fn set_learn(pool: &SqlitePool, id: &str, on: bool) -> Result<(), sqlx
 
 /// Where the reader's books are sent, `addresses` one per line, and whether their images are
 /// made gray for an e-ink screen.
-pub async fn set_kindle(pool: &SqlitePool, id: &str, addresses: &str, grayscale: bool) -> Result<(), sqlx::Error> {
-    sqlx::query!("UPDATE users SET kindle_addresses = ?, grayscale = ? WHERE id = ?", addresses, grayscale, id)
-        .execute(pool)
-        .await?;
+pub async fn set_kindle(
+    pool: &SqlitePool,
+    id: &str,
+    addresses: &str,
+    grayscale: bool,
+    daily: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE users SET kindle_addresses = ?, grayscale = ?, daily_to_kindle = ? WHERE id = ?",
+        addresses,
+        grayscale,
+        daily,
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

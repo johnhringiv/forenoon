@@ -1684,6 +1684,15 @@ def test_a_reader_with_no_kindle_address_reads_their_issue_on_the_web_pages(env)
     assert not emailed.web_only and sent and emailed.messages == len(sent)
 
 
+def test_a_reader_who_turned_the_daily_email_off_reads_their_issue_on_the_web_pages(env):
+    cfg, store, fetcher = env
+    user = dataclasses.replace(cfg.users[0], daily_to_kindle=False)
+    assert user.kindle_addresses, "an address is kept, for Send to Kindle"
+    report = run(cfg, store, fetcher, user, now=NOW, sender=lambda m, s: pytest.fail("nothing is emailed"))
+    assert report.web_only and not report.no_address and report.delivered and report.messages == 0
+    assert "The reader reads it on the web: the issue is on the web pages" in report.to_markdown()
+
+
 def test_an_invited_reader_gets_no_issue_until_they_join(env):
     _, store, _ = env
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):

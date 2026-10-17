@@ -31,7 +31,10 @@ what its own users configure and delivers only to the addresses its readers have
   an alert is sent. A reader with no Kindle address reads on the web pages: their issue is
   built and recorded as for anyone (on their newsstand, counted against their day's cap,
   rated the same way), nothing is emailed, and no alert is sent; the run report says so.
-  Adding an address sends the next issue to it. Sending one article from the web pages
+  Adding an address sends the next issue to it. A reader with an address can turn the daily
+  email off on their Account page ("Email my daily issue to my Kindle", on for a new account):
+  their issue is then read on the web pages the same way, and Send to Kindle still sends what
+  they pick there. Sending one article from the web pages
   still needs an address and says so.
 - **Sources** belong to the household and are read for the readers who **follow** them: a
   reader's issue is built from the sources they follow, and nothing else. Each reader has
@@ -692,7 +695,8 @@ A separate program, `forenoon-web` (Rust, in `web/`), with its own image. It sha
 database with the pipeline.
 
 - **Accounts.** Every page except sign-in and the health check needs a session. An account
-  is a reader: the pipeline delivers to each account that has a Kindle address. A signed-in
+  is a reader: the pipeline emails each account's issue to its Kindle addresses, unless it
+  has none or has turned the daily email off. A signed-in
   reader sees and changes only their own deliveries, ratings, settings and sources (section 2). The first account is
   created from the command line (`forenoon-web add-user <id> --email <address>`) and is an
   admin; there is no sign-up page. An admin has the Settings, Accounts and Problems pages,

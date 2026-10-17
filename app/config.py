@@ -28,6 +28,7 @@ class User:
     # Their own settings, from the Reading and Account pages; `for_reader` applies them.
     format: str = "issue"
     grayscale: bool = True
+    daily_to_kindle: bool = True  # off: the daily issue is read on the web pages only
     explore: bool = True
     most_per_subject: int = 2
     show_reasons: bool = True
