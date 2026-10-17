@@ -12,8 +12,8 @@ know far less about what you want. Forenoon runs on your own machine and has one
 find what you would choose to read, and put it where you read best.
 
 Every morning it reads your RSS feeds, including those of the publications you subscribe to,
-and searches aggregation sites (Hacker News, Lobsters). Claude chooses from
-all of it against a plain-English description of your interests, and the result is emailed
+and searches aggregation sites (Hacker News, Lobsters). A model (Claude, or one on your own
+server) chooses from all of it against a plain-English description of your interests, and the result is emailed
 to your Kindle as one book with a contents page. Each article ends with rating links, so
 you can say what you thought without leaving your e-reader, and your ratings shape the next
 day's choices.
@@ -43,12 +43,15 @@ day's choices.
   kept readable on e-ink. No scripts, trackers or remote content reach the device.
 - **Cheap to run.** One measured day: 23 sources including a whole Financial Times, about
   165 candidates ranked, 40 read in full, 8 stories delivered in 80 seconds, for **about
-  two cents** of Claude Haiku. If the model is unreachable or the day's tokens are spent it
-  still delivers: pinned sources first, then the newest articles in turn across sources.
+  two cents** of Claude Haiku. Or nothing: any OpenAI-compatible server works too (Ollama,
+  LM Studio, llama.cpp, vLLM, or OpenAI itself), and a local Qwen3.8-27B on one RTX 4090
+  ranks and reads that day in about five minutes. If a model server cannot be reached as a
+  run starts, it moves to a fallback model; with none, or when the day's tokens are spent, it still delivers: pinned
+  sources first, then the newest articles in turn across sources.
 - **No one else's incentives.** No ads, no engagement metrics, no telemetry. Your sources,
   ratings and articles are one SQLite file and a folder on your own machine. What leaves it
   is what the choosing needs: your interests and the articles' text, sent to the model
-  provider you hold the key for. The web pages are public behind a login; only the signed
+  provider you hold the key for, or to nobody when the model runs on your own network. The web pages are public behind a login; only the signed
   rating links in each book work without one.
 
 Everything is set up in the browser: sources, interests, delivery time and the rest.
@@ -98,7 +101,8 @@ Code in a monospaced font, with long lines wrapped under their own indent rather
 uv sync
 mkdir -p run/data
 export FORENOON_DATA_DIR=run/data FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
-export FORENOON_ANTHROPIC_API_KEY=sk-ant-...  # required: the model chooses the articles
+export FORENOON_ANTHROPIC_API_KEY=sk-ant-...  # the model chooses the articles; or add a local
+                                              # model server on the Settings page instead
 
 # a reader to deliver to; asks for a password for the web pages
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)

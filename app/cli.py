@@ -47,7 +47,7 @@ def load(store: Store | None = None) -> Config:
 def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     fetcher = Fetcher(cfg.user_agent, store)
-    backend = backend_from_env(cfg.llm)
+    backend = backend_from_env(cfg.llm, store.connections())
     failed = 0
     try:
         # Read at every run, so a change made on the account page applies to the next one.
@@ -90,7 +90,9 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             print(f"Report written to {path}", file=sys.stderr)
             if not args.dry_run:
                 notify_run(cfg, report)
-                _learn(own, store, backend, user)
+                # On the model the run used: the fallback, when the first could not be reached.
+                used = dataclasses.replace(own.llm, model=report.model or own.llm.model)
+                _learn(dataclasses.replace(own, llm=used), store, backend, user)
             failed += bool(report.delivery_error)
     finally:
         fetcher.close()
@@ -188,6 +190,22 @@ def _check_sources(cfg: Config) -> int:
         return 0
 
 
+def _look_after_connections(cfg: Config) -> int:
+    """Check the model connections and run the tests asked for on the Settings page. Run every
+    minute by the scheduler."""
+    from .connections import look_after
+
+    try:
+        store = Store(cfg.db_path)
+        try:
+            return look_after(store)
+        finally:
+            store.close()
+    except Exception:
+        log.exception("connection checks failed")
+        return 0
+
+
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
     while True:
         cfg = _reload(cfg)
@@ -200,6 +218,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
                 _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
                 _check_sources(cfg)
+                _look_after_connections(cfg)
         cfg = _reload(cfg)
         try:
             _run_all(cfg, args)
@@ -259,6 +278,10 @@ def _usage(cfg: Config, args: argparse.Namespace) -> int:
     month = store.llm_usage_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
     print(f"\nToday: {today['tokens']} of {cfg.llm.daily_token_cap} tokens, about ${today['cost']:.4f}.")
     print(f"This month: {month['tokens']} tokens, about ${month['cost']:.2f}.")
+    if month["free_tokens"]:
+        print(
+            f"Also {today['free_tokens']} today and {month['free_tokens']} this month on servers you run, at no cost."
+        )
     if month["unpriced"]:
         print(f"{month['unpriced']} calls this month were to a model with no known price, and are not counted.")
     print(

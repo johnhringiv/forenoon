@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass
 
 from .config import Llm, User
-from .llm import Backend, LlmError
+from .llm import Backend, LlmError, free
 from .rank import reader_profile
 from .store import Store
 
@@ -148,7 +148,7 @@ def choose(
     model = cfg.choose_model or cfg.model
     estimate = TOKENS_OVERHEAD + TOKENS_PER_ARTICLE * len(candidates)
     used = store.llm_tokens_since(today_start)
-    if used + estimate > cfg.daily_token_cap:
+    if not free(backend, model) and used + estimate > cfg.daily_token_cap:
         log.warning("issue not chosen: daily token cap reached (%d of %d used)", used, cfg.daily_token_cap)
         return None
     try:
@@ -160,7 +160,7 @@ def choose(
             model=model,
         )
     except LlmError as exc:
-        store.log_llm_call("choose", model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("choose", model, exc)
         log.warning("choosing the issue failed: %s", exc)
         return None
     wanted = {c.id for c in candidates}

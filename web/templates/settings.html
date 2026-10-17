@@ -6,10 +6,11 @@
 {% block main %}
 {% if let Some(error) = error %}<p class="error">{{ error }}</p>{% endif %}
 {% if saved %}<p class="notice">Saved.</p>{% endif %}
+{% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 <div class="views"><span>Jump to</span>
 {% if !usage.is_empty() %}<a href="#model-use">Model use</a>{% endif %}
 {% for section in sections %}<a href="#{{ section.id }}">{{ section.title }}</a>
-{% endfor %}</div>
+{% endfor %}<a href="#model-connections">Model connections</a></div>
 <form class="sheet wide settings" method="post" action="/settings">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 {% if !usage.is_empty() %}<h2 id="model-use">Model use</h2>
@@ -34,5 +35,44 @@
 {% endfor %}
 <button class="primary">Save</button>
 <p class="hint">Where mail is sent from, the time zone, the public address for rating links and the API keys belong to the deploy and are set in its env file, not here.</p>
+</form>
+
+<h2 id="model-connections">Model connections</h2>
+<p class="intro">Anthropic is built in, with its key as <code>FORENOON_ANTHROPIC_API_KEY</code>. Add any server that speaks the OpenAI chat completions API: OpenAI itself, or LM Studio, Ollama, llama.cpp or vLLM on your network. Its models then appear in the model settings above, named <code>&lt;connection&gt;/&lt;model&gt;</code>. A connection's key goes in the deploy's env file, never here; a server on your network may need none.</p>
+{% for c in connections %}
+<form class="sheet wide settings" method="post" action="/settings/connections/{{ c.name }}">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<h3>{{ c.name }}</h3>
+<p>{{ c.status }}</p>
+<p class="hint">Key: <code>{{ c.key_env }}</code> in the env file.</p>
+<label>Address <input name="address" maxlength="200" value="{{ c.address }}" required></label>
+<label>Context size (tokens) <input name="context_tokens" type="number" step="1" min="16384" max="2000000" value="{{ c.context_tokens }}" required></label>
+<p class="hint">What the server is set to hold in one request, prompt and answer together. Batches are sized to fit, as a server may drop what does not fit without saying.</p>
+<label>Answer limit (tokens) <input name="output_tokens" type="number" step="1" min="1024" max="200000" value="{{ c.output_tokens }}" required></label>
+<label>Time limit (seconds) <input name="timeout_seconds" type="number" step="1" min="5" max="3600" value="{{ c.timeout_seconds }}" required></label>
+<label class="tick"><input type="checkbox" name="free" value="1"{% if c.free %} checked{% endif %}> A server you run on your network: its calls cost nothing and do not count toward the daily tokens</label>
+<label class="tick"><input type="checkbox" name="reasoning_off" value="1"{% if c.reasoning_off %} checked{% endif %}> Ask the model not to reason first</label>
+<p class="hint">Only a server on your network (a private or local address) can be free; a service on the internet, such as OpenAI or OpenRouter, is always counted, so the daily tokens still guard what it costs. Reasoning made ranking five times slower in a test on a local Qwen model, for no better picks; the request is not sent to OpenAI itself.</p>
+<button class="primary">Save</button> <button formaction="/settings/connections/{{ c.name }}/delete">Delete</button>
+</form>
+<form class="sheet wide settings" method="post" action="/settings/connections/{{ c.name }}/test">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Test with <select name="model"><option value="">The first model it lists</option>{% for m in c.models %}<option value="{{ m }}">{{ m }}</option>{% endfor %}</select></label>
+<button>Test</button>
+{% if c.testing %}<p class="hint">Test asked for: the pipeline runs it within a minute.</p>{% else if !c.test_result.is_empty() %}<p>Last test: {{ c.test_result }}</p>{% endif %}
+</form>
+{% endfor %}
+<form class="sheet wide settings" method="post" action="/settings/connections">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<h3>Add a connection</h3>
+<label>Name <input name="name" maxlength="32" pattern="[a-z0-9][a-z0-9\-]*" placeholder="lan" required></label>
+<p class="hint">Lower-case letters, digits and dashes. Its key, if it needs one, is <code>FORENOON_LLM_KEY_</code> and the name in capitals with dashes as underscores: <code>lan-box</code> reads <code>FORENOON_LLM_KEY_LAN_BOX</code>.</p>
+<label>Address <input name="address" maxlength="200" placeholder="http://192.168.1.20:8080/v1" required></label>
+<label>Context size (tokens) <input name="context_tokens" type="number" step="1" min="16384" max="2000000" value="32768" required></label>
+<label>Answer limit (tokens) <input name="output_tokens" type="number" step="1" min="1024" max="200000" value="16384" required></label>
+<label>Time limit (seconds) <input name="timeout_seconds" type="number" step="1" min="5" max="3600" value="300" required></label>
+<label class="tick"><input type="checkbox" name="free" value="1" checked> A server you run on your network: its calls cost nothing and do not count toward the daily tokens</label>
+<label class="tick"><input type="checkbox" name="reasoning_off" value="1" checked> Ask the model not to reason first</label>
+<button class="primary">Add</button>
 </form>
 {% endblock %}

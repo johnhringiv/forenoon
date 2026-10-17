@@ -27,7 +27,7 @@ from .discover import is_article, read_listing, site_host, site_source
 from .extract import Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
-from .llm import API_KEY_ENV, Backend
+from .llm import API_KEY_ENV, Backend, models_for_run
 from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
 from .read import Reading, Verdict
@@ -117,6 +117,8 @@ class RunReport:
     delivery_error: str = ""
     cap_reached: bool = False  # the day's cap was already used before this run started
     ranking: str = ""  # "", "model" or "fallback: <why>"
+    models: str = ""  # a model whose connection could not be reached, and what was used instead
+    model: str = ""  # the model the run used for its routine work, after any fallback
     reviews: dict[str, int] = field(default_factory=dict)  # model extraction verdicts, counted
     sign_in_needed: dict[str, str] = field(default_factory=dict)  # site -> why its session failed
     link_only: list[str] = field(default_factory=list)  # picked, but only the link could be had
@@ -140,6 +142,8 @@ class RunReport:
             lines += [f"{why}: the issue is on the web pages, and nothing was emailed.", ""]
         if self.delivery_error:
             lines += [f"**Delivery failed:** {self.delivery_error}", ""]
+        if self.models:
+            lines += [f"Models: {self.models}.", ""]
         if self.ranking:
             lines += [f"Ranking: {self.ranking}.", ""]
         if self.link_only:
@@ -594,6 +598,10 @@ def run(
     now = (now or datetime.now(UTC)).astimezone(zone)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     report = RunReport(started=_stamp(), user=user.id, dry_run=dry_run)
+    # Decided once, at the start: a connection that cannot be reached now gives way to the fallback.
+    llm_cfg, report.models = models_for_run(cfg.llm, backend)
+    cfg = replace(cfg, llm=llm_cfg)
+    report.model = llm_cfg.model
     cutoff = now - timedelta(days=cfg.max_age_days)
     sent_today = store.delivered_on(
         user.id,
@@ -733,7 +741,7 @@ def run(
             cfg.llm, backend, store, ranking.order, day_start.astimezone(UTC).isoformat(timespec="seconds")
         )
     elif backend is None:
-        report.ranking = f"fallback: no API key; set {API_KEY_ENV} in the deploy's env file"
+        report.ranking = f"fallback: no API key; set {API_KEY_ENV} in the deploy's env file, or add a connection on the Settings page"
     elif ranking.note:
         report.ranking = f"fallback: {ranking.note}"
     queue = pinned + ranking.order
@@ -954,7 +962,7 @@ def run(
         if choice:
             store.record_selection(
                 user.id, article_id, now, POLICY,
-                choice.score, choice.reason, choice.rank, choice.explore, choice.propensity,
+                choice.score, choice.reason, choice.rank, choice.explore, choice.propensity, cfg.llm.model,
             )  # fmt: skip
         else:
             lead = story_of.get(article_id, article_id)

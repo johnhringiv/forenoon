@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE connections SET address = ?, context_tokens = ?, output_tokens = ?, timeout_seconds = ?, free = ?,\n         reasoning_off = ?, checked_at = '' WHERE name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "53f328fa47276bb85bcc6c4f21f28bf69d344921a9cb5a1216ca3042bb0b5424"
+}

@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .config import Llm, User
-from .llm import Backend, LlmError
+from .llm import CHARS_PER_TOKEN, Backend, LlmError, Unreachable, free, input_budget
 from .rank import MAX_REASON_CHARS, MAX_SUBJECT_LINKS, reader_profile
 from .store import Store
 
@@ -120,12 +120,26 @@ class Verdict:
     lasting: str = ""  # days | months | years; "" when the model did not say
 
 
-def _batches(readings: list[Reading]) -> list[list[Reading]]:
+def _tokens(text: str) -> int:
+    """A text's tokens, estimated: by words, or by characters when its words are long (URLs,
+    code, other languages), so a batch is never larger than the request will be."""
+    return max(int(len(text.split()) * TOKENS_PER_WORD), len(text) // CHARS_PER_TOKEN)
+
+
+def _batches(readings: list[Reading], limit: int = BATCH_TOKENS) -> list[list[Reading]]:
+    """The readings in order, in batches of at most BATCH_ARTICLES and about `limit` tokens. An
+    article longer than `limit` on its own is cut to fit."""
     out: list[list[Reading]] = [[]]
     size = 0
     for reading in readings:
-        cost = int(len(reading.text.split()) * TOKENS_PER_WORD) + TOKENS_PER_ARTICLE
-        if out[-1] and (len(out[-1]) >= BATCH_ARTICLES or size + cost > BATCH_TOKENS):
+        cost = _tokens(reading.text) + len(json.dumps(reading.links)) // CHARS_PER_TOKEN + TOKENS_PER_ARTICLE
+        if cost > limit:  # alone too long: cut, its links still sent whole
+            room = max(100, limit - TOKENS_PER_ARTICLE - len(json.dumps(reading.links)) // CHARS_PER_TOKEN)
+            words = max(1, int(room / TOKENS_PER_WORD))
+            text = " ".join(reading.text.split()[:words])[: room * CHARS_PER_TOKEN]
+            reading = replace(reading, text=text)
+            cost = limit
+        if out[-1] and (len(out[-1]) >= BATCH_ARTICLES or size + cost > limit):
             out.append([])
             size = 0
         out[-1].append(reading)
@@ -140,7 +154,7 @@ def _listing(batch: list[Reading], limit: int) -> str:
             "title": r.title,
             "source": r.source,
             "words": r.words,
-            "truncated": r.words > limit,
+            "truncated": len(r.text.split()) < r.words,  # cut at read_words, or to fit the context
             "text": r.text,
             "links": [{"n": n, **link} for n, link in enumerate(r.links, 1)],
         }
@@ -185,18 +199,29 @@ def read(
         return {}
     profile = reader_profile(user, store)
     out: dict[str, Verdict] = {}
-    for batch in _batches(readings):
-        words = sum(len(r.text.split()) for r in batch)
-        estimate = TOKENS_OVERHEAD + int(words * TOKENS_PER_WORD) + TOKENS_PER_ARTICLE * len(batch)
+    # A connection with a small context gets smaller batches: what does not fit may be dropped.
+    budget = input_budget(backend, cfg.model)
+    unlimited = free(backend, cfg.model)  # a server you run is not held to the daily tokens
+    limit = BATCH_TOKENS
+    if budget is not None:
+        limit = max(1000, min(limit, budget - TOKENS_OVERHEAD - (len(SYSTEM) + len(profile)) // CHARS_PER_TOKEN))
+    for batch in _batches(readings, limit):
+        estimate = (
+            TOKENS_OVERHEAD
+            + sum(_tokens(r.text) + len(json.dumps(r.links)) // CHARS_PER_TOKEN for r in batch)
+            + TOKENS_PER_ARTICLE * len(batch)
+        )
         used = store.llm_tokens_since(today_start)
-        if used + estimate > cfg.daily_token_cap:
+        if not unlimited and used + estimate > cfg.daily_token_cap:
             log.warning("reading pass stopped: daily token cap reached (%d of %d used)", used, cfg.daily_token_cap)
             break
         try:
             reply = backend.structured(SYSTEM, _listing(batch, cfg.read_words), SCHEMA, model=cfg.model, shared=profile)
         except LlmError as exc:
-            store.log_llm_call("read", cfg.model, 0, 0, "error", str(exc)[:300])
+            store.log_llm_error("read", cfg.model, exc)
             log.warning("reading pass batch failed: %s", exc)
+            if isinstance(exc, Unreachable) and exc.down:
+                break  # gone, or too slow twice running (see Router): the other batches would fare the same
             continue
         got = _validated(reply.data, batch)
         store.log_llm_reply("read", cfg.model, reply, "ok" if got else "invalid")

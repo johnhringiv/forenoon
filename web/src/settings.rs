@@ -22,7 +22,8 @@ use chrono_tz::Tz;
 use std::str::FromStr;
 
 use crate::{
-    auth::AuthSession,
+    auth::{AuthSession, User},
+    connections::{self, View},
     db::{self, now_iso},
     pages::{AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, thousands},
 };
@@ -171,6 +172,9 @@ struct SettingsPage {
     saved: bool,
     /// What the model has used today and this month, and what it cost.
     usage: Vec<String>,
+    connections: Vec<View>,
+    /// What was just done to a connection.
+    notice: Option<&'static str>,
 }
 
 /// Today's and this month's use of the model, in the install's time zone (the pipeline's day).
@@ -200,6 +204,13 @@ async fn usage(state: &AppState, stored: &HashMap<String, String>) -> Result<Vec
         ),
         format!("This month: {} tokens, about ${:.2}.", thousands(month.tokens), month.cost),
     ];
+    if month.free_tokens > 0 {
+        lines.push(format!(
+            "Also {} tokens today and {} this month on servers you run, which cost nothing and are not capped.",
+            thousands(day.free_tokens),
+            thousands(month.free_tokens)
+        ));
+    }
     if month.unpriced > 0 {
         lines.push(format!(
             "{} calls this month were to a model with no known price and are not in the cost.",
@@ -214,14 +225,20 @@ async fn stored(state: &AppState) -> Result<HashMap<String, String>, sqlx::Error
     Ok(rows.into_iter().map(|row| (row.key, row.value)).collect())
 }
 
-/// `shown` is what to put in the fields: what is stored, or a form that was refused.
-fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -> Vec<Section> {
+/// `shown` is what to put in the fields: what is stored, or a form that was refused. The model
+/// settings offer the shipped models and then `listed`, the models the connections list.
+fn sections(
+    shown: &HashMap<String, String>,
+    stored: &HashMap<String, String>,
+    listed: &[(String, String)],
+) -> Vec<Section> {
     let mut sections: Vec<Section> = Vec::new();
     for spec in SPECS.iter() {
         let default = spec.default_text();
         let value = shown.get(&spec.key).cloned().unwrap_or_else(|| default.clone());
+        let extra = if spec.models { listed } else { &[] };
         let mut choices: Vec<(String, String, bool)> =
-            spec.choices.iter().map(|(key, label)| (key.clone(), label.clone(), *key == value)).collect();
+            spec.choices.iter().chain(extra).map(|(key, label)| (key.clone(), label.clone(), *key == value)).collect();
         if spec.models && !choices.iter().any(|(_, _, selected)| *selected) {
             choices.push((value.clone(), format!("{value} (not in the list)"), true));
         }
@@ -248,6 +265,31 @@ fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -
 #[derive(Deserialize)]
 pub struct PageQuery {
     saved: Option<String>,
+    connection: Option<String>,
+}
+
+/// The page, with `typed` in the fields when a form was refused (else what is stored) and the
+/// problem said; a 400 then.
+pub(crate) async fn render(
+    state: &AppState,
+    user: &User,
+    session: &Session,
+    typed: Option<HashMap<String, String>>,
+    error: Option<String>,
+) -> Page {
+    let stored = stored(state).await?;
+    let connections = connections::views(&state.pool).await?;
+    let page = SettingsPage {
+        nav: Nav::new(state, user, "settings").await?,
+        csrf: csrf_token(session).await?,
+        sections: sections(typed.as_ref().unwrap_or(&stored), &stored, &connections::model_choices(&connections)),
+        saved: false,
+        usage: usage(state, &stored).await?,
+        connections,
+        notice: None,
+        error,
+    };
+    html(if page.error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK }, page)
 }
 
 pub async fn page(
@@ -261,13 +303,25 @@ pub async fn page(
         return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
     }
     let stored = stored(&state).await?;
+    let connections = connections::views(&state.pool).await?;
+    let notice = match query.connection.as_deref() {
+        Some("added") => Some("Connection added. The pipeline checks it within a minute: reload to see what it found."),
+        Some("saved") => Some("Connection saved. The pipeline checks it again within a minute."),
+        Some("deleted") => {
+            Some("Connection deleted. A model setting that named it is kept but cannot be reached: choose another.")
+        }
+        Some("testing") => Some("Test asked for. The pipeline runs it within a minute: reload to see the result."),
+        _ => None,
+    };
     let page = SettingsPage {
         nav: Nav::new(&state, &user, "settings").await?,
         csrf: csrf_token(&session).await?,
-        sections: sections(&stored, &stored),
+        sections: sections(&stored, &stored, &connections::model_choices(&connections)),
         error: None,
         saved: query.saved.is_some(),
         usage: usage(&state, &stored).await?,
+        connections,
+        notice,
     };
     html(StatusCode::OK, page)
 }
@@ -296,16 +350,7 @@ pub async fn save(
                 for spec in SPECS.iter().filter(|spec| spec.kind == "bool") {
                     typed.insert(spec.key.clone(), if form.contains_key(&spec.key) { "1" } else { "0" }.to_owned());
                 }
-                let stored = stored(&state).await?;
-                let page = SettingsPage {
-                    nav: Nav::new(&state, &user, "settings").await?,
-                    csrf: csrf_token(&session).await?,
-                    sections: sections(&typed, &stored),
-                    error: Some(problem),
-                    saved: false,
-                    usage: usage(&state, &stored).await?,
-                };
-                return html(StatusCode::BAD_REQUEST, page);
+                return render(&state, &user, &session, Some(typed), Some(problem)).await;
             }
         }
     }

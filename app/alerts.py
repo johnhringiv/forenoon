@@ -18,6 +18,8 @@ def problems(report: RunReport, cfg: Config) -> list[str]:
     found = []
     if report.delivery_error:
         found.append(f"Delivery failed: {report.delivery_error}")
+    if report.models:
+        found.append(f"Models: {report.models}.")
     if report.ranking.startswith("fallback"):
         found.append(f"Ranking was skipped ({report.ranking.removeprefix('fallback: ')}); sent newest first.")
     feed_errors = [s for s in report.sources if s.feed_error]

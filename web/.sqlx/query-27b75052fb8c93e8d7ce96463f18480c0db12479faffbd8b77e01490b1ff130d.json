@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT name AS \"name!\", address, context_tokens, output_tokens, timeout_seconds,\n                  free AS \"free: bool\", reasoning_off AS \"reasoning_off: bool\", checked_at, key_set AS \"key_set: bool\",\n                  error, models, test_requested_at, tested_at, test_result\n           FROM connections ORDER BY name",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "address",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "context_tokens",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "output_tokens",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "timeout_seconds",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "free: bool",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "reasoning_off: bool",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "checked_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "key_set: bool",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "error",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "models",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "test_requested_at",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "tested_at",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "test_result",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "27b75052fb8c93e8d7ce96463f18480c0db12479faffbd8b77e01490b1ff130d"
+}

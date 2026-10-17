@@ -102,6 +102,13 @@ export FORENOON_WEB_SECURE_COOKIES="${FORENOON_WEB_SECURE_COOKIES:-false}"
 export FORENOON_WEB_CLIENT_IP_HEADER FORENOON_WEB_TRUSTED_PROXIES="${FORENOON_WEB_TRUSTED_PROXIES:-127.0.0.1,::1}"
 # Exported so `docker run -e NAME` can pass them without the values appearing in `ps`.
 export FORENOON_FEEDBACK_SECRET FORENOON_SMTP_PASSWORD FORENOON_ANTHROPIC_API_KEY TUNNEL_TOKEN
+# Each model connection's key (FORENOON_LLM_KEY_<NAME>, see the Settings page), the same way.
+LLM_KEYS=""
+for name in $(grep -oE '^FORENOON_LLM_KEY_[A-Z0-9_]+' "$ENV_FILE" | sort -u); do
+    value=$(env_get "$name")
+    export "$name=$value"
+    LLM_KEYS="$LLM_KEYS -e $name"
+done
 
 start_tunnel() {
     docker stop -t 30 forenoon-cloudflared >/dev/null 2>&1 || true
@@ -273,7 +280,7 @@ run_app() {
 # The pipeline signs the rating links with the feedback secret; the web pages check them.
 run_app forenoon -e FORENOON_SMTP_PASSWORD -e FORENOON_ANTHROPIC_API_KEY -e FORENOON_PUBLIC_URL \
     -e FORENOON_SMTP_HOST -e FORENOON_SMTP_PORT -e FORENOON_SMTP_USERNAME -e FORENOON_SMTP_SENDER \
-    -e FORENOON_SMTP_MAX_MESSAGE_BYTES -e FORENOON_SMTP_IMPLICIT_TLS \
+    -e FORENOON_SMTP_MAX_MESSAGE_BYTES -e FORENOON_SMTP_IMPLICIT_TLS $LLM_KEYS \
     "$IMAGE" schedule
 
 start_browser

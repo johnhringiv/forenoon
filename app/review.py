@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 
 from .config import Llm
-from .llm import Backend, LlmError
+from .llm import Backend, LlmError, free
 from .render import Article
 from .store import Store
 
@@ -93,7 +93,7 @@ def review(
     if backend is None or not articles:
         return {}
     estimate = TOKENS_OVERHEAD + TOKENS_PER_ARTICLE * len(articles)
-    if store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
+    if not free(backend, cfg.model) and store.llm_tokens_since(today_start) + estimate > cfg.daily_token_cap:
         log.warning("extraction check skipped: daily token cap reached")
         return {}
     samples = [_sample(article) for article in articles]
@@ -101,7 +101,7 @@ def review(
     try:
         reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("check", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("check", cfg.model, exc)
         log.warning("extraction check failed: %s", exc)
         return {}
     wanted = {article.id for article in articles}

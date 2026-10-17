@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from .config import Llm, User
-from .llm import Backend, LlmError
+from .llm import Backend, LlmError, free
 from .rank import rated_entries
 from .store import Store
 
@@ -87,7 +87,7 @@ def learn(
     now = now or datetime.now(UTC)
     if not cfg.learn or backend is None or not store.can_learn() or not due(store, user, now):
         return False
-    if store.llm_tokens_since(today_start) + TOKENS_ESTIMATE > cfg.daily_token_cap:
+    if not free(backend, cfg.model) and store.llm_tokens_since(today_start) + TOKENS_ESTIMATE > cfg.daily_token_cap:
         log.warning("reader notes not updated: daily token cap reached")
         return False
     interests = user.interests.strip() or "(none given)"
@@ -99,7 +99,7 @@ def learn(
     try:
         reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("learn", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("learn", cfg.model, exc)
         log.warning("reader notes not updated: %s", exc)
         return False
     notes = _validated(reply.data)
