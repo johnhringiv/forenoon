@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS selections (
     rank INTEGER,
     explore INTEGER NOT NULL DEFAULT 0,
     propensity REAL,
+    model TEXT NOT NULL DEFAULT '',  -- the model that scored it, named with its connection
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS extraction_reviews (

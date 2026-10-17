@@ -160,7 +160,7 @@ def choose(
             model=model,
         )
     except LlmError as exc:
-        store.log_llm_call("choose", model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("choose", model, exc)
         log.warning("choosing the issue failed: %s", exc)
         return None
     wanted = {c.id for c in candidates}

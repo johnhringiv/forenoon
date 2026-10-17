@@ -101,7 +101,7 @@ def review(
     try:
         reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("check", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("check", cfg.model, exc)
         log.warning("extraction check failed: %s", exc)
         return {}
     wanted = {article.id for article in articles}

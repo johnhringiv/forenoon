@@ -18,20 +18,22 @@ from random import Random
 import lxml.html
 
 from .config import Llm, User
-from .llm import Backend, LlmError
+from .llm import Backend, LlmError, input_budget
 from .sources import Item
 from .store import Store
 from .tokens import reason_labels
 
 log = logging.getLogger("forenoon")
 
-POLICY = "claude-rank-v2"  # v2: shuffled batches, an equal share of each read, the issue chosen
+POLICY = "rank-v2"  # v2: shuffled batches, an equal share of each read, the issue chosen; the model is recorded apart
 ABSTRACT_WORDS = 100
 MAX_REASON_CHARS = 140
 RECENT_RATINGS = 40
 # Rough size of one ranking request, used to refuse a call that would cross the daily cap.
 TOKENS_PER_CANDIDATE = 260
 TOKENS_OVERHEAD = 2500  # per call: instructions, interests and recent ratings
+TOKENS_PER_SCORE = 60  # of the answer, per candidate
+CHARS_PER_TOKEN = 4
 
 SYSTEM = """\
 You rank articles for one reader's daily digest.
@@ -64,6 +66,7 @@ A candidate picked up in several places (a feed and an aggregator, or two aggreg
 of wide interest, which counts in its favour, but not for more than its substance.
 
 Return one entry per candidate id, using only the ids given."""
+SYSTEM_TOKENS = len(SYSTEM) // CHARS_PER_TOKEN + 500  # and the schema, which some servers are shown
 
 SCHEMA = {
     "type": "object",
@@ -208,7 +211,7 @@ def rank(
     # Scored in batches: one reply holds about 200 scores, and a short list is judged with
     # more care than a long one. A batch that fails leaves its candidates unscored.
     reader = reader_profile(user, store)
-    size = max(1, cfg.batch_size)
+    size = batch_size(cfg, backend, reader)
     scores: dict[str, tuple[float, str]] = {}
     batches: list[list[str]] = []  # the ids each batch scored
     problem = ""
@@ -227,7 +230,7 @@ def rank(
         try:
             reply = backend.structured(SYSTEM, _listing(batch), SCHEMA, model=cfg.model, shared=reader)
         except LlmError as exc:
-            store.log_llm_call("rank", cfg.model, 0, 0, "error", str(exc)[:300])
+            store.log_llm_error("rank", cfg.model, exc)
             problem = f"model call failed: {exc}"[:200]
             continue
         got = _validated(reply.data, batch)
@@ -274,6 +277,17 @@ def rank(
     if explored is not None:
         short.add(explored.id)
     return Ranking(order, choices, note, [item for item in order if item.id in short])
+
+
+def batch_size(cfg: Llm, backend: Backend | None, reader: str) -> int:
+    """Candidates per ranking call: the setting, or fewer when the model's connection has a
+    smaller context than a full batch needs."""
+    size = max(1, cfg.batch_size)
+    budget = input_budget(backend, cfg.model)
+    if budget is None:
+        return size
+    room = budget - SYSTEM_TOKENS - len(reader) // CHARS_PER_TOKEN
+    return max(1, min(size, room // TOKENS_PER_CANDIDATE))
 
 
 def _shares(batches: list[list[str]], scores: dict[str, tuple[float, str]], wanted: int) -> set[str]:
@@ -352,7 +366,7 @@ def group_stories(
     try:
         reply = backend.structured(GROUP_SYSTEM, prompt, GROUP_SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("group", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("group", cfg.model, exc)
         return {}
     store.log_llm_reply("group", cfg.model, reply, "ok")
     by_id = {item.id: item for item in top}
@@ -431,7 +445,7 @@ def subject_links(
     try:
         reply = backend.structured(LINK_SYSTEM, prompt, LINK_SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("links", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("links", cfg.model, exc)
         return None
     store.log_llm_reply("links", cfg.model, reply, "ok")
     counts = {a["id"]: len(a["links"]) for a in articles}

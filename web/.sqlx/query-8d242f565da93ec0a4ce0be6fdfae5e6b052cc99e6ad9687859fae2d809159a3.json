@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO connections (name, address, context_tokens, output_tokens, timeout_seconds, free, reasoning_off, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "8d242f565da93ec0a4ce0be6fdfae5e6b052cc99e6ad9687859fae2d809159a3"
+}

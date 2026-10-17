@@ -156,8 +156,9 @@ what its own users configure and delivers only to the addresses its readers have
   start on port 465 instead of STARTTLS; both programs read the same variables), the web
   pages' public address (`FORENOON_PUBLIC_URL`), the shipped model list
   (`FORENOON_MODELS`, set by the image) and the secrets (`FORENOON_FEEDBACK_SECRET`,
-  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`). There is no configuration file.
-- The API key is required: the model chooses the articles. Alerts are on by default and go
+  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`, and `FORENOON_LLM_KEY_<NAME>` for
+  each model connection that needs a key). There is no configuration file.
+- A model is required (the Anthropic key, or a connection): it chooses the articles. Alerts are on by default and go
   to every admin's sign-in address unless another address is set.
 
 ## 3. The daily run
@@ -260,7 +261,7 @@ The whole process for one reader's day, in order. The sections named give the de
 9. **Following links** (section 7e). A short pointer post is replaced by the pages it is
    about; a longer article is delivered with the page it responds to, in one story.
 10. **Recorded.** Every score and reason, delivered or not (the archive shows what was
-    passed over and why); for each delivery the policy (`claude-rank-v2`), score, rank,
+    passed over and why); for each delivery the policy (`rank-v2`, and the model that scored it), score, rank,
     whether it was the exploration pick and the probability it was put forward (1 when the
     model chose it); and in the run's report, the model's choice with what became of each.
 
@@ -426,23 +427,44 @@ source).
   goes to one article chosen uniformly at random from those outside the top picks
   (exploration). If an article then fails extraction, the next in order takes its place.
 - **Models.** A model is named with the connection it is reached through,
-  `anthropic/claude-haiku-5-5`; Anthropic is the only connection so far. Two settings: every
-  call uses `llm.model` (Claude Haiku 5.5), except the choosing of the issue (section 7f),
-  which can have its own (`llm.choose_model`): one small call a day that decides what the
-  reader gets, where a stronger model costs cents. Every call is logged and priced under the
-  model it used. The models offered, and their prices, are listed in `web/models.json`,
+  `anthropic/claude-haiku-5-5`. Anthropic is built in. Any other server that speaks the
+  OpenAI chat completions API (OpenAI itself, or LM Studio, Ollama, llama.cpp or vLLM on the
+  network) is added on the Settings page as a connection: a name, its address, the context
+  size the server holds, an answer limit, a time limit, whether it is a server you run (its
+  calls cost nothing and stay outside the token cap) and whether to ask the model not to
+  reason first (on by default; not sent to OpenAI). Its key is `FORENOON_LLM_KEY_<NAME>` in
+  the pipeline's environment, never in the database. Its models are then named
+  `<connection>/<model>`. The web pages never reach a server: the scheduler checks each
+  connection within a minute of a change and every ten minutes after, writes back whether
+  it was reached, whether its key is set and which models it lists (offered in the model
+  settings), and runs the Test asked for on the page (one small request: its time, and
+  whether the answer matched). Three settings: every call uses `llm.model` (Claude Haiku
+  5.5), except the choosing of the issue (section 7f), which can have its own
+  (`llm.choose_model`): one small call a day that decides what the reader gets, where a
+  stronger model costs cents. `llm.fallback_model` replaces a model for the whole run when,
+  at its start, a two-second look at its connection's model list fails or does not list it;
+  the report and the alert say so. Only an unreachable connection moves a run on, never a
+  bad answer. Every call is logged and priced under the model it used, and logged as
+  `unreachable` or `error` when it got no usable answer. The models offered, and their prices, are listed in `web/models.json`,
   shipped with the app and read-only: the web pages build it in for the Settings page's lists
   and the pipeline reads it for prices and for how each model is asked. The answer is a call
   of one tool, forced where the model allows it; a model that refuses a forced tool call
   (Sonnet 5.5, Opus 5.5, so marked in the file) or one not listed is asked for it in the
-  prompt instead.
+  prompt instead. An OpenAI-compatible server is sent the schema in strict mode (every
+  object closed, optional fields made nullable) and in the prompt as well, since a server
+  that enforces it by grammar does not show it to the model. Reasoning left in the text
+  (`<think>`) and a Markdown fence are removed; an answer that is not a JSON object is asked
+  for once more, saying what was wrong; an answer cut off at the answer limit is a bad
+  answer. Batches are sized to the connection's context size: a local server may drop what
+  does not fit without saying.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page, unless the reader turned that off on their Reading page.
-- **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
+- **Recorded per delivered article:** policy, the model that scored it, score, reason, rank among the day's candidates,
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
   checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
-  later batches are skipped; the cap counts cached input too. Every call is logged with
+  later batches are skipped; the cap counts cached input too, and only priced calls: one to
+  a server you run costs nothing and is left out. Every call is logged with
   model, input, cache-write, cache-read and output tokens, outcome and cost. The cost is
   worked out when the call is logged, from each model's published prices in
   `web/models.json` (the API does not report prices), so cached input is priced at the
@@ -941,8 +963,9 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 
 ## 15. Not built yet
 
-- Summaries; an OpenAI-compatible connection (OpenAI, or a local model through LM Studio,
-  Ollama, llama.cpp or vLLM) beside Anthropic; a ranker that needs no model call.
+- Summaries; a ranker that needs no model call; shadow mode (a second model ranking beside
+  the real run for a while, reported against the ratings); reasoning set per step rather
+  than per connection.
 - Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
 - The whole archive of a followed blog; full-text search of stored articles; expiring

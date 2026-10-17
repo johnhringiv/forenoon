@@ -31,9 +31,20 @@ openssl rand -hex 32    # paste as FORENOON_FEEDBACK_SECRET
 
 Fill in `FORENOON_HOST_DATA`, `TZ`, the mail server (`FORENOON_SMTP_HOST`,
 `FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`; see
-[setup-email.md](setup-email.md)) and `FORENOON_ANTHROPIC_API_KEY`, which Forenoon needs:
-the model is what chooses your articles. Without it a run still delivers, newest first, and
-the alert says the key is missing. Never commit `.env`.
+[setup-email.md](setup-email.md)) and a model: the model is what chooses your articles.
+Either set `FORENOON_ANTHROPIC_API_KEY`, or after the first start add a connection on the
+Settings page (Model connections) to any server that speaks the OpenAI chat completions API:
+OpenAI, or Ollama, LM Studio, llama.cpp or vLLM on your network. A connection's key, if it
+needs one, is `FORENOON_LLM_KEY_<NAME>` in `.env` (with docker compose, also add the line the
+compose file shows for it). The Settings page shows what the pipeline found at each server
+within a minute, and its Test button tries one small request. Without any model a run still
+delivers, newest first, and the alert says so. Never commit `.env`.
+
+For a server on your network: it must listen on an address the pipeline's container can
+reach (not only `127.0.0.1`), and the context size you give the connection must be what the
+server is really set to; Forenoon sizes its batches to it, and some servers drop what does
+not fit without saying. Turn reasoning off (the default) unless you have time to spare: in a
+test it made ranking five times slower for no better picks.
 Changing `FORENOON_FEEDBACK_SECRET` invalidates every rating link already delivered.
 
 ## 3. First run

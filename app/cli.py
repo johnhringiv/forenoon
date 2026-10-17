@@ -47,7 +47,7 @@ def load(store: Store | None = None) -> Config:
 def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     fetcher = Fetcher(cfg.user_agent, store)
-    backend = backend_from_env(cfg.llm)
+    backend = backend_from_env(cfg.llm, store.connections())
     failed = 0
     try:
         # Read at every run, so a change made on the account page applies to the next one.
@@ -188,6 +188,22 @@ def _check_sources(cfg: Config) -> int:
         return 0
 
 
+def _look_after_connections(cfg: Config) -> int:
+    """Check the model connections and run the tests asked for on the Settings page. Run every
+    minute by the scheduler."""
+    from .connections import look_after
+
+    try:
+        store = Store(cfg.db_path)
+        try:
+            return look_after(store)
+        finally:
+            store.close()
+    except Exception:
+        log.exception("connection checks failed")
+        return 0
+
+
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
     while True:
         cfg = _reload(cfg)
@@ -200,6 +216,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
                 _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
                 _check_sources(cfg)
+                _look_after_connections(cfg)
         cfg = _reload(cfg)
         try:
             _run_all(cfg, args)

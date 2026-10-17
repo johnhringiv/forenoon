@@ -99,7 +99,7 @@ def learn(
     try:
         reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
     except LlmError as exc:
-        store.log_llm_call("learn", cfg.model, 0, 0, "error", str(exc)[:300])
+        store.log_llm_error("learn", cfg.model, exc)
         log.warning("reader notes not updated: %s", exc)
         return False
     notes = _validated(reply.data)
