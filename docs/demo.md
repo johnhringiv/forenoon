@@ -172,9 +172,11 @@ taken with `tools/screenshots.py`, and should be retaken from a persona's demo h
 demo install runs, so that it shows the persona switcher rather than an admin's pages.
 
 Route the landing hostname to the web pages like the persona hostnames. The page and the
-persona pages carry `Cache-Control: public`, so Cloudflare's cache serves a busy day; and when
-the deploy is down (the NAS rebooting, the tunnel gone) a Cloudflare Worker,
-`deploy/cloudflare/outage-worker.js`, shows a page saying so in place of Cloudflare's error
-screen, as gotflashes does. It passes every other answer through, the pages' own errors
-included. Deploy it once with `npx wrangler deploy` from that folder; its routes cover
-`forenoon.dev` and every subdomain.
+persona pages carry `Cache-Control: public`, so Cloudflare's cache serves a busy day. When the
+deploy is down (the NAS rebooting, the tunnel gone), a Cloudflare Worker,
+`deploy/cloudflare/outage-worker.js`, steps in as gotflashes's does: on `forenoon.dev` it
+serves the landing page itself from a copy of `web/site` bundled with the Worker, with a line
+under the masthead saying the demo behind its links is away; on a persona host it shows a
+short notice. It passes every other answer through, the pages' own errors included. Deploy it
+with `npx wrangler deploy` from that folder, and again when the page changes, since the copy
+is taken at deploy time; its routes cover `forenoon.dev` and every subdomain.

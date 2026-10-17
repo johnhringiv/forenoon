@@ -1,6 +1,8 @@
-// A Cloudflare Worker on forenoon.dev: when the origin behind the tunnel cannot answer, a
-// visitor gets a page in Forenoon's own voice instead of Cloudflare's error screen. Every
-// other answer, the pages' own errors included, passes through untouched. Deployed with
+// A Cloudflare Worker on forenoon.dev and its subdomains. Every request goes to the origin
+// behind the tunnel as usual. When the origin cannot answer, the landing page is served from
+// a copy held at the edge (the static assets in wrangler.toml: web/site, bundled at deploy),
+// with a line saying the demo behind its links is away; a persona host gets a short notice.
+// Everything else, the pages' own errors included, passes through untouched. Deployed with
 // wrangler.toml beside this file; see docs/demo.md.
 
 // What counts as the origin being down, not the application failing: the tunnel or the
@@ -8,36 +10,56 @@
 // throwing), or a gateway in front of the pages with no live backend (502 to 504). A 500 is
 // the application's own and is shown as it is.
 const OUTAGE = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 530]);
+const LANDING_HOST = "forenoon.dev";
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     let response;
     try {
       response = await fetch(request);
     } catch {
-      return outage(request);
+      return outage(request, env);
     }
-    return OUTAGE.has(response.status) ? outage(request) : response;
+    return OUTAGE.has(response.status) ? outage(request, env) : response;
   },
 };
 
-function outage(request) {
-  // A page for a browser going somewhere; a bare status for a picture or a script it asked for.
+async function outage(request, env) {
+  const url = new URL(request.url);
+  if (url.hostname === LANDING_HOST) {
+    // The page and its pictures, from the edge's copy; the page with its notice.
+    const asset = await env.ASSETS.fetch(request);
+    if (!asset.ok) {
+      return asset;
+    }
+    const headers = new Headers(asset.headers);
+    headers.set("cache-control", "no-store");
+    if (url.pathname !== "/") {
+      return new Response(asset.body, { status: asset.status, headers });
+    }
+    const notice = `<p class="demo" style="max-width:1120px;margin:.8rem auto 0;padding:0 20px;font:.95rem/1.5 system-ui,sans-serif;color:#8a3b12">The demo behind the links below is away for a few minutes: the machine that runs it is not answering. This page is served from Cloudflare's copy.</p>`;
+    const rewritten = new HTMLRewriter()
+      .on("header.mast", { element(header) { header.after(notice, { html: true }); } })
+      .transform(new Response(asset.body, { status: asset.status, headers }));
+    return rewritten;
+  }
+  // A persona host, or the admin's: a page for a browser going somewhere, a bare status for
+  // a picture or a script it asked for.
   const mode = request.headers.get("sec-fetch-mode");
   const navigating = mode ? mode === "navigate" : (request.headers.get("accept") || "").includes("text/html");
   const headers = { "retry-after": "120", "cache-control": "no-store" };
   if (!navigating) {
     return new Response("Service Unavailable", { status: 503, headers });
   }
-  return new Response(PAGE, { status: 503, headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+  return new Response(NOTICE, { status: 503, headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
 }
 
-const PAGE = `<!DOCTYPE html>
+const NOTICE = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Forenoon is not answering</title>
+<title>The demo is not answering</title>
 <style>
 :root { color-scheme:light dark; --bg:#f6f4ef; --ink:#1c1b19; --soft:#6b675f; --accent:#8a3b12 }
 @media (prefers-color-scheme:dark) { :root { --bg:#161513; --ink:#ece8df; --soft:#a39e93; --accent:#e0a074 } }
@@ -55,9 +77,9 @@ a { color:var(--accent) }
 <body>
 <main>
 <div class="plate">Forenoon</div>
-<h1>The press is stopped for a moment.</h1>
-<p>The machine that serves these pages is not answering. It is usually back within a few minutes; this page will go away by itself when it is.</p>
-<p class="small">The project itself is unaffected: <a href="https://github.com/johnhringiv/forenoon">github.com/johnhringiv/forenoon</a>.</p>
+<h1>The demo is away for a moment.</h1>
+<p>The machine that serves these pages is not answering. It is usually back within a few minutes; this page goes away by itself when it is.</p>
+<p class="small">Meanwhile: <a href="https://forenoon.dev/">what Forenoon is</a>, and <a href="https://github.com/johnhringiv/forenoon">the source</a>.</p>
 </main>
 </body>
 </html>`;
