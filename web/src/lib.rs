@@ -9,6 +9,7 @@ pub mod demo;
 pub mod feedback;
 mod hex;
 pub mod icons;
+pub mod landing;
 pub mod limit;
 pub mod mail;
 pub mod pages;
@@ -65,6 +66,9 @@ pub struct Options {
     /// Hostnames at which a reader's pages are shown read-only to anyone, for a public demo
     /// (`FORENOON_WEB_DEMO`); see `demo`. Empty for an ordinary install.
     pub demo: Vec<demo::Persona>,
+    /// The hostname the landing page is served at (`FORENOON_WEB_LANDING`); see `landing`.
+    /// `None` for an ordinary install.
+    pub landing: Option<String>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -164,6 +168,11 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
     let router = match options.demo.is_empty() {
         true => router,
         false => router.layer(middleware::from_fn_with_state(Arc::from(options.demo), demo::gate)),
+    };
+    // Outside everything: the landing host is decided on before any other layer sees the request.
+    let router = match options.landing {
+        Some(host) => router.layer(middleware::from_fn_with_state(Arc::<str>::from(host), landing::gate)),
+        None => router,
     };
     Ok(router.with_state(state))
 }

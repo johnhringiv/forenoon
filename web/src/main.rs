@@ -71,6 +71,10 @@ enum Command {
         /// alice.forenoon.example=alice,bob.forenoon.example=bob. Route them here as well.
         #[arg(long, env = "FORENOON_WEB_DEMO", default_value = "")]
         demo: String,
+        /// The hostname the project's landing page (built into this program) is served at,
+        /// for the public site: forenoon.dev. Route it here as well. Empty for an ordinary install.
+        #[arg(long, env = "FORENOON_WEB_LANDING", default_value = "")]
+        landing: String,
     },
     /// Create an account. The id names the reader in the pipeline's records and never changes.
     AddUser {
@@ -157,6 +161,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
             smtp_sender,
             logins_dir,
             demo,
+            landing,
         } => {
             if db::user_count(&pool).await? == 0 {
                 eprintln!("No accounts yet. Create one with: forenoon-web add-user <id> --email <address>");
@@ -211,6 +216,8 @@ async fn run(cli: Cli) -> Result<(), Error> {
                     eprintln!("{line}");
                 }
             }
+            let landing =
+                forenoon_web::landing::host(&landing).map_err(|problem| format!("FORENOON_WEB_LANDING: {problem}"))?;
             let options = Options {
                 secure_cookies,
                 mailer,
@@ -221,6 +228,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
                 feedback_secret,
                 sender,
                 demo,
+                landing,
             };
             let router = app(pool, options).await?;
             let listener = tokio::net::TcpListener::bind(listen).await?;

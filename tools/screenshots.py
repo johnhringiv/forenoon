@@ -1,10 +1,10 @@
-"""The README's screenshots of the web pages, in light and dark, saved as WebP in docs/images.
+"""The README's screenshots of the web pages, in light and dark, saved as WebP in web/site/images.
 
 Run against a web app serving a copy of a database, never the live one, signed in as a reader
 whose page shows nothing private (the confirm-your-email banner names the address: confirm it
 in the copy first). Needs Playwright with Chromium and Pillow:
 
-    python tools/screenshots.py http://127.0.0.1:8133 reader@example.com <password> docs/images
+    python tools/screenshots.py http://127.0.0.1:8133 reader@example.com <password> web/site/images
 """
 
 import io

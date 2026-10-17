@@ -80,6 +80,8 @@ services:
       FORENOON_SMTP_IMPLICIT_TLS: ${FORENOON_SMTP_IMPLICIT_TLS:-false}
       # A public demo: hostnames at which a reader's pages are shown read-only to anyone.
       FORENOON_WEB_DEMO: ${FORENOON_WEB_DEMO:-}
+      # The public site: the hostname the project's landing page is served at.
+      FORENOON_WEB_LANDING: ${FORENOON_WEB_LANDING:-}
 
   # Enabled by adding "browser" to COMPOSE_PROFILES in .env. Reads article pages with Chrome,
   # signed in as the reader, for the sites given a subscriber session on the Sources page;

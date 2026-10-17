@@ -68,7 +68,7 @@ pub struct Demo {
 const CACHE_SECONDS: u32 = 300;
 
 /// The host a request names, lowercase, with and without its port.
-fn hosts(request: &Request) -> Option<(String, String)> {
+pub(crate) fn hosts(request: &Request) -> Option<(String, String)> {
     let host = request.headers().get(header::HOST)?.to_str().ok()?.trim().to_ascii_lowercase();
     let bare = match host.rsplit_once(':') {
         Some((bare, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => bare.to_owned(),

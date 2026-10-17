@@ -67,11 +67,12 @@ async fn site(with_pipeline: bool) -> Site {
 }
 
 async fn site_with(with_pipeline: bool, secure_cookies: bool) -> Site {
-    site_full(with_pipeline, secure_cookies, "").await
+    site_full(with_pipeline, secure_cookies, "", None).await
 }
 
-/// `demo`: the demo hosts, as `FORENOON_WEB_DEMO` is written.
-async fn site_full(with_pipeline: bool, secure_cookies: bool, demo: &str) -> Site {
+/// `demo`: the demo hosts, as `FORENOON_WEB_DEMO` is written; `landing`: the hostname the
+/// landing page is served at, as `FORENOON_WEB_LANDING` names it.
+async fn site_full(with_pipeline: bool, secure_cookies: bool, demo: &str, landing: Option<&str>) -> Site {
     let folder = tempfile::tempdir().unwrap();
     let pool = db::open(&folder.path().join("forenoon.sqlite3")).await.unwrap();
     if with_pipeline {
@@ -99,6 +100,7 @@ async fn site_full(with_pipeline: bool, secure_cookies: bool, demo: &str) -> Sit
         feedback_secret: Some(FEEDBACK_SECRET.to_vec()),
         sender: Some("issues@example.com".to_owned()),
         demo: forenoon_web::demo::parse(demo).unwrap(),
+        landing: landing.map(str::to_owned),
     };
     let router = app(pool.clone(), options).await.unwrap();
     Site { router, pool, mail, folder }
@@ -2469,7 +2471,7 @@ async fn a_shared_link_previews_with_the_sites_card() {
 async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session() {
     const DEMO: &str =
         "john.forenoon.test=john,mary.forenoon.test=mary,nobody.forenoon.test=nobody,port.forenoon.test:8081=mary";
-    let site = site_full(true, false, DEMO).await;
+    let site = site_full(true, false, DEMO, None).await;
     let pool = &site.pool;
     let sent = "2026-10-10T10:00:00+00:00";
     article(pool, "a1", "https://blog.example/1", "Blog", "Johns article", "john", sent).await;
@@ -2584,7 +2586,7 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     assert!(text.contains("Marys article") && !text.contains("Johns article") && !text.contains(r#"method="post""#));
 
     // Over https, a demo host is an address of its own, not sent to the public one.
-    let secure = site_full(true, true, DEMO).await;
+    let secure = site_full(true, true, DEMO, None).await;
     let request = Request::get("/").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
     assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }
@@ -2593,7 +2595,7 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
 async fn demo_personas_and_their_feeds_are_made_on_start_and_only_once() {
     // Mary is a reader made by hand, named as a persona too; she has stopped following Lobsters.
     const DEMO: &str = "mara.forenoon.test=mara,theo.forenoon.test=theo,june.forenoon.test=june,m.forenoon.test=mary,x.forenoon.test=nobody";
-    let site = site_full(true, false, DEMO).await;
+    let site = site_full(true, false, DEMO, None).await;
     let pool = &site.pool;
     let count = async |sql: &str| sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap();
     sqlx::query(
@@ -2636,4 +2638,44 @@ async fn demo_personas_and_their_feeds_are_made_on_start_and_only_once() {
     let response = site.router.clone().oneshot(request).await.unwrap();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("Quanta Magazine"));
+}
+
+#[tokio::test]
+async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
+    let site = site_full(true, false, "", Some("forenoon.test")).await;
+    let get = async |host: &str, path: &str| {
+        let request = Request::get(path).header(header::HOST, host).body(Body::empty()).unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        let text = |name: &str| {
+            response.headers().get(name).map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default()
+        };
+        let headers = (text("content-type"), text("cache-control"), text("x-robots-tag"), text("set-cookie"));
+        let has_csp = response.headers().contains_key(header::CONTENT_SECURITY_POLICY);
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, headers, has_csp, String::from_utf8_lossy(&body).into_owned())
+    };
+    // The page, to anyone, meant to be found and kept by a cache; dressed like every other answer.
+    let (status, (kind, cache, robots, cookie), csp, page) = get("Forenoon.Test:443", "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(kind.starts_with("text/html") && cache == "public, max-age=300" && robots.is_empty() && cookie.is_empty());
+    assert!(csp && page.contains("A morning paper for your e-reader"), "{page}");
+    // Its pictures, and the icons it names.
+    let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;
+    assert!(status == StatusCode::OK && kind == "image/webp" && cache.starts_with("public"));
+    assert_eq!(get("forenoon.test", "/favicon.ico").await.0, StatusCode::OK);
+    assert_eq!(get("forenoon.test", "/healthz").await.0, StatusCode::OK);
+    // Nothing else on that host, the sign-in page included.
+    for path in ["/login", "/archive", "/images/nope.webp", "/thumb/a1", "/f/x"] {
+        let (status, _, csp, _) = get("forenoon.test", path).await;
+        assert!(status == StatusCode::NOT_FOUND && csp, "{path}");
+    }
+    let post = Request::post("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(site.router.clone().oneshot(post).await.unwrap().status(), StatusCode::NOT_FOUND);
+    // The install's own address is as it was.
+    assert!(Browser::default().get(&site, "/").await.status.is_redirection());
+    // Over https, the landing host is an address of its own, not sent to the public one.
+    let secure = site_full(true, true, "", Some("forenoon.test")).await;
+    let request = Request::get("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
+    assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }

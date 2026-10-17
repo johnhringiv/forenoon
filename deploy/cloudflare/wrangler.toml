@@ -1,0 +1,20 @@
+# The outage page for forenoon.dev (outage-worker.js). Deploy with `npx wrangler deploy`
+# from this folder, signed in to the Cloudflare account that holds the zone. The Worker
+# answers for the landing page and every persona host, passes everything through unless
+# the origin is down, and then serves the landing page from the copy of web/site bundled
+# here at deploy time. Deploy again when the page changes.
+name = "forenoon-outage"
+main = "outage-worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+routes = [
+  { pattern = "forenoon.dev/*", zone_name = "forenoon.dev" },
+  { pattern = "*.forenoon.dev/*", zone_name = "forenoon.dev" },
+]
+
+[assets]
+directory = "../../web/site"
+binding = "ASSETS"
+# Every request runs the Worker, which asks the origin first; the copy is only for an outage.
+run_worker_first = true

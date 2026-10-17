@@ -835,6 +835,10 @@ database with the pipeline.
   knows), and when the install has no feeds at all the file's shared feeds are added and
   followed by every persona; nothing already there is touched, so later changes on the
   pages stand.
+- **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
+  built into the program from `web/site`, is served at that hostname with its pictures, the
+  icons and the health check; everything else there is 404. It is the one page meant to be
+  indexed, and it carries `Cache-Control: public, max-age=300`. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
