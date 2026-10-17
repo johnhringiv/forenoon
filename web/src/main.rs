@@ -200,9 +200,11 @@ async fn run(cli: Cli) -> Result<(), Error> {
             };
             let sender = Some(smtp_sender).filter(|sender| !sender.is_empty());
             let demo = forenoon_web::demo::parse(&demo).map_err(|problem| format!("FORENOON_WEB_DEMO: {problem}"))?;
-            for persona in &demo {
-                if auth::find_user(&pool, &persona.id).await?.is_none() {
-                    eprintln!("Demo host {} names reader {}, which is not an account yet.", persona.host, persona.id);
+            if !demo.is_empty() {
+                // The personas and their feeds, made the first time the demo hosts are set.
+                let zone = std::env::var("TZ").ok().filter(|zone| Tz::from_str(zone).is_ok());
+                for line in forenoon_web::demo::seed(&pool, &demo, zone.as_deref().unwrap_or("UTC")).await? {
+                    eprintln!("{line}");
                 }
             }
             let options = Options {

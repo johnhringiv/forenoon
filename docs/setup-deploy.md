@@ -209,11 +209,14 @@ checks the rating links. Session cookies pasted into the Sources page are writte
 An install can show a few readers' pages to anyone, read-only, each at a hostname of its own:
 the pages a visitor sees are the product's, so a demo cannot drift from what you deploy.
 
-1. Create the personas as readers (`add-user`, with no Kindle address) and write each one's
-   interests on its Reading page. They follow the household's shared sources and get an
-   issue every morning like any reader.
-2. In `.env`, list them as `host=reader` pairs:
-   `FORENOON_WEB_DEMO=alice.forenoon.example=alice,bob.forenoon.example=bob`
+1. In `.env`, list the personas as `host=reader` pairs:
+   `FORENOON_WEB_DEMO=mara.forenoon.example=mara,theo.forenoon.example=theo`
+   On start, the web program makes any persona named in `web/demo.json` that is not an
+   account yet, with its interests and no Kindle address, and on an install with no feeds it
+   adds the file's shared feeds, followed by every persona. A persona not in the file is an
+   ordinary reader you create yourself (`add-user`, no `--kindle`) and write interests for.
+2. Nothing already there is touched on later starts, so change interests and feeds on the
+   pages as usual, signed in on the install's own hostname.
 3. Route each hostname to the web pages as well: on a tunnel, another public hostname to
    `http://localhost:8081`; on your own proxy, another server name to the same upstream.
    Cloudflare's proxy may cache these pages: they carry `Cache-Control: public, max-age=300`

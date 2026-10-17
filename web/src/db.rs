@@ -188,6 +188,29 @@ async fn follow_shared_with(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user: 
     Ok(())
 }
 
+/// How many feeds the install has, the built-in front pages aside.
+pub async fn feed_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar!(r#"SELECT COUNT(*) AS "n: i64" FROM sources WHERE kind = 'rss'"#).fetch_one(pool).await
+}
+
+/// A feed shared with the household from the start, as the demo's are. Its address is
+/// checked by the scheduler within a minute, like one added on the Sources page.
+pub async fn add_shared_feed(pool: &SqlitePool, name: &str, url: &str, added_by: &str) -> Result<i64, sqlx::Error> {
+    let now = now_iso();
+    let row = sqlx::query!(
+        "INSERT INTO sources (name, kind, url, extract, daily_max, enabled, created_at, check_state, added_by, shared, shared_at)
+         VALUES (?, 'rss', ?, 'auto', 2, 1, ?, 'pending', ?, 1, ?)",
+        name,
+        url,
+        now,
+        added_by,
+        now
+    )
+    .execute(pool)
+    .await?;
+    Ok(row.last_insert_rowid())
+}
+
 /// Whether feeds are followed for this reader when they are shared with the household.
 pub async fn follows_new(pool: &SqlitePool, user: &str) -> Result<bool, sqlx::Error> {
     let on = sqlx::query_scalar!(r#"SELECT follow_new AS "on: bool" FROM users WHERE id = ?"#, user)

@@ -2588,3 +2588,39 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     let request = Request::get("/").header(header::HOST, "john.forenoon.test").body(Body::empty()).unwrap();
     assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn demo_personas_and_their_feeds_are_made_on_start_and_only_once() {
+    const DEMO: &str = "mara.forenoon.test=mara,theo.forenoon.test=theo,june.forenoon.test=june,x.forenoon.test=nobody";
+    let site = site_full(true, false, DEMO).await;
+    let pool = &site.pool;
+    let personas = forenoon_web::demo::parse(DEMO).unwrap();
+    let made = forenoon_web::demo::seed(pool, &personas, "America/New_York").await.unwrap();
+    // Three readers, the feeds, and a word about the host whose reader the file does not know.
+    assert_eq!(made.len(), 5, "{made:?}");
+    let count = async |sql: &str| sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap();
+    assert_eq!(
+        count("SELECT COUNT(*) FROM sources WHERE kind = 'rss' AND shared = 1 AND check_state = 'pending'").await,
+        24
+    );
+    let shared = count("SELECT COUNT(*) FROM sources WHERE shared = 1").await;
+    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'june'").await, shared);
+    let theo = auth::find_user(pool, "theo").await.unwrap().unwrap();
+    assert!(theo.interests.contains("housing") && theo.kindle_addresses.is_empty() && theo.role == "reader");
+    assert_eq!(theo.timezone, "America/New_York");
+    // Again: nothing to make, and an unfollow made since stands.
+    sqlx::query(
+        "DELETE FROM follows WHERE user_id = 'june' AND source_id = (SELECT id FROM sources WHERE name = 'BBC News')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let again = forenoon_web::demo::seed(pool, &personas, "UTC").await.unwrap();
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'june'").await, shared - 1);
+    // The persona's Sources page lists them on its host.
+    let request = Request::get("/sources").header(header::HOST, "mara.forenoon.test").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("Quanta Magazine"));
+}

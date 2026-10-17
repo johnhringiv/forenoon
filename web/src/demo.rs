@@ -15,8 +15,10 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use serde::Deserialize;
+use sqlx::SqlitePool;
 
-use crate::{auth, icons, pages};
+use crate::{auth, db, hex, icons, pages};
 
 /// One reader shown at one hostname.
 #[derive(Clone, Debug, PartialEq)]
@@ -117,9 +119,96 @@ pub async fn gate(State(personas): State<Arc<[Persona]>>, request: Request, next
     response
 }
 
+// seeding the demo
+
+/// The demo's readers and their shared feeds, as `demo.json` beside the crate's manifest
+/// gives them; docs/demo.md says why each is there.
+#[derive(Deserialize)]
+struct Seed {
+    personas: Vec<SeedPersona>,
+    feeds: Vec<SeedFeed>,
+}
+
+#[derive(Deserialize)]
+struct SeedPersona {
+    id: String,
+    name: String,
+    interests: String,
+}
+
+#[derive(Deserialize)]
+struct SeedFeed {
+    name: String,
+    url: String,
+}
+
+const SEED: &str = include_str!("../demo.json");
+
+/// Makes what the demo hosts need and the install does not have yet: a reader for each
+/// configured persona the seed file knows, with its interests, and, when the install has no
+/// feeds at all, the shared feeds, followed by every persona. Run on every start, it makes
+/// only what is missing, so a change made later on the pages stands. Returns a line for the
+/// log per thing made or left unmade.
+pub async fn seed(pool: &SqlitePool, personas: &[Persona], timezone: &str) -> Result<Vec<String>, crate::Error> {
+    let file: Seed = serde_json::from_str(SEED)?;
+    let mut made = Vec::new();
+    let mut accounts = Vec::new();
+    for persona in personas {
+        if auth::find_user(pool, &persona.id).await?.is_some() {
+            accounts.push(persona.id.as_str());
+            continue;
+        }
+        let Some(profile) = file.personas.iter().find(|profile| profile.id == persona.id) else {
+            made.push(format!(
+                "Demo host {} names reader {}, which is not an account yet and is not in demo.json.",
+                persona.host, persona.id
+            ));
+            continue;
+        };
+        // Nobody signs in as a persona: a password no one knows.
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+        let hash = auth::hash_password(hex::encode(&bytes)).await?;
+        let email = format!("{}@demo.invalid", profile.id);
+        db::add_user(pool, &profile.id, &email, &profile.name, &hash, "reader", timezone).await?;
+        let reading = db::Reading {
+            interests: &profile.interests,
+            daily_stories: 8,
+            format: "issue",
+            explore: true,
+            most_per_subject: 2,
+            show_reasons: true,
+        };
+        db::set_reading(pool, &profile.id, &reading).await?;
+        db::follow_shared(pool, &profile.id).await?;
+        accounts.push(persona.id.as_str());
+        made.push(format!("Made reader {} for demo host {}.", profile.id, persona.host));
+    }
+    if db::feed_count(pool).await? == 0
+        && let Some(first) = accounts.first()
+    {
+        for feed in &file.feeds {
+            db::add_shared_feed(pool, &feed.name, &feed.url, first).await?;
+        }
+        // Followed for every persona now, once: an unfollow made later on the pages stands.
+        for account in &accounts {
+            db::follow_shared(pool, account).await?;
+        }
+        made.push(format!("Added the {} shared feeds from demo.json.", file.feeds.len()));
+    }
+    Ok(made)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_seed_file_is_well_formed() {
+        let file: Seed = serde_json::from_str(SEED).unwrap();
+        assert!(file.personas.iter().all(|p| auth::valid_id(&p.id) && !p.name.is_empty() && !p.interests.is_empty()));
+        assert!(file.feeds.iter().all(|f| !f.name.is_empty() && pages::web_url(&f.url).is_some()));
+    }
 
     #[test]
     fn personas_are_parsed_from_host_reader_pairs() {

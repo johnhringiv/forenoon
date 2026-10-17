@@ -830,7 +830,11 @@ database with the pipeline.
   host, the sign-in page included, is 404, and so is any post. No session is started for a
   visitor and the pages carry `Cache-Control: public, max-age=300`, so a cache in front
   serves a busy day. A persona is shown as a reader whatever its role. The install's own
-  hostname is unchanged.
+  hostname is unchanged. On start, a configured persona that is not an account yet is made
+  from `web/demo.json` (a reader with its interests, no Kindle address and a password nobody
+  knows), and when the install has no feeds at all the file's shared feeds are added and
+  followed by every persona; nothing already there is touched, so later changes on the
+  pages stand.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
