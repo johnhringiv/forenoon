@@ -339,3 +339,40 @@ def test_boxes_of_real_text_are_never_dropped_as_teasers_or_repeats():
     # A short article in a callout-classed wrapper with a comment form under it is the article.
     page = f"<html><body><div class='notice'><article>{words * 3}</article><form><textarea></textarea></form></div></body></html>"
     assert extract("https://news.example/b", page, "", "page").status == "clean"
+
+
+def test_notes_roundups_credits_and_footnotes_in_boxes_are_kept():
+    words = "<p>" + "Plain words about memory allocators and the servers they run on. " * 12 + "</p>"
+    url = "https://blog.example/post"
+    dek = "We benchmarked seven allocators on real servers and jemalloc won"
+    cases = {
+        # Notes with links of their own words around them, or starting as a note does.
+        "a correction to section two": "<aside class='notice'><p>Update, March 2025: <a href='/f'>I wrote a "
+        "follow-up</a> and <a href='/x'>a correction to section two</a>.</p></aside>",
+        "and part three": "<aside class='notice'><p>Update: <a href='/a'>Part two is out</a>, "
+        "<a href='/b'>and part three</a>.</p></aside>",
+        "Coroutines and tasks": "<div class='admonition seealso'><p>See also</p><p><a href='/a'>The event loop"
+        "</a> and <a href='/b'>Coroutines and tasks</a></p></div>",
+        # A picture whose credit is all links.
+        "fig1.jpg": "<aside><a href='/full.jpg'><img src='https://e.com/fig1.jpg'></a><p><a href='https://f.com/x'>"
+        "Photo by Jane Doe</a> <a href='/license'>CC BY</a></p></aside>",
+        # Notes pointed at by a full address, a percent-encoded id, or a name.
+        "Memory Safety in Practice": f"<p>Claim<a href='{url}#fn1'>1</a> and<a href='#fn%3A2'>2</a> and"
+        "<a href='#n3'>3</a>.</p><aside class='footnotes'><ol><li id='fn1'><a href='https://doi.org/1'>Memory "
+        "Safety in Practice, 2020</a> <a href='#r1'>back</a></li><li id='fn:2'><a href='https://doi.org/2'>Two"
+        "</a></li><li><a name='n3'></a><a href='https://doi.org/3'>Three</a></li></ol></aside>",
+        # A box that repeats a sentence and then says more is not a pull quote.
+        "Pick it unless": f"<div class='callout'><p><b>TL;DR</b></p><p>{dek}.</p><p>Pick it unless you have "
+        "a measured reason not to.</p></div>",
+    }
+    for needle, box in cases.items():
+        page = f"<html><body><header><p>{dek}.</p></header><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract(url, page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
+    # A post that is all links, in an aside: it is the article, not a teaser beside it.
+    links = "".join(
+        f"<p><a href='/l{n}'>Interesting article about systems number {n}</a> — short take.</p>" for n in range(25)
+    )
+    page = f"<html><body><nav>x</nav><aside><h1>Weekly links</h1>{links}</aside></body></html>"
+    assert extract(url, page, "", "page").status == "clean"
+    assert extract(url, None, f"<aside><h2>Links this week</h2>{links}</aside>", "feed").status == "clean"
