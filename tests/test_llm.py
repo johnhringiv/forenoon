@@ -670,16 +670,66 @@ def test_a_bad_env_line_reaches_the_run_even_with_no_other_connection(monkeypatc
         router.structured("s", "u", SCHEMA, model="lan/qwen")
 
 
-def test_a_misspelt_setting_or_a_password_in_the_address_is_named():
-    found, problems = connections_from_env(
-        {
-            "FORENOON_LLM_LAN_URL": "http://x/v1",
-            "FORENOON_LLM_LAN_TIMOUT": "900",
-            "FORENOON_LLM_LAN_BOX_URL": "http://x/v1",
-            "FORENOON_LLM_LAN_BOX_CONTEXT": "65536",
-            "FORENOON_LLM_PW_URL": "http://me:secret@x/v1",
-        }
-    )
-    assert [c.name for c in found] == ["lan_box"], "LAN_BOX's settings are not LAN's misspellings"
-    assert problems["lan"].startswith("FORENOON_LLM_LAN_TIMOUT: not a setting")
+def test_a_misspelt_or_left_over_setting_is_said_but_stops_nothing():
+    from app.llm import unknown_settings
+
+    env = {
+        "FORENOON_LLM_LAN_URL": "http://x/v1",
+        "FORENOON_LLM_LAN_TIMOUT": "900",
+        "FORENOON_LLM_LAN_BOX_KEY": "left when its address was taken out",
+        "FORENOON_LLM_GPU_URL": "http://x/v1",
+        "FORENOON_LLM_GPU_CONTEXT": "65536",
+        "FORENOON_LLM_PW_URL": "http://me:secret@x/v1",
+    }
+    found, problems = connections_from_env(env)
+    assert [c.name for c in found] == ["gpu", "lan"], "a stray variable stops no connection"
+    assert unknown_settings(env) == ["FORENOON_LLM_LAN_BOX_KEY", "FORENOON_LLM_LAN_TIMOUT"]
     assert "no user name or password" in problems["pw"] and "secret" not in problems["pw"]
+
+
+def test_a_test_asked_for_again_stops_the_one_running_and_one_that_breaks_is_answered(tmp_path, monkeypatch):
+    from app import model_test
+
+    store = _migrated(tmp_path)
+    store.db.execute("INSERT INTO model_tests (id, requested_at) VALUES (1, '2026-10-17T12:00:00+00:00')")
+    store.db.commit()
+    seen = []
+
+    def models(cfg, store_, progress):
+        progress(["lan/qwen (ranking): OK"])
+        row = store.db.execute("SELECT started, answered, result FROM model_tests").fetchone()
+        seen.append(tuple(row))
+        # Asked for again, as the web page does, while this one runs.
+        store.db.execute(
+            "UPDATE model_tests SET requested_at = '2026-10-17T12:00:09+00:00', answered = '', started = '', result = ''"
+        )
+        store.db.commit()
+        progress(["lan/qwen (ranking): OK", "anthropic/claude-haiku-5-5 (fallback): OK"])
+        raise AssertionError("not reached: the next model is not asked")
+
+    monkeypatch.setattr(model_test, "test_models", models)
+    assert model_test.run_asked(store, Llm())
+    assert seen == [("2026-10-17T12:00:00+00:00", "", "lan/qwen (ranking): OK")], "lines shown as they come"
+    assert store.model_test_asked() == "2026-10-17T12:00:09+00:00", "the new one is next, untouched"
+    assert store.db.execute("SELECT result FROM model_tests").fetchone()[0] == ""
+
+    def broken(cfg, store_, progress):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(model_test, "test_models", broken)
+    assert model_test.run_asked(store, Llm())
+    assert store.model_test_asked() == "", "answered, so not run again every few seconds"
+    assert (
+        "The test could not finish: RuntimeError: disk full"
+        in store.db.execute("SELECT result FROM model_tests").fetchone()[0]
+    )
+
+
+def test_the_anthropic_test_is_bounded_and_leaves_the_runs_client_alone():
+    from app.llm import AnthropicBackend
+
+    run = AnthropicBackend(Llm(timeout=60.0), "sk-ant-test")
+    quick = run.bounded(120.0)
+    assert quick._client.timeout == 60.0 and quick._client.max_retries == 0, "never longer than a run waits"
+    assert run.bounded(30.0)._client.timeout == 30.0
+    assert run._client.max_retries == 1 and run._client.timeout == 60.0

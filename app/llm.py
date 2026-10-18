@@ -106,22 +106,19 @@ def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tupl
     found: list[Connection] = []
     problems: dict[str, str] = {}
     # Left empty, as a compose file's ${VAR:-} line does, is not set.
-    every_url = [v for v in sorted(environ) if v.startswith(ENV_PREFIX) and v.endswith("_URL")]
-    urls = [v for v in every_url if environ[v].strip()]
+    urls = [v for v in sorted(environ) if v.startswith(ENV_PREFIX) and v.endswith("_URL") and environ[v].strip()]
     for var in urls:
         prefix = var.removesuffix("URL")
         raw = prefix.removeprefix(ENV_PREFIX).removesuffix("_")
         name = raw.lower()
         if not re.fullmatch(r"[A-Z0-9]+(_[A-Z0-9]+)*", raw) or raw == "ANTHROPIC":
-            problems[name or var] = (
-                f"{var}: the name must be capital letters and digits, joined by single underscores, and not ANTHROPIC"
+            problems.setdefault(
+                name or var,
+                (
+                    f"{var}: the name must be capital letters and digits, joined by single underscores, and not ANTHROPIC"
+                ),
             )
             continue
-        # A setting misspelt would otherwise be left at its default without a word.
-        unknown = [
-            v for v in environ if v.startswith(prefix) and v.removeprefix(prefix) not in SETTINGS
-            and not any(v.startswith(u.removesuffix("URL")) for u in every_url if len(u) > len(var))
-        ]  # fmt: skip
         address = environ[var].strip()
         parts = urlsplit(address)
         try:
@@ -134,8 +131,6 @@ def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tupl
             problems[name] = f"{var}: give the API's address, as in http://192.168.1.20:8080/v1"
         elif parts.username or parts.password:
             problems[name] = f"{var}: no user name or password in the address; a key goes in {prefix}KEY"
-        elif unknown:
-            problems[name] = f"{', '.join(sorted(unknown))}: not a setting; the settings are {', '.join(SETTINGS)}"
         for setting, (attr, default, low, high) in NUMBERS.items():
             text = environ.get(prefix + setting, "").strip() or str(default)
             if not text.isdigit() or not low <= int(text) <= high:
@@ -165,6 +160,15 @@ def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tupl
     return tuple(found), problems
 
 
+def unknown_settings(environ: Mapping[str, str] | None = None) -> list[str]:
+    """FORENOON_LLM_ variables that are no connection's setting: misspelt (_TIMOUT), or left
+    behind by a connection whose address was taken out. Said by the test; they change nothing."""
+    environ = os.environ if environ is None else environ
+    prefixes = [v.removesuffix("URL") for v in environ if v.startswith(ENV_PREFIX) and v.endswith("_URL")]
+    known = {prefix + setting for prefix in prefixes for setting in SETTINGS}
+    return sorted(v for v in environ if v.startswith(ENV_PREFIX) and v not in known)
+
+
 class Backend(Protocol):
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
         """One request to `model` whose answer must match `schema`. Raises LlmError.
@@ -182,12 +186,13 @@ class AnthropicBackend:
         import anthropic
 
         self._anthropic = anthropic
+        self._timeout = cfg.timeout
         self._client = anthropic.Anthropic(api_key=api_key, timeout=cfg.timeout, max_retries=1)
 
     def bounded(self, timeout: float) -> AnthropicBackend:
         """The same, waiting at most `timeout` seconds for an answer and not asking twice."""
         copy_ = copy.copy(self)
-        copy_._client = self._client.with_options(timeout=timeout, max_retries=0)
+        copy_._client = self._client.with_options(timeout=min(timeout, self._timeout), max_retries=0)
         return copy_
 
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:

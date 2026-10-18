@@ -23,6 +23,7 @@ from .llm import (
     Router,
     backend_from_env,
     connections_from_env,
+    unknown_settings,
 )
 from .store import Store
 
@@ -85,6 +86,7 @@ def test_models(cfg: Llm, store: Store | None = None, progress: Callable[[list[s
     """A line for each model the settings name, and one for each connection in the
     environment that could not be read. `progress` is given the lines so far, after each."""
     lines = [f"Not read: {problem}" for problem in connections_from_env()[1].values()]
+    lines += [f"Ignored: {var} is not a setting of any connection set here" for var in unknown_settings()]
     backend = backend_from_env(cfg)
     for model, use in _models(cfg):
         if not isinstance(backend, Router):
@@ -97,14 +99,33 @@ def test_models(cfg: Llm, store: Store | None = None, progress: Callable[[list[s
     return lines
 
 
+class Superseded(Exception):
+    """Another test was asked for while this one ran: its answer would be thrown away."""
+
+
 def run_asked(store: Store, cfg: Llm) -> bool:
     """Run the test the Settings page asked for, if there is one, writing each model's line as
-    it is found so the page can show them coming in. Whether one was run."""
+    it is found so the page can show them coming in. Whether one was run. A test asked for again
+    meanwhile stops this one, unfinished, so the new one starts at once and nothing more is
+    spent on the old. One that fails in a way not foreseen is answered with why, not run again."""
     asked = store.model_test_asked()
     if not asked:
         return False
-    store.record_model_test(asked, "", done=False)  # started: the page says so
-    lines = test_models(cfg, store, lambda so_far: store.record_model_test(asked, "\n".join(so_far), done=False))
+
+    def progress(so_far: list[str]) -> None:
+        if not store.record_model_test(asked, "\n".join(so_far), done=False):
+            raise Superseded
+
+    try:
+        progress([])  # started: the page says so
+        lines = test_models(cfg, store, progress)
+    except Superseded:
+        log.info("model test: asked for again; starting the new one")
+        return True
+    except Exception as exc:
+        log.exception("the model test failed")
+        store.record_model_test(asked, f"The test could not finish: {type(exc).__name__}: {exc}")
+        return True
     store.record_model_test(asked, "\n".join(lines))
     for line in lines:
         log.info("model test: %s", line)

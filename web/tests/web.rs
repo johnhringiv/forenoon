@@ -1756,6 +1756,7 @@ async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
     sqlx::query("UPDATE model_tests SET requested_at = '2026-10-17T12:00:00+00:00'").execute(&site.pool).await.unwrap();
     let page = admin.get(&site, "/settings/test").await.text;
     assert!(!page.contains(refresh) && page.contains("check that it is running"));
+    assert!(admin.get(&site, "/settings").await.text.contains("The last test did not finish: see why."));
 
     // Under way: each model's line as it comes, still refreshing.
     let now = forenoon_web::db::now_iso();

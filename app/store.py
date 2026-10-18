@@ -375,15 +375,18 @@ class Store:
         row = self.db.execute("SELECT requested_at FROM model_tests WHERE requested_at != answered").fetchone()
         return row["requested_at"] if row else ""
 
-    def record_model_test(self, requested_at: str, result: str, done: bool = True) -> None:
+    def record_model_test(self, requested_at: str, result: str, done: bool = True) -> bool:
         """The answer to the test asked for at `requested_at`, a line per model; with `done`
         False, the lines so far of one under way. Dropped when another was asked for while it
-        ran: that one is run next."""
+        ran, and False then: that one is run next."""
         with self.db:
-            self.db.execute(
-                "UPDATE model_tests SET started = requested_at, tested_at = ?, result = ?,"
-                " answered = CASE WHEN ? THEN requested_at ELSE answered END WHERE requested_at = ?",
-                (now_iso(), result[:4000], int(done), requested_at),
+            return (
+                self.db.execute(
+                    "UPDATE model_tests SET started = requested_at, tested_at = ?, result = ?,"
+                    " answered = CASE WHEN ? THEN requested_at ELSE answered END WHERE requested_at = ?",
+                    (now_iso(), result[:4000], int(done), requested_at),
+                ).rowcount
+                > 0
             )
 
     def send_requests(self) -> list[sqlite3.Row]:

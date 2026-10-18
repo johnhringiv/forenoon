@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import logging
+import sqlite3
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -199,10 +201,17 @@ def _test_models(cfg: Config) -> bool:
     from .model_test import run_asked
 
     try:
+        # A cheap look first: opening the Store checks the whole schema.
+        with contextlib.closing(sqlite3.connect(f"file:{cfg.db_path}?mode=ro", uri=True)) as db:
+            if not db.execute("SELECT 1 FROM model_tests WHERE requested_at != answered").fetchone():
+                return False
+    except sqlite3.Error:
+        return False  # no database, or the web app has not made the table yet
+    try:
         store = Store(cfg.db_path)
         try:
             # The settings as just saved with the button: the scheduler's own are a day old.
-            return bool(store.model_test_asked()) and run_asked(store, load(store).llm)
+            return run_asked(store, load(store).llm)
         finally:
             store.close()
     except Exception:
@@ -232,8 +241,10 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
             # Every few seconds for a model test, which someone is waiting on; every minute for the rest.
             time.sleep(min(wait, TEST_POLL_SECONDS))
+            if args.dry_run:
+                continue
             _test_models(cfg)
-            if not args.dry_run and time.monotonic() - last >= 60:
+            if time.monotonic() - last >= 60:
                 last = time.monotonic()
                 _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
