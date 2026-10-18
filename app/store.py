@@ -7,7 +7,6 @@ SCHEMA regenerate the copy and run `web/dev-db.sh`.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,7 +14,7 @@ from pathlib import Path
 
 from . import models
 from .config import Source, User
-from .llm import Connection, LlmError, Unreachable
+from .llm import LlmError, Unreachable
 from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
 SCHEMA = """
@@ -367,62 +366,22 @@ class Store:
 
     # send requests (queued by the web app's "Send to Kindle" button)
 
-    # model connections (set up on the Settings page; see web/migrations/0027_connections.sql)
+    # model tests (asked for by the Settings page's Test button; see web/migrations/0027_model_tests.sql)
 
-    def _has_table(self, name: str) -> bool:
-        return bool(
-            self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone()
-        )
+    def model_test_asked(self) -> str:
+        """When a test of the models was asked for and not yet answered; "" when none is."""
+        if not self._has_table("model_tests"):
+            return ""
+        row = self.db.execute("SELECT requested_at FROM model_tests WHERE requested_at != answered").fetchone()
+        return row["requested_at"] if row else ""
 
-    def connections(self) -> tuple[Connection, ...]:
-        """The OpenAI-compatible connections; none until the web app has made their table."""
-        if not self._has_table("connections"):
-            return ()
-        rows = self.db.execute(
-            "SELECT name, address, context_tokens, output_tokens, timeout_seconds, free, reasoning_off"
-            " FROM connections ORDER BY name"
-        ).fetchall()
-        return tuple(
-            Connection(r["name"], r["address"], r["context_tokens"], r["output_tokens"], float(r["timeout_seconds"]),
-                       bool(r["free"]), bool(r["reasoning_off"]))
-            for r in rows
-        )  # fmt: skip
-
-    def record_connection_check(
-        self, name: str, address: str, key_set: bool, error: str, model_ids: list[str], when: str | None = None
-    ) -> None:
-        """What the pipeline found at a connection, for the Settings page. A failed check keeps the
-        model list from the last one that worked. Dropped when the address was changed while the
-        check ran: the new one is checked next."""
+    def record_model_test(self, requested_at: str, result: str) -> None:
+        """The answer to the test asked for at `requested_at`, a line per model. Dropped when
+        another was asked for while it ran: that one is run next."""
         with self.db:
             self.db.execute(
-                "UPDATE connections SET checked_at = ?, key_set = ?, error = ?,"
-                " models = CASE WHEN ? = '' THEN ? ELSE models END WHERE name = ? AND address = ?",
-                (when or now_iso(), int(key_set), error[:300], error, json.dumps(model_ids), name, address),
-            )
-
-    def connection_rows(self) -> list[sqlite3.Row]:
-        """Every connection with what the pipeline last found there."""
-        if not self._has_table("connections"):
-            return []
-        return self.db.execute("SELECT * FROM connections ORDER BY name").fetchall()
-
-    def connection_tests(self) -> list[sqlite3.Row]:
-        """Tests asked for on the Settings page and not yet run."""
-        if not self._has_table("connections"):
-            return []
-        return self.db.execute(
-            "SELECT name, test_model, test_requested_at FROM connections"
-            " WHERE test_requested_at != '' AND test_requested_at > tested_at"
-        ).fetchall()
-
-    def record_connection_test(self, name: str, result: str, requested_at: str) -> None:
-        """The result of the test asked for at `requested_at`. Dropped when another was asked for
-        while it ran: that one is run next."""
-        with self.db:
-            self.db.execute(
-                "UPDATE connections SET tested_at = ?, test_result = ? WHERE name = ? AND test_requested_at = ?",
-                (requested_at, result[:300], name, requested_at),
+                "UPDATE model_tests SET answered = requested_at, tested_at = ?, result = ? WHERE requested_at = ?",
+                (now_iso(), result[:4000], requested_at),
             )
 
     def send_requests(self) -> list[sqlite3.Row]:

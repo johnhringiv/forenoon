@@ -3,8 +3,8 @@
 A model is named with the connection it is reached through (`anthropic/claude-haiku-5-5`, see
 app/models.py), and the router hands each call to that connection's backend. Anthropic is built
 in. Every other connection is a server that speaks the OpenAI chat completions API (OpenAI
-itself, LM Studio, Ollama, llama.cpp, vLLM), set up on the Settings page and kept in the
-`connections` table, with its key in the environment.
+itself, LM Studio, Ollama, llama.cpp, vLLM), set in the pipeline's environment as
+FORENOON_LLM_<NAME>_URL and the variables beside it (see `connections_from_env`).
 
 The model receives article text as data and returns a structured answer. It has no tools that
 act on anything, and its output is validated by the caller before use.
@@ -16,7 +16,8 @@ import copy
 import ipaddress
 import json
 import os
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -26,9 +27,8 @@ from . import models
 from .config import Llm
 
 API_KEY_ENV = "FORENOON_ANTHROPIC_API_KEY"
-KEY_ENV_PREFIX = "FORENOON_LLM_KEY_"
+ENV_PREFIX = "FORENOON_LLM_"
 MAX_OUTPUT_TOKENS = 8192  # a batch of 80 candidates needs about 3,300
-MAX_LISTED = 500  # model ids kept from a server's list
 CHECK_TIMEOUT = 2.0  # seconds for a connection's model list, at the start of a run
 CHARS_PER_TOKEN = 4  # a rough count of a prompt's tokens, the same everywhere it is estimated
 TAILNET = ipaddress.ip_network("100.64.0.0/10")  # carrier-grade NAT, as Tailscale uses: your own devices
@@ -70,7 +70,7 @@ class Reply:
 
 @dataclass(frozen=True)
 class Connection:
-    """An OpenAI-compatible server, as saved on the Settings page."""
+    """An OpenAI-compatible server, as set in the environment (see `connections_from_env`)."""
 
     name: str
     address: str  # the API's base, as in http://192.168.1.20:8080/v1
@@ -79,15 +79,73 @@ class Connection:
     timeout: float = 300.0
     free: bool = True
     reasoning_off: bool = True
-
-    @property
-    def key_env(self) -> str:
-        return key_env(self.name)
+    key: str = field(default="", repr=False)
 
 
-def key_env(connection: str) -> str:
-    """The environment variable holding a connection's key: lan-box → FORENOON_LLM_KEY_LAN_BOX."""
-    return KEY_ENV_PREFIX + connection.upper().replace("-", "_")
+# FORENOON_LLM_<NAME>_<SETTING>: the setting, its default, and the range it must be in.
+NUMBERS = {
+    "CONTEXT": ("context_tokens", 32768, 16384, 2_000_000),
+    "OUTPUT": ("output_tokens", 16384, 1024, 200_000),
+    "TIMEOUT": ("timeout", 300, 5, 3600),
+}
+
+
+def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tuple[Connection, ...], list[str]]:
+    """The connections set in the environment, and what is wrong with any that could not be
+    read (those are left out). Each is FORENOON_LLM_<NAME>_URL, and beside it, all optional:
+    _KEY; _CONTEXT, the tokens the server holds in one request (prompt and answer); _OUTPUT, the
+    answer limit; _TIMEOUT in seconds; _FREE=0 for a paid service on your network (one on the
+    internet is always counted); _REASONING=1 to let the model reason first. Its models are named
+    <name>/<model id>, the name in lower case: FORENOON_LLM_LAN_URL gives lan/qwen3.8-27b."""
+    environ = os.environ if environ is None else environ
+    found: list[Connection] = []
+    problems: list[str] = []
+    for var in sorted(environ):
+        if not (var.startswith(ENV_PREFIX) and var.endswith("_URL")) or len(var) <= len(ENV_PREFIX) + 4:
+            continue
+        prefix = var.removesuffix("URL")
+        name = prefix.removeprefix(ENV_PREFIX).rstrip("_").lower()
+        if not name.replace("_", "").isalnum() or name == "anthropic":
+            problems.append(f"{var}: the name must be letters, digits and underscores, and not ANTHROPIC")
+            continue
+        address = environ[var].strip()
+        parts = urlsplit(address)
+        try:
+            parts.port  # noqa: B018 - raises on a bad port
+            ok = parts.scheme in ("http", "https") and bool(parts.hostname)
+        except ValueError:
+            ok = False
+        if not ok:
+            problems.append(f"{var}: give the API's address, as in http://192.168.1.20:8080/v1")
+            continue
+        values: dict[str, Any] = {}
+        for setting, (attr, default, low, high) in NUMBERS.items():
+            text = environ.get(prefix + setting, "").strip() or str(default)
+            if not text.isdigit() or not low <= int(text) <= high:
+                problems.append(f"{prefix}{setting}: give a whole number from {low} to {high}")
+                break
+            values[attr] = int(text)
+        else:
+            if values["output_tokens"] >= values["context_tokens"]:
+                problems.append(f"{prefix}OUTPUT must be less than {prefix}CONTEXT: the context holds the prompt too")
+                continue
+            flags = {}
+            for setting, default in (("FREE", True), ("REASONING", False)):
+                text = environ.get(prefix + setting, "").strip().lower()
+                flags[setting] = default if not text else text in ("1", "yes", "true", "on")
+            found.append(
+                Connection(
+                    name,
+                    address,
+                    values["context_tokens"],
+                    values["output_tokens"],
+                    float(values["timeout"]),
+                    flags["FREE"],
+                    not flags["REASONING"],
+                    environ.get(prefix + "KEY", "").strip(),
+                )
+            )
+    return tuple(found), problems
 
 
 class Backend(Protocol):
@@ -208,9 +266,9 @@ def _answer_text(content: str) -> str:
 class OpenAIBackend:
     """One OpenAI-compatible connection. Requests go one at a time, as a local server prefers."""
 
-    def __init__(self, connection: Connection, api_key: str = "", client: httpx.Client | None = None):
+    def __init__(self, connection: Connection, client: httpx.Client | None = None):
         self.connection = connection
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        headers = {"Authorization": f"Bearer {connection.key}"} if connection.key else {}
         self._client = client or httpx.Client(timeout=connection.timeout)
         self._headers = headers
         self._base = connection.address.rstrip("/")
@@ -315,7 +373,7 @@ class OpenAIBackend:
                 short = limit != self.connection.output_tokens
                 fix = "raise the context size" if short else "raise the answer limit"
                 raise BadAnswer(
-                    f"{self.connection.name}: the answer was cut off at {limit} tokens; {fix} on the Settings page",
+                    f"{self.connection.name}: the answer was cut off at {limit} tokens; {fix} ({ENV_PREFIX}{self.connection.name.upper()}_...)",
                     *spent(),
                 )
             try:
@@ -335,7 +393,13 @@ class OpenAIBackend:
             return Reply(_without_nulls(data, schema), input_tokens, output_tokens, 0, cached, self.priced)
         raise BadAnswer(f"{self.connection.name}: {problem}", *spent())
 
-    def model_ids(self, timeout: float = CHECK_TIMEOUT, limit: int | None = MAX_LISTED) -> list[str]:
+    def bounded(self, timeout: float) -> OpenAIBackend:
+        """The same connection, waiting at most `timeout` seconds for an answer."""
+        if timeout >= self.connection.timeout:
+            return self
+        return OpenAIBackend(replace(self.connection, timeout=timeout), self._client)
+
+    def model_ids(self, timeout: float = CHECK_TIMEOUT) -> list[str]:
         """The models the server lists, by the ids it knows them by. Raises Unreachable."""
         try:
             response = self._client.get(f"{self._base}/models", headers=self._headers, timeout=timeout)
@@ -345,16 +409,15 @@ class OpenAIBackend:
                 raise TypeError("no list of models")
         except (httpx.HTTPError, httpx.InvalidURL, ValueError, TypeError, AttributeError) as exc:
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}") from exc
-        ids = [m["id"] for m in listed if isinstance(m, dict) and isinstance(m.get("id"), str)]
-        # A model setting cannot name one with a space in it; and the page lists them all.
-        return [i for i in ids if i and not any(c.isspace() for c in i) and len(i) <= 150][:limit]
+        return [m["id"] for m in listed if isinstance(m, dict) and isinstance(m.get("id"), str)]
 
 
 class Router:
     """Sends each call to the backend of the connection its model names."""
 
-    def __init__(self, backends: dict[str, Backend]):
+    def __init__(self, backends: dict[str, Backend], problems: list[str] | None = None):
         self._backends = backends
+        self._problems = problems or []  # connections in the environment that could not be read
         # Connections found unreachable in this run, with why: not tried again until the next,
         # so a server that is off costs one time limit, not one per call. A connection whose
         # calls time out twice in a row joins them: too slow for this run's requests.
@@ -368,7 +431,10 @@ class Router:
             raise LlmError(str(exc)) from exc
         backend = self._backends.get(connection)
         if backend is None:
-            raise Unreachable(f"no connection named {connection!r} for the model {model}", down=True)
+            prefix = f"{ENV_PREFIX}{connection.upper()}_"
+            unread = [p for p in self._problems if p.startswith(prefix)]
+            where = unread[0] if unread else f"set {API_KEY_ENV if connection == 'anthropic' else prefix + 'URL'}"
+            raise Unreachable(f"no connection {connection!r} for the model {model}: {where}", down=True)
         return backend
 
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
@@ -404,7 +470,7 @@ class Router:
         if not isinstance(backend, OpenAIBackend):
             return ""
         try:
-            listed = backend.model_ids(limit=None)
+            listed = backend.model_ids()
         except Unreachable as exc:
             self._down[connection] = str(exc)
             return str(exc)
@@ -486,12 +552,16 @@ def models_for_run(cfg: Llm, backend: Backend | None) -> tuple[Llm, str]:
     return replace(cfg, **changes), "; ".join(dict.fromkeys(notes))
 
 
-def backend_from_env(cfg: Llm, connections: tuple[Connection, ...] = ()) -> Backend | None:
-    """The connections there are keys for, or None when there are none: then the run falls back
-    to newest first and says so in its alert. A server on the network may need no key."""
+def backend_from_env(cfg: Llm, connections: tuple[Connection, ...] | None = None) -> Backend | None:
+    """Anthropic when its key is set, and the connections set in the environment (or those
+    given); None when there are none: then the run falls back to newest first and says so in its
+    alert. A server on the network may need no key."""
     backends: dict[str, Backend] = {}
     if key := os.environ.get(API_KEY_ENV, ""):
         backends["anthropic"] = AnthropicBackend(cfg, key)
+    problems: list[str] = []
+    if connections is None:
+        connections, problems = connections_from_env()
     for connection in connections:
-        backends[connection.name] = OpenAIBackend(connection, os.environ.get(connection.key_env, ""))
-    return Router(backends) if backends else None
+        backends[connection.name] = OpenAIBackend(connection)
+    return Router(backends, problems) if backends else None

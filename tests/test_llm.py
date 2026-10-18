@@ -1,23 +1,23 @@
-"""The OpenAI-compatible connections: the request, the answer, the errors, the run's choice of
-model and the Settings page's checks. The servers are httpx mock transports."""
+"""The OpenAI-compatible connections: how they are set in the environment, the request, the
+answer, the errors, the run's choice of model and the Settings page's Test button. The servers
+are httpx mock transports."""
 
 import json
-from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 
 from app.config import Llm
-from app.connections import look_after
 from app.llm import (
     BadAnswer,
     Connection,
     OpenAIBackend,
     Router,
     Unreachable,
+    connections_from_env,
     input_budget,
-    key_env,
     models_for_run,
     strict_schema,
 )
@@ -74,7 +74,7 @@ class Server:
 
 
 def backend(server, connection=LAN, key=""):
-    return OpenAIBackend(connection, key, server.client())
+    return OpenAIBackend(replace(connection, key=key) if key else connection, server.client())
 
 
 def test_strict_schema_closes_objects_and_makes_optional_fields_nullable():
@@ -149,20 +149,22 @@ def test_errors_say_whether_the_connection_or_the_answer_failed():
     def down(request):
         raise httpx.ConnectError("refused")
 
-    broken = OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(down)))
+    broken = OpenAIBackend(LAN, httpx.Client(transport=httpx.MockTransport(down)))
     with pytest.raises(Unreachable, match="ConnectError"):
         broken.structured("s", "u", SCHEMA, model="lan/qwen")
     for status, kind in ((401, Unreachable), (503, Unreachable), (400, BadAnswer)):
         with pytest.raises(kind, match=f"HTTP {status}"):
             backend(Server(status=status)).structured("s", "u", SCHEMA, model="lan/qwen")
-    assert issubclass(Unreachable, Exception) and key_env("lan-box") == "FORENOON_LLM_KEY_LAN_BOX"
 
 
 def test_a_model_is_checked_by_its_connections_model_list():
     router = Router({"lan": backend(Server(models=["qwen"]))})
     assert router.check("lan/qwen") == ""
     assert "does not list the model gemma" in router.check("lan/gemma")
-    assert "no connection named 'other'" in router.check("other/qwen")
+    assert "no connection 'other' for the model other/qwen: set FORENOON_LLM_OTHER_URL" in router.check("other/qwen")
+    unread = Router({}, ["FORENOON_LLM_OTHER_CONTEXT: give a whole number from 16384 to 2000000"])
+    assert "FORENOON_LLM_OTHER_CONTEXT: give a whole number" in unread.check("other/qwen"), "why it is missing"
+    assert "set FORENOON_ANTHROPIC_API_KEY" in router.check("anthropic/claude-haiku-5-5")
     assert Router({"lan": backend(Server(status=500))}).check("lan/qwen").startswith("lan:")
 
 
@@ -207,29 +209,8 @@ def _migrated(tmp_path) -> Store:
     store = Store(tmp_path / "forenoon.sqlite3")
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
         store.db.executescript(migration.read_text())
-    store.db.execute(
-        "INSERT INTO connections (name, address, context_tokens, output_tokens, free, created_at)"
-        " VALUES ('lan', 'http://192.168.1.20:8080/v1', 65536, 8192, 1, '2026-10-17T00:00:00+00:00')"
-    )
     store.db.commit()
     return store
-
-
-def test_connections_come_from_the_settings_pages_table(tmp_path):
-    assert Store(tmp_path / "empty.sqlite3").connections() == (), "the web app has not run yet"
-    store = _migrated(tmp_path)
-    (lan,) = store.connections()
-    assert (lan.name, lan.context_tokens, lan.output_tokens, lan.free, lan.reasoning_off) == (
-        "lan",
-        65536,
-        8192,
-        True,
-        True,
-    )
-    with pytest.raises(Exception, match="CHECK"):
-        store.db.execute("INSERT INTO connections (name, address, created_at) VALUES ('anthropic', 'x', 'now')")
-    with pytest.raises(Exception, match="CHECK"):
-        store.db.execute("INSERT INTO connections (name, address, created_at) VALUES ('Bad Name', 'x', 'now')")
 
 
 def test_calls_to_a_server_you_run_cost_nothing_and_stay_outside_the_token_cap(tmp_path):
@@ -245,43 +226,6 @@ def test_calls_to_a_server_you_run_cost_nothing_and_stay_outside_the_token_cap(t
     assert rows[0]["cost"] == 0.0 and rows[1]["cost"] > 0
     assert [r["status"] for r in rows[2:]] == ["unreachable", "error"]
     assert store.llm_usage_since("2000-01-01")["unpriced"] == 0
-
-
-def test_the_scheduler_checks_connections_and_runs_the_tests_asked_for(tmp_path, monkeypatch):
-    store = _migrated(tmp_path)
-    monkeypatch.setenv("FORENOON_LLM_KEY_LAN", "sk-lan")
-    server = Server([reply('{"word": "ready", "number": 7}')], models=["qwen"])
-    now = datetime(2026, 10, 17, 12, tzinfo=UTC)
-    assert look_after(store, now, server.client()) == 1
-    (row,) = store.connection_rows()
-    assert row["key_set"] == 1 and row["error"] == "" and json.loads(row["models"]) == ["qwen"]
-    assert look_after(store, now, server.client()) == 0, "not due again for a while"
-
-    # A test asked for on the page is run at once, on the first listed model when none is chosen.
-    store.db.execute("UPDATE connections SET test_requested_at = '2026-10-17T12:01:00+00:00'")
-    store.db.commit()
-    assert look_after(store, now, server.client()) == 1
-    (row,) = store.connection_rows()
-    assert row["test_result"].startswith("OK: qwen answered in") and "matching the schema" in row["test_result"]
-    assert store.connection_tests() == []
-
-    # A failed check keeps the last model list, and says why.
-    store.db.execute("UPDATE connections SET checked_at = ''")
-    store.db.commit()
-    look_after(store, now, Server(status=503).client())
-    (row,) = store.connection_rows()
-    assert "HTTP" in row["error"] or "503" in row["error"]
-    assert json.loads(row["models"]) == ["qwen"]
-
-
-def test_a_test_reports_an_answer_that_was_not_as_asked(tmp_path):
-    from app.connections import test_connection
-
-    wrong = Server([reply('{"word": "hello", "number": 3}')])
-    assert "not as asked" in test_connection(backend(wrong), "qwen")
-    cut = Server([reply("{", finish="length")])
-    assert test_connection(backend(cut), "qwen").startswith("Failed (the answer was unusable)")
-    assert test_connection(backend(Server(status=503)), "qwen").startswith("Failed (could not reach it)")
 
 
 def test_a_server_you_run_is_not_held_back_by_the_daily_token_cap(tmp_path):
@@ -350,19 +294,6 @@ def test_a_failed_call_logs_the_tokens_it_used(tmp_path):
     assert (row["input_tokens"], row["output_tokens"], row["status"], row["cost"]) == (1100, 90, "error", 0.0)
 
 
-def test_a_test_asked_for_while_one_runs_is_not_answered_by_the_older_one(tmp_path):
-    store = _migrated(tmp_path)
-    store.db.execute("UPDATE connections SET test_requested_at = '2026-10-17T12:00:00+00:00'")
-    store.db.commit()
-    (asked,) = store.connection_tests()
-    # Clicked again while the first ran.
-    store.db.execute("UPDATE connections SET test_requested_at = '2026-10-17T12:00:30+00:00', test_result = ''")
-    store.db.commit()
-    store.record_connection_test("lan", "OK: first", asked["test_requested_at"])
-    (row,) = store.connection_rows()
-    assert row["test_result"] == "" and len(store.connection_tests()) == 1, "the second is still to run"
-
-
 def test_a_connection_found_down_is_not_tried_again_in_the_run():
     server = Server(status=503)
     router = Router({"lan": backend(server)})
@@ -378,7 +309,7 @@ def test_a_connection_found_down_is_not_tried_again_in_the_run():
         calls.append(request)
         raise httpx.ConnectError("refused")
 
-    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(refused)))})
+    router = Router({"lan": OpenAIBackend(LAN, httpx.Client(transport=httpx.MockTransport(refused)))})
     for _ in range(3):
         with pytest.raises(Unreachable):
             router.structured("s", "u", SCHEMA, model="lan/qwen")
@@ -400,7 +331,7 @@ def test_a_connection_found_down_is_not_tried_again_in_the_run():
         slow.append(request)
         raise httpx.ReadTimeout("slow")
 
-    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))})
+    router = Router({"lan": OpenAIBackend(LAN, httpx.Client(transport=httpx.MockTransport(timeout)))})
     downs = []
     for _ in range(3):
         with pytest.raises(Unreachable) as lost:
@@ -456,13 +387,6 @@ def test_replies_that_are_not_objects_or_wrap_the_json_are_handled():
         assert backend(Server([reply(content)])).structured("s", "u", SCHEMA, model="lan/qwen").data == {"scores": []}
 
 
-def test_a_check_does_not_overwrite_an_address_saved_while_it_ran(tmp_path):
-    store = _migrated(tmp_path)
-    store.record_connection_check("lan", "http://old/v1", True, "", ["qwen"], "2026-10-17T12:00:00+00:00")
-    (row,) = store.connection_rows()
-    assert row["checked_at"] == "" and row["models"] == "[]", "the row's address had changed"
-
-
 def test_an_article_cut_to_fit_a_small_context_is_marked_as_cut():
     from app.read import Reading, _batches, _listing
 
@@ -475,11 +399,10 @@ def test_an_article_cut_to_fit_a_small_context_is_marked_as_cut():
     assert listed[0]["truncated"] is False
 
 
-def test_a_tailnet_server_can_be_free_and_model_ids_with_spaces_are_left_out():
+def test_a_tailnet_server_can_be_free():
     from app.llm import private_host
 
     assert private_host("http://100.101.102.103:8080/v1") and private_host("http://gpu.tail1234.ts.net/v1")
-    assert backend(Server(models=["qwen", "my model", "llama"])).model_ids() == ["qwen", "llama"]
 
 
 def test_which_failures_take_a_connection_out_for_the_run():
@@ -487,7 +410,7 @@ def test_which_failures_take_a_connection_out_for_the_run():
         def handler(request):
             raise exc
 
-        return OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(handler)))
+        return OpenAIBackend(LAN, httpx.Client(transport=httpx.MockTransport(handler)))
 
     for exc, down in (
         (httpx.ConnectTimeout("dropped"), True),
@@ -523,7 +446,7 @@ def test_a_pass_stops_after_two_calls_in_a_row_that_could_not_reach_the_model(tm
         slow.append(request)
         raise httpx.ReadTimeout("slow")
 
-    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))})
+    router = Router({"lan": OpenAIBackend(LAN, httpx.Client(transport=httpx.MockTransport(timeout)))})
     items = [Item(f"i{n}", f"https://x/{n}", Source("S"), f"T{n}", "", None, "") for n in range(10)]
     ranking = rank(
         Llm(model="lan/qwen", batch_size=2),
@@ -540,8 +463,6 @@ def test_a_pass_stops_after_two_calls_in_a_row_that_could_not_reach_the_model(tm
 
 def test_the_start_of_run_check_sees_the_whole_model_list():
     many = [f"m{n}" for n in range(600)]
-    lan = backend(Server(models=many))
-    assert len(lan.model_ids()) == 500, "the page keeps at most 500"
     assert Router({"lan": backend(Server(models=many))}).check("lan/m550") == ""
 
 
@@ -555,7 +476,7 @@ def test_two_timeouts_in_a_row_end_the_reading_pass_too_and_only_timeouts_count(
         slow.append(request)
         raise httpx.ReadTimeout("slow")
 
-    router = Router({"lan": OpenAIBackend(LAN, "", httpx.Client(transport=httpx.MockTransport(timeout)))})
+    router = Router({"lan": OpenAIBackend(LAN, httpx.Client(transport=httpx.MockTransport(timeout)))})
     readings = [Reading(f"r{n}", f"T{n}", "S", 900, " ".join(["word"] * 900)) for n in range(30)]
     store = Store(tmp_path / "f.sqlite3")
     assert read(Llm(model="lan/qwen"), router, store, User("john", "John", ()), readings, "2026-10-17") == {}
@@ -581,3 +502,104 @@ def test_an_article_cut_to_fit_leaves_room_for_its_links():
     ((cut,),) = _batches([long], limit=3000)
     sent = _tokens(cut.text) + len(json.dumps(cut.links)) // CHARS_PER_TOKEN + TOKENS_PER_ARTICLE
     assert sent <= 3000 and len(cut.links) == 8
+
+
+def test_connections_are_set_in_the_environment():
+    found, problems = connections_from_env(
+        {
+            "FORENOON_LLM_LAN_URL": "http://192.168.1.20:8888/v1",
+            "FORENOON_LLM_LAN_KEY": "sk-lan",
+            "FORENOON_LLM_LAN_CONTEXT": "65536",
+            "FORENOON_LLM_OPENAI_URL": "https://api.openai.com/v1",
+            "FORENOON_LLM_OPENAI_OUTPUT": "8192",
+            "FORENOON_LLM_OPENAI_FREE": "0",
+            "FORENOON_LLM_GPU_BOX_URL": "http://gpu-box:8000/v1",
+            "FORENOON_LLM_GPU_BOX_REASONING": "1",
+            "FORENOON_LLM_GPU_BOX_TIMEOUT": "900",
+            "FORENOON_LLM_KEY_LAN": "an old name, ignored",
+            "FORENOON_ANTHROPIC_API_KEY": "not a connection",
+        }
+    )
+    assert problems == []
+    gpu, lan, openai = found
+    assert (lan.name, lan.address, lan.key, lan.context_tokens, lan.output_tokens) == (
+        "lan",
+        "http://192.168.1.20:8888/v1",
+        "sk-lan",
+        65536,
+        16384,
+    )
+    assert lan.free and lan.reasoning_off and lan.timeout == 300
+    assert (openai.output_tokens, openai.free, openai.key) == (8192, False, "")
+    assert (gpu.name, gpu.reasoning_off, gpu.timeout) == ("gpu_box", False, 900)
+    assert "sk-lan" not in repr(lan), "the key is kept out of logs"
+
+
+def test_a_connection_that_cannot_be_read_is_left_out_and_says_why():
+    found, problems = connections_from_env(
+        {
+            "FORENOON_LLM_A_URL": "192.168.1.20:8080",
+            "FORENOON_LLM_B_URL": "http://x:80o0/v1",
+            "FORENOON_LLM_C_URL": "http://x/v1",
+            "FORENOON_LLM_C_CONTEXT": "8000",
+            "FORENOON_LLM_D_URL": "http://x/v1",
+            "FORENOON_LLM_D_CONTEXT": "20000",
+            "FORENOON_LLM_D_OUTPUT": "20000",
+            "FORENOON_LLM_ANTHROPIC_URL": "http://x/v1",
+            "FORENOON_LLM_OK_URL": "http://x/v1",
+        }
+    )
+    assert [c.name for c in found] == ["ok"]
+    assert len(problems) == 5
+    assert any(p.startswith("FORENOON_LLM_A_URL: give the API's address") for p in problems)
+    assert any(p.startswith("FORENOON_LLM_C_CONTEXT: give a whole number from 16384") for p in problems)
+    assert any(p.startswith("FORENOON_LLM_D_OUTPUT must be less than FORENOON_LLM_D_CONTEXT") for p in problems)
+    assert any(p.startswith("FORENOON_LLM_ANTHROPIC_URL: the name") for p in problems)
+
+
+def test_a_test_reports_each_way_a_model_can_fail():
+    from app.model_test import test_model
+
+    def router(server):
+        return Router({"lan": backend(server)})
+
+    assert test_model(router(Server([reply('{"word": "ready", "number": 7}')])), "lan/qwen").startswith(
+        "OK: answered in"
+    )
+    assert "not as asked" in test_model(router(Server([reply('{"word": "hello", "number": 3}')])), "lan/qwen")
+    cut = Server([reply("{", finish="length")])
+    assert test_model(router(cut), "lan/qwen").startswith("Failed (the answer was unusable)")
+    assert test_model(router(Server(status=503)), "lan/qwen").startswith("Failed (could not reach it)")
+    assert "set FORENOON_LLM_GPU_URL" in test_model(router(Server()), "gpu/qwen")
+
+
+def test_the_test_asked_for_on_the_page_is_run_and_answered(tmp_path, monkeypatch):
+    from app import model_test
+
+    store = _migrated(tmp_path)
+    cfg = Llm(model="lan/qwen", fallback_model="anthropic/claude-haiku-5-5")
+    assert not model_test.run_asked(store, cfg), "none asked for"
+    store.db.execute("INSERT INTO model_tests (id, requested_at) VALUES (1, '2026-10-17T12:00:00Z')")
+    store.db.commit()
+    assert store.model_test_asked() == "2026-10-17T12:00:00Z"
+
+    server = Server([reply('{"word": "ready", "number": 7}')])
+    monkeypatch.delenv("FORENOON_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(model_test, "backend_from_env", lambda llm: Router({"lan": backend(server)}, []))
+    monkeypatch.setattr(
+        model_test, "connections_from_env", lambda: ((), ["FORENOON_LLM_X_URL: give the API's address"])
+    )
+    assert model_test.run_asked(store, cfg)
+    row = store.db.execute("SELECT * FROM model_tests").fetchone()
+    lines = row["result"].split("\n")
+    assert row["answered"] == row["requested_at"] and row["tested_at"] and store.model_test_asked() == ""
+    assert lines[0] == "Not read: FORENOON_LLM_X_URL: give the API's address"
+    assert lines[1].startswith("lan/qwen (ranking and choosing): OK: answered in")
+    assert lines[2].startswith("anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it)")
+    assert [r["purpose"] for r in store.llm_call_rows()] == ["test", "test"], "the calls are logged like any other"
+
+    # Asked for again while one ran: the older answer does not count for it.
+    store.db.execute("UPDATE model_tests SET requested_at = '2026-10-17T12:00:30Z', answered = ''")
+    store.db.commit()
+    store.record_model_test("2026-10-17T12:00:00Z", "an older answer")
+    assert store.model_test_asked() == "2026-10-17T12:00:30Z", "the second is still to run"

@@ -102,9 +102,10 @@ export FORENOON_WEB_SECURE_COOKIES="${FORENOON_WEB_SECURE_COOKIES:-false}"
 export FORENOON_WEB_CLIENT_IP_HEADER FORENOON_WEB_TRUSTED_PROXIES="${FORENOON_WEB_TRUSTED_PROXIES:-127.0.0.1,::1}"
 # Exported so `docker run -e NAME` can pass them without the values appearing in `ps`.
 export FORENOON_FEEDBACK_SECRET FORENOON_SMTP_PASSWORD FORENOON_ANTHROPIC_API_KEY TUNNEL_TOKEN
-# Each model connection's key (FORENOON_LLM_KEY_<NAME>, see the Settings page), the same way.
+# Each model server's settings and key (FORENOON_LLM_<NAME>_URL and the rest, see
+# docs/setup-deploy.md), the same way.
 LLM_KEYS=""
-for name in $(grep -oE '^FORENOON_LLM_KEY_[A-Z0-9_]+' "$ENV_FILE" | sort -u); do
+for name in $(grep -oE '^FORENOON_LLM_[A-Z0-9_]+' "$ENV_FILE" | sort -u); do
     value=$(env_get "$name")
     export "$name=$value"
     LLM_KEYS="$LLM_KEYS -e $name"

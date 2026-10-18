@@ -1612,21 +1612,22 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     assert!(text.contains("Today: 103,000 of 600,000 tokens") && text.contains("1 calls this month were to a model"));
     assert!(text.contains("Also 9,000 tokens today and 9,000 this month on servers you run"));
     sqlx::query("DELETE FROM llm_calls WHERE model = 'lan/qwen'").execute(&site.pool).await.unwrap();
-    // The model settings list the shipped models; only the others can be left to follow the first.
-    assert!(text.contains(r#"<option value="anthropic/claude-haiku-5-5" selected>Claude Haiku 5.5</option>"#));
-    assert_eq!(text.matches(r#"<option value="anthropic/claude-sonnet-5-5">Claude Sonnet 5.5</option>"#).count(), 3);
-    assert!(text.contains(r#"<option value="" selected>The model above</option>"#));
-    // A model saved before it left the list is shown as it is, so a save keeps it.
-    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('llm.model', 'anthropic/claude-old-1', ?)")
-        .bind(&now)
-        .execute(&site.pool)
-        .await
-        .unwrap();
+    // The model settings are typed, suggesting the shipped models; only the others can be left empty.
+    assert!(text.contains(r#"<input name="llm.model" list="shipped-models" maxlength="200" value="anthropic/claude-haiku-5-5" autocomplete="off" spellcheck="false" required>"#));
+    assert!(text.contains(r#"name="llm.choose_model" list="shipped-models" maxlength="200" value="" autocomplete="off" spellcheck="false" placeholder="The model above">"#));
+    assert_eq!(text.matches(r#"<option value="anthropic/claude-sonnet-5-5">Claude Sonnet 5.5</option>"#).count(), 1);
+    // Any model is shown as it was saved, so a save keeps it.
+    sqlx::query(
+        "INSERT INTO settings (key, value, updated_at) VALUES ('llm.model', 'lan/unsloth/Qwen3.8-27B-GGUF', ?)",
+    )
+    .bind(&now)
+    .execute(&site.pool)
+    .await
+    .unwrap();
     let text = admin.get(&site, "/settings").await.text;
-    assert!(text.contains(
-        r#"<option value="anthropic/claude-old-1" selected>anthropic/claude-old-1 (not in the list)</option>"#
-    ));
-    assert!(!text.contains(r#"<option value="anthropic/claude-haiku-5-5" selected>"#));
+    assert!(
+        text.contains(r#"name="llm.model" list="shipped-models" maxlength="200" value="lan/unsloth/Qwen3.8-27B-GGUF""#)
+    );
     sqlx::query("DELETE FROM settings").execute(&site.pool).await.unwrap();
 
     // Every field as the page shows it, with a few changed.
@@ -1695,117 +1696,88 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
 }
 
 #[tokio::test]
-async fn model_connections_are_added_checked_by_the_pipeline_tested_and_deleted() {
+async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
     let site = site(true).await;
     let mut admin = Browser::default();
     admin.sign_in(&site, "john").await;
     let page = admin.get(&site, "/settings").await;
     let csrf = page.csrf();
-    assert!(page.text.contains(r#"<h2 id="model-connections">Model connections</h2>"#));
-    assert!(page.text.contains(r#"<option value="" selected>No fallback</option>"#));
-    let add = |name: &str, address: &str| {
-        vec![
-            ("csrf", csrf.clone()),
-            ("name", name.to_owned()),
-            ("address", address.to_owned()),
-            ("context_tokens", "65536".to_owned()),
-            ("output_tokens", "16384".to_owned()),
-            ("timeout_seconds", "300".to_owned()),
-            ("free", "1".to_owned()),
-            ("reasoning_off", "1".to_owned()),
+    assert!(page.text.contains(r#"<button formaction="/settings/test">Save and test</button>"#));
+    assert!(page.text.contains("<code>FORENOON_LLM_LAN_URL</code>"), "where a connection is set is said");
+
+    // Every field as the page shows it, with the models given.
+    let full = |models: &[(&'static str, &'static str)]| -> Vec<(&'static str, String)> {
+        let mut form = vec![("csrf", csrf.clone())];
+        for (key, value) in [
+            ("delivery_time", "06:00"),
+            ("max_age_days", "3"),
+            ("llm.daily_token_cap", "600000"),
+            ("llm.read_candidates", "40"),
+            ("alerts.enabled", "1"),
+            ("alerts.on_empty", "1"),
+            ("alerts.source_failures", "3"),
+            ("keep_pages_days", "-1"),
+            ("keep_issues_days", "-1"),
         ]
+        .iter()
+        .chain(models)
+        {
+            form.push((key, (*value).to_owned()));
+        }
+        form
     };
-    let post = |form: &Vec<(&'static str, String)>| form.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>();
-    let form = post(&add("LAN", "http://192.168.1.20:8080/v1/"));
-    let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    assert_eq!(
-        admin.post(&site, "/settings/connections", &form).await.location,
-        "/settings?connection=added#model-connections"
-    );
-    let row: (String, i64, bool) =
-        sqlx::query_as("SELECT address, context_tokens, free FROM connections WHERE name = 'lan'")
-            .fetch_one(&site.pool)
+    // A model must name its connection; nothing is saved or asked for when one does not.
+    let bad = full(&[("llm.model", "qwen")]);
+    let form: Vec<(&str, &str)> = bad.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let reply = admin.post(&site, "/settings/test", &form).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Model: name a model with its connection"));
+    let asked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_tests").fetch_one(&site.pool).await.unwrap();
+    assert_eq!(asked, 0);
+
+    // The form is saved, then the test asked for.
+    let good = full(&[("llm.model", "lan/qwen3.8-27b"), ("llm.fallback_model", "anthropic/claude-haiku-5-5")]);
+    let form: Vec<(&str, &str)> = good.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    assert_eq!(admin.post(&site, "/settings/test", &form).await.location, "/settings?testing=1#model-test");
+    let model: String =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm.model'").fetch_one(&site.pool).await.unwrap();
+    assert_eq!(model, "lan/qwen3.8-27b");
+    let (requested, answered): (String, String) =
+        sqlx::query_as("SELECT requested_at, answered FROM model_tests").fetch_one(&site.pool).await.unwrap();
+    assert!(!requested.is_empty() && answered.is_empty());
+    assert!(
+        admin
+            .get(&site, "/settings?testing=1")
             .await
-            .unwrap();
-    assert_eq!(row, ("http://192.168.1.20:8080/v1".to_owned(), 65536, true));
-    let text = admin.get(&site, "/settings?connection=added").await.text;
-    assert!(text.contains("Connection added.") && text.contains("Not checked yet"));
-    assert!(text.contains("<code>FORENOON_LLM_KEY_LAN</code>"), "the key's variable is named, never asked for");
+            .text
+            .contains("Test asked for: the pipeline runs it within a minute.")
+    );
 
-    // Refused: a name taken or built in, an address that is not one.
-    for (name, address, problem) in [
-        ("lan", "http://x/v1", "already a connection named lan"),
-        ("anthropic", "http://x/v1", "anthropic is built in"),
-        ("box", "192.168.1.20:8080", "Address: the API"),
-    ] {
-        let form = post(&add(name, address));
-        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let reply = admin.post(&site, "/settings/connections", &form).await;
-        assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains(problem), "{name}");
-    }
-
-    // What the pipeline found is shown, and the models it listed join the model settings.
+    // The pipeline's answer is shown, a line per model.
     sqlx::query(
-        "UPDATE connections SET checked_at = '2026-10-17T12:00:00+00:00', key_set = 1, models = '[\"qwen\", \"gemma\"]'",
+        "UPDATE model_tests SET answered = requested_at, tested_at = '2026-10-17T12:00:05+00:00',
+         result = 'lan/qwen3.8-27b (ranking and choosing): OK: answered in 1.1 s
+anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it): no key'",
     )
     .execute(&site.pool)
     .await
     .unwrap();
     let text = admin.get(&site, "/settings").await.text;
-    assert!(text.contains("Reached (key set); lists 2 models."));
-    assert_eq!(text.matches(r#"<option value="lan/qwen">qwen (on lan)</option>"#).count(), 3, "every model setting");
-    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES ('llm.model', 'lan/qwen', '2026')")
-        .execute(&site.pool)
-        .await
-        .unwrap();
-    assert!(
-        admin
-            .get(&site, "/settings")
-            .await
-            .text
-            .contains(r#"<option value="lan/qwen" selected>qwen (on lan)</option>"#)
-    );
+    assert!(text.contains("Last tested 2026-10-17 12:00 UTC:"));
+    assert!(text.contains("<li>lan/qwen3.8-27b (ranking and choosing): OK: answered in 1.1 s</li>"));
+    assert!(text.contains("<li>anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it): no key</li>"));
 
-    // A test is only asked for; the pipeline runs it and writes the result.
-    let reply =
-        admin.post(&site, "/settings/connections/lan/test", &[("csrf", csrf.as_str()), ("model", "qwen")]).await;
-    assert_eq!(reply.location, "/settings?connection=testing#model-connections");
-    let asked: (String, String) =
-        sqlx::query_as("SELECT test_model, test_requested_at FROM connections").fetch_one(&site.pool).await.unwrap();
-    assert!(asked.0 == "qwen" && !asked.1.is_empty());
-    assert!(admin.get(&site, "/settings").await.text.contains("Test asked for: the pipeline runs it within a minute."));
-
-    // Saving it again has the pipeline check it afresh.
-    let mut form = post(&add("", "http://192.168.1.21:8080/v1"));
-    form.retain(|(k, _)| *k != "name" && *k != "free");
-    let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    assert_eq!(
-        admin.post(&site, "/settings/connections/lan", &form).await.location,
-        "/settings?connection=saved#model-connections"
-    );
-    let row: (String, String, bool) =
-        sqlx::query_as("SELECT address, checked_at, free FROM connections").fetch_one(&site.pool).await.unwrap();
-    assert_eq!(row, ("http://192.168.1.21:8080/v1".to_owned(), String::new(), false));
-    assert_eq!(admin.post(&site, "/settings/connections/nope", &form).await.status, StatusCode::NOT_FOUND);
+    // Asking again replaces the last.
+    admin.post(&site, "/settings/test", &form).await;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT requested_at, answered FROM model_tests").fetch_all(&site.pool).await.unwrap();
+    assert!(rows.len() == 1 && rows[0].0 != rows[0].1);
 
     // Only admins, only from this site's page.
     let mut mary = Browser::default();
     mary.sign_in(&site, "mary").await;
     let token = mary.get(&site, "/account").await.csrf();
-    assert_eq!(
-        mary.post(&site, "/settings/connections/lan/delete", &[("csrf", token.as_str())]).await.status,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        admin.post(&site, "/settings/connections/lan/delete", &[("csrf", "wrong")]).await.status,
-        StatusCode::FORBIDDEN
-    );
-    let reply = admin.post(&site, "/settings/connections/lan/delete", &[("csrf", csrf.as_str())]).await;
-    assert_eq!(reply.location, "/settings?connection=deleted#model-connections");
-    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM connections").fetch_one(&site.pool).await.unwrap();
-    assert_eq!(left, 0);
-    // The model setting that named it is kept as saved, and shown as not in the list.
-    assert!(admin.get(&site, "/settings").await.text.contains("lan/qwen (not in the list)"));
+    assert_eq!(mary.post(&site, "/settings/test", &[("csrf", token.as_str())]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(admin.post(&site, "/settings/test", &[("csrf", "wrong")]).await.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

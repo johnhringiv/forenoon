@@ -101,8 +101,8 @@ Code in a monospaced font, with long lines wrapped under their own indent rather
 uv sync
 mkdir -p run/data
 export FORENOON_DATA_DIR=run/data FORENOON_FEEDBACK_SECRET=$(openssl rand -hex 32)
-export FORENOON_ANTHROPIC_API_KEY=sk-ant-...  # the model chooses the articles; or add a local
-                                              # model server on the Settings page instead
+export FORENOON_ANTHROPIC_API_KEY=sk-ant-...  # the model chooses the articles; or a local
+                                              # one: FORENOON_LLM_LAN_URL=http://gpu-box:8080/v1
 
 # a reader to deliver to; asks for a password for the web pages
 (cd web && cargo run -- --db ../run/data/forenoon.sqlite3 add-user me --email you@example.com --kindle you@kindle.com)

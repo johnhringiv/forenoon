@@ -741,7 +741,7 @@ def run(
             cfg.llm, backend, store, ranking.order, day_start.astimezone(UTC).isoformat(timespec="seconds")
         )
     elif backend is None:
-        report.ranking = f"fallback: no API key; set {API_KEY_ENV} in the deploy's env file, or add a connection on the Settings page"
+        report.ranking = f"fallback: no API key; set {API_KEY_ENV} in the deploy's env file, or a model server as FORENOON_LLM_<NAME>_URL"
     elif ranking.note:
         report.ranking = f"fallback: {ranking.note}"
     queue = pinned + ranking.order

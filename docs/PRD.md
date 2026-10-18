@@ -156,9 +156,10 @@ what its own users configure and delivers only to the addresses its readers have
   start on port 465 instead of STARTTLS; both programs read the same variables), the web
   pages' public address (`FORENOON_PUBLIC_URL`), the shipped model list
   (`FORENOON_MODELS`, set by the image) and the secrets (`FORENOON_FEEDBACK_SECRET`,
-  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`, and `FORENOON_LLM_KEY_<NAME>` for
-  each model connection that needs a key). There is no configuration file.
-- A model is required (the Anthropic key, or a connection): it chooses the articles. Alerts are on by default and go
+  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`), and each OpenAI-compatible model
+  server (`FORENOON_LLM_<NAME>_URL` and the variables beside it, section 7). There is no
+  configuration file.
+- A model is required (the Anthropic key, or a model server): it chooses the articles. Alerts are on by default and go
   to every admin's sign-in address unless another address is set.
 
 ## 3. The daily run
@@ -429,17 +430,19 @@ source).
 - **Models.** A model is named with the connection it is reached through,
   `anthropic/claude-haiku-5-5`. Anthropic is built in. Any other server that speaks the
   OpenAI chat completions API (OpenAI itself, or LM Studio, Ollama, llama.cpp or vLLM on the
-  network) is added on the Settings page as a connection: a name, its address, the context
-  size the server holds, an answer limit, a time limit, whether it is a server you run (its
-  calls cost nothing and stay outside the token cap; only one on a private or local address
-  can be) and whether to ask the model not to
-  reason first (on by default; not sent to OpenAI). Its key is `FORENOON_LLM_KEY_<NAME>` in
-  the pipeline's environment, never in the database. Its models are then named
-  `<connection>/<model>`. The web pages never reach a server: the scheduler checks each
-  connection within a minute of a change and every ten minutes after, writes back whether
-  it was reached, whether its key is set and which models it lists (offered in the model
-  settings), and runs the Test asked for on the page (one small request: its time, and
-  whether the answer matched). Three settings: every call uses `llm.model` (Claude Haiku
+  network) is a connection set in the pipeline's environment, as with the self-hosted apps
+  that call a model in the background: `FORENOON_LLM_<NAME>_URL`, and optionally its key,
+  the context size the server holds (32,768), an answer limit (16,384), a time limit (300 s),
+  whether the model may reason first (no; not sent to OpenAI) and whether it is free (yes: a
+  server you run costs nothing and stays outside the token cap; only one on a private or
+  local address can be). Its models are then named `<name>/<model id>`, the name in lower
+  case, and typed into the model settings; the shipped models are suggested. A connection
+  whose variables cannot be read is left out, and why is said wherever a model on it is
+  missed. More than one can be set. The web pages never reach a server: the Settings page's
+  **Save and test** saves the page and asks for a test, which the scheduler, looking at the
+  database every minute, runs: one small request to each model the settings name, with its
+  time and whether the answer matched, written back for the page (`forenoon test-models` from
+  the terminal). Test calls are logged like any other. Three settings: every call uses `llm.model` (Claude Haiku
   5.5), except the choosing of the issue (section 7f), which can have its own
   (`llm.choose_model`): one small call a day that decides what the reader gets, where a
   stronger model costs cents. `llm.fallback_model` replaces a model for the whole run when,
@@ -448,7 +451,7 @@ source).
   the report and the alert say so. Only an unreachable connection moves a run on, never a
   bad answer. Every call is logged and priced under the model it used, and logged as
   `unreachable` or `error` when it got no usable answer. The models offered, and their prices, are listed in `web/models.json`,
-  shipped with the app and read-only: the web pages build it in for the Settings page's lists
+  shipped with the app and read-only: the web pages build it in for the Settings page's suggestions
   and the pipeline reads it for prices and for how each model is asked. The answer is a call
   of one tool, forced where the model allows it; a model that refuses a forced tool call
   (Sonnet 5.5, Opus 5.5, so marked in the file) or one not listed is asked for it in the

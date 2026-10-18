@@ -4,7 +4,6 @@
 pub mod accounts;
 pub mod archive;
 pub mod auth;
-pub mod connections;
 pub mod db;
 pub mod demo;
 pub mod feedback;
@@ -135,10 +134,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/sources/sessions", post(sources::set_session))
         .route("/sources/sessions/delete", post(sources::remove_session))
         .route("/settings", get(settings::page).post(settings::save))
-        .route("/settings/connections", post(connections::add))
-        .route("/settings/connections/{name}", post(connections::update))
-        .route("/settings/connections/{name}/delete", post(connections::delete))
-        .route("/settings/connections/{name}/test", post(connections::test))
+        .route("/settings/test", post(settings::test))
         .route("/accounts", get(accounts::page).post(accounts::invite))
         .route("/accounts/{id}/resend", post(accounts::resend))
         .route("/accounts/{id}/revoke", post(accounts::revoke))

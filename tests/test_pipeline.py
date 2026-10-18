@@ -400,7 +400,7 @@ def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
     no_key = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=None)
     assert (
         no_key.ranking
-        == "fallback: no API key; set FORENOON_ANTHROPIC_API_KEY in the deploy's env file, or add a connection on the Settings page"
+        == "fallback: no API key; set FORENOON_ANTHROPIC_API_KEY in the deploy's env file, or a model server as FORENOON_LLM_<NAME>_URL"
     )
     assert any("Ranking was skipped (no API key" in p for p in problems(no_key, cfg)), "a missing key is alerted"
 

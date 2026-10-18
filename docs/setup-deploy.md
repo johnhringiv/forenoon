@@ -32,13 +32,29 @@ openssl rand -hex 32    # paste as FORENOON_FEEDBACK_SECRET
 Fill in `FORENOON_HOST_DATA`, `TZ`, the mail server (`FORENOON_SMTP_HOST`,
 `FORENOON_SMTP_USERNAME`, `FORENOON_SMTP_SENDER`, `FORENOON_SMTP_PASSWORD`; see
 [setup-email.md](setup-email.md)) and a model: the model is what chooses your articles.
-Either set `FORENOON_ANTHROPIC_API_KEY`, or after the first start add a connection on the
-Settings page (Model connections) to any server that speaks the OpenAI chat completions API:
-OpenAI, or Ollama, LM Studio, llama.cpp or vLLM on your network. A connection's key, if it
-needs one, is `FORENOON_LLM_KEY_<NAME>` in `.env` (with docker compose, also add the line the
-compose file shows for it). The Settings page shows what the pipeline found at each server
-within a minute, and its Test button tries one small request. Without any model a run still
-delivers, newest first, and the alert says so. Never commit `.env`.
+Either set `FORENOON_ANTHROPIC_API_KEY`, or point Forenoon at any server that speaks the
+OpenAI chat completions API (Ollama, LM Studio, llama.cpp or vLLM on your network, or OpenAI
+itself) with `FORENOON_LLM_<NAME>_URL` in `.env`. The name is yours: `FORENOON_LLM_LAN_URL`
+makes a connection called `lan`, and on the Settings page you type its models as
+`lan/<model id>`, the id the server knows the model by. With docker compose, also add the lines
+the compose file shows. Without any model a run still delivers, newest first, and the alert
+says so. Never commit `.env`.
+
+| Variable                        | Default |                                                                                                                                                                            |
+| ------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORENOON_LLM_<NAME>_URL`       |         | The API's address, as in `http://192.168.1.20:8080/v1`.                                                                                                                    |
+| `FORENOON_LLM_<NAME>_KEY`       | none    | If the server needs one.                                                                                                                                                   |
+| `FORENOON_LLM_<NAME>_CONTEXT`   | 32768   | The tokens the server holds in one request, prompt and answer together (16,384 at least).                                                                                  |
+| `FORENOON_LLM_<NAME>_OUTPUT`    | 16384   | The answer limit; less than the context.                                                                                                                                   |
+| `FORENOON_LLM_<NAME>_TIMEOUT`   | 300     | Seconds to wait for one answer.                                                                                                                                            |
+| `FORENOON_LLM_<NAME>_REASONING` | 0       | 1 lets the model reason first. Not sent to OpenAI.                                                                                                                         |
+| `FORENOON_LLM_<NAME>_FREE`      | 1       | Calls to a server on your network (a private or local address) cost nothing and stay outside the daily tokens; 0 counts them. A service on the internet is always counted. |
+
+Set more than one under different names if you have them, for example a server at home and
+OpenAI as the fallback model. After a change, restart the pipeline (`deploy.sh` does) and press
+**Save and test** on the Settings page: within a minute it shows, for each model the settings
+name, whether one small request worked and how long it took. `forenoon test-models` does the
+same from the terminal. An env line that cannot be read is named there and in the run's alert.
 
 For a server on your network: it must listen on an address the pipeline's container can
 reach (not only `127.0.0.1`), and the context size you give the connection must be what the

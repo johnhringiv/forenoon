@@ -47,7 +47,7 @@ def load(store: Store | None = None) -> Config:
 def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     fetcher = Fetcher(cfg.user_agent, store)
-    backend = backend_from_env(cfg.llm, store.connections())
+    backend = backend_from_env(cfg.llm)
     failed = 0
     try:
         # Read at every run, so a change made on the account page applies to the next one.
@@ -190,20 +190,32 @@ def _check_sources(cfg: Config) -> int:
         return 0
 
 
-def _look_after_connections(cfg: Config) -> int:
-    """Check the model connections and run the tests asked for on the Settings page. Run every
-    minute by the scheduler."""
-    from .connections import look_after
+def _test_models(cfg: Config) -> bool:
+    """Run the model test asked for on the Settings page, if there is one. Every minute, from the
+    scheduler: only the database is looked at unless a test was asked for."""
+    from .model_test import run_asked
 
     try:
         store = Store(cfg.db_path)
         try:
-            return look_after(store)
+            return run_asked(store, cfg.llm)
         finally:
             store.close()
     except Exception:
-        log.exception("connection checks failed")
-        return 0
+        log.exception("the model test failed")
+        return False
+
+
+def _test_models_now(cfg: Config) -> int:
+    from .model_test import test_models
+
+    store = Store(cfg.db_path)
+    try:
+        lines = test_models(cfg.llm, store)
+    finally:
+        store.close()
+    print("\n".join(lines))
+    return 0 if lines and all(": OK" in line for line in lines) else 1
 
 
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
@@ -218,7 +230,7 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
                 _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
                 _check_sources(cfg)
-                _look_after_connections(cfg)
+                _test_models(cfg)
         cfg = _reload(cfg)
         try:
             _run_all(cfg, args)
@@ -378,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("send-queue", help="send the articles readers asked for on the web pages, now")
     sub.add_parser("feedback-log", help="print logged feedback")
     sub.add_parser("usage", help="print recent model calls and today's token use")
+    sub.add_parser("test-models", help="send one small request to each model the settings name")
     p = sub.add_parser("checks", help="print articles the model thought were badly extracted")
     p.add_argument("--all", action="store_true", help="include the ones it judged fine")
     sub.add_parser("thumbs", help="make the web pages' thumbnails for articles delivered earlier")
@@ -416,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
             return _replay(cfg, args)
         if args.command == "usage":
             return _usage(cfg, args)
+        if args.command == "test-models":
+            return _test_models_now(cfg)
         return _feedback_log(cfg, args)
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
