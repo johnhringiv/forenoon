@@ -2423,6 +2423,8 @@ async fn icons_and_the_manifest_need_no_session() {
         ("/icon-512.png", "image/png"),
         ("/icon-maskable-512.png", "image/png"),
         ("/og.png", "image/png"),
+        // The address the pages name the card by, versioned: the same answer.
+        (forenoon_web::icons::SHARE_CARD.as_str(), "image/png"),
         ("/manifest.webmanifest", "application/manifest+json"),
     ] {
         let response = site.router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
@@ -2431,7 +2433,7 @@ async fn icons_and_the_manifest_need_no_session() {
         assert_eq!(header(header::CONTENT_TYPE), media_type, "{path}");
         assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400", "{path}");
         // The share card may be shown on another site's page; nothing else may.
-        let policy = if path == "/og.png" { "cross-origin" } else { "same-origin" };
+        let policy = if path.starts_with("/og.png") { "cross-origin" } else { "same-origin" };
         assert_eq!(header(header::HeaderName::from_static("cross-origin-resource-policy")), policy, "{path}");
     }
     // Every icon the manifest names is served, and the page lets the browser load the manifest.
@@ -2691,6 +2693,16 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     assert_eq!(status, StatusCode::OK);
     assert!(kind.starts_with("text/html") && cache == "public, max-age=300" && robots.is_empty() && cookie.is_empty());
     assert!(csp && page.contains("A morning paper edited for one reader"), "{page}");
+    // What a shared link's preview needs, X's card type and the picture's size among it.
+    for tag in [
+        r#"<meta property="og:site_name" content="Forenoon">"#,
+        r#"<meta property="og:image:width" content="1200">"#,
+        r#"<meta property="og:image:height" content="630">"#,
+        r#"<meta property="og:image:alt" content="#,
+        r#"<meta name="twitter:card" content="summary_large_image">"#,
+    ] {
+        assert!(page.contains(tag), "{tag}");
+    }
     // Its pictures, and the icons it names.
     let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;
     assert!(status == StatusCode::OK && kind == "image/webp" && cache.starts_with("public"));
