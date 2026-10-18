@@ -195,6 +195,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         ):
             el.tag = "blockquote"
 
+    _unclass_quotes(root)
+
     targets: dict[str, lxml.html.HtmlElement] = {}
     for el in root.iter():
         if isinstance(el.tag, str):
@@ -311,6 +313,20 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         if top is not None and top.getparent() is not None:
             top.drop_tree()
     return holder
+
+
+def _unclass_quotes(root: lxml.html.HtmlElement) -> None:
+    """Take the class names off quotes, and off wrappers that hold nothing but one: picking the
+    article out of the page throws away anything classed like page furniture, which includes
+    every embedded post ("twitter-tweet", "wp-block-embed-twitter"). The book keeps no class
+    names anyway; ids stay, as in-page links may point at them."""
+    for quote in root.iter("blockquote"):
+        quote.attrib.pop("class", None)
+        text = _norm(quote.text_content())
+        for wrapper in quote.iterancestors():
+            if wrapper is root or wrapper.tag in ("body", "html") or _norm(wrapper.text_content()) != text:
+                break
+            wrapper.attrib.pop("class", None)
 
 
 def _unmark(root: lxml.html.HtmlElement) -> None:

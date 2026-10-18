@@ -286,3 +286,15 @@ def test_a_notes_link_back_is_not_taken_for_a_reference():
     assert "A claim in the text." in text and "It goes on for a while" in text and "The note itself." not in text
     assert text.count('class="noteref"') == 1 and notes.count("<aside") == 1
     assert '<a href="#fnref-1">1</a> The note itself.' in notes
+
+
+def test_embedded_posts_survive_picking_the_article_out_of_the_page():
+    words = "<p>" + "Plain words about hardware wallets and the shops that sell them second hand. " * 12 + "</p>"
+    tweet = (
+        "<figure class='wp-block-embed is-provider-twitter wp-block-embed-twitter'><blockquote class='twitter-tweet'>"
+        "<p>Ledger Flex sold at an airport shop confirmed to contain a spy implant</p>— Danny (@d) October 13</blockquote>"
+        "<script src='https://platform.twitter.com/widgets.js'></script></figure>"
+    )
+    page = f"<html><body><article>{words}{tweet}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert "<blockquote><p>Ledger Flex sold at an airport shop" in out and "twitter-tweet" not in out
