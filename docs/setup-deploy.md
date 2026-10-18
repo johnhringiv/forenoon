@@ -95,8 +95,8 @@ silently drops egress from custom bridge networks, which would break feed fetchi
 tunnel. On DSM, run docker with `sudo`; the binary is at `/usr/local/bin/docker`.
 
 After a host reboot `cloudflared` can start before `web` and fail to join its namespace. If
-the health check above fails after a reboot, run `docker compose up -d` again. (The deploy
-script's poller, below, does this by itself; docker compose has nothing watching.)
+the health check above fails after a reboot, run `docker compose up -d` again, or let
+`poll-compose.sh` (below) do it.
 
 ### Your own reverse proxy
 
@@ -119,6 +119,23 @@ redirected, so a proxy that names its upstream as the host (nginx does unless gi
 passing the host on: a proxy on the same machine reaches the container from Docker's bridge
 gateway (often `172.17.0.1`), which is also where LAN visits to the published port can come
 from, so trusting it would let those visits through without the redirect.
+
+### Continuous deploy with docker compose
+
+CI publishes every merge to `main` to GHCR. To follow it, set `IMAGE`, `WEB_IMAGE` (and
+`BROWSER_IMAGE` if you use the browser) in `.env` to their `ghcr.io/<owner>/<repo>…:latest`
+tags, then schedule `deploy/poll-compose.sh` every 5 minutes as root, from the folder holding
+`docker-compose.yml` and `.env` (DSM: Control Panel → Task Scheduler → user-defined script;
+enable the email on abnormal termination):
+
+```sh
+cd /path/to/compose-folder && sh poll-compose.sh >> poll-compose.log 2>&1
+```
+
+It runs `docker compose pull` and `docker compose up -d`, which replaces only the containers
+whose image changed and starts any that stopped, then checks `FORENOON_PUBLIC_URL/healthz`.
+An unchanged install costs a manifest check per image. Roll back by pinning `:sha-<commit>`
+tags in `.env`. The GHCR packages must be public: the host pulls anonymously.
 
 ## Alternative: deploy script and continuous deploy
 
