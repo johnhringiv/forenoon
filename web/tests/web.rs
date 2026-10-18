@@ -2463,7 +2463,7 @@ async fn a_shared_link_previews_with_the_sites_card() {
     assert_eq!(home.location, "/login");
     let page = Browser::default().get(&site, "/login").await;
     for tag in [
-        r#"<meta property="og:title" content="Forenoon: run your own AI-powered news aggregator for about two cents a day">"#,
+        r#"<meta property="og:title" content="Forenoon: the AI scrolls, you read">"#,
         r#"<meta property="og:url" content="http://nas:8787/login">"#,
         r#"<meta name="twitter:card" content="summary_large_image">"#,
     ] {
