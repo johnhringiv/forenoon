@@ -288,7 +288,7 @@ def test_a_notes_link_back_is_not_taken_for_a_reference():
     assert '<a href="#fnref-1">1</a> The note itself.' in notes
 
 
-def test_teasers_sign_ups_and_pull_quotes_are_dropped_but_notes_and_quotes_stay():
+def test_teasers_and_sign_ups_are_dropped_but_notes_and_quotes_stay():
     words = "Plain words about grid storage and the cost of transmission lines. " * 12
     page = f"""<html><body><article>
     <p>{words}</p>
@@ -308,11 +308,11 @@ def test_teasers_sign_ups_and_pull_quotes_are_dropped_but_notes_and_quotes_stay(
     # Boxes that point elsewhere or ask for an address are not the article.
     assert "Recommended" not in out and "Another story" not in out
     assert "Sign up" not in out and "Long Read" not in out
-    # A pull quote repeats a sentence the article has: it goes, its speaker with it.
-    assert "Jane Doe" not in out
+    # A pull quote is part of the article as its editors set it: it stays, its speaker with it.
+    assert "Jane Doe, Grid Operator" in out
     # A note with a link in it is still a callout; a quote the author wrote stays, repeated or not.
     assert "<blockquote>Update: this post has" in out and "corrected figures" in out
-    assert out.count("never built for this much solar") == 2  # the paragraph and the quote
+    assert out.count("never built for this much solar") == 3  # the paragraph and both quotes
 
 
 def test_boxes_of_real_text_are_never_dropped_as_teasers_or_repeats():
@@ -376,3 +376,20 @@ def test_notes_roundups_credits_and_footnotes_in_boxes_are_kept():
     page = f"<html><body><nav>x</nav><aside><h1>Weekly links</h1>{links}</aside></body></html>"
     assert extract(url, page, "", "page").status == "clean"
     assert extract(url, None, f"<aside><h2>Links this week</h2>{links}</aside>", "feed").status == "clean"
+
+
+def test_link_boxes_with_odd_characters_or_author_labels_are_handled():
+    words = "<p>" + "Plain words about levees and the town that paid for one. " * 12 + "</p>"
+    note = "<p>Ref<sup><a href='#fn1' id='r1'>1</a></sup>.</p><ol><li id='fn1'>The note itself here. <a href='#r1'>back</a></li></ol>"
+    # A control character beside a teaser's links must not stop the structure pass: the
+    # footnote is still gathered at the end.
+    page = f"<html><body><article>{words}<aside>Read more \x0c<a href='/a'>One</a> <a href='/b'>Two</a></aside>{note}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert "<h3>Notes</h3>" in out
+    for box in (
+        "<aside>Updates: <a href='/p2'>Part two of this story is out</a> <a href='/p3'>The council replied</a></aside>",
+        "<aside>Authors: <a href='/a'>Alice Smith</a>, <a href='/b'>Bob Jones</a></aside>",
+    ):
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/b", page, "", "page").body, encoding="unicode")
+        assert ("Bob Jones" in out) or ("council replied" in out), box

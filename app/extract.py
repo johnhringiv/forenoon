@@ -60,17 +60,14 @@ TEASER_LINK_SHARE = 0.6
 TEASER_LABEL_MAX_WORDS = 4  # "Recommended", "You may like", "More on this story"
 # How an author starts a note that may be only links ("Update: part two is out"): never a teaser.
 NOTE_LABEL_START = re.compile(
-    r"\W*(update|updated|correction|corrected|note|editor.s note|edit|addendum|erratum)\b", re.IGNORECASE
+    r"\W*(updates?|updated|corrections?|corrected|notes?|editor.s note|edit|addendum|erratum"
+    r"|by|authors?|written by|reporting by|photos? by|credits?)\b",
+    re.IGNORECASE,
 )
 BOX_MAX_SHARE = 0.5  # of the page's words: a box holding more is the article
 # A sign-up box is a form and a line or two selling it; a box with more text than this beside
 # its form (an article with a comment form under it) is not one.
 FORM_BOX_MAX_WORDS = 60
-# A pull quote repeats a sentence of the article, set apart for the eye; in a book it is read
-# twice. Shorter than this, a phrase may repeat by chance. What else the box holds beside it
-# (the speaker's name, a caption) is no more than ATTRIBUTION_MAX_WORDS.
-QUOTE_REPEAT_MIN_WORDS = 6
-ATTRIBUTION_MAX_WORDS = 8
 # Syntax highlighting, in the class names of highlight.js, Prism and Pygments. On a
 # greyscale screen the two worth keeping are comments (italic) and keywords (bold).
 CODE_COMMENT_CLASSES = {"comment", "hljs-comment", "c", "c1", "cm", "cs"}
@@ -188,9 +185,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
-    # Boxes are judged against the page as it was, before any is dropped: the text outside
-    # every box (where a pull quote's sentence must also be), and what in-page links point at.
-    outside = _visible_text(root, without_boxes=True)
+    # Boxes are judged against the page as it was, before any is dropped.
     page_words = _words(_visible_text(root))
     linked_to = _in_page_targets(root, base_url)
     for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
@@ -211,7 +206,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
                 target in linked_to for target in el.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name")
             )
         )
-        if classes & SIDENOTE_CHROME or (droppable and (_promo(el) or _repeats(el, outside))):
+        if classes & SIDENOTE_CHROME or (droppable and _promo(el)):
             el.drop_tree()
         elif el.tag in ("span", "tt", "font") and in_code:
             if classes & CODE_COMMENT_CLASSES:
@@ -365,29 +360,37 @@ def _promo(box: lxml.html.HtmlElement) -> bool:
     linked = sum(_words(a.text_content()) for a in links)
     if len(links) < 2 or not words or linked < TEASER_LINK_SHARE * words:
         return False
-    marked = copy.deepcopy(box)
-    for link in marked.xpath(".//a[not(ancestor::a)]"):
-        _replace_with_marker(link)
-    label, _, rest = marked.text_content().partition(LINK_MARKER)
-    if NOTE_LABEL_START.match(label) or WORD.search(rest.replace(LINK_MARKER, "")):
+    label, rest = _around_first_link(box)
+    if NOTE_LABEL_START.match(label) or WORD.search(rest):
         return False
     return 1 <= len(WORD.findall(label)) <= TEASER_LABEL_MAX_WORDS
 
 
-LINK_MARKER = "\ue000"  # a private-use character: no page text has it, and lxml accepts it
 WORD = re.compile(r"\w+")
 
 
-def _replace_with_marker(link: lxml.html.HtmlElement) -> None:
-    """Stand a link's text in for one marker character, keeping the text after it."""
-    parent = link.getparent()
-    marker = LINK_MARKER + (link.tail or "")
-    previous = link.getprevious()
-    if previous is not None:
-        previous.tail = (previous.tail or "") + marker
-    else:
-        parent.text = (parent.text or "") + marker
-    parent.remove(link)
+def _around_first_link(box: lxml.html.HtmlElement) -> tuple[str, str]:
+    """The box's text before its first link, and its text after that outside any link. Read
+    only: the tree is not touched, so no character in the page can make this fail."""
+    before: list[str] = []
+    after: list[str] = []
+    seen_link = False
+
+    def walk(el: lxml.html.HtmlElement, in_link: bool) -> None:
+        nonlocal seen_link
+        linked = in_link or el.tag == "a"
+        if el.tag == "a" and not in_link:
+            seen_link = True
+        if el.text and not linked:
+            (after if seen_link else before).append(el.text)
+        for child in el:
+            if isinstance(child.tag, str):
+                walk(child, linked)
+            if child.tail and not linked:
+                (after if seen_link else before).append(child.tail)
+
+    walk(box, False)
+    return " ".join(before), " ".join(after)
 
 
 def _in_page_targets(root: lxml.html.HtmlElement, base_url: str) -> set[str]:
@@ -403,36 +406,14 @@ def _in_page_targets(root: lxml.html.HtmlElement, base_url: str) -> set[str]:
     return targets
 
 
-def _visible_text(root: lxml.html.HtmlElement, without_boxes: bool = False) -> str:
+def _visible_text(root: lxml.html.HtmlElement) -> str:
     """The page's text as a reader sees it, normalised: not the head, hidden elements or the
-    scripts, which often hold the article a second time as data. `without_boxes`: nor the
-    text of any box beside it."""
+    scripts, which often hold the article a second time as data."""
     shown = copy.deepcopy(root)
     hidden = ".//head | .//script | .//style | .//template | .//noscript | .//*[@hidden] | .//*[@aria-hidden='true']"
     for el in shown.xpath(hidden):
         el.drop_tree()
-    if without_boxes:
-        # Nor the page's own furniture: a sentence there (a header's summary) is not the article's.
-        for el in shown.xpath(".//header | .//nav | .//footer | .//*[@role='banner' or @role='navigation']"):
-            el.drop_tree()
-        for el in list(shown.iter("div", "aside", "section", "p")):
-            if el is not shown and _boxed(el, _classes(el)):
-                el.drop_tree()  # one inside a box already dropped goes with it, harmlessly
     return _norm(shown.text_content())
-
-
-def _repeats(box: lxml.html.HtmlElement, outside: str) -> bool:
-    """Whether a box beside the text is a pull quote: a sentence that is also in the text
-    outside every box, followed by nothing but who said it (a name, not a sentence)."""
-    whole = _norm(box.text_content())
-    for el in (box, *box.iterdescendants("div", "p", "span", "blockquote", "q")):
-        quote = _norm(el.text_content())
-        if len(quote.split()) < QUOTE_REPEAT_MIN_WORDS or not whole.startswith(quote) or quote not in outside:
-            continue
-        after = whole[len(quote) :].strip()
-        if len(after.split()) <= ATTRIBUTION_MAX_WORDS and not after.endswith((".", "!", "?", ":")):
-            return True
-    return False
 
 
 def _unmark(root: lxml.html.HtmlElement) -> None:

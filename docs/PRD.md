@@ -299,13 +299,10 @@ All fetched content is treated as untrusted.
     (bold) in highlighted code blocks keep their meaning as elements.
   - Boxes beside the text that are not the article are dropped: a teaser (an aside or
     callout that is a short label and then only links, two or more, such as "Recommended" or
-    "You may like"), a box holding a form and little else (a newsletter sign-up), and a pull
-    quote (a box whose sentence is also in the text outside every box and outside the page's
-    header, navigation and footer, followed by nothing but a name). Never dropped: a box of
-    over 400 words or half the page's text, one holding something an in-page link points at
-    (a footnote), and one that starts as an author's note does ("Update:", "Correction:").
-    Quotes the author wrote as block quotes are kept even when repeated, since a reply quotes
-    what it answers.
+    "You may like") and a box holding a form and little else (a newsletter sign-up). Never
+    dropped: a box of over 400 words or half the page's text, one holding something an
+    in-page link points at (a footnote), and one whose label is an author's ("Update:",
+    "Correction:", "By", "Authors:"). Pull quotes stay, as the editors set them.
 
   No id or class from the page reaches the book: the ids and link targets are generated.
 
