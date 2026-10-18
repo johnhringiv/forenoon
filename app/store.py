@@ -194,11 +194,16 @@ class Store:
     def _ratings_to_verdicts(self) -> None:
         """Bring 1-to-5 ratings forward to verdicts and progress (October 2026).
 
-        5, and 4 with a reason (only what was liked fits a 4), become "more"; 4, and 3 with no
-        reason, "worth it". 1 to 3 with a reason say which: the topic or already knowing it is
-        "not for me", the rest "not good". Without a reason a 1 or 2 is "not good": it says less
-        about the subject than "not for me" would. "Too long" becomes "longer than it needed
-        to be". A rating from the "didn't finish" row is "stopped partway".
+        5, and 4 with a reason (only what was liked fits a 4), become "more"; 4 "worth it". A 3
+        with no reason has no verdict: 3 was used as a mild negative, so it is not made a
+        positive. 1 to 3 with a reason say which: the topic is "not for me", the rest
+        "not good"; a 1 or 2 with no reason is "not good", which says less about the subject.
+        "Too long" becomes "longer than it needed to be".
+
+        Only the book's "didn't finish" row said that the reader stopped partway: the web pages
+        recorded a rating as not finished without asking, so a rating from there is "not
+        known". What is left with neither verdict nor progress is dropped. Every tap, with its
+        1 to 5, stays in feedback_events.
         """
         start = SCHEMA.index("CREATE TABLE IF NOT EXISTS ratings (")
         create = SCHEMA[start : SCHEMA.index(");", start) + 2]
@@ -208,16 +213,18 @@ class Store:
             self.db.execute(create)
             self.db.execute(
                 "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)"
-                " SELECT user_id, article_id,"
+                " SELECT * FROM (SELECT user_id, article_id,"
                 " CASE WHEN rating IS NULL THEN NULL"
                 "  WHEN rating = 5 OR (rating = 4 AND reason != '') THEN 'more'"
-                "  WHEN rating = 4 OR (rating = 3 AND reason = '') THEN 'worth-it'"
-                "  WHEN reason IN ('topic', 'known') THEN 'not-for-me' ELSE 'not-good' END,"
-                " CASE WHEN finished THEN 'finished' WHEN rating IS NOT NULL THEN 'partway' END,"
+                "  WHEN rating = 4 THEN 'worth-it' WHEN rating = 3 AND reason = '' THEN NULL"
+                "  WHEN reason = 'topic' THEN 'not-for-me' ELSE 'not-good' END AS verdict,"
+                " CASE WHEN finished THEN 'finished' WHEN EXISTS (SELECT 1 FROM feedback_events e"
+                "  WHERE e.user_id = o.user_id AND e.article_id = o.article_id AND e.source = 'kindle-footer'"
+                "  AND e.signal IN ('r1', 'r2', 'r3', 'r4', 'r5')) THEN 'partway' END AS progress,"
                 " updated_at,"
                 " CASE WHEN rating >= 4 THEN reason WHEN reason = 'long' THEN 'padded'"
-                "  WHEN reason IN ('known', 'thin', 'wrong') THEN reason ELSE '' END"
-                " FROM ratings_1to5"
+                "  WHEN reason IN ('known', 'thin', 'wrong') THEN reason ELSE '' END AS reason"
+                " FROM ratings_1to5 o) WHERE verdict IS NOT NULL OR progress IS NOT NULL"
             )
             self.db.execute("DROP TABLE ratings_1to5")
             self.db.commit()
@@ -774,37 +781,62 @@ class Store:
                 self.db.execute(*log)
             self.record_review(article_id, "bad", "reader: broken or incomplete", "reader")
             return self.get_rating(user_id, article_id)
+        self.db.execute("BEGIN IMMEDIATE")  # read and write as one, against a web tap meanwhile
+        try:
+            self.db.execute(*log)
+            self._apply(user_id, article_id, signal, when)
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        return self.get_rating(user_id, article_id)
+
+    def _apply(self, user_id: str, article_id: str, signal: str, when: str) -> None:
+        """Apply one signal to the stored rating, inside the caller's transaction."""
         verdict, progress = meaning(signal)
-        was = self.get_rating(user_id, article_id) or Rating(None, None)
+        was = self.get_rating(user_id, article_id)
+        before = was or Rating(None, None)
         if verdict is KEEP:
-            verdict = was.verdict
+            verdict = before.verdict
         if progress is KEEP:
-            progress = None if verdict and was.progress == "skipped" else was.progress
+            progress = None if verdict and before.progress == "skipped" else before.progress
         pressed = signal.removeprefix("why-") if signal in REASON_SIGNALS else ""
         # An empty key leaves the choice alone and only drops what no longer fits.
-        reason = with_reason(with_reason(was.reason, "", verdict, progress), pressed, verdict, progress)
-        with self.db:
-            self.db.execute(*log)
-            self.db.execute(
-                "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)"
-                " VALUES (?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT(user_id, article_id) DO UPDATE SET verdict = excluded.verdict,"
-                " progress = excluded.progress, updated_at = excluded.updated_at, reason = excluded.reason",
-                (user_id, article_id, verdict, progress, when, reason),
-            )
-        return self.get_rating(user_id, article_id)
+        reason = with_reason(with_reason(before.reason, "", verdict, progress), pressed, verdict, progress)
+        if was is None and not (verdict or progress or reason):
+            return  # a reason for nothing: no rating to keep it on
+        self.db.execute(
+            "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(user_id, article_id) DO UPDATE SET verdict = excluded.verdict,"
+            " progress = excluded.progress, updated_at = excluded.updated_at, reason = excluded.reason",
+            (user_id, article_id, verdict, progress, when, reason),
+        )
 
     def skip_rest(self, user_id: str, article_ids: list[str], source: str) -> int:
         """ "Done with this issue": skip each of these articles the reader has given nothing for,
         among those delivered to them. Returns how many were skipped."""
-        skipped = 0
-        for article_id in article_ids:
-            delivered = self.db.execute(
-                "SELECT 1 FROM deliveries WHERE user_id = ? AND article_id = ?", (user_id, article_id)
-            ).fetchone()
-            if delivered and self.get_rating(user_id, article_id) is None:
-                self.record_feedback(user_id, article_id, SKIP, source)
-                skipped += 1
+        skipped, when = 0, now_iso()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            for article_id in article_ids:
+                open_ = self.db.execute(
+                    "SELECT 1 FROM deliveries d WHERE d.user_id = ?1 AND d.article_id = ?2 AND NOT EXISTS"
+                    " (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = ?2)",
+                    (user_id, article_id),
+                ).fetchone()
+                if open_:
+                    self.db.execute(
+                        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        (user_id, article_id, SKIP, source, when),
+                    )
+                    self._apply(user_id, article_id, SKIP, when)
+                    skipped += 1
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
         return skipped
 
     def get_rating(self, user_id: str, article_id: str) -> Rating | None:

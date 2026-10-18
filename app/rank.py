@@ -38,13 +38,14 @@ RATINGS_GUIDE = """\
 Each rating has a verdict, how far the reader got, or both, with the article's length, why it
 was picked and sometimes the reader's own reason ("reader_said": trust it).
 - "verdict": "more like this", they want more of what it was; "worth it", it earned its place;
-  "not for me", the subject is wrong for them; "not good", the subject is fine but this
-  article was not (thin, padded, oversold or wrong: "reader_said" says which when given).
-- "read": "finished", "stopped partway" or "skipped"; absent when not known. Set against the
-  length it shows how much length they take: a long article stopped partway says more about
-  its length than about its subject, unless the verdict says otherwise.
+  "not for me", the subject is wrong for them ("reader_said" may say it was too basic or too
+  specialised for them: their level, not the subject, is the lesson then); "not good", the
+  subject is fine but this article was not (thin, nothing new, padded, oversold or wrong).
+- "progress": "finished", "stopped partway" or "skipped"; absent when not known. Set against
+  the length it shows how much length they take, but one stop partway may be an interruption:
+  learn from it only when several agree, or when the verdict or reason says why.
 - "skipped" means they did not read it at all: a weak judgement of its headline on one day.
-  Learn from skips only when several agree; one skipped for "Just no time" says nothing.
+  Learn from skips only when several agree.
 Work out what a rating is about before learning from it: a short post judged "not good" may be
 a verdict on thin posts, not on its source or topic. "Too thin" and "Longer than it needed to
 be" are about the form, not the subject."""
@@ -137,24 +138,33 @@ def abstract(item: Item) -> str:
 
 
 def rated_entries(user: User, store: Store, latest: int) -> list[dict]:
-    """The reader's latest ratings as the model is shown them."""
-    rated = []
-    for row in store.rating_rows(user.id, latest):
-        if not (row["verdict"] or row["progress"]) or not row["title"]:
+    """The reader's latest ratings as the model is shown them, oldest first.
+
+    Skips are kept apart from the rest: "Done with this issue" skips several a day, and would
+    otherwise push the verdicts out. One skipped for want of time counts for nothing and is
+    left out.
+    """
+    rows = store.rating_rows(user.id)
+    rated = [row for row in rows if row["progress"] != "skipped" and (row["verdict"] or row["progress"])]
+    skips = [row for row in rows if row["progress"] == "skipped" and "no-time" not in row["reason"].split(",")]
+    chosen = sorted(rated[-latest:] + skips[-(latest * 3 // 8) :], key=lambda row: row["updated_at"])
+    out = []
+    for row in chosen:
+        if not row["title"]:
             continue
         entry = {"title": row["title"], "source": row["article_source"], "words": row["word_count"]}
         if row["verdict"]:
             entry["verdict"] = VERDICTS[row["verdict"]].lower()
         if row["progress"]:
-            entry["read"] = PROGRESS[row["progress"]]
-        # What turns a number into a lesson: the reader's own reason when they gave one, and
+            entry["progress"] = PROGRESS[row["progress"]]
+        # What turns a verdict into a lesson: the reader's own reason when they gave one, and
         # why the article was put in front of them in the first place.
         if said := reason_labels(row["reason"]):
             entry["reader_said"] = "; ".join(said)
         if row["picked_because"]:
             entry["picked_because"] = row["picked_because"]
-        rated.append(entry)
-    return rated
+        out.append(entry)
+    return out
 
 
 def reader_profile(user: User, store: Store) -> str:

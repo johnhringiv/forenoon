@@ -386,10 +386,11 @@ it was worth to them (**verdict**). Either can be given without the other.
 - **Progress**: **finished**, **stopped partway** or **skipped** (not read at all), or not
   known. A skipped article has no verdict: choosing a verdict for it makes its progress not
   known again, and skipping it drops its verdict.
-- **In the book.** Under each article's byline is "Skip this one". After it, "How was it?"
-  and the four verdicts; one of these taps records the verdict and that the article was
-  finished, since the reader is at its end. The last page of each book has "Done with this
-  issue", which marks skipped every article in that book the reader has given nothing for.
+- **In the book.** Beside each article's "Read the original" link, before the body, is "Skip
+  this one". After the body, "How was it?" and the four verdicts; one of these taps records
+  the verdict and that the article was finished, since the reader is at its end. The last
+  page of each daily issue has "Done with this issue", which marks skipped every article in
+  that book the reader has given nothing for (a book sent on request has no such page).
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
   article (for "Done with this issue", the book's articles), signal and expiry (default 60
   days after delivery).
@@ -399,13 +400,20 @@ it was worth to them (**verdict**). Either can be given without the other.
   forgotten-password and email-link pages and `GET /healthz`, it is the only page that needs
   no login, and it takes no other input.
 - **Why (optional).** After a verdict or a skip, the page always offers one more tap for the
-  reason. Not for me: already knew it, already saw it elsewhere. Not good: too thin, longer
-  than it needed to be, the headline oversold it, wrong or misleading. More like this: more
+  reason. Not for me, about the reader's level: too basic for me, too specialised for me.
+  Not good: too thin, nothing new in it, longer than it needed to be, the headline oversold
+  it, wrong or misleading. More like this: more
   on this topic, more from this source, liked the depth or format. Skipped: not interested,
   already saw it elsewhere, just no time. Worth it has none. The rating counts without a
   reason. What was liked can be several of these at once; anything else is one, so a new
   choice replaces the old. Tapping a chosen reason again takes it back. A later tap that
-  leaves a reason not fitting drops it.
+  leaves a reason not fitting drops it. A reason for an article with nothing else recorded is
+  logged and kept nowhere else.
+- **Links from before verdicts.** Books sent before October 2026 carry 1-to-5 links. They are
+  answered "This book is from before ratings changed" and record nothing.
+- **Where else it is recorded.** The rating holds only its latest state. Where each tap came
+  from (`kindle-footer` or `web`), and every 1 to 5 given before verdicts, are in the event
+  log; an article's place in its issue is in `selections`.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
   the install, not a rating or a reason: it is logged, written to the extraction log, and
@@ -417,19 +425,30 @@ it was worth to them (**verdict**). Either can be given without the other.
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
-not use them). The model is given the 40 most recent, each with its verdict and progress,
-the article's length, why it was picked and the reader's reason when there is one. It is told
-what each means: a verdict is strong, "not for me" about the subject and "not good" about the
-article; how far the reader got against the article's length shows how much length they
-take; a skip is weak, a judgement on a headline on one day, that counts only when several
-agree, and a skip for want of time counts for nothing.
+not use them). The model is given the 40 most recent that are not skips, and with them the
+15 most recent skips, so that "Done with this issue" cannot push the verdicts out; a skip for
+want of time is left out. Each comes with its verdict and progress, the article's length, why
+it was picked and the reader's reason when there is one. The model is told what each means: a
+verdict is strong, "not for me" about the subject (or the reader's level, when the reason
+says so) and "not good" about the article; how far the reader got against the article's
+length shows how much length they take, though one stop partway may be an interruption; a
+skip is weak, a judgement on a headline on one day, that counts only when several agree.
+
+**Ratings from before verdicts** (1 to 5, and "finished") were brought forward by the
+pipeline when it first started after the change: 5, and 4 with a reason, became "more like
+this"; 4 "worth it"; a 3 with no reason no verdict, since 3 was used as a mild negative; a
+low rating whose reason was the topic "not for me", any other low rating "not good"; "too
+long" "longer than it needed to be". Only the book's "didn't finish" row became "stopped
+partway": a rating given on the web pages has progress not known. A rating left with
+neither verdict nor progress was dropped.
 
 ## 7a. Ranking with a model (needs the API key)
 
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
   article page is fetched for ranking. Also the user's `interests` text and their 40 most
-  recent ratings (title, source, length, verdict, progress, the reader's reason).
+  recent ratings and 15 most recent skips (title, source, length, verdict, progress, the
+  reader's reason; see section 7).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
   merged into one order. With more than one batch the candidates are shuffled first (seeded by
@@ -659,7 +678,7 @@ it keeps a second text of its own: a few plain statements of what the reader's r
 - **When.** After a delivery, at most once a week per reader, and only when the reader has
   given at least 10 verdicts and at least 5 new ones since the last time. One model call.
 - **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
-  (skips among them) with each article's length, its verdict and progress, why it was picked
+  that are not skips and their latest 75 skips with each article's length, its verdict and progress, why it was picked
   and the reader's own reason. Titles are untrusted and are given only as material.
 - **What comes back.** At most 8 statements of at most 200 characters each, each resting on
   several ratings. The model is told to keep a current note the ratings still bear out, to
@@ -803,7 +822,8 @@ database with the pipeline.
   article, with the others delivered with it listed beside it, each still rated on its own.
 - **Ratings can be changed there**: choose or change the verdict; say finished, stopped
   partway or skipped; choose the reason with one click; or clear the rating. A verdict given
-  there leaves progress as it was, since the web pages cannot tell how far the reader got.
+  there leaves progress as it was, since the web pages cannot tell how far the reader got;
+  pressing the choice already made records nothing.
   Each issue with articles given nothing has "Mark the rest skipped", as the book's "Done
   with this issue". Changes are logged like taps, with `web` as their source.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything

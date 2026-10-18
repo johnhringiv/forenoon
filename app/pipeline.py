@@ -1112,7 +1112,7 @@ def run(
                     now,
                     label,
                     grayscale=cfg.images.grayscale,
-                    done_link=_done_link(cfg, user, [e.article.id for e in part], now),
+                    done_link=_done_link(cfg, user, [i for e in part for i in (e.article.id, *e.covers)], now),
                 ),
                 tuple(i for e in part for i in (e.article.id, *e.covers)),
             )

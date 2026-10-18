@@ -1223,9 +1223,11 @@ async fn record_in(
         article
     )
     .fetch_optional(&mut **tx)
-    .await?
-    .unwrap_or_default();
-    let rating = after(&was, signal);
+    .await?;
+    let rating = after(was.as_ref().unwrap_or(&Rating::default()), signal);
+    if was.is_none() && rating == Rating::default() {
+        return Ok(rating); // a reason for nothing: no rating to keep it on
+    }
     sqlx::query!(
         r#"INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -1291,4 +1293,33 @@ pub async fn clear_rating(pool: &SqlitePool, user: &str, article: &str) -> Resul
     .await?;
     sqlx::query!("DELETE FROM ratings WHERE user_id = ? AND article_id = ?", user, article).execute(&mut *tx).await?;
     tx.commit().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same cases as the pipeline's (tests/test_core.py): one set of rules in both programs.
+    #[test]
+    fn taps_leave_the_rating_the_pipeline_would() {
+        let file: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/rating_cases.json")).expect("valid JSON");
+        for case in file["cases"].as_array().expect("cases") {
+            let mut rating: Option<Rating> = None;
+            for tap in case["taps"].as_array().expect("taps") {
+                let signal: Signal = tap.as_str().expect("a signal").parse().expect("a known signal");
+                let next = after(rating.as_ref().unwrap_or(&Rating::default()), &signal);
+                if rating.is_some() || next != Rating::default() {
+                    rating = Some(next);
+                }
+            }
+            let text = |v: &serde_json::Value| v.as_str().map(str::to_owned);
+            let want = case["then"].as_array().map(|then| Rating {
+                verdict: text(&then[0]),
+                progress: text(&then[1]),
+                reason: then[2].as_str().unwrap_or_default().to_owned(),
+            });
+            assert_eq!(rating, want, "{}", case["taps"]);
+        }
+    }
 }

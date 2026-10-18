@@ -12,9 +12,11 @@ pub const VERDICTS: [(&str, &str); 4] =
 pub const PROGRESS: [(&str, &str); 3] =
     [("finished", "Finished"), ("partway", "Stopped partway"), ("skipped", "Skipped")];
 
-const NOT_FOR_ME: [(&str, &str); 2] = [("known", "Already knew it"), ("seen", "Already saw it elsewhere")];
-const NOT_GOOD: [(&str, &str); 4] = [
+/// "Not for me" is about the subject, so its reasons are about the reader's level.
+const NOT_FOR_ME: [(&str, &str); 2] = [("basic", "Too basic for me"), ("specialist", "Too specialised for me")];
+const NOT_GOOD: [(&str, &str); 5] = [
     ("thin", "Too thin"),
+    ("known", "Nothing new in it"),
     ("padded", "Longer than it needed to be"),
     ("oversold", "The headline oversold it"),
     ("wrong", "Wrong or misleading"),
@@ -88,7 +90,7 @@ pub fn fits(reason: &str, verdict: Option<&str>, progress: Option<&str>) -> bool
 /// What the reason buttons are asked under: they read as answers to it.
 pub fn question(verdict: Option<&str>, progress: Option<&str>) -> &'static str {
     match standing(verdict, progress) {
-        Some("not-for-me") => "Why not?",
+        Some("not-for-me") => "Why not for you?",
         Some("more") => "What did you like?",
         Some("skipped") => "Why skip it?",
         _ => "What was wrong?",
@@ -98,7 +100,9 @@ pub fn question(verdict: Option<&str>, progress: Option<&str>) -> &'static str {
 /// A reason as a short answer to `question`, for a button.
 pub fn short(reason: &str) -> &'static str {
     match reason {
-        "known" => "Knew it",
+        "basic" => "Too basic",
+        "specialist" => "Too specialised",
+        "known" => "Nothing new",
         "seen" => "Seen it",
         "thin" => "Too thin",
         "padded" => "Padded",
@@ -219,7 +223,7 @@ mod tests {
     fn reasons_follow_the_verdict_or_the_skip() {
         assert!(reasons_for(Some("worth-it"), Some("finished")).is_empty());
         assert!(reasons_for(None, Some("finished")).is_empty());
-        assert!(fits("seen", None, Some("skipped")) && fits("seen", Some("not-for-me"), None));
+        assert!(fits("seen", None, Some("skipped")) && !fits("seen", Some("not-for-me"), None));
         assert!(!fits("no-time", Some("not-for-me"), None));
         // One reason, except for what was liked.
         assert_eq!(with_reason("thin", "padded", Some("not-good"), None), "padded");

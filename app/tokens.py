@@ -31,12 +31,13 @@ SKIP = "skip"
 SKIP_REST = "skip-rest"
 # The links in a book, one set per article.
 LINK_SIGNALS = (*END_SIGNALS, SKIP)
-# Why: offered by the verdict, or by the skip when there is none. Keys are unique across
-# lists except "seen", which fits both a "not for me" and a skip.
+# Why: offered by the verdict, or by the skip when there is none. "Not for me" is about the
+# subject, so its reasons are about the reader's level; a stale article is "not good".
 REASONS_BY = {
-    "not-for-me": {"known": "Already knew it", "seen": "Already saw it elsewhere"},
+    "not-for-me": {"basic": "Too basic for me", "specialist": "Too specialised for me"},
     "not-good": {
         "thin": "Too thin",
+        "known": "Nothing new in it",
         "padded": "Longer than it needed to be",
         "oversold": "The headline oversold it",
         "wrong": "Wrong or misleading",

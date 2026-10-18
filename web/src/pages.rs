@@ -1260,8 +1260,14 @@ pub async fn rate(
     let signal = if form.clear.is_some() {
         None
     } else if let Some(verdict) = form.verdict.as_deref().and_then(ratings::verdict_key) {
+        if now.verdict.as_deref() == Some(verdict) {
+            return back_to(&form.back, &form.article); // already so: nothing to record
+        }
         Some(Signal::Verdict(verdict))
     } else if let Some(progress) = form.progress.as_deref() {
+        if now.progress.as_deref() == Some(progress) {
+            return back_to(&form.back, &form.article);
+        }
         match progress {
             "finished" => Some(Signal::Finished),
             "partway" => Some(Signal::Partway),

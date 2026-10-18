@@ -354,6 +354,9 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     store.upsert_article("passed", "https://x.example/passed", "Blog", "Passed over", "", None)
     store.record_feedback(user.id, "passed", "skip", "kindle-footer")
     store.record_feedback(user.id, "passed", "why-no-time", "kindle-footer")
+    store.upsert_article("dull", "https://x.example/dull", "Blog", "Passed over, not wanted", "", None)
+    store.record_feedback(user.id, "dull", "skip", "kindle-footer")
+    store.record_feedback(user.id, "dull", "why-no-interest", "kindle-footer")
 
     def scores(ids):
         # Reverse of the order given, plus entries that must be ignored.
@@ -370,8 +373,9 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     assert report.model == cfg.llm.model and report.models == "", "no fallback was needed"
     system, prompt = backend.prompts[0]
     assert "untrusted" in system and "Compilers. Not watches." in prompt
-    assert '"title": "An old favourite"' in prompt and '"verdict": "more like this", "read": "finished"' in prompt
-    assert '"read": "skipped", "reader_said": "Just no time"' in prompt
+    assert '"title": "An old favourite"' in prompt and '"verdict": "more like this", "progress": "finished"' in prompt
+    # A skip counts, lightly; one for want of time says nothing and is left out.
+    assert '"progress": "skipped", "reader_said": "Not interested"' in prompt and "Just no time" not in prompt
     assert "<script" not in prompt  # abstracts are plain text
 
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}

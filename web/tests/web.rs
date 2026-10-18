@@ -2409,7 +2409,7 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert!(claim.user == "john" && claim.article == "a1" && claim.expires == later);
     assert!(page.text.contains(">Stopped partway<") && page.text.contains(">Skipped: did not read it<"));
     assert!(!page.text.contains(">Not good<") && page.text.contains(">Not for me<"));
-    assert_eq!(page.text.matches("href=\"/f/").count(), 4 + 3 + 2 + 1, "reasons, verdicts, progress, the report");
+    assert_eq!(page.text.matches("href=\"/f/").count(), 5 + 3 + 2 + 1, "reasons, verdicts, progress, the report");
 
     let why = kindle.get(&site, &link("why-padded")).await.text;
     assert!(why.contains("Not good, finished. Longer than it needed to be."), "{why}");
@@ -2445,6 +2445,9 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
         .await;
     assert!(forged.status == StatusCode::BAD_REQUEST && forged.text.contains("Link not valid."));
     assert_eq!(kindle.get(&site, "/f/garbage").await.status, StatusCode::BAD_REQUEST);
+    // A link from a book sent before verdicts says so, and records nothing.
+    let before = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "f4", later))).await;
+    assert!(before.status == StatusCode::BAD_REQUEST && before.text.contains("from before ratings changed"));
     assert_eq!(db::get_rating(pool, "john", "a1").await.unwrap().unwrap().verdict.as_deref(), Some("more"));
 
     // Taps are limited per client.
@@ -2526,6 +2529,9 @@ async fn done_with_this_issue_skips_only_what_was_given_nothing() {
     article(pool, "m1", "https://blog.example/m1", "Blog", "Mary's", "mary", sent).await;
     let mut kindle = Browser::default();
     kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "end-worth-it", 4_000_000_000))).await;
+    // A reason with nothing to answer to keeps no rating, so the article is still open.
+    kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a2", "why-thin", 4_000_000_000))).await;
+    assert!(db::get_rating(pool, "john", "a2").await.unwrap().is_none());
     // From the book: the articles it names, and only the reader's own.
     let done = format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1,a2,m1", "skip-rest", 4_000_000_000));
     let page = kindle.get(&site, &done).await;

@@ -100,6 +100,24 @@ pub fn verify(secret: &[u8], token: &str, now: i64) -> Result<Claim, TokenError>
     Ok(Claim { user: user.to_owned(), article: article.to_owned(), tap, expires })
 }
 
+/// A link this install signed, for a rating from 1 to 5 (`f4`, `r2`) or "finished" (`done`):
+/// books sent before verdicts carry them. Only to say so; nothing is recorded.
+fn from_before_verdicts(secret: &[u8], token: &str) -> bool {
+    let Some((payload, signature)) = token.split_once('.') else { return false };
+    let (Ok(payload), Ok(signature)) = (URL_SAFE_NO_PAD.decode(payload), URL_SAFE_NO_PAD.decode(signature)) else {
+        return false;
+    };
+    if signature.len() != SIGNATURE_BYTES || mac(secret, &payload).verify_truncated_left(&signature).is_err() {
+        return false;
+    }
+    let payload = String::from_utf8_lossy(&payload);
+    let signal = payload.split('|').nth(3).unwrap_or_default();
+    let old = |kind: char| {
+        signal.len() == 2 && signal.starts_with(kind) && ('1'..='5').contains(&signal.chars().nth(1).unwrap())
+    };
+    old('f') || old('r') || signal == "done"
+}
+
 #[derive(Template)]
 #[template(path = "feedback.html")]
 struct FeedbackPage {
@@ -157,6 +175,13 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     let claim = match verify(secret, &token, chrono::Utc::now().timestamp()) {
         Ok(claim) => claim,
         Err(TokenError::Expired) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", "This link has expired."),
+        Err(TokenError::Invalid) if from_before_verdicts(secret, &token) => {
+            return plain(
+                StatusCode::BAD_REQUEST,
+                "This book is from before ratings changed.",
+                "Its links no longer work: rate it on the web pages instead.",
+            );
+        }
         Err(TokenError::Invalid) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", ""),
     };
     let pool = &state.pool;
@@ -269,5 +294,9 @@ mod tests {
         }
         assert_eq!(verify(SECRET, &make(SECRET, "john|x", "a1", "skip", 1000), 0), Err(TokenError::Invalid));
         assert_eq!(verify(SECRET, "garbage", 0), Err(TokenError::Invalid));
+        // Signed before verdicts: recognised only to say so.
+        assert!(from_before_verdicts(SECRET, &make(SECRET, "john", "a1", "f4", 1000)));
+        assert!(!from_before_verdicts(SECRET, &make(SECRET, "john", "a1", "end-more", 1000)));
+        assert!(!from_before_verdicts(b"another secret, also long enough", &make(SECRET, "john", "a1", "r2", 1000)));
     }
 }

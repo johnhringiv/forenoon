@@ -280,32 +280,39 @@ def test_web_app_offers_the_same_reasons():
 
 
 def test_a_rating_is_a_verdict_and_progress_and_the_latest_tap_wins():
+    import json
+    from pathlib import Path
+
     from app.store import Rating, Store
 
+    # The same cases as the web app's (web/src/db.rs): one set of rules in both programs.
+    cases = json.loads((Path(__file__).parent / "rating_cases.json").read_text())["cases"]
+    for case in cases:
+        store = Store(":memory:")
+        for signal in case["taps"]:
+            store.record_feedback("john", "a1", signal, "kindle-footer")
+        want = case["then"] and Rating(case["then"][0], case["then"][1], case["then"][2])
+        assert store.get_rating("john", "a1") == want, case["taps"]
+        assert len(store.feedback_rows()) == len(case["taps"]), "every tap is logged"
     store = Store(":memory:")
-    say = lambda signal: store.record_feedback("john", "a1", signal, "kindle-footer")
-    # At an article's end: the verdict, and finished.
-    assert say("end-not-good") == Rating("not-good", "finished")
-    assert say("why-thin") == Rating("not-good", "finished", "thin")
-    # Anything but "more like this" is one reason: a new one replaces the old; again takes it back.
-    assert say("why-padded").reason == "padded"
-    assert say("why-padded").reason == ""
-    assert say("why-oversold").reason == "oversold"
-    # A reason that does not fit the verdict is ignored, and a new verdict drops the unfit.
-    assert say("why-depth").reason == "oversold"
-    assert say("more") == Rating("more", "finished")
-    assert say("why-depth").reason == "depth" and say("why-more-topic").reason == "more-topic,depth"
-    assert say("partway") == Rating("more", "partway", "more-topic,depth")
-    # A skip drops the verdict and its reasons; it has reasons of its own.
-    assert say("skip") == Rating(None, "skipped")
-    assert say("why-no-time") == Rating(None, "skipped", "no-time")
-    # A verdict on a skipped article: read after all, how far is not known.
-    assert say("not-for-me") == Rating("not-for-me", None)
-    assert say("why-seen") == Rating("not-for-me", None, "seen")
-    assert say("finished") == Rating("not-for-me", "finished", "seen")
-    assert say("problem") == Rating("not-for-me", "finished", "seen")  # a report changes nothing
-    signals = [row["signal"] for row in store.feedback_rows()]
-    assert signals[:2] == ["end-not-good", "why-thin"] and signals[-1] == "problem"
+    store.record_feedback("john", "a1", "end-worth-it", "kindle-footer")
+    assert store.record_feedback("john", "a1", "problem", "kindle-footer") == Rating("worth-it", "finished")
+
+
+def test_skips_do_not_push_the_verdicts_out_of_what_the_model_sees():
+    from app.rank import rated_entries
+    from app.store import Store
+
+    store = Store(":memory:")
+    for n in range(3):
+        store.upsert_article(f"v{n}", f"https://x.example/v{n}", "Blog", f"Judged {n}", "", None)
+        store.record_feedback("john", f"v{n}", "end-worth-it", "kindle-footer", f"2026-10-01T0{n}:00:00+00:00")
+    for n in range(60):  # weeks of "Done with this issue", all newer
+        store.upsert_article(f"s{n}", f"https://x.example/s{n}", "Blog", f"Skipped {n}", "", None)
+        store.record_feedback("john", f"s{n}", "skip", "kindle-footer", f"2026-10-10T00:{n:02d}:00+00:00")
+    entries = rated_entries(User(id="john", name="John", kindle_addresses=()), store, 40)
+    assert [e["title"] for e in entries if "verdict" in e] == ["Judged 0", "Judged 1", "Judged 2"]
+    assert sum(e.get("progress") == "skipped" for e in entries) == 15
 
 
 def test_done_with_this_issue_skips_only_what_was_delivered_and_given_nothing():
@@ -338,13 +345,24 @@ def test_ratings_from_one_to_five_are_brought_forward(tmp_path):
         ("four", 4, 1, ""),
         ("four-liked", 4, 0, "depth"),
         ("three", 3, 1, ""),
+        ("three-web", 3, 0, ""),
         ("three-long", 3, 0, "long"),
         ("two-topic", 2, 1, "topic"),
         ("two-known", 2, 1, "known"),
-        ("one", 1, 0, ""),
+        ("one-kindle", 1, 0, ""),
         ("only-finished", None, 1, ""),
     ]
     db.executemany("INSERT INTO ratings VALUES ('john', ?, ?, ?, 'x', ?)", old)
+    # Only the book's "didn't finish" row said the reader stopped partway.
+    db.execute(
+        "CREATE TABLE feedback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,"
+        " article_id TEXT NOT NULL, signal TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    for article, signal, source in [("one-kindle", "r1", "kindle-footer"), ("four-liked", "r4", "web")]:
+        db.execute(
+            "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES ('john', ?, ?, ?, 'x')",
+            (article, signal, source),
+        )
     db.commit()
     db.close()
     store = Store(path)
@@ -352,12 +370,13 @@ def test_ratings_from_one_to_five_are_brought_forward(tmp_path):
     assert got == {
         "five": Rating("more", "finished"),
         "four": Rating("worth-it", "finished"),
-        "four-liked": Rating("more", "partway", "depth"),
-        "three": Rating("worth-it", "finished"),
-        "three-long": Rating("not-good", "partway", "padded"),
+        "four-liked": Rating("more", None, "depth"),
+        "three": Rating(None, "finished"),
+        "three-web": None,
+        "three-long": Rating("not-good", None, "padded"),
         "two-topic": Rating("not-for-me", "finished"),
-        "two-known": Rating("not-for-me", "finished", "known"),
-        "one": Rating("not-good", "partway"),
+        "two-known": Rating("not-good", "finished", "known"),
+        "one-kindle": Rating("not-good", "partway"),
         "only-finished": Rating(None, "finished"),
     }
     assert "rating" not in {row["name"] for row in store.db.execute("PRAGMA table_info(ratings)")}
