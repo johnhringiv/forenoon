@@ -15,7 +15,7 @@ from pathlib import Path
 from . import models
 from .config import Source, User
 from .llm import LlmError, Unreachable
-from .tokens import KEEP, PROBLEM, REASON_SIGNALS, SKIP, meaning, with_reason
+from .tokens import KEEP, PROBLEM, REASON_SIGNALS, SKIP, SKIP_REST, meaning, with_reason
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -222,7 +222,8 @@ class Store:
                 "  WHERE e.user_id = o.user_id AND e.article_id = o.article_id AND e.source = 'kindle-footer'"
                 "  AND e.signal IN ('r1', 'r2', 'r3', 'r4', 'r5')) THEN 'partway' END AS progress,"
                 " updated_at,"
-                " CASE WHEN rating >= 4 THEN reason WHEN reason = 'long' THEN 'padded'"
+                " CASE WHEN rating IS NULL OR (rating = 3 AND reason = '') THEN ''"
+                "  WHEN rating >= 4 THEN reason WHEN reason = 'long' THEN 'padded'"
                 "  WHEN reason IN ('known', 'thin', 'wrong') THEN reason ELSE '' END AS reason"
                 " FROM ratings_1to5 o) WHERE verdict IS NOT NULL OR progress IS NOT NULL"
             )
@@ -829,7 +830,7 @@ class Store:
                     self.db.execute(
                         "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at)"
                         " VALUES (?, ?, ?, ?, ?)",
-                        (user_id, article_id, SKIP, source, when),
+                        (user_id, article_id, SKIP_REST, source, when),  # logged as the sweep it was
                     )
                     self._apply(user_id, article_id, SKIP, when)
                     skipped += 1

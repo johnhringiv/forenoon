@@ -230,8 +230,7 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     match progress {
         Some("finished") => others.push(("partway", "Stopped partway")),
         Some("partway") => others.push(("finished", "Finished")),
-        Some(_) => {}
-        None => others.extend([("finished", "Finished"), ("partway", "Stopped partway")]),
+        _ => others.extend([("finished", "Finished"), ("partway", "Stopped partway")]),
     }
     if progress != Some("skipped") {
         others.push(("skip", "Skipped: did not read it"));

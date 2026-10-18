@@ -2545,6 +2545,9 @@ async fn done_with_this_issue_skips_only_what_was_given_nothing() {
     assert_eq!(progress("a3").await, None);
     assert!(db::get_rating(pool, "john", "m1").await.unwrap().is_none());
     assert!(db::get_rating(pool, "mary", "m1").await.unwrap().is_none());
+    let logged: Vec<String> =
+        sqlx::query_scalar("SELECT signal FROM feedback_events WHERE article_id = 'a2'").fetch_all(pool).await.unwrap();
+    assert_eq!(logged, ["why-thin", "skip-rest"], "every tap logged; the sweep as itself");
 
     // From the newsstand: the rest of the issue.
     let mut browser = Browser::default();

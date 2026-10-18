@@ -29,8 +29,9 @@ PROGRESS = {"finished": "finished", "partway": "stopped partway", "skipped": "sk
 END_SIGNALS = tuple(f"end-{verdict}" for verdict in VERDICTS)
 SKIP = "skip"
 SKIP_REST = "skip-rest"
-# The links in a book, one set per article.
-LINK_SIGNALS = (*END_SIGNALS, SKIP)
+# The links in a book, one set per article: the verdicts at its end, "Stopped partway" for a
+# reader who did not get there, and "Skip this one" at its start.
+LINK_SIGNALS = (*END_SIGNALS, "partway", SKIP)
 # Why: offered by the verdict, or by the skip when there is none. "Not for me" is about the
 # subject, so its reasons are about the reader's level; a stale article is "not good".
 REASONS_BY = {

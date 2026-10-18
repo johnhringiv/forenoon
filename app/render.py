@@ -263,7 +263,11 @@ def _footer(feedback_links: dict[str, str]) -> str:
     )
     if not links:
         return ""
-    return f'<hr class="rule"/><div class="feedback"><p>How was it?</p><p class="rate">{links}</p></div>'
+    partway = ""
+    if "partway" in feedback_links:
+        stop = f"<a href={quoteattr(feedback_links['partway'])}>Stopped partway</a>"
+        partway = f'<p class="hint">Did not finish it? {stop}</p>'
+    return f'<hr class="rule"/><div class="feedback"><p>How was it?</p><p class="rate">{links}</p>{partway}</div>'
 
 
 def _content(article: Article, feedback_links: dict[str, str]) -> str:

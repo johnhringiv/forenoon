@@ -124,7 +124,7 @@ def test_run_delivers_capped_pinned_first_and_is_idempotent(env):
     token = article.split("https://fb.example/f/")[1].split('"')[0]
     claim = verify_token(SECRET.encode(), token, now=NOW.timestamp())
     assert (claim.user_id, claim.signal) == ("john", "skip")  # under the byline, first
-    assert article.count("https://fb.example/f/") == 5
+    assert article.count("https://fb.example/f/") == 6
     assert store.get_article(claim.article_id).title == "Post 1"
 
     # Same day: cap already used, nothing more goes out.
@@ -232,7 +232,7 @@ def test_issue_format_sends_one_book_with_contents_and_per_article_ratings(env):
     for chapter in ("a01", "a02"):
         page = epub.read(f"OEBPS/{chapter}.xhtml").decode()
         etree.fromstring(page.encode())
-        assert page.count("https://fb.example/f/") == 5 and 'href="contents.xhtml"' in page
+        assert page.count("https://fb.example/f/") == 6 and 'href="contents.xhtml"' in page
         token = page.split("https://fb.example/f/")[1].split('"')[0]
         seen.add(verify_token(SECRET.encode(), token, now=NOW.timestamp()).article_id)
         for src in re.findall(r'<img src="([^"]+)"', page):

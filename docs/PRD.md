@@ -388,7 +388,9 @@ it was worth to them (**verdict**). Either can be given without the other.
   known again, and skipping it drops its verdict.
 - **In the book.** Beside each article's "Read the original" link, before the body, is "Skip
   this one". After the body, "How was it?" and the four verdicts; one of these taps records
-  the verdict and that the article was finished, since the reader is at its end. The last
+  the verdict and that the article was finished, since the reader is at its end. Under them,
+  "Did not finish it? Stopped partway" records only that; the page it opens offers the
+  verdicts. The last
   page of each daily issue has "Done with this issue", which marks skipped every article in
   that book the reader has given nothing for (a book sent on request has no such page).
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
@@ -396,7 +398,8 @@ it was worth to them (**verdict**). Either can be given without the other.
   days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
   small page stating what is now stored ("Worth it, finished.") with links to change it: the
-  four verdicts, "Stopped partway" or "Finished", and "Skipped". Besides sign-in, the
+  other verdicts, "Stopped partway" or "Finished" (both when progress is not known or the
+  article was skipped), and "Skipped". Besides sign-in, the
   forgotten-password and email-link pages and `GET /healthz`, it is the only page that needs
   no login, and it takes no other input.
 - **Why (optional).** After a verdict or a skip, the page always offers one more tap for the
@@ -419,15 +422,16 @@ it was worth to them (**verdict**). Either can be given without the other.
   the install, not a rating or a reason: it is logged, written to the extraction log, and
   listed for admins on the web pages' Problems page. The rating is left as it was.
 - **Latest tap wins** for verdict, progress and reason. Every tap is also kept in an event
-  log.
+  log; "Done with this issue" and "Mark the rest skipped" are logged as `skip-rest` against
+  each article they skipped, so a sweep can be told from "Skip this one".
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
-not use them). The model is given the 40 most recent that are not skips, and with them the
-15 most recent skips, so that "Done with this issue" cannot push the verdicts out; a skip for
-want of time is left out. Each comes with its verdict and progress, the article's length, why
+not use them). The model is given the 40 most recent with a verdict, and with them the 15
+most recent skips, so that "Done with this issue" cannot push the verdicts out; a skip for
+want of time, and progress with no verdict, are left out. Each comes with its verdict and progress, the article's length, why
 it was picked and the reader's reason when there is one. The model is told what each means: a
 verdict is strong, "not for me" about the subject (or the reader's level, when the reason
 says so) and "not good" about the article; how far the reader got against the article's
@@ -447,7 +451,7 @@ neither verdict nor progress was dropped.
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
   article page is fetched for ranking. Also the user's `interests` text and their 40 most
-  recent ratings and 15 most recent skips (title, source, length, verdict, progress, the
+  recent verdicts and 15 most recent skips (title, source, length, verdict, progress, the
   reader's reason; see section 7).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
@@ -678,7 +682,7 @@ it keeps a second text of its own: a few plain statements of what the reader's r
 - **When.** After a delivery, at most once a week per reader, and only when the reader has
   given at least 10 verdicts and at least 5 new ones since the last time. One model call.
 - **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
-  that are not skips and their latest 75 skips with each article's length, its verdict and progress, why it was picked
+  with a verdict and their latest 75 skips with each article's length, its verdict and progress, why it was picked
   and the reader's own reason. Titles are untrusted and are given only as material.
 - **What comes back.** At most 8 statements of at most 200 characters each, each resting on
   several ratings. The model is told to keep a current note the ratings still bear out, to

@@ -110,7 +110,7 @@ def test_golden_epub_structure_is_stable_and_well_formed():
     article = zf.read("OEBPS/article.xhtml").decode()
     assert "alert(" not in article and '<pre><code><span class="ln i0">fn main(' in article
     assert 'src="images/img001.jpg"' in article and "OEBPS/images/img001.jpg" in zf.namelist()
-    assert article.count("/f/golden-") == 5
+    assert article.count("/f/golden-") == 6
     opf = zf.read("OEBPS/content.opf").decode()
     assert "<dc:title>FN 2026-01-02 · Forenoon · Golden rendering test</dc:title>" in opf
 
@@ -326,6 +326,8 @@ def test_done_with_this_issue_skips_only_what_was_delivered_and_given_nothing():
     assert store.get_rating("john", "a2") == Rating(None, "skipped")
     assert store.get_rating("john", "never-sent") is None
     assert store.skip_rest("john", ["a2", "a3"], "kindle-footer") == 0
+    # Logged as the sweep it was, apart from "Skip this one".
+    assert [row["signal"] for row in store.feedback_rows()] == ["end-worth-it", "skip-rest", "skip-rest"]
 
 
 def test_ratings_from_one_to_five_are_brought_forward(tmp_path):

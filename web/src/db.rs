@@ -1191,7 +1191,7 @@ pub async fn record_feedback(
     source: &str,
 ) -> Result<Rating, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let rating = record_in(&mut tx, user, article, signal, source).await?;
+    let rating = record_in(&mut tx, user, article, signal, &signal.to_string(), source).await?;
     tx.commit().await?;
     Ok(rating)
 }
@@ -1201,10 +1201,11 @@ async fn record_in(
     user: &str,
     article: &str,
     signal: &Signal,
+    logged: &str,
     source: &str,
 ) -> Result<Rating, sqlx::Error> {
     let now = now_iso();
-    let text = signal.to_string();
+    let text = logged;
     sqlx::query!(
         "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
         user,
@@ -1260,7 +1261,8 @@ pub async fn skip_rest(pool: &SqlitePool, user: &str, articles: &[&str], source:
         .fetch_one(&mut *tx)
         .await?;
         if open > 0 {
-            record_in(&mut tx, user, article, &Signal::Skip, source).await?;
+            // Logged as the sweep it was, so it can be told from "Skip this one" later.
+            record_in(&mut tx, user, article, &Signal::Skip, "skip-rest", source).await?;
             skipped += 1;
         }
     }
