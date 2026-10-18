@@ -187,8 +187,10 @@ struct SettingsPage {
 }
 
 /// Seconds a test may wait for the pipeline to begin before the page stops refreshing and
-/// asks whether it is running: it looks every few seconds, but not during the morning run.
-const TEST_PICKUP: i64 = 60;
+/// asks whether it is running: it looks every few seconds, but not during the morning run, and
+/// one asked for again begins when the request under way for the last returns (two minutes
+/// at most).
+const TEST_PICKUP: i64 = 150;
 /// Seconds without word from a test under way before the page gives up on it (each model has
 /// two minutes at most).
 const TEST_SILENCE: i64 = 300;

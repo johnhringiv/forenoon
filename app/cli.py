@@ -202,11 +202,12 @@ def _test_models(cfg: Config) -> bool:
 
     try:
         # A cheap look first: opening the Store checks the whole schema.
-        with contextlib.closing(sqlite3.connect(f"file:{cfg.db_path}?mode=ro", uri=True)) as db:
+        with contextlib.closing(sqlite3.connect(Path(cfg.db_path).as_uri() + "?mode=ro", uri=True)) as db:
             if not db.execute("SELECT 1 FROM model_tests WHERE requested_at != answered").fetchone():
                 return False
-    except sqlite3.Error:
-        return False  # no database, or the web app has not made the table yet
+    except sqlite3.Error as exc:
+        log.debug("no model test looked for: %s", exc)  # no database yet, or no table: the web app makes it
+        return False
     try:
         store = Store(cfg.db_path)
         try:
@@ -228,7 +229,9 @@ def _test_models_now(cfg: Config) -> int:
     finally:
         store.close()
     print("\n".join(lines))
-    return 0 if lines and all(": OK" in line for line in lines) else 1
+    # A variable listed as ignored changes nothing; a model that failed, or one not read, does.
+    tested = [line for line in lines if not line.startswith("Ignored: ")]
+    return 0 if tested and all(": OK" in line for line in tested) else 1
 
 
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:

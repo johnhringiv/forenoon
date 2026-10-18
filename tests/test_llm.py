@@ -684,6 +684,7 @@ def test_a_misspelt_or_left_over_setting_is_said_but_stops_nothing():
     found, problems = connections_from_env(env)
     assert [c.name for c in found] == ["gpu", "lan"], "a stray variable stops no connection"
     assert unknown_settings(env) == ["FORENOON_LLM_LAN_BOX_KEY", "FORENOON_LLM_LAN_TIMOUT"]
+    assert unknown_settings({**env, "FORENOON_LLM_OLD_KEY": ""}) == unknown_settings(env), "empty is not set"
     assert "no user name or password" in problems["pw"] and "secret" not in problems["pw"]
 
 
@@ -733,3 +734,16 @@ def test_the_anthropic_test_is_bounded_and_leaves_the_runs_client_alone():
     assert quick._client.timeout == 60.0 and quick._client.max_retries == 0, "never longer than a run waits"
     assert run.bounded(30.0)._client.timeout == 30.0
     assert run._client.max_retries == 1 and run._client.timeout == 60.0
+
+
+def test_the_schedulers_look_for_a_test_needs_no_table_and_makes_no_database(tmp_path, monkeypatch):
+    from app import cli
+
+    odd = tmp_path / "100% sure? #1"
+    odd.mkdir()
+    monkeypatch.setenv("FORENOON_DATA_DIR", str(odd))
+    cfg = cli.from_env()
+    assert not cli._test_models(cfg) and not cfg.db_path.exists(), "no database: none made"
+    Store(cfg.db_path).close()
+    assert not cli._test_models(cfg), "no model_tests table yet"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["100% sure? #1"], "nothing made at a cut-short path"

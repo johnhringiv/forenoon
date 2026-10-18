@@ -166,7 +166,7 @@ def unknown_settings(environ: Mapping[str, str] | None = None) -> list[str]:
     environ = os.environ if environ is None else environ
     prefixes = [v.removesuffix("URL") for v in environ if v.startswith(ENV_PREFIX) and v.endswith("_URL")]
     known = {prefix + setting for prefix in prefixes for setting in SETTINGS}
-    return sorted(v for v in environ if v.startswith(ENV_PREFIX) and v not in known)
+    return sorted(v for v in environ if v.startswith(ENV_PREFIX) and v not in known and environ[v].strip())
 
 
 class Backend(Protocol):

@@ -41,6 +41,6 @@
 <p class="hint">Saves this page, then sends one small request to each model in Ranking, Claude's as well as your own servers', the way a morning run would, so you know they work before a run depends on them. A model is named with its connection: <code>anthropic/…</code> uses <code>FORENOON_ANTHROPIC_API_KEY</code>; any other is a server that speaks the OpenAI API (OpenAI, Ollama, LM Studio, llama.cpp, vLLM) set in the env file as <code>FORENOON_LLM_&lt;NAME&gt;_URL</code>, so <code>FORENOON_LLM_LAN_URL</code> gives <code>lan/&lt;model id&gt;</code>. See docs/setup-deploy.md.</p>
 <button formaction="/settings/test">Save and test</button>
 {% if let Some(test) = test %}{% if test.state == "done" %}<p class="hint">Last tested {{ test.tested_at }} UTC (<a href="/settings/test">details</a>):</p>
-<ul class="test-result">{% for line in test.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% else if test.refresh() %}<p class="hint"><a href="/settings/test">A test is under way.</a></p>{% else %}<p class="hint"><a href="/settings/test">The last test did not finish: see why.</a></p>{% endif %}{% endif %}
+<ul class="test-result">{% for line in test.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% else if test.refresh() %}<p class="hint"><a href="/settings/test">A test is under way.</a></p>{% else if test.state == "late" %}<p class="hint"><a href="/settings/test">The last test was not begun: see why.</a></p>{% else %}<p class="hint"><a href="/settings/test">The last test did not finish: see why.</a></p>{% endif %}{% endif %}
 </form>
 {% endblock %}

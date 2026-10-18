@@ -7,7 +7,7 @@
 {% block main %}
 <div class="sheet wide">
 <h2>{% if test.state == "done" %}Tested{% else %}Testing the models{% endif %}</h2>
-{% if test.state == "waiting" %}<p class="notice">Waiting for the pipeline to begin. This page updates by itself.</p>
+{% if test.state == "waiting" %}<p class="notice">Waiting for the pipeline to begin, which can take a minute or two when a test was already under way. This page updates by itself.</p>
 {% else if test.state == "late" %}<p class="error">The pipeline has not begun the test. It looks every few seconds when it is running, but not during the morning run: check that it is running, then <a href="/settings/test">look again</a>.</p>
 {% else if test.state == "running" %}<p class="notice">Under way: each model is listed as it answers. This page updates by itself.</p>
 {% else if test.state == "silent" %}<p class="error">No word from the pipeline for five minutes: it may have stopped. Its log says more.</p>

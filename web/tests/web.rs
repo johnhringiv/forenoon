@@ -1750,13 +1750,13 @@ async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
     // The results page waits for the pipeline, refreshing itself: no reloading by hand.
     let refresh = r#"<meta http-equiv="refresh" content="3">"#;
     let page = admin.get(&site, "/settings/test").await.text;
-    assert!(page.contains(refresh) && page.contains("Waiting for the pipeline to begin."));
+    assert!(page.contains(refresh) && page.contains("Waiting for the pipeline to begin,"));
     assert!(admin.get(&site, "/settings").await.text.contains(r#"<a href="/settings/test">A test is under way.</a>"#));
     // Not begun in a minute: it stops refreshing and asks whether the pipeline is running.
     sqlx::query("UPDATE model_tests SET requested_at = '2026-10-17T12:00:00+00:00'").execute(&site.pool).await.unwrap();
     let page = admin.get(&site, "/settings/test").await.text;
     assert!(!page.contains(refresh) && page.contains("check that it is running"));
-    assert!(admin.get(&site, "/settings").await.text.contains("The last test did not finish: see why."));
+    assert!(admin.get(&site, "/settings").await.text.contains("The last test was not begun: see why."));
 
     // Under way: each model's line as it comes, still refreshing.
     let now = forenoon_web::db::now_iso();
