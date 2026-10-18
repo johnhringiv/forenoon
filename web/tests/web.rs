@@ -1739,22 +1739,43 @@ async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
     // The form is saved, then the test asked for.
     let good = full(&[("llm.model", "lan/qwen3.8-27b"), ("llm.fallback_model", "anthropic/claude-haiku-5-5")]);
     let form: Vec<(&str, &str)> = good.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    assert_eq!(admin.post(&site, "/settings/test", &form).await.location, "/settings?testing=1#model-test");
+    assert_eq!(admin.get(&site, "/settings/test").await.location, "/settings#model-test", "none asked for yet");
+    assert_eq!(admin.post(&site, "/settings/test", &form).await.location, "/settings/test");
     let model: String =
         sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm.model'").fetch_one(&site.pool).await.unwrap();
     assert_eq!(model, "lan/qwen3.8-27b");
     let (requested, answered): (String, String) =
         sqlx::query_as("SELECT requested_at, answered FROM model_tests").fetch_one(&site.pool).await.unwrap();
     assert!(!requested.is_empty() && answered.is_empty());
-    assert!(
-        admin
-            .get(&site, "/settings?testing=1")
-            .await
-            .text
-            .contains("Test asked for: the pipeline, if it is running, runs it within a minute.")
-    );
+    // The results page waits for the pipeline, refreshing itself: no reloading by hand.
+    let refresh = r#"<meta http-equiv="refresh" content="3">"#;
+    let page = admin.get(&site, "/settings/test").await.text;
+    assert!(page.contains(refresh) && page.contains("Waiting for the pipeline to begin."));
+    assert!(admin.get(&site, "/settings").await.text.contains(r#"<a href="/settings/test">A test is under way.</a>"#));
+    // Not begun in a minute: it stops refreshing and asks whether the pipeline is running.
+    sqlx::query("UPDATE model_tests SET requested_at = '2026-10-17T12:00:00+00:00'").execute(&site.pool).await.unwrap();
+    let page = admin.get(&site, "/settings/test").await.text;
+    assert!(!page.contains(refresh) && page.contains("check that it is running"));
 
-    // The pipeline's answer is shown, a line per model.
+    // Under way: each model's line as it comes, still refreshing.
+    let now = forenoon_web::db::now_iso();
+    sqlx::query(
+        "UPDATE model_tests SET started = requested_at, tested_at = ?,
+         result = 'lan/qwen3.8-27b (ranking and choosing): OK: answered in 1.1 s'",
+    )
+    .bind(&now)
+    .execute(&site.pool)
+    .await
+    .unwrap();
+    let page = admin.get(&site, "/settings/test").await.text;
+    assert!(page.contains(refresh) && page.contains("Under way"));
+    assert!(page.contains("<li>lan/qwen3.8-27b (ranking and choosing): OK: answered in 1.1 s</li>"));
+    // Silent for five minutes: given up on.
+    sqlx::query("UPDATE model_tests SET tested_at = '2026-10-17T12:00:05+00:00'").execute(&site.pool).await.unwrap();
+    let page = admin.get(&site, "/settings/test").await.text;
+    assert!(!page.contains(refresh) && page.contains("it may have stopped"));
+
+    // The pipeline's answer is shown, a line per model, here and on Settings.
     sqlx::query(
         "UPDATE model_tests SET answered = requested_at, tested_at = '2026-10-17T12:00:05+00:00',
          result = 'lan/qwen3.8-27b (ranking and choosing): OK: answered in 1.1 s
@@ -1763,8 +1784,11 @@ anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it): no key'",
     .execute(&site.pool)
     .await
     .unwrap();
+    let page = admin.get(&site, "/settings/test").await.text;
+    assert!(!page.contains(refresh) && page.contains("<h2>Tested</h2>"));
+    assert!(page.contains("<li>anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it): no key</li>"));
     let text = admin.get(&site, "/settings").await.text;
-    assert!(text.contains("Last tested 2026-10-17 12:00 UTC:"));
+    assert!(text.contains("Last tested 2026-10-17 12:00 UTC"));
     assert!(text.contains("<li>lan/qwen3.8-27b (ranking and choosing): OK: answered in 1.1 s</li>"));
     assert!(text.contains("<li>anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it): no key</li>"));
 
@@ -1779,6 +1803,7 @@ anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it): no key'",
     mary.sign_in(&site, "mary").await;
     let token = mary.get(&site, "/account").await.csrf();
     assert_eq!(mary.post(&site, "/settings/test", &[("csrf", token.as_str())]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(mary.get(&site, "/settings/test").await.status, StatusCode::FORBIDDEN);
     assert_eq!(admin.post(&site, "/settings/test", &[("csrf", "wrong")]).await.status, StatusCode::FORBIDDEN);
 }
 

@@ -190,9 +190,12 @@ def _check_sources(cfg: Config) -> int:
         return 0
 
 
+TEST_POLL_SECONDS = 5
+
+
 def _test_models(cfg: Config) -> bool:
-    """Run the model test asked for on the Settings page, if there is one. Every minute, from the
-    scheduler: only the database is looked at unless a test was asked for."""
+    """Run the model test asked for on the Settings page, if there is one. Every few seconds,
+    from the scheduler: only the database is looked at unless a test was asked for."""
     from .model_test import run_asked
 
     try:
@@ -225,13 +228,16 @@ def _schedule(cfg: Config, args: argparse.Namespace) -> int:
         zone = ZoneInfo(cfg.timezone)
         target = _next_run(cfg, datetime.now(zone))
         log.info("next delivery at %s", target.isoformat())
+        last = time.monotonic()
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
-            time.sleep(min(wait, 60))
-            if not args.dry_run:
+            # Every few seconds for a model test, which someone is waiting on; every minute for the rest.
+            time.sleep(min(wait, TEST_POLL_SECONDS))
+            _test_models(cfg)
+            if not args.dry_run and time.monotonic() - last >= 60:
+                last = time.monotonic()
                 _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
                 _check_sources(cfg)
-                _test_models(cfg)
         cfg = _reload(cfg)
         try:
             _run_all(cfg, args)

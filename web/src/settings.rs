@@ -186,22 +186,72 @@ struct SettingsPage {
     test: Option<TestView>,
 }
 
-/// The last test of the models, or the one waiting for the pipeline.
+/// Seconds a test may wait for the pipeline to begin before the page stops refreshing and
+/// asks whether it is running: it looks every few seconds, but not during the morning run.
+const TEST_PICKUP: i64 = 60;
+/// Seconds without word from a test under way before the page gives up on it (each model has
+/// two minutes at most).
+const TEST_SILENCE: i64 = 300;
+
+/// The last test of the models: asked for, under way, or answered.
 struct TestView {
-    waiting: bool,
+    /// "waiting", "late" (not begun in TEST_PICKUP), "running", "silent" or "done".
+    state: &'static str,
     tested_at: String,
     lines: Vec<String>,
 }
 
+impl TestView {
+    fn refresh(&self) -> bool {
+        matches!(self.state, "waiting" | "running")
+    }
+}
+
+fn seconds_since(stamp: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(stamp)
+        .map(|at| (Utc::now() - at.with_timezone(&Utc)).num_seconds())
+        .unwrap_or(0)
+}
+
 async fn test_view(state: &AppState) -> Result<Option<TestView>, sqlx::Error> {
-    let row = sqlx::query!("SELECT requested_at, answered, tested_at, result FROM model_tests WHERE id = 1")
+    let row = sqlx::query!("SELECT requested_at, answered, started, tested_at, result FROM model_tests WHERE id = 1")
         .fetch_optional(&state.pool)
         .await?;
-    Ok(row.map(|row| TestView {
-        waiting: row.requested_at != row.answered,
-        tested_at: row.tested_at.get(..16).unwrap_or(&row.tested_at).replace('T', " "),
-        lines: row.result.lines().map(str::to_owned).collect(),
+    Ok(row.map(|row| {
+        let state = if row.answered == row.requested_at {
+            "done"
+        } else if row.started == row.requested_at {
+            if seconds_since(&row.tested_at) > TEST_SILENCE { "silent" } else { "running" }
+        } else if seconds_since(&row.requested_at) > TEST_PICKUP {
+            "late"
+        } else {
+            "waiting"
+        };
+        TestView {
+            state,
+            tested_at: row.tested_at.get(..16).unwrap_or(&row.tested_at).replace('T', " "),
+            lines: row.result.lines().map(str::to_owned).collect(),
+        }
     }))
+}
+
+#[derive(Template)]
+#[template(path = "model_test.html")]
+struct TestPage {
+    nav: Option<Nav>,
+    test: TestView,
+}
+
+/// The test's progress and result, refreshing itself while the pipeline works on it.
+pub async fn test_page(State(state): State<AppState>, auth: AuthSession) -> Page {
+    let user = reader(&auth)?;
+    if !user.is_admin() {
+        return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
+    }
+    let Some(test) = test_view(&state).await? else {
+        return Ok(Redirect::to("/settings#model-test").into_response());
+    };
+    html(StatusCode::OK, TestPage { nav: Nav::new(&state, &user, "settings").await?, test })
 }
 
 /// Today's and this month's use of the model, in the install's time zone (the pipeline's day).
@@ -284,7 +334,6 @@ fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -
 #[derive(Deserialize)]
 pub struct PageQuery {
     saved: Option<String>,
-    testing: Option<String>,
 }
 
 /// The page, with `typed` in the fields when a form was refused (else what is stored) and the
@@ -321,7 +370,7 @@ pub async fn page(
     if !user.is_admin() {
         return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
     }
-    render(&state, &user, &session, None, None, query.saved.is_some() || query.testing.is_some()).await
+    render(&state, &user, &session, None, None, query.saved.is_some()).await
 }
 
 /// Saves the form; with `test`, also asks the pipeline to test the models it names.
@@ -375,14 +424,14 @@ async fn save_form(
     if test {
         sqlx::query!(
             "INSERT INTO model_tests (id, requested_at) VALUES (1, ?)
-             ON CONFLICT (id) DO UPDATE SET requested_at = excluded.requested_at, answered = ''",
+             ON CONFLICT (id) DO UPDATE SET requested_at = excluded.requested_at, answered = '', started = '', result = ''",
             now
         )
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
-    Ok(Redirect::to(if test { "/settings?testing=1#model-test" } else { "/settings?saved=1" }).into_response())
+    Ok(Redirect::to(if test { "/settings/test" } else { "/settings?saved=1" }).into_response())
 }
 
 pub async fn save(

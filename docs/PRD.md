@@ -440,9 +440,12 @@ source).
   whose variables cannot be read is left out, and why is said wherever a model on it is
   missed. More than one can be set. The web pages never reach a server: the Settings page's
   **Save and test** saves the page and asks for a test, which the scheduler, looking at the
-  database every minute, runs: one small request to each model the settings name, with its
-  time and whether the answer matched, written back for the page (`forenoon test-models` from
-  the terminal). Test calls are logged like any other. Three settings: every call uses `llm.model` (Claude Haiku
+  database every five seconds, runs: for each model the settings name, Anthropic's too, the
+  start-of-run check and one small request, with its time and whether the answer matched,
+  written back line by line. The results page refreshes itself (`<meta refresh>`, no
+  scripts) until the answer is in, and stops, asking whether the pipeline is running, when the
+  test has not begun in a minute; it is not begun during the morning run
+  (`forenoon test-models` from the terminal). Test calls are logged like any other. Three settings: every call uses `llm.model` (Claude Haiku
   5.5), except the choosing of the issue (section 7f), which can have its own
   (`llm.choose_model`): one small call a day that decides what the reader gets, where a
   stronger model costs cents. `llm.fallback_model` replaces a model for the whole run when,

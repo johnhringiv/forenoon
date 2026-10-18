@@ -52,8 +52,9 @@ says so. Never commit `.env`.
 
 Set more than one under different names if you have them, for example a server at home and
 OpenAI as the fallback model. After a change, restart the pipeline (`deploy.sh` does) and press
-**Save and test** on the Settings page: within a minute it shows, for each model the settings
-name, whether one small request worked and how long it took. `forenoon test-models` does the
+**Save and test** on the Settings page: a page that updates itself shows, for each model the
+settings name (Claude's too), whether the check a run makes and one small request worked, and
+how long it took, usually within seconds. `forenoon test-models` does the
 same from the terminal. An env line that cannot be read is named there and in the run's alert.
 
 For a server on your network: it must listen on an address the pipeline's container can

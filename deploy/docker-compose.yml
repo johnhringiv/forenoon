@@ -30,6 +30,10 @@ services:
       # FORENOON_LLM_LAN_URL: ${FORENOON_LLM_LAN_URL:-}
       # FORENOON_LLM_LAN_KEY: ${FORENOON_LLM_LAN_KEY:-}
       # FORENOON_LLM_LAN_CONTEXT: ${FORENOON_LLM_LAN_CONTEXT:-}
+      # FORENOON_LLM_LAN_OUTPUT: ${FORENOON_LLM_LAN_OUTPUT:-}
+      # FORENOON_LLM_LAN_TIMEOUT: ${FORENOON_LLM_LAN_TIMEOUT:-}
+      # FORENOON_LLM_LAN_REASONING: ${FORENOON_LLM_LAN_REASONING:-}
+      # FORENOON_LLM_LAN_FREE: ${FORENOON_LLM_LAN_FREE:-}
       # Where rating links point: the web pages' public address.
       FORENOON_PUBLIC_URL: ${FORENOON_PUBLIC_URL:-}
       # The mail server books and alerts are sent through; see docs/setup-email.md.

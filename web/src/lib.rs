@@ -134,7 +134,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/sources/sessions", post(sources::set_session))
         .route("/sources/sessions/delete", post(sources::remove_session))
         .route("/settings", get(settings::page).post(settings::save))
-        .route("/settings/test", post(settings::test))
+        .route("/settings/test", get(settings::test_page).post(settings::test))
         .route("/accounts", get(accounts::page).post(accounts::invite))
         .route("/accounts/{id}/resend", post(accounts::resend))
         .route("/accounts/{id}/revoke", post(accounts::revoke))

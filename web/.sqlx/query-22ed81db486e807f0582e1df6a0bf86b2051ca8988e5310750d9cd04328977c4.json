@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO model_tests (id, requested_at) VALUES (1, ?)\n             ON CONFLICT (id) DO UPDATE SET requested_at = excluded.requested_at, answered = '', started = '', result = ''",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "22ed81db486e807f0582e1df6a0bf86b2051ca8988e5310750d9cd04328977c4"
+}

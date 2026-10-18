@@ -105,7 +105,8 @@ export FORENOON_FEEDBACK_SECRET FORENOON_SMTP_PASSWORD FORENOON_ANTHROPIC_API_KE
 # Each model server's settings and key (FORENOON_LLM_<NAME>_URL and the rest, see
 # docs/setup-deploy.md), the same way.
 LLM_KEYS=""
-for name in $(grep -oE '^FORENOON_LLM_[A-Z0-9_]+' "$ENV_FILE" | sort -u); do
+# Any case, so a name the pipeline refuses reaches it and is named in the alert.
+for name in $(grep -oE '^FORENOON_LLM_[A-Za-z0-9_]+' "$ENV_FILE" | sort -u); do
     value=$(env_get "$name")
     export "$name=$value"
     LLM_KEYS="$LLM_KEYS -e $name"

@@ -162,7 +162,7 @@ def test_a_model_is_checked_by_its_connections_model_list():
     assert router.check("lan/qwen") == ""
     assert "does not list the model gemma" in router.check("lan/gemma")
     assert "no connection 'other' for the model other/qwen: set FORENOON_LLM_OTHER_URL" in router.check("other/qwen")
-    unread = Router({}, ["FORENOON_LLM_OTHER_CONTEXT: give a whole number from 16384 to 2000000"])
+    unread = Router({}, {"other": "FORENOON_LLM_OTHER_CONTEXT: give a whole number from 16384 to 2000000"})
     assert "FORENOON_LLM_OTHER_CONTEXT: give a whole number" in unread.check("other/qwen"), "why it is missing"
     assert "set FORENOON_ANTHROPIC_API_KEY" in router.check("anthropic/claude-haiku-5-5")
     assert Router({"lan": backend(Server(status=500))}).check("lan/qwen").startswith("lan:")
@@ -520,7 +520,7 @@ def test_connections_are_set_in_the_environment():
             "FORENOON_ANTHROPIC_API_KEY": "not a connection",
         }
     )
-    assert problems == []
+    assert problems == {}
     gpu, lan, openai = found
     assert (lan.name, lan.address, lan.key, lan.context_tokens, lan.output_tokens) == (
         "lan",
@@ -550,11 +550,11 @@ def test_a_connection_that_cannot_be_read_is_left_out_and_says_why():
         }
     )
     assert [c.name for c in found] == ["ok"]
-    assert len(problems) == 5
-    assert any(p.startswith("FORENOON_LLM_A_URL: give the API's address") for p in problems)
-    assert any(p.startswith("FORENOON_LLM_C_CONTEXT: give a whole number from 16384") for p in problems)
-    assert any(p.startswith("FORENOON_LLM_D_OUTPUT must be less than FORENOON_LLM_D_CONTEXT") for p in problems)
-    assert any(p.startswith("FORENOON_LLM_ANTHROPIC_URL: the name") for p in problems)
+    assert sorted(problems) == ["a", "anthropic", "b", "c", "d"]
+    assert problems["a"].startswith("FORENOON_LLM_A_URL: give the API's address")
+    assert problems["c"].startswith("FORENOON_LLM_C_CONTEXT: give a whole number from 16384")
+    assert problems["d"].startswith("FORENOON_LLM_D_OUTPUT must be less than FORENOON_LLM_D_CONTEXT")
+    assert problems["anthropic"].startswith("FORENOON_LLM_ANTHROPIC_URL: the name")
 
 
 def test_a_test_reports_each_way_a_model_can_fail():
@@ -570,6 +570,9 @@ def test_a_test_reports_each_way_a_model_can_fail():
     cut = Server([reply("{", finish="length")])
     assert test_model(router(cut), "lan/qwen").startswith("Failed (the answer was unusable)")
     assert test_model(router(Server(status=503)), "lan/qwen").startswith("Failed (could not reach it)")
+    # The server answers whatever it has loaded, but a run would not use a model it does not list.
+    unlisted = Server([reply('{"word": "ready", "number": 7}')], models=["unsloth/Qwen3.8-27B-GGUF"])
+    assert "lan does not list the model qwen" in test_model(router(unlisted), "lan/qwen")
     assert "set FORENOON_LLM_GPU_URL" in test_model(router(Server()), "gpu/qwen")
 
 
@@ -585,9 +588,9 @@ def test_the_test_asked_for_on_the_page_is_run_and_answered(tmp_path, monkeypatc
 
     server = Server([reply('{"word": "ready", "number": 7}')])
     monkeypatch.delenv("FORENOON_ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(model_test, "backend_from_env", lambda llm: Router({"lan": backend(server)}, []))
+    monkeypatch.setattr(model_test, "backend_from_env", lambda llm: Router({"lan": backend(server)}, {}))
     monkeypatch.setattr(
-        model_test, "connections_from_env", lambda: ((), ["FORENOON_LLM_X_URL: give the API's address"])
+        model_test, "connections_from_env", lambda: ((), {"x": "FORENOON_LLM_X_URL: give the API's address"})
     )
     assert model_test.run_asked(store, cfg)
     row = store.db.execute("SELECT * FROM model_tests").fetchone()
@@ -596,7 +599,7 @@ def test_the_test_asked_for_on_the_page_is_run_and_answered(tmp_path, monkeypatc
     assert lines[0] == "Not read: FORENOON_LLM_X_URL: give the API's address"
     assert lines[1].startswith("lan/qwen (ranking and choosing): OK: answered in")
     assert lines[2].startswith("anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it)")
-    assert [r["purpose"] for r in store.llm_call_rows()] == ["test", "test"], "the calls are logged like any other"
+    assert [r["purpose"] for r in store.llm_call_rows()] == ["test"], "the call made is logged like any other"
 
     # Asked for again while one ran: the older answer does not count for it.
     store.db.execute("UPDATE model_tests SET requested_at = '2026-10-17T12:00:30Z', answered = ''")
@@ -615,7 +618,9 @@ def test_the_scheduler_tests_the_models_as_just_saved_not_its_own_day_old_settin
     store.close()
     monkeypatch.setenv("FORENOON_DATA_DIR", str(tmp_path))
     tested = []
-    monkeypatch.setattr(model_test, "test_models", lambda llm, store=None: tested.append(llm.model) or ["ok"])
+    monkeypatch.setattr(
+        model_test, "test_models", lambda llm, store=None, progress=None: tested.append(llm.model) or ["ok"]
+    )
     stale = cli.load()
     stale = cli.dataclasses.replace(stale, llm=replace(stale.llm, model="anthropic/claude-haiku-5-5"))
     assert cli._test_models(stale) and tested == ["lan/qwen"]
@@ -635,8 +640,10 @@ def test_connection_names_are_strict_and_problems_belong_to_their_own_connection
         }
     )
     assert found == () and len(problems) == 5, "an empty address is not set, the rest are named"
+    assert set(problems) == {"lan", "lan_", "_x", "FORENOON_LLM_URL", "lan_box"}
     router = Router({}, problems)
-    assert "set FORENOON_LLM_LAN_URL" in router.check("lan/qwen"), "LAN_BOX's problem is not LAN's"
+    assert "FORENOON_LLM_lan_URL: the name must be capital" in router.check("lan/qwen"), "the likely mistake"
+    assert "LAN_BOX" not in router.check("lan/qwen"), "LAN_BOX's problem is not LAN's"
     assert "FORENOON_LLM_LAN_BOX_CONTEXT" in router.check("lan_box/qwen")
 
 
@@ -648,3 +655,31 @@ def test_a_refused_key_is_not_quoted_back():
     with pytest.raises(Unreachable) as refused:
         backend(Refusing()).structured("s", "u", SCHEMA, model="lan/qwen")
     assert "sk-ab" not in str(refused.value) and "the key was refused" in str(refused.value)
+
+
+def test_a_bad_env_line_reaches_the_run_even_with_no_other_connection(monkeypatch):
+    from app.llm import backend_from_env
+
+    for var in [v for v in __import__("os").environ if v.startswith("FORENOON_LLM_")]:
+        monkeypatch.delenv(var)
+    monkeypatch.delenv("FORENOON_ANTHROPIC_API_KEY", raising=False)
+    assert backend_from_env(Llm()) is None, "nothing set: newest first, as before"
+    monkeypatch.setenv("FORENOON_LLM_LAN_URL", "192.168.1.20:8080/v1")
+    router = backend_from_env(Llm(model="lan/qwen"))
+    with pytest.raises(Unreachable, match="FORENOON_LLM_LAN_URL: give the API's address"):
+        router.structured("s", "u", SCHEMA, model="lan/qwen")
+
+
+def test_a_misspelt_setting_or_a_password_in_the_address_is_named():
+    found, problems = connections_from_env(
+        {
+            "FORENOON_LLM_LAN_URL": "http://x/v1",
+            "FORENOON_LLM_LAN_TIMOUT": "900",
+            "FORENOON_LLM_LAN_BOX_URL": "http://x/v1",
+            "FORENOON_LLM_LAN_BOX_CONTEXT": "65536",
+            "FORENOON_LLM_PW_URL": "http://me:secret@x/v1",
+        }
+    )
+    assert [c.name for c in found] == ["lan_box"], "LAN_BOX's settings are not LAN's misspellings"
+    assert problems["lan"].startswith("FORENOON_LLM_LAN_TIMOUT: not a setting")
+    assert "no user name or password" in problems["pw"] and "secret" not in problems["pw"]

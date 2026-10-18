@@ -38,10 +38,9 @@
 <p class="hint">Where mail is sent from, the time zone, the public address for rating links and the API keys belong to the deploy and are set in its env file, not here.</p>
 {# After Save, so Enter in a field saves rather than tests. #}
 <h2 id="model-test">Test the models</h2>
-<p class="hint">Saves this page, then sends one small request to each model in Ranking, so you know a connection works before a morning run depends on it. A model is named with its connection: <code>anthropic/…</code> uses <code>FORENOON_ANTHROPIC_API_KEY</code>; any other is a server that speaks the OpenAI API (OpenAI, Ollama, LM Studio, llama.cpp, vLLM) set in the env file as <code>FORENOON_LLM_&lt;NAME&gt;_URL</code>, so <code>FORENOON_LLM_LAN_URL</code> gives <code>lan/&lt;model id&gt;</code>. See docs/setup-deploy.md.</p>
+<p class="hint">Saves this page, then sends one small request to each model in Ranking, Claude's as well as your own servers', the way a morning run would, so you know they work before a run depends on them. A model is named with its connection: <code>anthropic/…</code> uses <code>FORENOON_ANTHROPIC_API_KEY</code>; any other is a server that speaks the OpenAI API (OpenAI, Ollama, LM Studio, llama.cpp, vLLM) set in the env file as <code>FORENOON_LLM_&lt;NAME&gt;_URL</code>, so <code>FORENOON_LLM_LAN_URL</code> gives <code>lan/&lt;model id&gt;</code>. See docs/setup-deploy.md.</p>
 <button formaction="/settings/test">Save and test</button>
-{% if let Some(test) = test %}{% if test.waiting %}<p class="notice">Test asked for: the pipeline, if it is running, runs it within a minute. Reload to see the result.</p>
-{% else %}<p class="hint">Last tested {{ test.tested_at }} UTC:</p>
-<ul class="test-result">{% for line in test.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}{% endif %}
+{% if let Some(test) = test %}{% if test.state == "done" %}<p class="hint">Last tested {{ test.tested_at }} UTC (<a href="/settings/test">details</a>):</p>
+<ul class="test-result">{% for line in test.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% else %}<p class="hint"><a href="/settings/test">A test is under way.</a></p>{% endif %}{% endif %}
 </form>
 {% endblock %}

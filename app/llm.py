@@ -91,28 +91,37 @@ NUMBERS = {
 }
 
 
-def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tuple[Connection, ...], list[str]]:
+SETTINGS = ("URL", "KEY", *NUMBERS, "FREE", "REASONING")
+
+
+def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tuple[Connection, ...], dict[str, str]]:
     """The connections set in the environment, and what is wrong with any that could not be
-    read (those are left out). Each is FORENOON_LLM_<NAME>_URL, and beside it, all optional:
-    _KEY; _CONTEXT, the tokens the server holds in one request (prompt and answer); _OUTPUT, the
-    answer limit; _TIMEOUT in seconds; _FREE=0 for a paid service on your network (one on the
-    internet is always counted); _REASONING=1 to let the model reason first. Its models are named
-    <name>/<model id>, the name in lower case: FORENOON_LLM_LAN_URL gives lan/qwen3.8-27b."""
+    read (those are left out), by the connection's name. Each is FORENOON_LLM_<NAME>_URL, and
+    beside it, all optional: _KEY; _CONTEXT, the tokens the server holds in one request (prompt
+    and answer); _OUTPUT, the answer limit; _TIMEOUT in seconds; _FREE=0 for a paid service on
+    your network (one on the internet is always counted); _REASONING=1 to let the model reason
+    first. Its models are named <name>/<model id>, the name in lower case: FORENOON_LLM_LAN_URL
+    gives lan/qwen3.8-27b."""
     environ = os.environ if environ is None else environ
     found: list[Connection] = []
-    problems: list[str] = []
-    for var in sorted(environ):
-        # Left empty, as a compose file's ${VAR:-} line does, is not set.
-        if not (var.startswith(ENV_PREFIX) and var.endswith("_URL")) or not environ[var].strip():
-            continue
+    problems: dict[str, str] = {}
+    # Left empty, as a compose file's ${VAR:-} line does, is not set.
+    every_url = [v for v in sorted(environ) if v.startswith(ENV_PREFIX) and v.endswith("_URL")]
+    urls = [v for v in every_url if environ[v].strip()]
+    for var in urls:
         prefix = var.removesuffix("URL")
         raw = prefix.removeprefix(ENV_PREFIX).removesuffix("_")
+        name = raw.lower()
         if not re.fullmatch(r"[A-Z0-9]+(_[A-Z0-9]+)*", raw) or raw == "ANTHROPIC":
-            problems.append(
+            problems[name or var] = (
                 f"{var}: the name must be capital letters and digits, joined by single underscores, and not ANTHROPIC"
             )
             continue
-        name = raw.lower()
+        # A setting misspelt would otherwise be left at its default without a word.
+        unknown = [
+            v for v in environ if v.startswith(prefix) and v.removeprefix(prefix) not in SETTINGS
+            and not any(v.startswith(u.removesuffix("URL")) for u in every_url if len(u) > len(var))
+        ]  # fmt: skip
         address = environ[var].strip()
         parts = urlsplit(address)
         try:
@@ -120,36 +129,39 @@ def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tupl
             ok = parts.scheme in ("http", "https") and bool(parts.hostname)
         except ValueError:
             ok = False
-        if not ok:
-            problems.append(f"{var}: give the API's address, as in http://192.168.1.20:8080/v1")
-            continue
         values: dict[str, Any] = {}
+        if not ok:
+            problems[name] = f"{var}: give the API's address, as in http://192.168.1.20:8080/v1"
+        elif parts.username or parts.password:
+            problems[name] = f"{var}: no user name or password in the address; a key goes in {prefix}KEY"
+        elif unknown:
+            problems[name] = f"{', '.join(sorted(unknown))}: not a setting; the settings are {', '.join(SETTINGS)}"
         for setting, (attr, default, low, high) in NUMBERS.items():
             text = environ.get(prefix + setting, "").strip() or str(default)
             if not text.isdigit() or not low <= int(text) <= high:
-                problems.append(f"{prefix}{setting}: give a whole number from {low} to {high}")
+                problems.setdefault(name, f"{prefix}{setting}: give a whole number from {low} to {high}")
                 break
             values[attr] = int(text)
-        else:
-            if values["output_tokens"] >= values["context_tokens"]:
-                problems.append(f"{prefix}OUTPUT must be less than {prefix}CONTEXT: the context holds the prompt too")
-                continue
-            flags = {}
-            for setting, default in (("FREE", True), ("REASONING", False)):
-                text = environ.get(prefix + setting, "").strip().lower()
-                flags[setting] = default if not text else text in ("1", "yes", "true", "on")
-            found.append(
-                Connection(
-                    name,
-                    address,
-                    values["context_tokens"],
-                    values["output_tokens"],
-                    float(values["timeout"]),
-                    flags["FREE"],
-                    not flags["REASONING"],
-                    environ.get(prefix + "KEY", "").strip(),
-                )
+        if name not in problems and values["output_tokens"] >= values["context_tokens"]:
+            problems[name] = f"{prefix}OUTPUT must be less than {prefix}CONTEXT: the context holds the prompt too"
+        if name in problems:
+            continue
+        flags = {}
+        for setting, default in (("FREE", True), ("REASONING", False)):
+            text = environ.get(prefix + setting, "").strip().lower()
+            flags[setting] = default if not text else text in ("1", "yes", "true", "on")
+        found.append(
+            Connection(
+                name,
+                address,
+                values["context_tokens"],
+                values["output_tokens"],
+                float(values["timeout"]),
+                flags["FREE"],
+                not flags["REASONING"],
+                environ.get(prefix + "KEY", "").strip(),
             )
+        )
     return tuple(found), problems
 
 
@@ -171,6 +183,12 @@ class AnthropicBackend:
 
         self._anthropic = anthropic
         self._client = anthropic.Anthropic(api_key=api_key, timeout=cfg.timeout, max_retries=1)
+
+    def bounded(self, timeout: float) -> AnthropicBackend:
+        """The same, waiting at most `timeout` seconds for an answer and not asking twice."""
+        copy_ = copy.copy(self)
+        copy_._client = self._client.with_options(timeout=timeout, max_retries=0)
+        return copy_
 
     def structured(self, system: str, user: str, schema: dict[str, Any], *, model: str, shared: str = "") -> Reply:
         # A single call of a tool that does nothing is the answer format. It is forced where
@@ -421,9 +439,9 @@ class OpenAIBackend:
 class Router:
     """Sends each call to the backend of the connection its model names."""
 
-    def __init__(self, backends: dict[str, Backend], problems: list[str] | None = None):
+    def __init__(self, backends: dict[str, Backend], problems: dict[str, str] | None = None):
         self._backends = backends
-        self._problems = problems or []  # connections in the environment that could not be read
+        self._problems = problems or {}  # connections in the environment that could not be read, by name
         # Connections found unreachable in this run, with why: not tried again until the next,
         # so a server that is off costs one time limit, not one per call. A connection whose
         # calls time out twice in a row joins them: too slow for this run's requests.
@@ -437,10 +455,10 @@ class Router:
             raise LlmError(str(exc)) from exc
         backend = self._backends.get(connection)
         if backend is None:
-            prefix = f"{ENV_PREFIX}{connection.upper()}"
-            # A problem names its variable first: this connection's, not one whose name starts the same.
-            unread = [p for p in self._problems if p.split(maxsplit=1)[0].rstrip(":").rsplit("_", 1)[0] == prefix]
-            where = unread[0] if unread else f"set {API_KEY_ENV if connection == 'anthropic' else prefix + '_URL'}"
+            unread = self._problems.get(connection)
+            where = (
+                unread or f"set {API_KEY_ENV if connection == 'anthropic' else f'{ENV_PREFIX}{connection.upper()}_URL'}"
+            )
             raise Unreachable(f"no connection {connection!r} for the model {model}: {where}", down=True)
         return backend
 
@@ -569,4 +587,5 @@ def backend_from_env(cfg: Llm) -> Backend | None:
     connections, problems = connections_from_env()
     for connection in connections:
         backends[connection.name] = OpenAIBackend(connection)
-    return Router(backends, problems) if backends else None
+    # With only connections that could not be read, still a router: its calls say why.
+    return Router(backends, problems) if backends or problems else None
