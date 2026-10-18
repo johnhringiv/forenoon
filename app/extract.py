@@ -170,6 +170,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
+    # The page's own quotes only: before asides and callouts are made quotes below.
+    _unclass_quotes(root)
     for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
@@ -194,8 +196,6 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
             and not el.xpath(".//blockquote | .//pre | .//table")
         ):
             el.tag = "blockquote"
-
-    _unclass_quotes(root)
 
     targets: dict[str, lxml.html.HtmlElement] = {}
     for el in root.iter():
@@ -317,6 +317,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
 
 EMBED_CLASS = re.compile(r"tweet|twitter", re.IGNORECASE)
 EMBED_WRAPPER_DEPTH = 3  # figure > div > blockquote, as embed plugins nest them
+EMBED_WRAPPER_CHILDREN = 8  # the quote, its loader and a caption at most: no longer a wrapper past this
 
 
 def _unclass_quotes(root: lxml.html.HtmlElement) -> None:
@@ -339,7 +340,7 @@ def _unclass_quotes(root: lxml.html.HtmlElement) -> None:
 def _holds_only(wrapper: lxml.html.HtmlElement, child: lxml.html.HtmlElement) -> bool:
     """Whether `child` is all `wrapper` shows: no text of its own, and beside it only scripts
     and empty elements (the embed's loader, an empty caption)."""
-    if (wrapper.text or "").strip():
+    if (wrapper.text or "").strip() or len(wrapper) > EMBED_WRAPPER_CHILDREN:
         return False
     for other in wrapper:
         if (other.tail or "").strip():

@@ -321,3 +321,20 @@ def test_many_quotes_are_handled_in_linear_time():
     started = time.monotonic()
     extract("https://forum.example/t", f"<html><body>{thread}</body></html>", "", "page")
     assert time.monotonic() - started < 10
+
+
+def test_tweet_furniture_stays_out_and_empty_quotes_are_fast():
+    import time
+
+    words = "<p>" + "Plain words about council votes and the budget for the new bridge. " * 12 + "</p>"
+    follow = (
+        "<aside class='twitter-follow'><p>Follow us on Twitter for the latest updates from the council.</p></aside>"
+    )
+    page = f"<html><body><article>{words}{follow}{words}</article></body></html>"
+    assert "Follow us" not in lxml.html.tostring(
+        extract("https://news.example/a", page, "", "page").body, encoding="unicode"
+    )
+    empty = "<div>" + "<blockquote></blockquote>" * 20000 + "</div>"
+    started = time.monotonic()
+    extract("https://news.example/b", f"<html><body>{words}{empty}</body></html>", "", "page")
+    assert time.monotonic() - started < 10
