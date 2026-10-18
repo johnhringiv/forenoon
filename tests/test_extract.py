@@ -393,3 +393,21 @@ def test_link_boxes_with_odd_characters_or_author_labels_are_handled():
         page = f"<html><body><article>{words}{box}{words}</article></body></html>"
         out = lxml.html.tostring(extract("https://news.example/b", page, "", "page").body, encoding="unicode")
         assert ("Bob Jones" in out) or ("council replied" in out), box
+
+
+def test_callout_boxes_and_anchors_are_never_teasers():
+    words = "<p>" + "Plain words about levees and the town that paid for one. " * 12 + "</p>"
+    for needle, box in {
+        "eleven years": "<aside class='callout'><b>Key point</b> <a name='k1'>The bridge took eleven years to build</a> "
+        "<a name='k2'>and it is the longest in the county</a></aside>",
+        "migration guide": "<div class='warning'>Deprecated, see <a href='/new'>the new API and its migration guide</a> "
+        "<a href='/faq'>FAQ</a></div>",
+        "misnamed the engineer": "<aside>Clarification: <a href='/c'>An earlier version misnamed the engineer</a> "
+        "<a href='/o'>see the original</a></aside>",
+        "John Smith": "<aside><img src='https://e.com/a.jpg'> Photo <a href='/js'>John Smith</a> <a href='/cc'>CC BY</a></aside>",
+        "type a number": "<div class='notice'><p>Try it yourself: type a number and see the tax owed.</p>"
+        "<form><input><button>Go</button></form></div>",
+    }.items():
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert needle in out, needle

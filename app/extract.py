@@ -61,7 +61,8 @@ TEASER_LABEL_MAX_WORDS = 4  # "Recommended", "You may like", "More on this story
 # How an author starts a note that may be only links ("Update: part two is out"): never a teaser.
 NOTE_LABEL_START = re.compile(
     r"\W*(updates?|updated|corrections?|corrected|notes?|editor.s note|edit|addendum|erratum"
-    r"|by|authors?|written by|reporting by|photos? by|credits?)\b",
+    r"|by|authors?|written by|reporting by|photos?|images?|credits?|sources?|via|clarifications?"
+    r"|see also|deprecated|part \d)\b",
     re.IGNORECASE,
 )
 BOX_MAX_SHARE = 0.5  # of the page's words: a box holding more is the article
@@ -206,7 +207,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
                 target in linked_to for target in el.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name")
             )
         )
-        if classes & SIDENOTE_CHROME or (droppable and _promo(el)):
+        # Promos are asides; a box classed as a callout (a warning, a tip, "see also") is the author's.
+        if classes & SIDENOTE_CHROME or (droppable and el.tag == "aside" and _promo(el)):
             el.drop_tree()
         elif el.tag in ("span", "tt", "font") and in_code:
             if classes & CODE_COMMENT_CLASSES:
@@ -355,7 +357,7 @@ def _promo(box: lxml.html.HtmlElement) -> bool:
     # A teaser is a short label and then only links: a section and a headline, or several
     # stories. A note has words of its own among its links ("Update: I wrote X and Y."), and
     # a picture's linked credit has no label.
-    links = box.xpath(".//a[not(ancestor::a)]")
+    links = box.xpath(".//a[@href][not(ancestor::a[@href])]")
     words = _words(box.text_content())
     linked = sum(_words(a.text_content()) for a in links)
     if len(links) < 2 or not words or linked < TEASER_LINK_SHARE * words:
@@ -378,8 +380,9 @@ def _around_first_link(box: lxml.html.HtmlElement) -> tuple[str, str]:
 
     def walk(el: lxml.html.HtmlElement, in_link: bool) -> None:
         nonlocal seen_link
-        linked = in_link or el.tag == "a"
-        if el.tag == "a" and not in_link:
+        link = el.tag == "a" and el.get("href") is not None
+        linked = in_link or link
+        if link and not in_link:
             seen_link = True
         if el.text and not linked:
             (after if seen_link else before).append(el.text)
