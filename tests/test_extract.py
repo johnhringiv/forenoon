@@ -286,3 +286,31 @@ def test_a_notes_link_back_is_not_taken_for_a_reference():
     assert "A claim in the text." in text and "It goes on for a while" in text and "The note itself." not in text
     assert text.count('class="noteref"') == 1 and notes.count("<aside") == 1
     assert '<a href="#fnref-1">1</a> The note itself.' in notes
+
+
+def test_interactive_figures_leave_a_placeholder_and_ordinary_ones_are_kept():
+    words = "<p>" + "Plain words about image codecs and how their encoders trade size for time. " * 12 + "</p>"
+    chart = (
+        "<figure><div class='line-chart'><fieldset><legend>Scale</legend><input type='radio'></fieldset>"
+        "<div>Encode time</div><span>0 ms</span><span>1 s</span><svg><path d='M0 0L9 9'></path></svg>"
+        "<script>render()</script></div><figcaption>Encode time by quality</figcaption></figure>"
+    )
+    photo = (
+        "<figure><img src='https://e.com/car.jpg'><button>Full screen</button><figcaption>A car</figcaption></figure>"
+    )
+    code = "<figure><pre><code>let x = 1;</code></pre><button><svg><path d='M0'></path></svg></button></figure>"
+    quote = "<figure><blockquote><p>A quote worth keeping here</p></blockquote><script>embed()</script></figure>"
+    player = "<figure><button><svg><path d='M0'></path></svg></button><span>00:00 / 56:52</span></figure>"
+    page = f"<html><body><article>{words}{photo}{chart}{words}{code}{quote}{player}{words}</article></body></html>"
+    result = extract("https://blog.example/codecs", page, "", "page")
+    out = lxml.html.tostring(result.body, encoding="unicode")
+
+    # The chart is the page's second figure: its labels are gone, its caption stays.
+    assert '<figure><p id="shot-1">An interactive figure from the original page.</p>' in out
+    assert "Encode time by quality" in out and "0 ms" not in out and "Scale" not in out
+    # Pictures, code, quotes and players are kept as they are.
+    assert "car.jpg" in out and "let x = 1;" in out and "A quote worth keeping" in out
+    assert out.count('id="shot-') == 1
+    # A feed's copy is not the page a browser shows: no placeholder there.
+    fed = extract("https://blog.example/codecs", None, f"{words}{chart}{words}{words}", "feed")
+    assert "shot-" not in lxml.html.tostring(fed.body, encoding="unicode")

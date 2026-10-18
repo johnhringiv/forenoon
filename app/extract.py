@@ -53,6 +53,13 @@ SIDENOTE_CHROME = {"margin-toggle", "sidenote-number"}
 INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", "mono"}
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
+# A figure drawn by the page's own scripts (a chart, a slider comparing pictures): without
+# them it is only its labels, run together. It has controls, a canvas or a script, or a
+# drawing beside a button, and none of what a figure keeps as it is (a picture, a video or
+# audio player, a table, code or a quote, an embedded tweet among them).
+WIDGET_MARKERS = ".//input | .//select | .//textarea | .//fieldset | .//canvas | .//script"
+WIDGET_KEPT = ".//img | .//picture | .//video | .//audio | .//table | .//iframe | .//pre | .//code | .//blockquote"
+SHOT_ID = "shot-"  # the placeholder left for such a figure: the pipeline puts a picture of it here
 # Syntax highlighting, in the class names of highlight.js, Prism and Pygments. On a
 # greyscale screen the two worth keeping are comments (italic) and keywords (bold).
 CODE_COMMENT_CLASSES = {"comment", "hljs-comment", "c", "c1", "cm", "cs"}
@@ -152,7 +159,35 @@ def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: 
     return el if 0 < size <= NOTE_MAX_CHARS else None
 
 
-def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElement | None:
+def _interactive(figure: lxml.html.HtmlElement) -> bool:
+    """Whether a figure is drawn by the page's scripts; see WIDGET_MARKERS."""
+    if figure.xpath(WIDGET_KEPT):
+        return False
+    return bool(figure.xpath(WIDGET_MARKERS)) or bool(
+        figure.xpath(".//button") and figure.xpath(".//svg[not(ancestor::button)]")
+    )
+
+
+def _mark_widgets(root: lxml.html.HtmlElement) -> None:
+    """Replace each interactive figure's insides with a placeholder that says which of the
+    page's figures it was (counted in document order, as a browser counts them), keeping its
+    caption. A browser can then take a picture of that figure for the book."""
+    figures = list(root.iter("figure"))
+    for number, figure in enumerate(figures):
+        if root not in figure.iterancestors() or not _interactive(figure):
+            continue  # inside a figure already replaced, or an ordinary one
+        captions = figure.findall(".//figcaption")
+        for child in list(figure):
+            figure.remove(child)
+        figure.text = None
+        holder = etree.SubElement(figure, "p")
+        holder.set(MARK, "shot")
+        holder.set(MARK_N, str(number))
+        holder.text = "An interactive figure from the original page."
+        figure.extend(captions)
+
+
+def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
     Works on the whole page, before the article is picked out of it, and returns the notes
@@ -170,6 +205,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
+    if whole_page:  # a feed's copy is not the page a browser would show
+        _mark_widgets(root)
     for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
@@ -327,7 +364,7 @@ def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
-        notes = _structure(root, base_url)
+        notes = _structure(root, base_url, whole_page)
         return lxml.html.tostring(root, encoding="unicode"), notes
     except Exception:  # noqa: BLE001 - hostile input; the article is still delivered without this
         # Unprocessed, so any marker in it is the page's own: make sure none is acted on.
@@ -376,6 +413,8 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
             keep.update({"id": f"fn-{number}", "class": "footnote"})
         elif mark == "target":
             keep["id"] = f"sec-{number}"
+        elif mark == "shot" and tag == "p":
+            keep["id"] = f"{SHOT_ID}{number}"
         if tag == "a" and mark == "ref":
             keep.update({"href": f"#fn-{number}", "class": "noteref"})
             if el.get(MARK_FIRST):

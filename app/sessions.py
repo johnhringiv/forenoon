@@ -6,10 +6,15 @@ holds the cookie: it knows only the site. It leaves a request in `<data>/session
 and the browser container, the only one besides the web pages that mounts the logins volume,
 fetches the page with the cookie and leaves the answer beside it. Only pages the ranking
 wants read are asked for, a few a day; feeds themselves are read without the session.
+
+The same container takes pictures of a page's interactive figures (charts, sliders), which
+only a browser running the page's scripts can draw: any page, with its site's session when
+there is one. It touches `ALIVE` while it runs, so a run never waits for one that is not.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 import uuid
@@ -29,6 +34,10 @@ SIGNED_OUT = "Sign-in needed: "
 
 _silent_until = 0.0  # nothing answered: the browser container is not running
 STATUS = "status.json"  # where the browser container says how each session last went
+ALIVE = "alive"  # in FOLDER, touched by the browser container every few seconds
+ALIVE_SECONDS = 30.0
+SHOTS_WAIT = 300.0  # seconds for one page's pictures: the pause between pages, then each figure
+MAX_SHOTS_BYTES = 40 * 1024 * 1024
 
 
 def sign_in_ends(sessions_dir: Path, session: str) -> date | None:
@@ -53,6 +62,48 @@ def for_url(sites: tuple[str, ...], url: str) -> str:
         return ""
     covering = [site for site in sites if host == site or host.endswith("." + site)]
     return max(covering, key=len, default="")  # the most particular, should two cover it
+
+
+def browser_running(sessions_dir: Path) -> bool:
+    """Whether the browser container is answering requests now."""
+    try:
+        return time.time() - (sessions_dir / FOLDER / ALIVE).stat().st_mtime < ALIVE_SECONDS
+    except OSError:
+        return False
+
+
+def figure_shots(
+    sessions_dir: Path, session: str, url: str, figures: list[int], wait: float = SHOTS_WAIT, poll: float = 0.5
+) -> dict[int, bytes]:
+    """Pictures of the page's figures (numbered in document order), as JPEG, from the browser
+    container: with the named session, or none when `session` is "". A figure it could not
+    take is missing from the answer. Raises FetchError when there is no answer at all."""
+    if not browser_running(sessions_dir):
+        raise FetchError("the browser container is not running")
+    folder = sessions_dir / FOLDER
+    name = uuid.uuid4().hex
+    request, answer, error = folder / f"{name}.json", folder / f"{name}.shots", folder / f"{name}.err"
+    partial = folder / f".{name}.tmp"
+    partial.write_text(json.dumps({"session": session, "url": url, "shots": figures}), encoding="utf-8")
+    partial.replace(request)
+    deadline = time.monotonic() + wait
+    try:
+        while time.monotonic() < deadline:
+            if error.exists():
+                raise FetchError(error.read_text(encoding="utf-8", errors="replace")[:300] or "no pictures taken")
+            if answer.exists():
+                if answer.stat().st_size > MAX_SHOTS_BYTES:
+                    raise FetchError(f"pictures larger than {MAX_SHOTS_BYTES} bytes")
+                try:
+                    taken = json.loads(answer.read_text(encoding="utf-8"))
+                    return {int(n): base64.b64decode(data) for n, data in taken.items() if int(n) in figures}
+                except (ValueError, TypeError, AttributeError) as exc:
+                    raise FetchError(f"unreadable pictures: {exc}") from exc
+            time.sleep(poll)
+        raise FetchError(f"pictures took longer than {wait:.0f}s")
+    finally:
+        for path in (request, answer, error):
+            path.unlink(missing_ok=True)
 
 
 def fetch(sessions_dir: Path, session: str, url: str, wait: float = WAIT, poll: float = 0.5) -> str:

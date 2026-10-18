@@ -547,6 +547,18 @@ source).
   and nothing answers a CAPTCHA.
 - How each session's last page went, with the day the site says its sign-in ends, is kept in
   `<data>/sessions/status.json` for the Sources page and the run's alerts.
+- It also takes pictures of interactive figures: a `<figure>` the page's scripts draw (a
+  chart, a slider comparing pictures), recognised by having controls, a canvas or a script,
+  or a drawing beside a button, and no picture, player, table, code or quote of its own.
+  Without the scripts it is only its labels run together, so extraction leaves a placeholder
+  numbered by the figure's place among the page's figures. For each article going in a
+  book, the pipeline asks for up to 20 (fewer when the article's own pictures leave less
+  room), with the site's session when it has one, and Chrome opens the page, opens any
+  closed `<details>`, and photographs each figure as it first appears. The picture goes
+  where the figure was, with a line under it saying it is interactive on the original page;
+  without a picture the line is there alone. The container touches
+  `<data>/sessions/.fetch/alive` every second, and nothing is asked for while it is stale,
+  so an install without it never waits.
 - There were Calibre news recipes here until October 2026, fetching whole papers once a day.
   They went once every source had a feed: the subscriber sessions above fetch only what the
   ranking picks. Articles that came in through a recipe keep the route `recipe`.

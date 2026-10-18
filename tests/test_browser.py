@@ -168,3 +168,78 @@ def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_
         sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=30)
     assert time.monotonic() - started < 1
     sessions._silent_until = 0.0
+
+
+def test_pictures_of_interactive_figures_are_asked_for_only_while_the_browser_runs(tmp_path):
+    import base64
+    import os
+    import threading
+
+    from app import sessions
+    from app.fetch import FetchError
+
+    # No browser container: nothing is asked for, and nothing is waited for.
+    started = time.monotonic()
+    with pytest.raises(FetchError, match="not running"):
+        sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0, 3], wait=30)
+    assert time.monotonic() - started < 1
+    alive = tmp_path / ".fetch" / "alive"
+    alive.parent.mkdir(parents=True)
+    alive.touch()
+    os.utime(alive, (time.time() - 60, time.time() - 60))  # stopped a minute ago
+    assert not sessions.browser_running(tmp_path)
+    alive.touch()
+    assert sessions.browser_running(tmp_path)
+
+    def answer():
+        for _ in range(200):
+            waiting = list((tmp_path / ".fetch").glob("*.json"))
+            if waiting:
+                wanted = json.loads(waiting[0].read_text())
+                assert wanted == {"session": "", "url": "https://blog.example/a", "shots": [0, 3]}
+                waiting[0].unlink()
+                # Figure 3 could not be shown; 9 was never asked for.
+                taken = {"0": base64.b64encode(b"jpeg 0").decode(), "9": base64.b64encode(b"x").decode()}
+                waiting[0].with_suffix(".shots").write_text(json.dumps(taken))
+                return
+            time.sleep(0.01)
+
+    worker = threading.Thread(target=answer)
+    worker.start()
+    assert sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0, 3], wait=5, poll=0.01) == {0: b"jpeg 0"}
+    worker.join()
+    assert [p.name for p in (tmp_path / ".fetch").iterdir()] == ["alive"], "nothing else is left behind"
+
+
+def test_the_browser_takes_pictures_with_the_sites_session_or_with_none(tmp_path):
+    runner = _fetcher()
+    out, logins = tmp_path / "sessions", tmp_path / "logins"
+    (out / ".fetch").mkdir(parents=True)
+    logins.mkdir()
+    (logins / "site-paper.example.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example"}')
+    seen = []
+
+    def shooter(url, session, name, figures):
+        seen.append((url, session.get("cookie"), figures))
+        if "broken" in url:
+            raise ValueError("the browser failed: crashed")
+        return {figures[0]: b"jpeg"}
+
+    requests = [
+        {"session": "", "url": "https://blog.example/a", "shots": [2, 5]},
+        {"session": "site-paper.example", "url": "https://paper.example/b", "shots": [0]},
+        {"session": "site-paper.example", "url": "https://paper.example/broken", "shots": [1]},
+        {"session": "", "url": "https://blog.example/c", "shots": ["0"]},
+    ]
+    ids = [c * 32 for c in "abcd"]
+    for name, wanted in zip(ids, requests, strict=True):
+        (out / ".fetch" / f"{name}.json").write_text(json.dumps(wanted))
+    assert runner.answer_fetches(out, logins, shooter=shooter) == 4
+    assert json.loads((out / ".fetch" / f"{ids[0]}.shots").read_text()) == {"2": "anBlZw=="}
+    assert json.loads((out / ".fetch" / f"{ids[1]}.shots").read_text()) == {"0": "anBlZw=="}
+    assert (out / ".fetch" / f"{ids[2]}.err").read_text() == "the browser failed: crashed"
+    assert (out / ".fetch" / f"{ids[3]}.err").read_text() == "not a list of figures"
+    # A page with no session is read without one; a page on the site, signed in.
+    assert seen[:2] == [("https://blog.example/a", None, [2, 5]), ("https://paper.example/b", "session=s3cret", [0])]
+    # A failed picture says nothing about the session: the Sources page shows how its pages go.
+    assert not (out / "status.json").exists()

@@ -1774,3 +1774,43 @@ def test_an_article_fetched_again_gets_a_new_summary_and_keeps_the_old_when_it_c
     # Nothing could be read: what was there stays.
     kept = store.get_article(ids["walled"])
     assert (kept.description, kept.status, kept.word_count) == (stale, "degraded", 90)
+
+
+def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, monkeypatch):
+    import types
+
+    import app.pipeline
+    from app import sessions
+    from app.extract import extract
+    from app.fetch import FetchError
+
+    cfg, _, _ = env
+    cfg = dataclasses.replace(cfg, sessions=("paper.example",))
+    words = "<p>" + "Plain words about grid storage and the price of power at noon. " * 12 + "</p>"
+    chart = "<figure><canvas></canvas><figcaption>Prices by hour</figcaption></figure>"
+    page = f"<html><body><article>{words}{chart}{words}{chart}{words}</article></body></html>"
+    picture = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(picture, "JPEG")
+    asked = []
+
+    def figure_shots(sessions_dir, session, url, figures):
+        asked.append((session, url, figures))
+        if "down" in url:
+            raise FetchError("the browser container is not running")
+        return {figures[0]: picture.getvalue()}  # the second could not be shown
+
+    monkeypatch.setattr(sessions, "figure_shots", figure_shots)
+    for url in ("https://www.paper.example/grid", "https://down.example/grid"):
+        result = extract(url, page, "", "page")
+        article, _ = app.pipeline._assemble(types.SimpleNamespace(url=url, id="x", title="Grid", site="", author="",
+            published=None, discussion_url="", also=(), source=Source("Blog"), sources=lambda: [Source("Blog")]),
+            result, None, cfg)  # fmt: skip
+        out = etree.tostring(article.body, encoding="unicode")
+        notes = out.count(f'Interactive on the <a href="{url}">original page</a>.')
+        assert notes == 2 and "shot-" not in out and out.count("Prices by hour") == 2
+        assert out.count("<img") == (1 if "paper" in url else 0)
+    # Asked with the site's session, or with none; each article once.
+    assert asked == [
+        ("site-paper.example", "https://www.paper.example/grid", [0, 1]),
+        ("", "https://down.example/grid", [0, 1]),
+    ]

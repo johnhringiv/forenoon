@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -11,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
+
+import lxml.html
 
 from . import archive, sessions, thumbs
 from .choose import Candidate, choose
@@ -24,7 +27,7 @@ from .deliver import (
     send,
 )
 from .discover import is_article, read_listing, site_host, site_source
-from .extract import Extracted, extract
+from .extract import SHOT_ID, Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
@@ -243,10 +246,45 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False, reus
     return result
 
 
+MAX_FIGURE_SHOTS = 20  # pictures of interactive figures per article; each takes the browser a few seconds
+
+
+def _figure_shots(item: Item, result: Extracted, cfg: Config) -> None:
+    """Put a picture of each interactive figure (see extract.SHOT_ID) where the page drew it,
+    as it first appears, taken by the browser container; and under it, or alone when there is
+    no picture, a line saying the figure is interactive on the original page."""
+    holders = result.body.xpath(f'.//p[starts-with(@id, "{SHOT_ID}")]')
+    if not holders:
+        return
+    numbers = [int(holder.get("id").removeprefix(SHOT_ID)) for holder in holders]
+    room = min(MAX_FIGURE_SHOTS, cfg.images.max_count_per_article - len(result.body.xpath(".//img")))
+    shots: dict[int, bytes] = {}
+    if room > 0:
+        site = sessions.for_url(cfg.sessions, item.url)
+        try:
+            shots = sessions.figure_shots(
+                cfg.sessions_dir, sessions.name(site) if site else "", item.url, numbers[:room]
+            )
+        except FetchError as exc:
+            log.info("no pictures of interactive figures for %s: %s", item.url, exc)
+    for holder, number in zip(holders, numbers, strict=True):
+        del holder.attrib["id"]
+        if number in shots:
+            picture = lxml.html.Element("img", src="data:image/jpeg;base64," + base64.b64encode(shots[number]).decode())
+            picture.set("alt", "An interactive figure, as the original page first shows it")
+            holder.addprevious(picture)
+        holder.text = "Interactive on the "
+        link = lxml.html.Element("a", href=item.url)
+        link.text = "original page"
+        link.tail = "."
+        holder.append(link)
+
+
 def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> tuple[Article | None, int]:
     """The article as it goes in a book, with its images fetched; None when nothing was extracted."""
     if result.body is None:
         return None, 0
+    _figure_shots(item, result, cfg)
     assets, dropped = embed_images(result.body, fetcher, cfg.images)
     article = Article(
         id=item.id,

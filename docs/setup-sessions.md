@@ -18,6 +18,11 @@ against a site's terms even for subscribers: that is yours to check.
    browser through to their articles. Nothing answers a CAPTCHA: if a site asks for one, the
    session's row and an alert email say so.
 
+The same container also takes pictures of a page's interactive figures (charts and
+sliders drawn by the page's own scripts) for the book, on any site, signed in when the site
+has a session. Without it those figures are a line saying they are interactive on the
+original page.
+
 ## Set it up
 
 1. Turn the container on:
