@@ -2856,3 +2856,41 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     let request = Request::get("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
     assert_eq!(secure.router.clone().oneshot(request).await.unwrap().status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn the_newsstand_shows_an_issue_in_the_order_it_was_built() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let sent = "2026-10-10T10:00:00+00:00";
+    for (id, title) in [("a", "Alpha"), ("b", "Bravo"), ("c", "Charlie"), ("d", "Delta")] {
+        article(pool, id, &format!("https://blog.example/{id}"), "Blog", title, "john", sent).await;
+    }
+    // The first ranking put them a, b, c; the issue was built c, a, b, and d was shown only as
+    // a link. The book's order is the one shown.
+    for (id, rank, position) in
+        [("a", Some(1), Some(1)), ("b", Some(2), Some(2)), ("c", Some(3), Some(0)), ("d", Some(0), None)]
+    {
+        sqlx::query(
+            "INSERT INTO selections (user_id, article_id, selected_at, policy, score, reason, rank, explore)
+             VALUES ('john', ?, ?, 'rank-v2', 5, '', ?, 0)",
+        )
+        .bind(id)
+        .bind(sent)
+        .bind(rank)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE deliveries SET position = ?, link_only = ? WHERE article_id = ?")
+            .bind(position)
+            .bind(position.is_none())
+            .bind(id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    let mut browser = Browser::default();
+    browser.sign_in(&site, "john").await;
+    let page = browser.get(&site, "/").await.text;
+    let at = |title: &str| page.find(title).unwrap_or_else(|| panic!("{title}"));
+    assert!(at("Charlie") < at("Alpha") && at("Alpha") < at("Bravo") && at("Bravo") < at("Delta"), "{page}");
+}

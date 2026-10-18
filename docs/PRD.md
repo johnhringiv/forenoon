@@ -780,7 +780,8 @@ database with the pipeline.
   A session lasts 30 days from its last use, in an `HttpOnly`, `SameSite=Lax` cookie.
   Changing a password signs out every other browser.
 - **Newsstand.** Delivered articles grouped by issue, newest first, 14 issues to a page, in
-  the reader's time zone. Each card shows source, author, title linked to the original, lead
+  the reader's time zone. Within an issue the cards follow the book's order (the pipeline
+  records each delivery's place in it); picks shown only as links come after. Each card shows source, author, title linked to the original, lead
   image and description when the page had them, word count and reading time, how it was
   chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
   `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
