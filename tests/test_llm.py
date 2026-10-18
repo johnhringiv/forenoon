@@ -573,7 +573,20 @@ def test_a_test_reports_each_way_a_model_can_fail():
     # The server answers whatever it has loaded, but a run would not use a model it does not list.
     unlisted = Server([reply('{"word": "ready", "number": 7}')], models=["unsloth/Qwen3.8-27B-GGUF"])
     assert "lan does not list the model qwen" in test_model(router(unlisted), "lan/qwen")
+    assert test_model(router(Server()), "gpu/qwen").startswith("Failed (not set up)")
     assert "set FORENOON_LLM_GPU_URL" in test_model(router(Server()), "gpu/qwen")
+
+
+def test_with_no_connections_set_each_model_names_the_variable_it_needs(monkeypatch):
+    from app import model_test
+
+    monkeypatch.setattr(model_test, "backend_from_env", lambda llm: None)
+    monkeypatch.setattr(model_test, "connections_from_env", lambda: ((), {}))
+    monkeypatch.setattr(model_test, "unknown_settings", list)
+    cfg = Llm(model="lan/qwen", fallback_model="anthropic/claude-haiku-5-5")
+    lines = model_test.test_models(cfg)
+    assert lines[0].endswith(": set FORENOON_LLM_LAN_URL") and "(not set up)" in lines[0]
+    assert lines[1].endswith(": set FORENOON_ANTHROPIC_API_KEY")
 
 
 def test_the_test_asked_for_on_the_page_is_run_and_answered(tmp_path, monkeypatch):
@@ -598,7 +611,10 @@ def test_the_test_asked_for_on_the_page_is_run_and_answered(tmp_path, monkeypatc
     assert row["answered"] == row["requested_at"] and row["tested_at"] and store.model_test_asked() == ""
     assert lines[0] == "Not read: FORENOON_LLM_X_URL: give the API's address"
     assert lines[1].startswith("lan/qwen (ranking and choosing): OK: answered in")
-    assert lines[2].startswith("anthropic/claude-haiku-5-5 (fallback): Failed (could not reach it)")
+    assert lines[2] == (
+        "anthropic/claude-haiku-5-5 (fallback): Failed (not set up): no connection 'anthropic'"
+        " for the model anthropic/claude-haiku-5-5: set FORENOON_ANTHROPIC_API_KEY"
+    )
     assert [r["purpose"] for r in store.llm_call_rows()] == ["test"], "the call made is logged like any other"
 
     # Asked for again while one ran: the older answer does not count for it.

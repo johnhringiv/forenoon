@@ -15,12 +15,12 @@ from collections.abc import Callable
 
 from .config import Llm
 from .llm import (
-    API_KEY_ENV,
     AnthropicBackend,
     BadAnswer,
     LlmError,
     OpenAIBackend,
     Router,
+    Unreachable,
     backend_from_env,
     connections_from_env,
     unknown_settings,
@@ -57,6 +57,10 @@ def test_model(backend: Router, model: str, store: Store | None = None) -> str:
     """The look a run takes at its start, then one small structured request to `model`: how
     long it took and whether the answer matched. A line for the page, starting "OK" when it
     worked. Anthropic's models are tested the same way, with its key."""
+    try:
+        backend.backend(model)
+    except Unreachable as exc:
+        return f"Failed (not set up): {exc}"
     why = backend.check(model)
     if why:
         # What a run would find too: it would move to the fallback model.
@@ -87,13 +91,10 @@ def test_models(cfg: Llm, store: Store | None = None, progress: Callable[[list[s
     environment that could not be read. `progress` is given the lines so far, after each."""
     lines = [f"Not read: {problem}" for problem in connections_from_env()[1].values()]
     lines += [f"Ignored: {var} is not a setting of any connection set here" for var in unknown_settings()]
-    backend = backend_from_env(cfg)
+    # With none set, an empty one, so each model's line names the variable it needs.
+    backend = backend_from_env(cfg) or Router({})
     for model, use in _models(cfg):
-        if not isinstance(backend, Router):
-            result = f"Failed: no model connections; set {API_KEY_ENV} or FORENOON_LLM_<NAME>_URL"
-        else:
-            result = test_model(backend, model, store)
-        lines.append(f"{model} ({use}): {result}")
+        lines.append(f"{model} ({use}): {test_model(backend, model, store)}")
         if progress is not None:
             progress(lines)
     return lines
