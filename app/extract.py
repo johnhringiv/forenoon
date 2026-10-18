@@ -315,18 +315,39 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     return holder
 
 
+EMBED_CLASS = re.compile(r"tweet|twitter", re.IGNORECASE)
+EMBED_WRAPPER_DEPTH = 3  # figure > div > blockquote, as embed plugins nest them
+
+
 def _unclass_quotes(root: lxml.html.HtmlElement) -> None:
-    """Take the class names off quotes, and off wrappers that hold nothing but one: picking the
-    article out of the page throws away anything classed like page furniture, which includes
-    every embedded post ("twitter-tweet", "wp-block-embed-twitter"). The book keeps no class
-    names anyway; ids stay, as in-page links may point at them."""
+    """Take the tweet class names off embedded posts and the wrappers that hold only them:
+    picking the article out of the page throws away anything classed like page furniture,
+    and that includes "tweet" and "twitter" ("twitter-tweet", "wp-block-embed-twitter").
+    Every other class name stays, for the passes that read them."""
     for quote in root.iter("blockquote"):
-        quote.attrib.pop("class", None)
-        text = _norm(quote.text_content())
-        for wrapper in quote.iterancestors():
-            if wrapper is root or wrapper.tag in ("body", "html") or _norm(wrapper.text_content()) != text:
+        el = quote
+        for _ in range(EMBED_WRAPPER_DEPTH + 1):
+            classes = (el.get("class") or "").split()
+            if any(EMBED_CLASS.search(name) for name in classes):
+                el.set("class", " ".join(name for name in classes if not EMBED_CLASS.search(name)))
+            wrapper = el.getparent()
+            if wrapper is None or wrapper is root or wrapper.tag in ("body", "html") or not _holds_only(wrapper, el):
                 break
-            wrapper.attrib.pop("class", None)
+            el = wrapper
+
+
+def _holds_only(wrapper: lxml.html.HtmlElement, child: lxml.html.HtmlElement) -> bool:
+    """Whether `child` is all `wrapper` shows: no text of its own, and beside it only scripts
+    and empty elements (the embed's loader, an empty caption)."""
+    if (wrapper.text or "").strip():
+        return False
+    for other in wrapper:
+        if (other.tail or "").strip():
+            return False
+        loader = other is child or not isinstance(other.tag, str) or other.tag in ("script", "style", "noscript")
+        if not loader and ((other.text or "").strip() or len(other)):
+            return False
+    return True
 
 
 def _unmark(root: lxml.html.HtmlElement) -> None:
