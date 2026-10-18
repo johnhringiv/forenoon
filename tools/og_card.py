@@ -1,8 +1,8 @@
 """Writes the share card, web/icons/og.png: the picture a chat or social site shows when someone
-shares a link to the landing page or to an install (login.html names it). It is the landing page's
-own hero, rendered: the wordmark with ".dev", the line under it and the credit on the left, the
-Kindle and the phone on the right, on the light paper, 1200 by 630 pixels. Run it again after
-changing the hero or the line here. Needs Playwright with Chromium:
+shares a link to the landing page or to an install (login.html names it), and the README's header
+image. It is the landing page's own hero, rendered: the wordmark with ".dev", the line under it
+and the credit on the left, the Kindle and the phone on the right, on the light paper, 1200 by 630
+pixels. Run it again after changing the hero or the line here. Needs Playwright with Chromium:
 
     uv run --with playwright python tools/og_card.py
 """

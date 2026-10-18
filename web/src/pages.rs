@@ -250,13 +250,14 @@ pub fn secured(mut response: Response) -> Response {
         (header::REFERRER_POLICY, "same-origin"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
-        // No other site's window keeps a handle on ours, and none can load our responses
-        // (thumbnails included) into its own pages.
+        // No other site's window keeps a handle on ours.
         (header::HeaderName::from_static("cross-origin-opener-policy"), "same-origin"),
-        (header::HeaderName::from_static("cross-origin-resource-policy"), "same-origin"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+    // No other site can load our responses (thumbnails included) into its own pages, unless the
+    // handler said so: the share card is for other sites to show.
+    headers.entry("cross-origin-resource-policy").or_insert(HeaderValue::from_static("same-origin"));
     // Pages are never stored; a thumbnail sets its own, so it is not fetched again on every visit.
     headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
@@ -423,6 +424,8 @@ struct LoginPage {
     /// For the Open Graph tags, which need full addresses: everyone not signed in, a chat app
     /// fetching a shared link's preview among them, is sent here.
     base_url: String,
+    /// The share card's versioned path (`icons::SHARE_CARD`).
+    share_card: &'static str,
     email: String,
     error: Option<&'static str>,
     notice: Option<&'static str>,
@@ -438,7 +441,17 @@ pub async fn login_page(State(state): State<AppState>, auth: AuthSession, Query(
         return Ok(Redirect::to("/").into_response());
     }
     let notice = query.reset.map(|_| "Password changed. Sign in with the new one.");
-    html(StatusCode::OK, LoginPage { nav: None, base_url: state.base_url, email: String::new(), error: None, notice })
+    html(
+        StatusCode::OK,
+        LoginPage {
+            nav: None,
+            base_url: state.base_url,
+            share_card: &crate::icons::SHARE_CARD,
+            email: String::new(),
+            error: None,
+            notice,
+        },
+    )
 }
 
 pub async fn login(
@@ -459,6 +472,7 @@ pub async fn login(
             LoginPage {
                 nav: None,
                 base_url: state.base_url.clone(),
+                share_card: &crate::icons::SHARE_CARD,
                 email: email.clone(),
                 error: Some(error),
                 notice: None,

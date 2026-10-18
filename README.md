@@ -1,7 +1,9 @@
 # Forenoon
 
-**A morning paper edited for one reader: you.** A book on your Kindle and a newsstand on the
-web. Run your own AI-powered news aggregator for about two cents a day.
+**[forenoon.dev](https://forenoon.dev)** · see a live newsstand:
+[Mara](https://mara.forenoon.dev) · [Theo](https://theo.forenoon.dev) · [June](https://june.forenoon.dev)
+
+<img src="web/icons/og.png" alt="A morning paper edited for one reader: you. A book on your Kindle and a newsstand on the web. Run your own AI-powered news aggregator for about two cents a day. The same morning's issue shown as a book on a Kindle and as a newsstand on a phone.">
 
 Forenoon is made to cut the time you spend scrolling, find the writing you actually care
 about, and make your e-reader useful for more than books. Reading on e-ink, away from a
