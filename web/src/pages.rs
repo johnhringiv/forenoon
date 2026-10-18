@@ -714,8 +714,10 @@ struct Filter {
     current: bool,
 }
 
-pub(crate) struct Star {
-    pub(crate) n: i64,
+/// One of the small choice buttons: a verdict or how far the reader got.
+pub(crate) struct RateChoice {
+    pub(crate) key: &'static str,
+    pub(crate) label: &'static str,
     pub(crate) on: bool,
 }
 
@@ -726,24 +728,31 @@ pub(crate) struct ReasonOption {
     pub(crate) selected: bool,
 }
 
-pub(crate) fn stars(rating: Option<i64>) -> Vec<Star> {
-    (1..=5).map(|n| Star { n, on: rating == Some(n) }).collect()
+pub(crate) fn verdict_choices(verdict: Option<&str>) -> Vec<RateChoice> {
+    ratings::VERDICTS.iter().map(|(key, label)| RateChoice { key, label, on: verdict == Some(*key) }).collect()
+}
+
+pub(crate) fn progress_choices(progress: Option<&str>) -> Vec<RateChoice> {
+    ratings::PROGRESS.iter().map(|(key, label)| RateChoice { key, label, on: progress == Some(*key) }).collect()
+}
+
+/// What the reader said, as marks on a card: "Worth it", "Finished".
+pub(crate) fn rating_marks(verdict: Option<&str>, progress: Option<&str>) -> Vec<String> {
+    let verdict = verdict.and_then(ratings::verdict_label);
+    verdict.into_iter().chain(progress.and_then(ratings::progress_label)).map(str::to_owned).collect()
 }
 
 /// The reasons a reader can give for this rating, with the ones they chose marked.
-pub(crate) fn reason_options(rating: Option<i64>, why: &str) -> Vec<ReasonOption> {
-    match rating {
-        Some(_) => ratings::reasons_for(rating)
-            .iter()
-            .map(|(key, label)| ReasonOption {
-                key,
-                short: ratings::short(key),
-                label,
-                selected: ratings::chosen(why).any(|chosen| chosen == *key),
-            })
-            .collect(),
-        None => Vec::new(),
-    }
+pub(crate) fn reason_options(verdict: Option<&str>, progress: Option<&str>, why: &str) -> Vec<ReasonOption> {
+    ratings::reasons_for(verdict, progress)
+        .iter()
+        .map(|(key, label)| ReasonOption {
+            key,
+            short: ratings::short(key),
+            label,
+            selected: ratings::chosen(why).any(|chosen| chosen == *key),
+        })
+        .collect()
 }
 
 /// "1,200 words, 5 min", or nothing for an article whose length is not known.
@@ -780,8 +789,8 @@ struct Card {
     facts: Vec<String>,
     marks: Vec<String>,
     unrated: bool,
-    finished: bool,
-    stars: Vec<Star>,
+    verdicts: Vec<RateChoice>,
+    progress: Vec<RateChoice>,
     reasons: Vec<ReasonOption>,
     /// The question the reason buttons answer.
     question: &'static str,
@@ -802,6 +811,8 @@ struct Issue {
     short: String,
     count: String,
     stories: Vec<Story>,
+    /// Articles sent in it that the reader has given nothing for: "Mark the rest skipped".
+    open: usize,
 }
 
 /// What one card on the page holds: an article, or a story's articles with its lead first.
@@ -900,16 +911,10 @@ fn card(row: Delivered) -> Card {
         facts.push(format!("Score {score}{rank}"));
     }
     facts.extend(length(row.word_count));
-    let finished = row.finished == Some(true);
-    let mut marks = Vec::new();
-    if let Some(rating) = row.rating {
-        marks.push(format!("Rated {rating} of 5"));
-    }
-    if finished {
-        marks.push("Finished".to_owned());
-    }
+    let (verdict, progress) = (row.verdict.as_deref(), row.progress.as_deref());
+    let marks = rating_marks(verdict, progress);
     facts.extend(ratings::chosen(&row.why).filter_map(ratings::label).map(str::to_owned));
-    let reasons = reason_options(row.rating, &row.why);
+    let reasons = reason_options(verdict, progress, &row.why);
     Card {
         link: web_url(&row.url),
         image: web_url(&row.image_url),
@@ -920,11 +925,11 @@ fn card(row: Delivered) -> Card {
         tags,
         facts,
         marks,
-        unrated: row.rating.is_none() && !finished,
-        finished,
-        stars: stars(row.rating),
+        unrated: verdict.is_none() && progress.is_none(),
+        verdicts: verdict_choices(verdict),
+        progress: progress_choices(progress),
         reasons,
-        question: ratings::question(row.rating),
+        question: ratings::question(verdict, progress),
         sendable: false,
         sent: None,
         source: row.source.split(" via ").next().unwrap_or_default().to_owned(),
@@ -1003,6 +1008,7 @@ pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(quer
                 short: String::new(),
                 count: String::new(),
                 stories: Vec::new(),
+                open: 0,
             });
         }
         let Some(issue) = page.issues.last_mut() else { continue };
@@ -1056,6 +1062,7 @@ pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(quer
         for story in &mut issue.stories {
             story.more = format!("One story · {} articles, delivered together", story.cards.len());
         }
+        issue.open = issue.stories.iter().flat_map(|story| &story.cards).filter(|c| c.unrated && !c.link_only).count();
         match local(&issue.stamp, zone) {
             Some(when) => {
                 issue.heading = when.format("%A %-d %B %Y").to_string();
@@ -1076,10 +1083,18 @@ pub struct RateForm {
     csrf: String,
     article: String,
     back: Option<String>,
-    rating: Option<String>,
-    finished: Option<String>,
+    verdict: Option<String>,
+    progress: Option<String>,
     clear: Option<String>,
     reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SkipRestForm {
+    csrf: String,
+    /// The issue, by its delivery time as stored.
+    issue: String,
+    back: Option<String>,
 }
 
 /// An article's thumbnail, for a reader it was delivered to.
@@ -1239,27 +1254,27 @@ pub async fn rate(
     if !db::pipeline_ready(pool).await? || !db::in_library(pool, &user.id, &form.article).await? {
         return refused(StatusCode::NOT_FOUND, "No such article.");
     }
-    let now = db::get_rating(pool, &user.id, &form.article).await?;
-    let rated = now.as_ref().and_then(|rating| rating.rating);
-    let finished = now.as_ref().is_some_and(|rating| rating.finished);
-    let chosen = form.rating.as_deref().and_then(|n| n.parse::<i64>().ok()).filter(|n| (1..=5).contains(n));
+    let now = db::get_rating(pool, &user.id, &form.article).await?.unwrap_or_default();
+    // A verdict given here leaves progress as it was: these pages cannot tell how far the
+    // reader got.
     let signal = if form.clear.is_some() {
         None
-    } else if let Some(rating) = chosen {
-        Some(Signal::Rated { rating, finished })
-    } else if let Some(flag @ ("0" | "1")) = form.finished.as_deref() {
-        match (rated, flag == "1") {
-            (Some(rating), finished) => Some(Signal::Rated { rating, finished }),
-            (None, true) => Some(Signal::Done),
-            (None, false) => None, // finished was all there was
-        }
-    } else if rated.is_some() {
-        match form.reason {
-            Some(reason) if ratings::fits(&reason, rated) => Some(Signal::Why(reason)),
-            _ => return back_to(&form.back, &form.article), // not a reason for this rating: ignored
+    } else if let Some(verdict) = form.verdict.as_deref().and_then(ratings::verdict_key) {
+        Some(Signal::Verdict(verdict))
+    } else if let Some(progress) = form.progress.as_deref() {
+        match progress {
+            "finished" => Some(Signal::Finished),
+            "partway" => Some(Signal::Partway),
+            "skipped" => Some(Signal::Skip),
+            _ => return back_to(&form.back, &form.article),
         }
     } else {
-        return back_to(&form.back, &form.article);
+        match form.reason {
+            Some(reason) if ratings::fits(&reason, now.verdict.as_deref(), now.progress.as_deref()) => {
+                Some(Signal::Why(reason))
+            }
+            _ => return back_to(&form.back, &form.article), // not a reason for this rating: ignored
+        }
     };
     match signal {
         Some(signal) => {
@@ -1268,6 +1283,27 @@ pub async fn rate(
         None => db::clear_rating(pool, &user.id, &form.article).await?,
     }
     back_to(&form.back, &form.article)
+}
+
+/// "Mark the rest skipped": every article of one issue the reader has given nothing for.
+pub async fn skip_rest(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<SkipRestForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    let pool = &state.pool;
+    if db::pipeline_ready(pool).await? {
+        let articles = db::issue_articles(pool, &user.id, &form.issue).await?;
+        let articles: Vec<&str> = articles.iter().map(String::as_str).collect();
+        db::skip_rest(pool, &user.id, &articles, "web").await?;
+    }
+    Ok(Redirect::to(safe_back(form.back.as_deref())).into_response())
 }
 
 pub(crate) fn back_to(back: &Option<String>, article: &str) -> Page {

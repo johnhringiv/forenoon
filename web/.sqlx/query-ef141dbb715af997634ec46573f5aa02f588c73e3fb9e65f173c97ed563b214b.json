@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT d.delivered_at AS \"delivered_at!\" FROM deliveries d\n           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?1 AND (?2 IS NULL OR d.delivered_at < ?2)\n           AND (?3 = '' OR (?3 = 'rated') = (r.updated_at IS NOT NULL))\n           ORDER BY d.delivered_at DESC LIMIT ?4",
+  "describe": {
+    "columns": [
+      {
+        "name": "delivered_at!",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ef141dbb715af997634ec46573f5aa02f588c73e3fb9e65f173c97ed563b214b"
+}

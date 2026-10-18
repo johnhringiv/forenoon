@@ -8,30 +8,55 @@ import hmac
 import time
 from dataclasses import dataclass
 
-RATINGS = (1, 2, 3, 4, 5)
-# r<n>: rated n, not finished. f<n>: rated n and finished. One tap carries both facts.
-LINK_SIGNALS = tuple(f"{kind}{n}" for kind in ("f", "r") for n in RATINGS)
+# A rating is two facts: what the article was worth (the verdict) and how far the reader got
+# (the progress). Either can be given without the other.
+VERDICTS = {
+    "not-for-me": "Not for me",
+    "not-good": "Not good",
+    "worth-it": "Worth it",
+    "more": "More like this",
+}
+PROGRESS = {"finished": "finished", "partway": "stopped partway", "skipped": "skipped"}
+# Signals, the same words in links, on the web pages and in the event log:
+#   <verdict>         sets the verdict; progress stays as it was (skipped becomes not known)
+#   end-<verdict>     the links at an article's end: the verdict, and finished
+#   finished, partway progress only
+#   skip              skipped: drops the verdict
+#   skip-rest         "Done with this issue": skip every article of the book given nothing
+#   why-<reason>      the reason, one optional tap after a verdict or a skip
 # The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
 # not in SIGNALS; anything replaying feedback_events must handle it.
-# Why a rating was given: one optional tap after rating. Offered by how the article was rated.
-LOW_REASONS = {
-    "topic": "Not interested in the topic",
-    "thin": "Too thin, nothing in it",
-    "known": "Already knew this",
-    "long": "Too long",
-    "wrong": "Wrong or misleading",
+END_SIGNALS = tuple(f"end-{verdict}" for verdict in VERDICTS)
+SKIP = "skip"
+SKIP_REST = "skip-rest"
+# The links in a book, one set per article.
+LINK_SIGNALS = (*END_SIGNALS, SKIP)
+# Why: offered by the verdict, or by the skip when there is none. Keys are unique across
+# lists except "seen", which fits both a "not for me" and a skip.
+REASONS_BY = {
+    "not-for-me": {"known": "Already knew it", "seen": "Already saw it elsewhere"},
+    "not-good": {
+        "thin": "Too thin",
+        "padded": "Longer than it needed to be",
+        "oversold": "The headline oversold it",
+        "wrong": "Wrong or misleading",
+    },
+    "worth-it": {},
+    "more": {
+        "more-topic": "More on this topic",
+        "more-source": "More from this source",
+        "depth": "Liked the depth or format",
+    },
+    "skipped": {"no-interest": "Not interested", "seen": "Already saw it elsewhere", "no-time": "Just no time"},
 }
-HIGH_REASONS = {
-    "more-topic": "More on this topic",
-    "more-source": "More from this source",
-    "depth": "Liked the depth",
-}
-REASONS = LOW_REASONS | HIGH_REASONS
+# What was liked can be several things at once; anything else is one.
+SEVERAL = "more"
+REASONS = {key: label for reasons in REASONS_BY.values() for key, label in reasons.items()}
 REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
 # "This article came out broken or incomplete": a report to whoever runs the install, about the
 # delivery. It is not a rating and not a reason for one.
 PROBLEM = "problem"
-SIGNALS = LINK_SIGNALS + REASON_SIGNALS + (PROBLEM,)
+SIGNALS = (*VERDICTS, *END_SIGNALS, "finished", "partway", SKIP, SKIP_REST, *REASON_SIGNALS, PROBLEM)
 
 
 def chosen(reason: str) -> list[str]:
@@ -43,37 +68,50 @@ def reason_labels(reason: str) -> list[str]:
     return [REASONS[key] for key in chosen(reason) if key in REASONS]
 
 
-def with_reason(reason: str, key: str, rating: int | None) -> str:
+def standing(verdict: str | None, progress: str | None) -> str | None:
+    """What the reasons answer to: the verdict, or a skip when there is none."""
+    return verdict or ("skipped" if progress == "skipped" else None)
+
+
+def with_reason(reason: str, key: str, verdict: str | None, progress: str | None) -> str:
     """The stored reasons after one more tap on `key`.
 
     Tapping a chosen reason again takes it back. What was liked adds up (the topic and the
-    depth); what was wrong is one thing, so a new choice replaces the old.
+    depth); anything else is one thing, so a new choice replaces the old. Reasons that do not
+    fit the rating are dropped; an empty `key` only does that.
     """
-    fitting = reasons_for(rating)
+    on = standing(verdict, progress)
+    fitting = REASONS_BY.get(on or "", {})
     now = [k for k in chosen(reason) if k in fitting]
     if key in now:
         now.remove(key)
     elif key in fitting:
-        now = [*now, key] if fitting is HIGH_REASONS else [key]
+        now = [*now, key] if on == SEVERAL else [key]
     return ",".join(k for k in fitting if k in now)
-
-
-def reasons_for(rating: int | None) -> dict[str, str]:
-    """The reasons that fit a rating: one list for 4 and 5, the other for the rest."""
-    return HIGH_REASONS if rating and rating >= 4 else LOW_REASONS
 
 
 _VERSION = "1"
 
 
-def meaning(signal: str) -> tuple[int | None, bool | None]:
-    """(rating, finished) a signal sets; None leaves that fact as it was."""
-    if signal in LINK_SIGNALS:
-        return int(signal[1]), signal[0] == "f"
+# Leave as it was: what `meaning` returns for a fact a signal does not set.
+KEEP = object()
+
+
+def meaning(signal: str) -> tuple[object, object]:
+    """(verdict, progress) a signal sets: a value, None to clear it, or KEEP.
+
+    A verdict on a skipped article makes its progress not known; the caller sees to that, as it
+    depends on what is stored."""
+    if signal in VERDICTS:
+        return signal, KEEP
+    if signal in END_SIGNALS:
+        return signal.removeprefix("end-"), "finished"
+    if signal in ("finished", "partway"):
+        return KEEP, signal
+    if signal == SKIP:
+        return None, "skipped"
     if signal in REASON_SIGNALS or signal == PROBLEM:
-        return None, None  # a reason or a problem report changes neither
-    if signal == "done":  # finished, with no rating: only ever from the web pages
-        return None, True
+        return KEEP, KEEP  # a reason or a problem report changes neither
     raise ValueError(f"unknown signal: {signal}")
 
 
@@ -106,6 +144,8 @@ def make_token(secret: bytes, user_id: str, article_id: str, signal: str, expire
         raise TokenError(f"unknown signal: {signal}")
     if "|" in user_id or "|" in article_id:
         raise TokenError("ids must not contain '|'")
+    if "," in article_id and signal != SKIP_REST:
+        raise TokenError("only skip-rest names several articles")
     payload = "|".join((_VERSION, user_id, article_id, signal, str(expires))).encode()
     return f"{_b64(payload)}.{_b64(_sign(secret, payload))}"
 

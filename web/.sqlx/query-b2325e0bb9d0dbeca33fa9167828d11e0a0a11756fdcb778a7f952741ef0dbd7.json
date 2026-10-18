@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT verdict AS \"verdict?\", progress AS \"progress?\", reason\n           FROM ratings WHERE user_id = ? AND article_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "verdict?",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "progress?",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "reason",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "b2325e0bb9d0dbeca33fa9167828d11e0a0a11756fdcb778a7f952741ef0dbd7"
+}

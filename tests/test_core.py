@@ -2,6 +2,7 @@ import dataclasses
 import io
 import time
 import zipfile
+from datetime import UTC, datetime
 
 import pytest
 from lxml import etree
@@ -24,9 +25,9 @@ def test_canonical_url_strips_noise():
 
 def test_token_round_trip_and_rejections():
     expires = int(time.time()) + 60
-    token = make_token(SECRET, "john", "abc", "f4", expires)
+    token = make_token(SECRET, "john", "abc", "end-worth-it", expires)
     claim = verify_token(SECRET, token)
-    assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "f4")
+    assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "end-worth-it")
     with pytest.raises(TokenError):
         verify_token(b"x" * 32, token)
     # A different signature: one ending in "AA" already would be left as it was (1 run in 256).
@@ -41,17 +42,25 @@ def test_token_round_trip_and_rejections():
         make_token(SECRET, "john", "abc", "delete-everything", expires)
     with pytest.raises(TokenError):  # no longer a reason
         make_token(SECRET, "john", "abc", "why-broken", expires)
-    for signal in ("up", "down", "done"):  # not something a link carries
+    for signal in ("up", "down", "done", "f4", "r2", "clear"):  # not something a link carries
         with pytest.raises(TokenError):
             make_token(SECRET, "john", "abc", signal, expires)
+    # Only "Done with this issue" names several articles.
+    assert verify_token(SECRET, make_token(SECRET, "john", "a,b", "skip-rest", expires)).article_id == "a,b"
+    with pytest.raises(TokenError):
+        make_token(SECRET, "john", "a,b", "skip", expires)
 
 
 def test_tokens_are_the_ones_the_web_app_checks():
     # The same strings are verified in web/src/feedback.rs, which answers the links.
     secret = b"k" * 32
     assert (
-        make_token(secret, "john", "a1", "f4", 2_000_000_000)
-        == "MXxqb2hufGExfGY0fDIwMDAwMDAwMDA.1VbsTqAK0ZRimXeA3yOaUg"
+        make_token(secret, "john", "a1", "end-worth-it", 2_000_000_000)
+        == "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ"
+    )
+    assert (
+        make_token(secret, "john", "a1,a2", "skip-rest", 2_000_000_000)
+        == "MXxqb2hufGExLGEyfHNraXAtcmVzdHwyMDAwMDAwMDAw.kMn5VzfdrB7rvXbL6_rIqg"
     )
     assert (
         make_token(secret, "john", "a1", "why-depth", 2_000_000_000)
@@ -101,7 +110,7 @@ def test_golden_epub_structure_is_stable_and_well_formed():
     article = zf.read("OEBPS/article.xhtml").decode()
     assert "alert(" not in article and '<pre><code><span class="ln i0">fn main(' in article
     assert 'src="images/img001.jpg"' in article and "OEBPS/images/img001.jpg" in zf.namelist()
-    assert article.count("/f/golden-") == 10
+    assert article.count("/f/golden-") == 5
     opf = zf.read("OEBPS/content.opf").decode()
     assert "<dc:title>FN 2026-01-02 · Forenoon · Golden rendering test</dc:title>" in opf
 
@@ -268,6 +277,92 @@ def test_web_app_offers_the_same_reasons():
     for key, label in REASONS.items():
         assert f'("{key}", "{label}")' in rust, f"web/src/ratings.rs is missing the reason {key!r}"
     assert rust.count('", "') >= len(REASONS)
+
+
+def test_a_rating_is_a_verdict_and_progress_and_the_latest_tap_wins():
+    from app.store import Rating, Store
+
+    store = Store(":memory:")
+    say = lambda signal: store.record_feedback("john", "a1", signal, "kindle-footer")
+    # At an article's end: the verdict, and finished.
+    assert say("end-not-good") == Rating("not-good", "finished")
+    assert say("why-thin") == Rating("not-good", "finished", "thin")
+    # Anything but "more like this" is one reason: a new one replaces the old; again takes it back.
+    assert say("why-padded").reason == "padded"
+    assert say("why-padded").reason == ""
+    assert say("why-oversold").reason == "oversold"
+    # A reason that does not fit the verdict is ignored, and a new verdict drops the unfit.
+    assert say("why-depth").reason == "oversold"
+    assert say("more") == Rating("more", "finished")
+    assert say("why-depth").reason == "depth" and say("why-more-topic").reason == "more-topic,depth"
+    assert say("partway") == Rating("more", "partway", "more-topic,depth")
+    # A skip drops the verdict and its reasons; it has reasons of its own.
+    assert say("skip") == Rating(None, "skipped")
+    assert say("why-no-time") == Rating(None, "skipped", "no-time")
+    # A verdict on a skipped article: read after all, how far is not known.
+    assert say("not-for-me") == Rating("not-for-me", None)
+    assert say("why-seen") == Rating("not-for-me", None, "seen")
+    assert say("finished") == Rating("not-for-me", "finished", "seen")
+    assert say("problem") == Rating("not-for-me", "finished", "seen")  # a report changes nothing
+    signals = [row["signal"] for row in store.feedback_rows()]
+    assert signals[:2] == ["end-not-good", "why-thin"] and signals[-1] == "problem"
+
+
+def test_done_with_this_issue_skips_only_what_was_delivered_and_given_nothing():
+    from app.store import Rating, Store
+
+    store = Store(":memory:")
+    store.mark_delivered("john", ["a1", "a2", "a3"], datetime(2026, 10, 18, tzinfo=UTC))
+    store.record_feedback("john", "a1", "end-worth-it", "kindle-footer")
+    assert store.skip_rest("john", ["a1", "a2", "a3", "never-sent"], "kindle-footer") == 2
+    assert store.get_rating("john", "a1") == Rating("worth-it", "finished")
+    assert store.get_rating("john", "a2") == Rating(None, "skipped")
+    assert store.get_rating("john", "never-sent") is None
+    assert store.skip_rest("john", ["a2", "a3"], "kindle-footer") == 0
+
+
+def test_ratings_from_one_to_five_are_brought_forward(tmp_path):
+    import sqlite3
+
+    from app.store import Rating, Store
+
+    path = tmp_path / "old.sqlite3"
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE ratings (user_id TEXT NOT NULL, article_id TEXT NOT NULL, rating INTEGER,"
+        " finished INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',"
+        " PRIMARY KEY (user_id, article_id))"
+    )
+    old = [
+        ("five", 5, 1, ""),
+        ("four", 4, 1, ""),
+        ("four-liked", 4, 0, "depth"),
+        ("three", 3, 1, ""),
+        ("three-long", 3, 0, "long"),
+        ("two-topic", 2, 1, "topic"),
+        ("two-known", 2, 1, "known"),
+        ("one", 1, 0, ""),
+        ("only-finished", None, 1, ""),
+    ]
+    db.executemany("INSERT INTO ratings VALUES ('john', ?, ?, ?, 'x', ?)", old)
+    db.commit()
+    db.close()
+    store = Store(path)
+    got = {row[0]: store.get_rating("john", row[0]) for row in old}
+    assert got == {
+        "five": Rating("more", "finished"),
+        "four": Rating("worth-it", "finished"),
+        "four-liked": Rating("more", "partway", "depth"),
+        "three": Rating("worth-it", "finished"),
+        "three-long": Rating("not-good", "partway", "padded"),
+        "two-topic": Rating("not-for-me", "finished"),
+        "two-known": Rating("not-for-me", "finished", "known"),
+        "one": Rating("not-good", "partway"),
+        "only-finished": Rating(None, "finished"),
+    }
+    assert "rating" not in {row["name"] for row in store.db.execute("PRAGMA table_info(ratings)")}
+    store.close()
+    assert Store(path).get_rating("john", "five") == Rating("more", "finished")  # once only
 
 
 def test_sources_come_from_the_web_apps_sources_table(tmp_path):

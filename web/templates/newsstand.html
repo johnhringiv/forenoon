@@ -13,6 +13,10 @@
 {% if issues.is_empty() %}<p class="empty">{{ empty }}</p>{% endif %}
 {% for issue in issues %}
 <section id="i-{{ loop.index }}"><h2>{{ issue.heading }} <span>{{ issue.count }}</span></h2>
+{% if issue.open > 0 && !demo %}<form class="skip-rest" method="post" action="/skip-rest">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="issue" value="{{ issue.stamp }}"><input type="hidden" name="back" value="{{ back }}">
+<button class="link" title="Records each article of this issue you have not rated as skipped">Mark the rest skipped ({{ issue.open }} not rated)</button>
+</form>{% endif %}
 <div class="grid">
 {% for story in issue.stories %}
 <article{% if story.cards.len() > 1 %} class="story"{% else if story.cards[0].link_only %} class="link-only" title="Its page could not be had: open it on the site"{% endif %}>

@@ -20,6 +20,7 @@ from .fetch import Fetcher
 from .llm import backend_from_env
 from .pipeline import run, triage
 from .store import Store
+from .tokens import PROGRESS, VERDICTS
 
 log = logging.getLogger("forenoon")
 
@@ -278,15 +279,15 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     for row in store.feedback_rows():
         print(
-            f"{row['created_at']}  {row['user_id']:<10} {row['signal']:<5}"
+            f"{row['created_at']}  {row['user_id']:<10} {row['signal']:<14}"
             f" {row['article_source']} · {row['title'] or row['article_id']}"
         )
     print("\nCurrent ratings:")
     for row in store.rating_rows():
-        rating = f"{row['rating']}/5" if row["rating"] else "  -"
+        verdict = VERDICTS.get(row["verdict"] or "", "-")
+        progress = PROGRESS.get(row["progress"] or "", "-")
         print(
-            f"{row['updated_at']}  {row['user_id']:<10} {rating}"
-            f" {'finished    ' if row['finished'] else 'not finished'}"
+            f"{row['updated_at']}  {row['user_id']:<10} {verdict:<14} {progress:<15}"
             f" {row['article_source']} · {row['title'] or row['article_id']}"
         )
     return 0

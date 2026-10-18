@@ -20,6 +20,7 @@ from lxml import etree
 from .cover import cover_image
 from .emoji import emoji_font, wrap_emoji
 from .images import Asset
+from .tokens import SKIP, VERDICTS
 
 CSS = """\
 body { font-family: serif; line-height: 1.4; margin: 0 2%; }
@@ -48,10 +49,10 @@ td, th { border: 1px solid #000; padding: 0.2em 0.4em; vertical-align: top; text
 .card-site { font-size: 0.8em; }
 .feedback { margin-top: 2.5em; text-align: center; }
 .feedback p { margin: 0.6em 0; text-indent: 0; }
-.feedback .rate { margin: 0.6em 0 1.8em; font-size: 1.5em; line-height: 2; }
-.feedback .rate a { display: inline-block; border: 1px solid #000; padding: 0 0.55em;
-  margin: 0 0.15em; font-weight: bold; text-decoration: none; }
-.feedback .scale { font-size: 0.8em; }
+.feedback .rate { margin: 0.6em 0 1.8em; font-size: 1.1em; line-height: 2.6; }
+.feedback .rate a { display: inline-block; border: 1px solid #000; padding: 0.1em 0.6em;
+  margin: 0 0.2em; font-weight: bold; text-decoration: none; white-space: nowrap; }
+.feedback .hint { font-size: 0.8em; }
 """
 
 # Each source line of a code block is its own block with a hanging indent, so a wrapped part
@@ -110,10 +111,8 @@ CONTAINER = """\
 </container>
 """
 
-# Two rows so one tap records both the rating and whether the article was finished.
-FEEDBACK_ROWS = (("f", "Finished? Rate it:"), ("r", "Didn't finish? Rate it:"))
-# Digits by default, by choice: stars render fine on the Oasis too.
-RATING_STYLES = {"numbers": "{n}", "stars": "\u2605"}
+# The links at an article's end: a verdict, and finished, in one tap (section 7 of the PRD).
+VERDICT_LINKS = tuple((f"end-{key}", label) for key, label in VERDICTS.items())
 
 
 @dataclass
@@ -256,34 +255,31 @@ def _body_xhtml(body: lxml.html.HtmlElement) -> str:
     return text.replace("<aside id=", '<aside epub:type="footnote" id=')
 
 
-def _footer(feedback_links: dict[str, str], style: str) -> str:
-    rows = ""
-    for kind, label in FEEDBACK_ROWS:
-        links = "\u00a0".join(
-            f"<a href={quoteattr(feedback_links[f'{kind}{n}'])}>{RATING_STYLES[style].format(n=n)}</a>"
-            for n in range(1, 6)
-            if f"{kind}{n}" in feedback_links
-        )
-        if links:
-            rows += f'<p>{escape(label)}</p><p class="rate">{links}</p>'
-    if not rows:
+def _footer(feedback_links: dict[str, str]) -> str:
+    links = " ".join(
+        f"<a href={quoteattr(feedback_links[signal])}>{escape(label)}</a>"
+        for signal, label in VERDICT_LINKS
+        if signal in feedback_links
+    )
+    if not links:
         return ""
-    scale = '<p class="scale">Left: less like this. Right: more like this.</p>'
-    return f'<hr class="rule"/><div class="feedback">{rows}{scale}</div>'
+    return f'<hr class="rule"/><div class="feedback"><p>How was it?</p><p class="rate">{links}</p></div>'
 
 
-def _content(article: Article, feedback_links: dict[str, str], rating_style: str) -> str:
+def _content(article: Article, feedback_links: dict[str, str]) -> str:
     byline = [article.author, article.source]
     if article.published:
         byline.append(f"{article.published:%-d %b %Y}")
     if article.reading_minutes:
         byline.append(f"{article.reading_minutes} min read")
     byline_html = escape(" · ".join(part for part in byline if part))
-    footer = _footer(feedback_links, rating_style)
+    footer = _footer(feedback_links)
     why = f'<p class="meta">Picked because: {escape(article.reason)}</p>\n' if article.reason else ""
     if article.added:
         why = '<p class="meta">Added by you</p>\n' + why
     talk = f" · <a href={quoteattr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
+    if SKIP in feedback_links:
+        talk += f" · <a href={quoteattr(feedback_links[SKIP])}>Skip this one</a>"
     if article.continues:
         why += f'<p class="meta">More on: {escape(article.continues)}</p>\n'
     if article.story:
@@ -368,7 +364,6 @@ def render_epub(
     article: Article,
     day: datetime,
     feedback_links: dict[str, str] | None = None,
-    rating_style: str = "numbers",
     title: str | None = None,
     cover: bytes | None = None,
 ) -> bytes:
@@ -376,7 +371,7 @@ def render_epub(
 
     `title` is the book's name in the library (the dated one by default); `cover` is a JPEG.
     """
-    page = wrap_emoji(_content(article, feedback_links or {}, rating_style))
+    page = wrap_emoji(_content(article, feedback_links or {}))
     font_css, font_assets = code_font([page])
     emoji_css, emoji_assets = emoji_font([page])
     font_css += emoji_css
@@ -421,7 +416,7 @@ def issue_title(day: datetime, part: int = 0) -> str:
     return f"Forenoon · {day:%Y-%m-%d}{suffix}"
 
 
-def _chapter(entry: IssueEntry, index: int, rating_style: str) -> tuple[str, list[Asset]]:
+def _chapter(entry: IssueEntry, index: int) -> tuple[str, list[Asset]]:
     """The article page, with its images renamed so chapters cannot collide."""
     article = entry.article
     body = copy.deepcopy(article.body)
@@ -429,7 +424,7 @@ def _chapter(entry: IssueEntry, index: int, rating_style: str) -> tuple[str, lis
     for img in body.iter("img"):
         img.set("src", renamed.get(img.get("src"), img.get("src")))
     assets = [Asset(renamed[a.name], a.data, a.media_type) for a in article.assets]
-    page = _content(Article(**{**article.__dict__, "body": body}), entry.feedback_links, rating_style)
+    page = _content(Article(**{**article.__dict__, "body": body}), entry.feedback_links)
     back = '<p class="meta"><a href="contents.xhtml">Contents</a></p>'
     page = page.replace("<body>\n", f"<body>\n{back}\n", 1)
     page = page.replace("\n</body>", f"\n{back}\n</body>", 1)
@@ -485,6 +480,22 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
 """
 
 
+def _done_page(link: str) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en">
+<head><meta charset="utf-8"/><title>Done with this issue</title>
+<link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body>
+<p class="meta"><a href="contents.xhtml">Contents</a></p>
+<div class="feedback"><p>That is the whole issue.</p>
+<p class="rate"><a href={quoteattr(link)}>Done with this issue</a></p>
+<p class="hint">Marks every article here you have not rated as skipped.</p></div>
+</body>
+</html>
+"""
+
+
 ISSUE_CSS = """\
 .toc-title { font-weight: bold; margin: 1.1em 0 0; text-indent: 0; }
 .toc-detail { font-size: 0.85em; margin: 0.1em 0 0; text-indent: 0; }
@@ -497,24 +508,26 @@ def render_issue(
     entries: list[IssueEntry],
     day: datetime,
     part: int = 0,
-    rating_style: str = "numbers",
     title: str | None = None,
     cover: bytes | None = None,
     grayscale: bool = True,
+    done_link: str = "",
 ) -> bytes:
     """One book: a contents page, then a chapter per article with its own rating links.
 
     Deterministic for the same entries, day and part. `title` and `cover` replace the daily
     issue's own, for a book that is one story sent on request. `grayscale` is the images setting;
-    the daily cover follows it.
+    the daily cover follows it. `done_link`, "Done with this issue", is on a last page of its own.
     """
     title = title or issue_title(day, part)
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, "forenoon:" + ",".join(e.article.id for e in entries)).urn
     chapters, assets = [], []
     for index, entry in enumerate(entries, 1):
-        page, chapter_assets = _chapter(entry, index, rating_style)
+        page, chapter_assets = _chapter(entry, index)
         chapters.append((f"a{index:02d}", entry.article.title, page))
         assets += chapter_assets
+    if done_link:
+        chapters.append(("done", "Done with this issue", _done_page(done_link)))
     chapters = [(name, label, wrap_emoji(page)) for name, label, page in chapters]
     contents = wrap_emoji(_issue_contents(entries, title, day))
     pages = [page for _, _, page in chapters] + [contents]

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO add_requests (user_id, url, action, verdict, requested_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "a5c7b1317b9d5b07269d988074eed64f76abe0541f66b326bf40947e1147e67d"
+}

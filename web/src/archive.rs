@@ -24,8 +24,9 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, Viewer, allowed, back_to, html,
-        length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, RateChoice, ReasonOption, Viewer, allowed, back_to,
+        html, length, local, progress_choices, rating_marks, reader, reason_options, refused, send_outcome, shorten,
+        verdict_choices, web_url,
     },
     ratings,
 };
@@ -48,13 +49,14 @@ const ROUTE: [(&str, &str); 6] = [
     ("linked", "Linked from another article"),
     ("manual", "Added by hand"),
 ];
-const RATING: [(&str, &str); 6] = [
+const RATING: [(&str, &str); 7] = [
     ("", "Any"),
     ("rated", "Rated"),
     ("unrated", "Not rated"),
-    ("high", "4 or 5"),
-    ("low", "1 or 2"),
+    ("liked", "Worth it or more"),
+    ("disliked", "Not for me or not good"),
     ("finished", "Finished"),
+    ("skipped", "Skipped"),
 ];
 const LASTING: [(&str, &str); 3] = [("", "Any"), ("months", "Months or longer"), ("years", "Years")];
 const SORT: [(&str, &str); 4] =
@@ -107,8 +109,8 @@ struct Row {
     facts: Vec<String>,
     marks: Vec<String>,
     unrated: bool,
-    finished: bool,
-    stars: Vec<Star>,
+    verdicts: Vec<RateChoice>,
+    progress: Vec<RateChoice>,
     reasons: Vec<ReasonOption>,
     question: &'static str,
     sendable: bool,
@@ -217,13 +219,14 @@ fn row(found: Shelved, zone: Tz) -> Row {
     let kicker =
         [found.source.as_str(), author].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
     let day = |stamp: &str| local(stamp, zone).map_or(stamp.to_owned(), |at| at.format("%-d %B %Y").to_string());
-    let finished = found.finished == Some(true);
+    let (verdict, progress) = (found.verdict.as_deref(), found.progress.as_deref());
+    let unrated = verdict.is_none() && progress.is_none();
     let mut facts = Vec::new();
     let added = found.added_at.as_deref().zip(found.added_for.as_deref());
     facts.push(match (&found.delivered_at, found.policy.as_deref(), found.read) {
         (Some(at), Some("requested"), _) => format!("Sent on request {}", day(at)),
         (Some(at), _, _) => format!("Delivered {}", day(at)),
-        (None, _, _) if added.is_some_and(|(_, wanted)| wanted == "next") && found.rating.is_none() && !finished => {
+        (None, _, _) if added.is_some_and(|(_, wanted)| wanted == "next") && unrated => {
             "Added by you; in your next issue".to_owned()
         }
         (None, _, _) if added.is_some() => format!("Added by you {}", day(added.map_or("", |(at, _)| at))),
@@ -242,13 +245,7 @@ fn row(found: Shelved, zone: Tz) -> Row {
     }
     facts.extend(arrivals(&found.routes));
     facts.extend(ratings::chosen(&found.why).filter_map(ratings::label).map(str::to_owned));
-    let mut marks = Vec::new();
-    if let Some(rating) = found.rating {
-        marks.push(format!("Rated {rating} of 5"));
-    }
-    if finished {
-        marks.push("Finished".to_owned());
-    }
+    let marks = rating_marks(verdict, progress);
     let said = (!found.said.is_empty()).then(|| {
         let how = if found.read || found.delivered_at.is_some() { "The model" } else { "The model, from the headline" };
         format!("{how}: {}", found.said)
@@ -262,11 +259,11 @@ fn row(found: Shelved, zone: Tz) -> Row {
         said,
         facts,
         marks,
-        unrated: found.rating.is_none() && !finished,
-        finished,
-        stars: stars(found.rating),
-        reasons: reason_options(found.rating, &found.why),
-        question: ratings::question(found.rating),
+        unrated,
+        verdicts: verdict_choices(verdict),
+        progress: progress_choices(progress),
+        reasons: reason_options(verdict, progress, &found.why),
+        question: ratings::question(verdict, progress),
         sendable: false,
         sent: None,
         refreshed: None,
@@ -447,7 +444,7 @@ pub struct AddForm {
     link: String,
     /// next, now or keep.
     then: String,
-    rating: Option<String>,
+    verdict: Option<String>,
 }
 
 /// Add a link by hand. This only queues it: the pipeline fetches the page, as it does every
@@ -493,10 +490,9 @@ pub async fn add(
     if action != "keep" && user.kindle_addresses.trim().is_empty() {
         return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; add one on your account page.");
     }
-    // A rating belongs to something already read.
-    let rating = form.rating.as_deref().and_then(|n| n.parse::<i64>().ok()).filter(|n| (1..=5).contains(n));
-    let rating = if action == "keep" { rating } else { None };
-    if !db::queue_add(&state.pool, &user.id, &link, action, rating).await? {
+    // A verdict belongs to something already read.
+    let verdict = form.verdict.as_deref().and_then(ratings::verdict_key).filter(|_| action == "keep");
+    if !db::queue_add(&state.pool, &user.id, &link, action, verdict).await? {
         return Ok(Redirect::to("/archive?show=added&error=many").into_response());
     }
     Ok(Redirect::to("/archive?show=added").into_response())

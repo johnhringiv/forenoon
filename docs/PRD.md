@@ -347,7 +347,9 @@ are dropped and counted in the report.
   - a contents page with the date, article count and total reading time, then each article's
     title, source and reading time;
   - one chapter per article: title, author, source, date, reading time, a link to the
-    original, the body, then the rating links; a "Contents" link at the top and bottom;
+    original, a "Skip this one" link, the body, then the rating links (section 7); a
+    "Contents" link at the top and bottom;
+  - a last page with "Done with this issue" (section 7);
   - a navigation table so the e-reader's own "go to" menu lists every article.
 - **Format `articles`.** One EPUB per article, titled `FN YYYY-MM-DD · Source · Title`.
 - Output is EPUB 3 with an NCX for older converters, and is byte-for-byte reproducible for
@@ -373,47 +375,61 @@ part-way never causes a resend.
 
 ## 7. Ratings
 
-- Each article ends with two rows of five links:
-  - "Finished? Rate it:" 1 2 3 4 5
-  - "Didn't finish? Rate it:" 1 2 3 4 5
+A rating says two things about an article: how far the reader got (**progress**) and what
+it was worth to them (**verdict**). Either can be given without the other.
 
-  One tap records both the rating and whether the article was finished.
-
+- **Verdicts**, about the article's place in the issue rather than its quality in general:
+  - **Not for me**: the subject is wrong for this reader.
+  - **Not good**: the subject is fine; this article is not.
+  - **Worth it**: it earned its place; keep things like it coming.
+  - **More like this**: turn it up.
+- **Progress**: **finished**, **stopped partway** or **skipped** (not read at all), or not
+  known. A skipped article has no verdict: choosing a verdict for it makes its progress not
+  known again, and skipping it drops its verdict.
+- **In the book.** Under each article's byline is "Skip this one". After it, "How was it?"
+  and the four verdicts; one of these taps records the verdict and that the article was
+  finished, since the reader is at its end. The last page of each book has "Done with this
+  issue", which marks skipped every article in that book the reader has given nothing for.
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
-  article, signal and expiry (default 60 days after delivery).
+  article (for "Done with this issue", the book's articles), signal and expiry (default 60
+  days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
-  small page stating what is now stored ("Rated 4 of 5, finished.") with links to change it.
-  Besides sign-in, the forgotten-password and email-link pages and `GET /healthz`, it is the
-  only page that needs no login, and it takes no other input.
-- **Why (optional).** After a rating, the page always offers one more tap for the reason.
-  For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
-  misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
-  rating counts without it. What was liked can be several of these at once; what was wrong is
-  one, so a new choice replaces the old. Tapping a chosen reason again takes it back. A later
-  rating that no longer fits a reason drops it.
+  small page stating what is now stored ("Worth it, finished.") with links to change it: the
+  four verdicts, "Stopped partway" or "Finished", and "Skipped". Besides sign-in, the
+  forgotten-password and email-link pages and `GET /healthz`, it is the only page that needs
+  no login, and it takes no other input.
+- **Why (optional).** After a verdict or a skip, the page always offers one more tap for the
+  reason. Not for me: already knew it, already saw it elsewhere. Not good: too thin, longer
+  than it needed to be, the headline oversold it, wrong or misleading. More like this: more
+  on this topic, more from this source, liked the depth or format. Skipped: not interested,
+  already saw it elsewhere, just no time. Worth it has none. The rating counts without a
+  reason. What was liked can be several of these at once; anything else is one, so a new
+  choice replaces the old. Tapping a chosen reason again takes it back. A later tap that
+  leaves a reason not fitting drops it.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
   the install, not a rating or a reason: it is logged, written to the extraction log, and
   listed for admins on the web pages' Problems page. The rating is left as it was.
-- **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
+- **Latest tap wins** for verdict, progress and reason. Every tap is also kept in an event
   log.
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
-not use them). The model is given the 40 most
-recent, each with the article's length, whether it was finished, why it was picked and the
-reader's reason when there is one, and is told to work out what a rating is about before
-learning from it (a low rating on a short post is a verdict on thin posts, not on its
-source).
+not use them). The model is given the 40 most recent, each with its verdict and progress,
+the article's length, why it was picked and the reader's reason when there is one. It is told
+what each means: a verdict is strong, "not for me" about the subject and "not good" about the
+article; how far the reader got against the article's length shows how much length they
+take; a skip is weak, a judgement on a headline on one day, that counts only when several
+agree, and a skip for want of time counts for nothing.
 
 ## 7a. Ranking with a model (needs the API key)
 
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
   article page is fetched for ranking. Also the user's `interests` text and their 40 most
-  recent ratings (title, source, rating, finished).
+  recent ratings (title, source, length, verdict, progress, the reader's reason).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
   merged into one order. With more than one batch the candidates are shuffled first (seeded by
@@ -641,10 +657,10 @@ A reader's interests are their own words and are never changed by the pipeline. 
 it keeps a second text of its own: a few plain statements of what the reader's ratings show.
 
 - **When.** After a delivery, at most once a week per reader, and only when the reader has
-  at least 10 ratings and at least 5 new ones since the last time. One model call.
+  given at least 10 verdicts and at least 5 new ones since the last time. One model call.
 - **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
-  with each article's length, whether it was finished, why it was picked and the reader's
-  own reason. Titles are untrusted and are given only as material.
+  (skips among them) with each article's length, its verdict and progress, why it was picked
+  and the reader's own reason. Titles are untrusted and are given only as material.
 - **What comes back.** At most 8 statements of at most 200 characters each, each resting on
   several ratings. The model is told to keep a current note the ratings still bear out, to
   change one they contradict, and to write no instructions. When it has nothing reliable to
@@ -679,7 +695,7 @@ the web pages' Archive shows (section 9a).
   saved page.
 - Nothing is recorded on a dry run.
 - **Never sent twice, never sent once read.** The daily run skips an article the reader has
-  already been sent, rated or marked finished.
+  already been sent or given a rating of any kind.
 
 ### Links added by hand
 
@@ -693,7 +709,7 @@ the route `manual` and its site as the source.
   pinned sources, built from the page saved when it was added, and takes one of the day's
   places. If the day is already full it waits for the next. Recorded as chosen by `added`.
 - **Send it to my Kindle now.** Sent as a book of its own, as Send to Kindle does.
-- **Only keep it: I have read it.** Marked finished, with the reader's rating when given.
+- **Only keep it: I have read it.** Marked finished, with the reader's verdict when given.
   It is never sent, and the rating counts with the others when the model chooses.
 - A link that cannot be fetched or has no article in it is marked failed, with the reason
   shown on the Archive page for a day. At most 30 links a day per reader.
@@ -785,9 +801,11 @@ database with the pipeline.
   chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
   `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
   article, with the others delivered with it listed beside it, each still rated on its own.
-- **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
-  choose the reason with one click, or clear the rating. Changes are logged like taps, with `web` as their
-  source.
+- **Ratings can be changed there**: choose or change the verdict; say finished, stopped
+  partway or skipped; choose the reason with one click; or clear the rating. A verdict given
+  there leaves progress as it was, since the web pages cannot tell how far the reader got.
+  Each issue with articles given nothing has "Mark the rest skipped", as the book's "Done
+  with this issue". Changes are logged like taps, with `web` as their source.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything
   delivered to them, and everything the model weighed for them and passed over (section 7g).
   A row shows the source, the title linked to the original, the summary when there is one,
@@ -795,8 +813,9 @@ database with the pipeline.
   headline, the score, the length, how long it stays worth reading and every way it reached
   us. Filters are a form sent by GET, so any view is a link: words in the title, delivered
   or read or everything, the feed or front page that brought it, how it arrived,
-  the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
-  length). Without a choice it shows what was delivered, added by hand or read by the
+  the reader's rating (rated, not rated, liked: worth it or more; disliked: not for me or
+  not good; finished; skipped), how long it lasts, a date range, and the order (newest,
+  score, rating, length). Without a choice it shows what was delivered, added by hand or read by the
   model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card, and
   fetched again (section 7g). A form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
@@ -815,7 +834,7 @@ database with the pipeline.
   issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
   Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
-  choices: ratings, reasons, finished. The pages work without scripts, so the Archive's
+  choices: verdicts, progress, reasons. The pages work without scripts, so the Archive's
   filters apply when "Apply filters" is pressed.
 - **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
   of the masthead switches; the choice is kept in that browser, and choosing what the system

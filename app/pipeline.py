@@ -36,7 +36,7 @@ from .render import Article, IssueEntry, book_title, issue_title, render_epub, r
 from .review import review as review_extractions
 from .sources import Item, is_front_page, read_feed
 from .store import Store
-from .tokens import LINK_SIGNALS, make_token
+from .tokens import LINK_SIGNALS, SKIP_REST, make_token
 from .urls import article_id, without_tracking
 
 log = logging.getLogger("forenoon")
@@ -578,6 +578,15 @@ def _feedback_links(cfg: Config, user: User, article_id: str, now: datetime) -> 
     }
 
 
+def _done_link(cfg: Config, user: User, article_ids: list[str], now: datetime) -> str:
+    """ "Done with this issue" for a book of these articles: skips the ones given nothing."""
+    if not cfg.public_base_url or not article_ids:
+        return ""
+    expires = int((now + timedelta(days=cfg.token_ttl_days)).timestamp())
+    token = make_token(cfg.feedback_secret, user.id, ",".join(article_ids), SKIP_REST, expires)
+    return f"{cfg.public_base_url.rstrip('/')}/f/{token}"
+
+
 def run(
     cfg: Config,
     store: Store,
@@ -1098,7 +1107,13 @@ def run(
         attachments.append(
             Attachment(
                 safe_filename(issue_title(now, label)),
-                render_issue(part, now, label, grayscale=cfg.images.grayscale),
+                render_issue(
+                    part,
+                    now,
+                    label,
+                    grayscale=cfg.images.grayscale,
+                    done_link=_done_link(cfg, user, [e.article.id for e in part], now),
+                ),
                 tuple(i for e in part for i in (e.article.id, *e.covers)),
             )
         )

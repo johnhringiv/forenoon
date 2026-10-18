@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS feedback_events (
 CREATE TABLE IF NOT EXISTS ratings (
     user_id TEXT NOT NULL,
     article_id TEXT NOT NULL,
-    rating INTEGER,
-    finished INTEGER NOT NULL DEFAULT 0,
+    verdict TEXT CHECK (verdict IN ('not-for-me', 'not-good', 'worth-it', 'more')),
+    progress TEXT CHECK (progress IN ('finished', 'partway', 'skipped')),
     updated_at TEXT NOT NULL,
     reason TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)

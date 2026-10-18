@@ -109,6 +109,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/archive/added/clear", post(archive::clear_failed))
         .route("/archive/refresh", post(archive::refresh))
         .route("/rate", post(pages::rate))
+        .route("/skip-rest", post(pages::skip_rest))
         .route("/thumb/{id}", get(pages::thumb))
         .route("/send", post(pages::send))
         .route("/report", post(pages::report))

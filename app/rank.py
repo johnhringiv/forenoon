@@ -21,7 +21,7 @@ from .config import Llm, User
 from .llm import CHARS_PER_TOKEN, Backend, LlmError, Unreachable, free, input_budget
 from .sources import Item
 from .store import Store
-from .tokens import reason_labels
+from .tokens import PROGRESS, VERDICTS, reason_labels
 
 log = logging.getLogger("forenoon")
 
@@ -33,19 +33,36 @@ RECENT_RATINGS = 40
 TOKENS_PER_CANDIDATE = 260
 TOKENS_OVERHEAD = 2500  # per call: instructions, interests and recent ratings
 
-SYSTEM = """\
+# How the ratings the prompts carry are to be read; `rated_entries` makes them.
+RATINGS_GUIDE = """\
+Each rating has a verdict, how far the reader got, or both, with the article's length, why it
+was picked and sometimes the reader's own reason ("reader_said": trust it).
+- "verdict": "more like this", they want more of what it was; "worth it", it earned its place;
+  "not for me", the subject is wrong for them; "not good", the subject is fine but this
+  article was not (thin, padded, oversold or wrong: "reader_said" says which when given).
+- "read": "finished", "stopped partway" or "skipped"; absent when not known. Set against the
+  length it shows how much length they take: a long article stopped partway says more about
+  its length than about its subject, unless the verdict says otherwise.
+- "skipped" means they did not read it at all: a weak judgement of its headline on one day.
+  Learn from skips only when several agree; one skipped for "Just no time" says nothing.
+Work out what a rating is about before learning from it: a short post judged "not good" may be
+a verdict on thin posts, not on its source or topic. "Too thin" and "Longer than it needed to
+be" are about the form, not the subject."""
+
+SYSTEM = (
+    """\
 You rank articles for one reader's daily digest.
 
-You are given the reader's interests, articles they rated recently (1 = less like this,
-5 = more like this), and today's candidate articles. Score every candidate from 0 to 10 for
-how much this reader will want to read it today, and give a reason of at most 15 words.
+You are given the reader's interests, articles they rated recently, and today's candidate
+articles. Score every candidate from 0 to 10 for how much this reader will want to read it
+today, and give a reason of at most 15 words.
 
-Each rating comes with the article's length, whether it was finished, why it was picked, and
-sometimes the reader's own reason. Work out what the rating is about before learning from it:
-a short post rated low may be a verdict on thin posts, not on its source or topic. When
-"reader_said" is present, trust it. "Too thin" and "Too long" are about the form, not the
-subject. "Wrong or misleading" means that article's claims did not hold up: the topic is still
-of interest, but be warier of unverified alarms, rumours and single-source claims like it.
+"""
+    + RATINGS_GUIDE
+    + """ "Wrong or misleading" means that article's claims did not hold up:
+the topic is still of interest, but be warier of unverified alarms, rumours and single-source
+claims like it. "The headline oversold it" means the title promised more than the article
+gave: be warier of titles like it.
 
 When <learned> is present it holds notes on what this reader's earlier ratings have shown.
 Use them as you use the ratings; where they disagree with the interests, the interests win.
@@ -64,6 +81,7 @@ A candidate picked up in several places (a feed and an aggregator, or two aggreg
 of wide interest, which counts in its favour, but not for more than its substance.
 
 Return one entry per candidate id, using only the ids given."""
+)
 SYSTEM_TOKENS = len(SYSTEM) // CHARS_PER_TOKEN + 500  # and the schema, which some servers are shown
 
 SCHEMA = {
@@ -122,15 +140,13 @@ def rated_entries(user: User, store: Store, latest: int) -> list[dict]:
     """The reader's latest ratings as the model is shown them."""
     rated = []
     for row in store.rating_rows(user.id, latest):
-        if not row["rating"] or not row["title"]:
+        if not (row["verdict"] or row["progress"]) or not row["title"]:
             continue
-        entry = {
-            "title": row["title"],
-            "source": row["article_source"],
-            "rating": row["rating"],
-            "finished": bool(row["finished"]),
-            "words": row["word_count"],
-        }
+        entry = {"title": row["title"], "source": row["article_source"], "words": row["word_count"]}
+        if row["verdict"]:
+            entry["verdict"] = VERDICTS[row["verdict"]].lower()
+        if row["progress"]:
+            entry["read"] = PROGRESS[row["progress"]]
         # What turns a number into a lesson: the reader's own reason when they gave one, and
         # why the article was put in front of them in the first place.
         if said := reason_labels(row["reason"]):

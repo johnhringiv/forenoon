@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"n!: i64\" FROM deliveries d WHERE d.user_id = ?1 AND d.article_id = ?2\n               AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = ?2)",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5f44afdf03ecf2f28694b215cfd646d1546715aba396ad59e6a9b779585fe71e"
+}

@@ -78,7 +78,7 @@ Jun 22 11:41:18 workstation mount[87790]: SSHFS version 3.7.1 executing &lt;-oSe
 <figure><img src="{transparent}" alt="Diagram on a transparent background"/>
 <figcaption>Black diagram on a transparent background: should show on white.</figcaption>
 </figure>
-<p>Final paragraph. The rating links follow: two rows of five.</p>
+<p>Final paragraph. The rating links follow: four verdicts in one row.</p>
 <script>alert("must not appear")</script>
 """
 
@@ -113,7 +113,6 @@ def _transparent_diagram() -> str:
 def golden_epub(
     links: dict[str, str] | None = None,
     label: str = "",
-    rating_style: str = "numbers",
 ) -> bytes:
     """Placeholder feedback links unless real signed ones are passed in.
 
@@ -143,4 +142,4 @@ def golden_epub(
     )
     if links is None:
         links = {s: f"https://feedback.example.com/f/golden-{s}" for s in LINK_SIGNALS}
-    return render_epub(article, DAY, links, rating_style)
+    return render_epub(article, DAY, links)

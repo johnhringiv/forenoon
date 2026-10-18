@@ -14,7 +14,7 @@ use sqlx::{
 
 use crate::{
     hex,
-    ratings::{self, Signal},
+    ratings::{self, Change, Signal},
 };
 
 pub async fn open(path: &Path) -> Result<SqlitePool, sqlx::Error> {
@@ -563,14 +563,14 @@ pub struct Totals {
     pub rated: i64,
 }
 
-/// Articles delivered to this reader, books sent, and articles rated. Picks shown only as
-/// links were not sent, so they count only when rated.
+/// Articles delivered to this reader, books sent, and articles rated (a skip counts). Picks
+/// shown only as links were not sent, so they count only when rated.
 pub async fn totals(pool: &SqlitePool, user: &str) -> Result<Totals, sqlx::Error> {
     sqlx::query_as!(
         Totals,
         r#"SELECT COUNT(*) FILTER (WHERE d.link_only = 0) AS "articles!: i64",
            COUNT(DISTINCT d.delivered_at) FILTER (WHERE d.link_only = 0) AS "issues!: i64",
-           COUNT(r.rating) AS "rated!: i64"
+           COUNT(r.updated_at) AS "rated!: i64"
            FROM deliveries d LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
            WHERE d.user_id = ?"#,
         user
@@ -592,7 +592,7 @@ pub async fn issue_times(
         r#"SELECT DISTINCT d.delivered_at AS "delivered_at!" FROM deliveries d
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
            WHERE d.user_id = ?1 AND (?2 IS NULL OR d.delivered_at < ?2)
-           AND (?3 = '' OR (?3 = 'rated') = (r.rating IS NOT NULL))
+           AND (?3 = '' OR (?3 = 'rated') = (r.updated_at IS NOT NULL))
            ORDER BY d.delivered_at DESC LIMIT ?4"#,
         user,
         before,
@@ -620,8 +620,8 @@ pub struct Delivered {
     pub picked: Option<String>,
     pub rank: Option<i64>,
     pub explore: Option<bool>,
-    pub rating: Option<i64>,
-    pub finished: Option<bool>,
+    pub verdict: Option<String>,
+    pub progress: Option<String>,
     pub why: String,
     /// Picked, but its page could not be had: shown as a link and not sent.
     pub link_only: bool,
@@ -641,7 +641,7 @@ pub async fn delivered(
         r#"SELECT d.delivered_at, d.story, a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count,
            a.image_url, a.description, s.policy AS "policy?", s.score AS "score?: f64",
            s.reason AS "picked?", s.rank AS "rank?: i64", s.explore AS "explore?: bool",
-           r.rating AS "rating?: i64", r.finished AS "finished?: bool",
+           r.verdict AS "verdict?", r.progress AS "progress?",
            COALESCE(r.reason, '') AS "why!: String", d.link_only AS "link_only: bool"
            FROM deliveries d JOIN articles a ON a.id = d.article_id
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
@@ -653,7 +653,7 @@ pub async fn delivered(
                LEFT JOIN ratings r2 ON r2.user_id = d2.user_id AND r2.article_id = d2.article_id
                WHERE d2.user_id = d.user_id AND d2.delivered_at = d.delivered_at
                AND (d2.article_id = d.article_id OR (d.story != '' AND d2.story = d.story))
-               AND (?4 = 'rated') = (r2.rating IS NOT NULL)))
+               AND (?4 = 'rated') = (r2.updated_at IS NOT NULL)))
            ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title"#,
         user,
         oldest,
@@ -741,7 +741,8 @@ pub struct Shelf<'a> {
     pub via: &'a str,
     /// How it arrived: feed, recipe, found, linked.
     pub route: &'a str,
-    /// rated, unrated, high (4 or 5), low (1 or 2), finished.
+    /// rated, unrated, liked (worth it or more), disliked (not for me or not good), finished,
+    /// skipped.
     pub rating: &'a str,
     /// years, or months (months or longer).
     pub lasting: &'a str,
@@ -776,8 +777,8 @@ pub struct Shelved {
     pub read: bool,
     pub lasting: String,
     pub policy: Option<String>,
-    pub rating: Option<i64>,
-    pub finished: Option<bool>,
+    pub verdict: Option<String>,
+    pub progress: Option<String>,
     pub why: String,
     /// One "route:via" per line.
     pub routes: String,
@@ -805,9 +806,11 @@ macro_rules! on_shelf {
            AND (?3 = '' OR instr(lower(a.title), lower(?3)) > 0)
            AND (?4 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.via = ?4))
            AND (?5 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.route = ?5))
-           AND CASE ?6 WHEN 'rated' THEN r.rating IS NOT NULL WHEN 'unrated' THEN r.rating IS NULL
-               WHEN 'high' THEN COALESCE(r.rating >= 4, 0) WHEN 'low' THEN COALESCE(r.rating <= 2, 0)
-               WHEN 'finished' THEN COALESCE(r.finished, 0) ELSE 1 END
+           AND CASE ?6 WHEN 'rated' THEN r.updated_at IS NOT NULL WHEN 'unrated' THEN r.updated_at IS NULL
+               WHEN 'liked' THEN COALESCE(r.verdict IN ('worth-it', 'more'), 0)
+               WHEN 'disliked' THEN COALESCE(r.verdict IN ('not-for-me', 'not-good'), 0)
+               WHEN 'finished' THEN COALESCE(r.progress = 'finished', 0)
+               WHEN 'skipped' THEN COALESCE(r.progress = 'skipped', 0) ELSE 1 END
            AND CASE ?7 WHEN 'years' THEN COALESCE(x.lasting = 'years', 0)
                WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END
            AND (?8 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) >= ?8)
@@ -841,13 +844,15 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
            COALESCE(s.score, x.score) AS "score?: f64",
            COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
            COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
-           s.policy AS "policy?", r.rating AS "rating?: i64", r.finished AS "finished?: bool",
+           s.policy AS "policy?", r.verdict AS "verdict?", r.progress AS "progress?",
            COALESCE(r.reason, '') AS "why!: String",
            COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t
                      WHERE t.article_id = a.id), '') AS "routes!: String""#,
         r#"
            ORDER BY CASE ?10 WHEN 'score' THEN -COALESCE(s.score, x.score, -1)
-               WHEN 'rating' THEN -COALESCE(r.rating, 0) WHEN 'length' THEN -a.word_count ELSE 0 END,
+               WHEN 'rating' THEN -CASE r.verdict WHEN 'more' THEN 4 WHEN 'worth-it' THEN 3 WHEN 'not-good' THEN 2
+                   WHEN 'not-for-me' THEN 1 ELSE 0 END
+               WHEN 'length' THEN -a.word_count ELSE 0 END,
                COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) DESC, a.id
            LIMIT ?11 OFFSET ?12"#,
         shelf.sort,
@@ -868,13 +873,13 @@ pub async fn shelved_count(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<i64, 
 pub const ADDS_PER_DAY: i64 = 30;
 
 /// `action` is next (the reader's next issue), now (sent as its own book) or keep (already
-/// read, with their rating when they gave one). False when the day's limit is reached.
+/// read, with their verdict when they gave one). False when the day's limit is reached.
 pub async fn queue_add(
     pool: &SqlitePool,
     user: &str,
     url: &str,
     action: &str,
-    rating: Option<i64>,
+    verdict: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
     let (now, day_ago) = (now_iso(), iso_in(-24 * 3600));
     let mut tx = pool.begin().await?;
@@ -886,11 +891,11 @@ pub async fn queue_add(
         return Ok(false);
     }
     sqlx::query!(
-        "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO add_requests (user_id, url, action, verdict, requested_at) VALUES (?, ?, ?, ?, ?)",
         user,
         url,
         action,
-        rating,
+        verdict,
         now
     )
     .execute(&mut *tx)
@@ -1134,11 +1139,12 @@ pub async fn problem_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
 
 // ratings
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rating {
-    /// 1 to 5; `None` when only "finished" was recorded.
-    pub rating: Option<i64>,
-    pub finished: bool,
+    /// A key of `ratings::VERDICTS`; `None` when none was given.
+    pub verdict: Option<String>,
+    /// finished, partway or skipped; `None` when not known.
+    pub progress: Option<String>,
     /// Keys of the reasons the reader gave, comma-separated; "" when none.
     pub reason: String,
 }
@@ -1146,7 +1152,7 @@ pub struct Rating {
 pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<Option<Rating>, sqlx::Error> {
     sqlx::query_as!(
         Rating,
-        r#"SELECT rating AS "rating?: i64", finished AS "finished!: bool", reason
+        r#"SELECT verdict AS "verdict?", progress AS "progress?", reason
            FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
         article
@@ -1155,11 +1161,28 @@ pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<
     .await
 }
 
-/// Log the signal and apply it: the latest one decides the stored rating and finished flag.
-/// Returns the rating as it now stands.
-///
-/// A reason sets only the reason. A new rating drops a stored reason that no longer fits it
-/// (a "too thin" on an article now rated 5). `source` is as for `report_problem`.
+/// The rating after `signal`, by the same rules as `app/store.py`: the latest tap decides
+/// verdict and progress, a verdict on a skipped article makes its progress not known, and
+/// any tap drops a reason that no longer fits.
+pub fn after(was: &Rating, signal: &Signal) -> Rating {
+    let (verdict, progress) = signal.meaning();
+    let verdict = match verdict {
+        Change::Keep => was.verdict.clone(),
+        Change::Set(v) => v.map(str::to_owned),
+    };
+    let progress = match progress {
+        Change::Set(p) => p.map(str::to_owned),
+        Change::Keep if verdict.is_some() && was.progress.as_deref() == Some("skipped") => None,
+        Change::Keep => was.progress.clone(),
+    };
+    let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
+    let (v, p) = (verdict.as_deref(), progress.as_deref());
+    let reason = ratings::with_reason(&ratings::with_reason(&was.reason, "", v, p), pressed, v, p);
+    Rating { verdict, progress, reason }
+}
+
+/// Log the signal and apply it (see `after`). Returns the rating as it now stands.
+/// `source` is as for `report_problem`.
 pub async fn record_feedback(
     pool: &SqlitePool,
     user: &str,
@@ -1167,10 +1190,21 @@ pub async fn record_feedback(
     signal: &Signal,
     source: &str,
 ) -> Result<Rating, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let rating = record_in(&mut tx, user, article, signal, source).await?;
+    tx.commit().await?;
+    Ok(rating)
+}
+
+async fn record_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    user: &str,
+    article: &str,
+    signal: &Signal,
+    source: &str,
+) -> Result<Rating, sqlx::Error> {
     let now = now_iso();
     let text = signal.to_string();
-    let (rating, finished) = signal.meaning();
-    let mut tx = pool.begin().await?;
     sqlx::query!(
         "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
         user,
@@ -1179,44 +1213,71 @@ pub async fn record_feedback(
         source,
         now
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    sqlx::query!(
-        r#"INSERT INTO ratings (user_id, article_id, rating, finished, updated_at)
-           VALUES (?1, ?2, ?3, COALESCE(?4, 0), ?5)
-           ON CONFLICT(user_id, article_id) DO UPDATE SET
-           rating = COALESCE(excluded.rating, rating),
-           finished = COALESCE(?4, finished), updated_at = excluded.updated_at"#,
-        user,
-        article,
-        rating,
-        finished,
-        now
-    )
-    .execute(&mut *tx)
-    .await?;
-    let stored = sqlx::query!(
-        r#"SELECT rating AS "rating?: i64", finished AS "finished!: bool", reason
+    let was = sqlx::query_as!(
+        Rating,
+        r#"SELECT verdict AS "verdict?", progress AS "progress?", reason
            FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
         article
     )
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut **tx)
+    .await?
+    .unwrap_or_default();
+    let rating = after(&was, signal);
+    sqlx::query!(
+        r#"INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(user_id, article_id) DO UPDATE SET verdict = excluded.verdict,
+           progress = excluded.progress, updated_at = excluded.updated_at, reason = excluded.reason"#,
+        user,
+        article,
+        rating.verdict,
+        rating.progress,
+        now,
+        rating.reason
+    )
+    .execute(&mut **tx)
     .await?;
-    // A reason adds, replaces or takes back; any signal drops reasons that no longer fit.
-    let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
-    let fitting = ratings::with_reason(&stored.reason, "", stored.rating);
-    let kept = ratings::with_reason(&fitting, pressed, stored.rating);
-    if kept != stored.reason {
-        sqlx::query!("UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", kept, user, article)
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
-    Ok(Rating { rating: stored.rating, finished: stored.finished, reason: kept })
+    Ok(rating)
 }
 
-/// Forget an article's rating, finished flag and reason; the event log keeps the history.
+/// "Done with this issue": skip each of these articles delivered to the reader that they have
+/// given nothing for. Returns how many were skipped.
+pub async fn skip_rest(pool: &SqlitePool, user: &str, articles: &[&str], source: &str) -> Result<usize, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let mut skipped = 0;
+    for article in articles {
+        let open = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "n!: i64" FROM deliveries d WHERE d.user_id = ?1 AND d.article_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = ?2)"#,
+            user,
+            article
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if open > 0 {
+            record_in(&mut tx, user, article, &Signal::Skip, source).await?;
+            skipped += 1;
+        }
+    }
+    tx.commit().await?;
+    Ok(skipped)
+}
+
+/// The articles of one issue (one delivery time) that were sent, not shown only as links.
+pub async fn issue_articles(pool: &SqlitePool, user: &str, delivered_at: &str) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "SELECT article_id FROM deliveries WHERE user_id = ? AND delivered_at = ? AND link_only = 0",
+        user,
+        delivered_at
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Forget an article's verdict, progress and reason; the event log keeps the history.
 pub async fn clear_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     let mut tx = pool.begin().await?;

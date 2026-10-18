@@ -1,10 +1,10 @@
 {% if demo %}<div class="rate" title="In your own install these record your rating, and the ratings shape the next day's choices">
-{% for star in card.stars %}<button type="button" class="inert{% if star.on %} on{% endif %}">{{ star.n }}</button>{% endfor %}
-<button type="button" class="inert gap{% if card.finished %} on{% endif %}">Finished</button>
+{% for choice in card.verdicts %}<button type="button" class="inert{% if choice.on %} on{% endif %}">{{ choice.label }}</button>{% endfor %}
+{% for choice in card.progress %}<button type="button" class="inert{% if loop.first %} gap{% endif %}{% if choice.on %} on{% endif %}">{{ choice.label }}</button>{% endfor %}
 </div>{% else %}<form class="rate" method="post" action="/rate">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
-{% for star in card.stars %}<button name="rating" value="{{ star.n }}"{% if star.on %} class="on"{% endif %}>{{ star.n }}</button>{% endfor %}
-<button class="gap{% if card.finished %} on{% endif %}" name="finished" value="{% if card.finished %}0{% else %}1{% endif %}">Finished</button>
+{% for choice in card.verdicts %}<button name="verdict" value="{{ choice.key }}"{% if choice.on %} class="on"{% endif %}>{{ choice.label }}</button>{% endfor %}
+{% for choice in card.progress %}<button name="progress" value="{{ choice.key }}" class="{% if loop.first %}gap{% endif %}{% if choice.on %} on{% endif %}">{{ choice.label }}</button>{% endfor %}
 {% if !card.unrated %}<button class="gap" name="clear" value="1">Clear</button>{% endif %}
 {% if !card.reasons.is_empty() %}<span class="why-row"><span class="why-q">{{ card.question }}</span>{% for reason in card.reasons %}<button name="reason" value="{{ reason.key }}" title="{{ reason.label }}"{% if reason.selected %} class="on"{% endif %}>{{ reason.short }}</button>{% endfor %}</span>{% endif %}
 </form>{% endif %}
