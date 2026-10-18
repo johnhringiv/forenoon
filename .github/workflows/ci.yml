@@ -48,9 +48,20 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          # No build time, commit, repository description or event (main, nightly, v1) in the
+          # labels: an image whose layers did not change keeps its digest, so the host's poller
+          # leaves its container running. The :sha-<commit> tag still says which commit it is.
+          labels: |
+            org.opencontainers.image.created=
+            org.opencontainers.image.revision=
+            org.opencontainers.image.description=
+            org.opencontainers.image.version=
       - uses: docker/setup-buildx-action@v4 # container driver; required for the gha build cache
       - uses: docker/build-push-action@v7
         with:
+          # No attestations: they carry the build's time, and would change the digest every run.
+          provenance: false
+          sbom: false
           context: .
           load: true
           tags: forenoon:ci
@@ -95,9 +106,20 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}-browser
+          # No build time, commit, repository description or event (main, nightly, v1) in the
+          # labels: an image whose layers did not change keeps its digest, so the host's poller
+          # leaves its container running. The :sha-<commit> tag still says which commit it is.
+          labels: |
+            org.opencontainers.image.created=
+            org.opencontainers.image.revision=
+            org.opencontainers.image.description=
+            org.opencontainers.image.version=
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
+          # No attestations: they carry the build's time, and would change the digest every run.
+          provenance: false
+          sbom: false
           context: browser
           load: true
           tags: forenoon-browser:ci
@@ -167,9 +189,20 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}-web
+          # No build time, commit, repository description or event (main, nightly, v1) in the
+          # labels: an image whose layers did not change keeps its digest, so the host's poller
+          # leaves its container running. The :sha-<commit> tag still says which commit it is.
+          labels: |
+            org.opencontainers.image.created=
+            org.opencontainers.image.revision=
+            org.opencontainers.image.description=
+            org.opencontainers.image.version=
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
+          # No attestations: they carry the build's time, and would change the digest every run.
+          provenance: false
+          sbom: false
           context: web
           load: true
           tags: forenoon-web:ci
