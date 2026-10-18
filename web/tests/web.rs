@@ -2461,7 +2461,7 @@ async fn a_shared_link_previews_with_the_sites_card() {
     assert_eq!(home.location, "/login");
     let page = Browser::default().get(&site, "/login").await;
     for tag in [
-        r#"<meta property="og:title" content="Forenoon">"#,
+        r#"<meta property="og:title" content="Forenoon: a self-hosted news aggregator where the AI reads the slop">"#,
         r#"<meta property="og:url" content="http://nas:8787/login">"#,
         r#"<meta name="twitter:card" content="summary_large_image">"#,
     ] {
@@ -2695,6 +2695,7 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;
     assert!(status == StatusCode::OK && kind == "image/webp" && cache.starts_with("public"));
     assert_eq!(get("forenoon.test", "/favicon.ico").await.0, StatusCode::OK);
+    assert_eq!(get("forenoon.test", &forenoon_web::icons::SHARE_CARD).await.0, StatusCode::OK);
     assert_eq!(get("forenoon.test", "/healthz").await.0, StatusCode::OK);
     // Nothing else on that host, the sign-in page included.
     for path in ["/login", "/archive", "/images/nope.webp", "/thumb/a1", "/f/x"] {
