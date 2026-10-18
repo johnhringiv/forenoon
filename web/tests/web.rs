@@ -319,8 +319,11 @@ async fn newsstand_shows_only_the_readers_own_deliveries_as_untrusted_text() {
     assert!(
         text.contains("Picked because: Deep &#34;compiler&#34; work") && text.contains("Score 8.5, no. 1 of the day")
     );
-    assert!(text.contains(r#"<span class="rated">Worth it</span>"#), "{text}");
-    assert!(text.contains(r#"<span class="rated">Finished</span>"#) && text.contains("2,300 words, 10 min"));
+    assert!(text.contains(r#"value="worth-it" aria-pressed="true">Worth it</button>"#), "{text}");
+    assert!(
+        text.contains(r#"value="finished" aria-pressed="true" title="Finished">"#)
+            && text.contains("2,300 words, 10 min")
+    );
     assert!(text.contains("Newest") && text.contains("Blog &#60;b&#62; · Ann"));
     assert_eq!(browser.get(&site, "/?before=nonsense&show=nonsense").await.status, StatusCode::OK);
 
@@ -399,9 +402,15 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
             && !unrated.contains("Post 1")
     );
     assert!(rated.contains("Too thin") && rated.contains("What was wrong?"));
-    assert!(rated.contains(r#"<button name="reason" value="thin" title="Too thin" class="on">Too thin</button>"#));
-    assert!(rated.contains(r#"<button name="verdict" value="not-good" class="on">Not good</button>"#), "{rated}");
-    assert!(rated.contains(r#"<button name="progress" value="finished" class="gap on">Finished</button>"#));
+    assert!(
+        rated.contains(r#"<button name="reason" value="thin" aria-pressed="true" title="Too thin">Too thin</button>"#)
+    );
+    assert!(
+        rated.contains(r#"<button name="verdict" value="not-good" aria-pressed="true">Not good</button>"#),
+        "{rated}"
+    );
+    assert!(rated.contains(r#"<button name="verdict" value="worth-it" aria-pressed="false">Worth it</button>"#));
+    assert!(rated.contains(r#"<button name="progress" value="finished" aria-pressed="true" title="Finished">"#));
 
     // What was wrong is one thing: another choice replaces it; pressing it again takes it back.
     browser.post(&site, "/rate", &with(&[("reason", "padded")])).await;
@@ -417,7 +426,11 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("finished"), "more-topic,depth"));
     let page = browser.get(&site, "/?show=rated").await.text;
-    assert!(page.contains("What did you like?") && page.matches(r#"class="on">The "#).count() == 2);
+    assert!(
+        page.contains("What did you like?")
+            && page.matches(r#"aria-pressed="true" title="More on this topic">"#).count() == 1
+            && page.contains(r#"aria-pressed="true" title="Liked the depth or format">"#)
+    );
     browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("finished"), "more-topic"));
     browser.post(&site, "/rate", &with(&[("progress", "partway")])).await;
@@ -2092,7 +2105,9 @@ async fn the_archive_lists_the_readers_library_and_filters_it() {
     let rate = [("csrf", csrf.as_str()), ("article", "n1"), ("verdict", "more"), ("back", back)];
     assert_eq!(browser.post(&site, "/rate", &rate).await.location, "/archive?show=near#a-n1");
     let liked = browser.get(&site, "/archive?show=all&rating=liked").await.text;
-    assert!(liked.contains(r#"<span class="rated">More like this</span>"#) && liked.contains(">A near miss"));
+    assert!(
+        liked.contains(r#"value="more" aria-pressed="true">More like this</button>"#) && liked.contains(">A near miss")
+    );
     assert!(!browser.get(&site, "/archive?show=all&rating=disliked").await.text.contains(">A near miss"));
     db::set_kindle(pool, "john", "john@kindle.com", true, true).await.unwrap();
     assert!(browser.get(&site, back).await.text.contains("<button class=\"kindle\">Send to Kindle</button>"));
@@ -2408,7 +2423,9 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     let claim = verify(FEEDBACK_SECRET, other, 0).unwrap();
     assert!(claim.user == "john" && claim.article == "a1" && claim.expires == later);
     assert!(page.text.contains(">Stopped partway<") && page.text.contains(">Skipped: did not read it<"));
-    assert!(!page.text.contains(">Not good<") && page.text.contains(">Not for me<"));
+    // The choices made are shown filled in, among the rest, and are not links.
+    assert!(page.text.contains(r#"<b class="on">Not good</b>"#) && page.text.contains(r#"<b class="on">Finished</b>"#));
+    assert!(page.text.contains(">Not for me<"));
     assert_eq!(page.text.matches("href=\"/f/").count(), 5 + 3 + 2 + 1, "reasons, verdicts, progress, the report");
 
     let why = kindle.get(&site, &link("why-padded")).await.text;
@@ -2430,7 +2447,7 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     kindle.get(&site, &link("partway")).await;
     // A fault in the delivery is reported apart from the rating, which it leaves as it was.
     let reported = kindle.get(&site, &link("problem")).await.text;
-    assert!(reported.contains("Reported. Thank you.") && !reported.contains("Change it"));
+    assert!(reported.contains("Reported. Thank you.") && !reported.contains("How was it?"));
     // Opened again (the Kindle's browser retries on its own), it is still one report.
     assert!(kindle.get(&site, &link("problem")).await.text.contains("Reported. Thank you."));
 
@@ -2735,7 +2752,7 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     assert!(page.contains(r#"href="//mary.forenoon.test/""#) && page.contains(r#"aria-current="true">John</a>"#));
     assert!(page.contains("Compilers and old maps") && page.contains("A demo, read only"));
     assert!(!page.contains(r#"method="post""#) && !page.contains(r#"name="csrf""#), "{page}");
-    assert!(page.contains(r#"<button type="button" class="inert">Worth it</button>"#));
+    assert!(page.contains(r#"<button type="button" class="inert" aria-pressed="false">Worth it</button>"#));
     assert!(page.contains(r#"class="kindle inert""#) && page.contains(r#"<img src="/thumb/a1""#));
     assert!(!page.contains("/account") && !page.contains("/settings") && !page.contains("Sign out"));
     // Mary's host, however the browser spells it, shows hers; so does one configured with its port.

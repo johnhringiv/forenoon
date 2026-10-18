@@ -126,12 +126,20 @@ struct FeedbackPage {
     /// What the reason links answer, and (token, label) for each reason that fits; none when
     /// nothing fits.
     question: &'static str,
-    reasons: Vec<(String, &'static str)>,
+    reasons: Vec<Pick>,
     several: bool,
-    /// (token, label) for each other choice; empty on an error page.
-    verdicts: Vec<(String, &'static str)>,
-    progress: Vec<(String, &'static str)>,
+    /// Every verdict and every progress, the reader's own marked; empty on an error page.
+    verdicts: Vec<Pick>,
+    progress: Vec<Pick>,
     report: String,
+}
+
+/// One link on the tap page. A chosen verdict or progress is shown without a link (tapping it
+/// again would change nothing); a chosen reason keeps its link, to take it back.
+struct Pick {
+    token: String,
+    label: &'static str,
+    on: bool,
 }
 
 fn plain(status: StatusCode, message: &str, detail: &str) -> Page {
@@ -218,23 +226,26 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     // One more tap says why. Always offered, never required: the rating already counts.
     let reasons = ratings::reasons_for(verdict, progress)
         .iter()
-        .map(|(key, label)| (sign(&format!("why-{key}")), *label))
+        .map(|(key, label)| Pick {
+            token: sign(&format!("why-{key}")),
+            label,
+            on: ratings::chosen(&rating.reason).any(|chosen| chosen == *key),
+        })
         .collect();
-    // The other choices. A verdict from here keeps progress as it is.
+    // Both pick-one groups in full, so the reader sees what they chose among what they could
+    // have. A verdict from here keeps progress as it is.
     let verdicts = ratings::VERDICTS
         .iter()
-        .filter(|(key, _)| verdict != Some(*key))
-        .map(|(key, label)| (sign(key), *label))
+        .map(|(key, label)| Pick { token: sign(key), label, on: verdict == Some(*key) })
         .collect();
-    let mut others = Vec::new();
-    match progress {
-        Some("finished") => others.push(("partway", "Stopped partway")),
-        Some("partway") => others.push(("finished", "Finished")),
-        _ => others.extend([("finished", "Finished"), ("partway", "Stopped partway")]),
-    }
-    if progress != Some("skipped") {
-        others.push(("skip", "Skipped: did not read it"));
-    }
+    let progress_picks = [
+        ("finished", "finished", "Finished"),
+        ("partway", "partway", "Stopped partway"),
+        ("skipped", "skip", "Skipped: did not read it"),
+    ]
+    .into_iter()
+    .map(|(key, signal, label)| Pick { token: sign(signal), label, on: progress == Some(key) })
+    .collect();
     let page = FeedbackPage {
         message: stated(&rating),
         detail: title,
@@ -242,7 +253,7 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
         reasons,
         several: ratings::several(verdict),
         verdicts,
-        progress: others.into_iter().map(|(signal, label)| (sign(signal), label)).collect(),
+        progress: progress_picks,
         // A delivery fault goes to whoever runs the install; it is not part of the rating.
         report: sign(PROBLEM),
     };

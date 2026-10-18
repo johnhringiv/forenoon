@@ -397,9 +397,10 @@ it was worth to them (**verdict**). Either can be given without the other.
   article (for "Done with this issue", the book's articles), signal and expiry (default 60
   days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
-  small page stating what is now stored ("Worth it, finished.") with links to change it: the
-  other verdicts, "Stopped partway" or "Finished" (both when progress is not known or the
-  article was skipped), and "Skipped". Besides sign-in, the
+  small page stating what is now stored ("Worth it, finished."), then the reasons that fit,
+  then two groups listed whole, "How was it?" (the four verdicts) and "How far did you get?"
+  (finished, stopped partway, skipped), with the reader's choice in each filled in black and
+  every other choice a link that changes it. Besides sign-in, the
   forgotten-password and email-link pages and `GET /healthz`, it is the only page that needs
   no login, and it takes no other input.
 - **Why (optional).** After a verdict or a skip, the page always offers one more tap for the
@@ -857,9 +858,13 @@ database with the pipeline.
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
-  Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
-  choices: verdicts, progress, reasons. The pages work without scripts, so the Archive's
-  filters apply when "Apply filters" is pressed.
+  Kindle" is outlined in it and set apart from the rating. The small plain buttons are
+  choices. A rating is two pick-one groups, each drawn as one joined control with the choice
+  made filled in: "How was it?" (the four verdicts, two by two on a narrow card) and "How far
+  did you get?" (finished, partway, skipped). The reasons that fit follow as rounded tags, a
+  chosen one ticked, and a small "Clear" link sits by the first group once anything is
+  recorded. The pages work without scripts, so the Archive's filters apply when "Apply
+  filters" is pressed.
 - **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
   of the masthead switches; the choice is kept in that browser, and choosing what the system
   already shows goes back to following it. It is the pages' one script; without scripts the

@@ -714,10 +714,12 @@ struct Filter {
     current: bool,
 }
 
-/// One of the small choice buttons: a verdict or how far the reader got.
+/// One choice in a pick-one group: a verdict, or how far the reader got.
 pub(crate) struct RateChoice {
     pub(crate) key: &'static str,
     pub(crate) label: &'static str,
+    /// What the button says: "Partway" for "Stopped partway", under "How far did you get?".
+    pub(crate) short: &'static str,
     pub(crate) on: bool,
 }
 
@@ -729,17 +731,22 @@ pub(crate) struct ReasonOption {
 }
 
 pub(crate) fn verdict_choices(verdict: Option<&str>) -> Vec<RateChoice> {
-    ratings::VERDICTS.iter().map(|(key, label)| RateChoice { key, label, on: verdict == Some(*key) }).collect()
+    ratings::VERDICTS
+        .iter()
+        .map(|(key, label)| RateChoice { key, label, short: label, on: verdict == Some(*key) })
+        .collect()
 }
 
 pub(crate) fn progress_choices(progress: Option<&str>) -> Vec<RateChoice> {
-    ratings::PROGRESS.iter().map(|(key, label)| RateChoice { key, label, on: progress == Some(*key) }).collect()
-}
-
-/// What the reader said, as marks on a card: "Worth it", "Finished".
-pub(crate) fn rating_marks(verdict: Option<&str>, progress: Option<&str>) -> Vec<String> {
-    let verdict = verdict.and_then(ratings::verdict_label);
-    verdict.into_iter().chain(progress.and_then(ratings::progress_label)).map(str::to_owned).collect()
+    ratings::PROGRESS
+        .iter()
+        .map(|(key, label)| RateChoice {
+            key,
+            label,
+            short: if *key == "partway" { "Partway" } else { label },
+            on: progress == Some(*key),
+        })
+        .collect()
 }
 
 /// The reasons a reader can give for this rating, with the ones they chose marked.
@@ -787,13 +794,14 @@ struct Card {
     picked: Option<String>,
     tags: Vec<&'static str>,
     facts: Vec<String>,
-    marks: Vec<String>,
     unrated: bool,
     verdicts: Vec<RateChoice>,
     progress: Vec<RateChoice>,
     reasons: Vec<ReasonOption>,
     /// The question the reason buttons answer.
     question: &'static str,
+    /// Whether the reasons add up (what was liked) or replace each other.
+    several: bool,
     /// Whether a "Send to Kindle" button is offered, and what became of the last request.
     sendable: bool,
     sent: Option<String>,
@@ -912,8 +920,6 @@ fn card(row: Delivered) -> Card {
     }
     facts.extend(length(row.word_count));
     let (verdict, progress) = (row.verdict.as_deref(), row.progress.as_deref());
-    let marks = rating_marks(verdict, progress);
-    facts.extend(ratings::chosen(&row.why).filter_map(ratings::label).map(str::to_owned));
     let reasons = reason_options(verdict, progress, &row.why);
     Card {
         link: web_url(&row.url),
@@ -924,12 +930,12 @@ fn card(row: Delivered) -> Card {
         picked: row.picked.filter(|reason| !reason.is_empty()),
         tags,
         facts,
-        marks,
         unrated: verdict.is_none() && progress.is_none(),
         verdicts: verdict_choices(verdict),
         progress: progress_choices(progress),
         reasons,
         question: ratings::question(verdict, progress),
+        several: ratings::several(verdict),
         sendable: false,
         sent: None,
         source: row.source.split(" via ").next().unwrap_or_default().to_owned(),

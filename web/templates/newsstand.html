@@ -38,8 +38,6 @@
 <div class="meta">
 {% for tag in card.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
 {% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
-{% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
-{% if card.unrated %}<span>Not rated</span>{% endif %}
 </div>
 {% include "_rate.html" %}
 {% include "_send.html" %}
@@ -55,8 +53,6 @@
 </div>
 <div class="meta">
 {% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
-{% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
-{% if card.unrated %}<span>Not rated</span>{% endif %}
 </div>
 {% include "_rate.html" %}
 {% include "_send.html" %}

@@ -25,8 +25,8 @@ use crate::{
     db::{self, Shelf, Shelved},
     pages::{
         AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, RateChoice, ReasonOption, Viewer, allowed, back_to,
-        html, length, local, progress_choices, rating_marks, reader, reason_options, refused, send_outcome, shorten,
-        verdict_choices, web_url,
+        html, length, local, progress_choices, reader, reason_options, refused, send_outcome, shorten, verdict_choices,
+        web_url,
     },
     ratings,
 };
@@ -107,12 +107,13 @@ struct Row {
     /// What the model said of it, with whether it had read it.
     said: Option<String>,
     facts: Vec<String>,
-    marks: Vec<String>,
     unrated: bool,
     verdicts: Vec<RateChoice>,
     progress: Vec<RateChoice>,
     reasons: Vec<ReasonOption>,
     question: &'static str,
+    /// Whether the reasons add up (what was liked) or replace each other.
+    several: bool,
     sendable: bool,
     sent: Option<String>,
     /// How the last "Fetch again" went, within the day; and whether it is still waiting.
@@ -244,8 +245,6 @@ fn row(found: Shelved, zone: Tz) -> Row {
         _ => {}
     }
     facts.extend(arrivals(&found.routes));
-    facts.extend(ratings::chosen(&found.why).filter_map(ratings::label).map(str::to_owned));
-    let marks = rating_marks(verdict, progress);
     let said = (!found.said.is_empty()).then(|| {
         let how = if found.read || found.delivered_at.is_some() { "The model" } else { "The model, from the headline" };
         format!("{how}: {}", found.said)
@@ -258,12 +257,12 @@ fn row(found: Shelved, zone: Tz) -> Row {
         desc: (!found.description.is_empty()).then(|| shorten(&found.description, MAX_DESCRIPTION_CHARS)),
         said,
         facts,
-        marks,
         unrated,
         verdicts: verdict_choices(verdict),
         progress: progress_choices(progress),
         reasons: reason_options(verdict, progress, &found.why),
         question: ratings::question(verdict, progress),
+        several: ratings::several(verdict),
         sendable: false,
         sent: None,
         refreshed: None,
