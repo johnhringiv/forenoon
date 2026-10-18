@@ -198,7 +198,8 @@ def _test_models(cfg: Config) -> bool:
     try:
         store = Store(cfg.db_path)
         try:
-            return run_asked(store, cfg.llm)
+            # The settings as just saved with the button: the scheduler's own are a day old.
+            return bool(store.model_test_asked()) and run_asked(store, load(store).llm)
         finally:
             store.close()
     except Exception:

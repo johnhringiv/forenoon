@@ -106,7 +106,9 @@ impl Spec {
             "model" if text.is_empty() && !self.same.is_empty() => Ok(String::new()),
             "model" => match model_name(text) {
                 true => Ok(text.to_owned()),
-                false => bad("name a model with its connection, as in anthropic/claude-haiku-5-5 or lan/qwen3.8-27b"),
+                false => bad(
+                    "name a model with its connection in lower case, as in anthropic/claude-haiku-5-5 or lan/qwen3.8-27b",
+                ),
             },
             "int" | "float" => {
                 let number =
@@ -130,11 +132,16 @@ impl Spec {
     }
 }
 
-/// A model named with its connection, as in anthropic/claude-haiku-5-5.
+/// A model named with its connection, as in anthropic/claude-haiku-5-5. The connection is in
+/// lower case, as the pipeline names it: FORENOON_LLM_LAN_URL is `lan`.
 fn model_name(text: &str) -> bool {
     text.len() <= MAX_TEXT
         && !text.chars().any(|c| c.is_control() || c.is_whitespace())
-        && text.split_once('/').is_some_and(|(connection, model)| !connection.is_empty() && !model.is_empty())
+        && text.split_once('/').is_some_and(|(connection, model)| {
+            !connection.is_empty()
+                && connection.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                && !model.is_empty()
+        })
 }
 
 struct Field {
@@ -430,6 +437,7 @@ mod tests {
         // Any model typed is kept, as long as it names its connection.
         assert!(check("llm.model", "anthropic/claude-haiku-5-5-20261001").is_ok());
         assert!(check("llm.model", "lan/unsloth/Qwen3.8-27B-GGUF").is_ok());
+        assert!(check("llm.model", "gpu_box/qwen").is_ok() && check("llm.model", "LAN/qwen").is_err());
         assert!(check("llm.model", "anthropic/").is_err() && check("llm.model", "anthropic/a b").is_err());
         assert!(
             check("llm.choose_model", "").is_ok() && check("llm.choose_model", "anthropic/claude-opus-5-5").is_ok()

@@ -603,3 +603,48 @@ def test_the_test_asked_for_on_the_page_is_run_and_answered(tmp_path, monkeypatc
     store.db.commit()
     store.record_model_test("2026-10-17T12:00:00Z", "an older answer")
     assert store.model_test_asked() == "2026-10-17T12:00:30Z", "the second is still to run"
+
+
+def test_the_scheduler_tests_the_models_as_just_saved_not_its_own_day_old_settings(tmp_path, monkeypatch):
+    from app import cli, model_test
+
+    store = _migrated(tmp_path)
+    store.db.execute("INSERT INTO settings (key, value, updated_at) VALUES ('llm.model', 'lan/qwen', 'now')")
+    store.db.execute("INSERT INTO model_tests (id, requested_at) VALUES (1, '2026-10-17T12:00:00+00:00')")
+    store.db.commit()
+    store.close()
+    monkeypatch.setenv("FORENOON_DATA_DIR", str(tmp_path))
+    tested = []
+    monkeypatch.setattr(model_test, "test_models", lambda llm, store=None: tested.append(llm.model) or ["ok"])
+    stale = cli.load()
+    stale = cli.dataclasses.replace(stale, llm=replace(stale.llm, model="anthropic/claude-haiku-5-5"))
+    assert cli._test_models(stale) and tested == ["lan/qwen"]
+    assert not cli._test_models(stale), "answered: nothing more to run"
+
+
+def test_connection_names_are_strict_and_problems_belong_to_their_own_connection():
+    found, problems = connections_from_env(
+        {
+            "FORENOON_LLM_lan_URL": "http://x/v1",
+            "FORENOON_LLM_LAN__URL": "http://x/v1",
+            "FORENOON_LLM__X_URL": "http://x/v1",
+            "FORENOON_LLM_URL": "http://x/v1",
+            "FORENOON_LLM_EMPTY_URL": "  ",
+            "FORENOON_LLM_LAN_BOX_URL": "http://x/v1",
+            "FORENOON_LLM_LAN_BOX_CONTEXT": "8000",
+        }
+    )
+    assert found == () and len(problems) == 5, "an empty address is not set, the rest are named"
+    router = Router({}, problems)
+    assert "set FORENOON_LLM_LAN_URL" in router.check("lan/qwen"), "LAN_BOX's problem is not LAN's"
+    assert "FORENOON_LLM_LAN_BOX_CONTEXT" in router.check("lan_box/qwen")
+
+
+def test_a_refused_key_is_not_quoted_back():
+    class Refusing(Server):
+        def __call__(self, request):
+            return httpx.Response(401, json={"error": {"message": "Incorrect API key provided: sk-ab***xyz"}})
+
+    with pytest.raises(Unreachable) as refused:
+        backend(Refusing()).structured("s", "u", SCHEMA, model="lan/qwen")
+    assert "sk-ab" not in str(refused.value) and "the key was refused" in str(refused.value)

@@ -16,6 +16,7 @@ import copy
 import ipaddress
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
@@ -101,13 +102,17 @@ def connections_from_env(environ: Mapping[str, str] | None = None) -> tuple[tupl
     found: list[Connection] = []
     problems: list[str] = []
     for var in sorted(environ):
-        if not (var.startswith(ENV_PREFIX) and var.endswith("_URL")) or len(var) <= len(ENV_PREFIX) + 4:
+        # Left empty, as a compose file's ${VAR:-} line does, is not set.
+        if not (var.startswith(ENV_PREFIX) and var.endswith("_URL")) or not environ[var].strip():
             continue
         prefix = var.removesuffix("URL")
-        name = prefix.removeprefix(ENV_PREFIX).rstrip("_").lower()
-        if not name.replace("_", "").isalnum() or name == "anthropic":
-            problems.append(f"{var}: the name must be letters, digits and underscores, and not ANTHROPIC")
+        raw = prefix.removeprefix(ENV_PREFIX).removesuffix("_")
+        if not re.fullmatch(r"[A-Z0-9]+(_[A-Z0-9]+)*", raw) or raw == "ANTHROPIC":
+            problems.append(
+                f"{var}: the name must be capital letters and digits, joined by single underscores, and not ANTHROPIC"
+            )
             continue
+        name = raw.lower()
         address = environ[var].strip()
         parts = urlsplit(address)
         try:
@@ -293,7 +298,8 @@ class OpenAIBackend:
             slow = isinstance(exc, httpx.TimeoutException) and not down
             raise Unreachable(f"{self.connection.name}: {type(exc).__name__}: {exc}", down=down, timeout=slow) from exc
         if response.status_code >= 400:
-            detail = response.text[:300]
+            # Not for a refused key: the reply may quote part of it.
+            detail = "the key was refused" if response.status_code == 401 else response.text[:300]
             # A server that is up but turns the request down is a bad answer, except for the
             # refusals that another connection would not get: the key, the server's own trouble.
             # A rate limit is neither: this call is lost, the next may go through.
@@ -431,9 +437,10 @@ class Router:
             raise LlmError(str(exc)) from exc
         backend = self._backends.get(connection)
         if backend is None:
-            prefix = f"{ENV_PREFIX}{connection.upper()}_"
-            unread = [p for p in self._problems if p.startswith(prefix)]
-            where = unread[0] if unread else f"set {API_KEY_ENV if connection == 'anthropic' else prefix + 'URL'}"
+            prefix = f"{ENV_PREFIX}{connection.upper()}"
+            # A problem names its variable first: this connection's, not one whose name starts the same.
+            unread = [p for p in self._problems if p.split(maxsplit=1)[0].rstrip(":").rsplit("_", 1)[0] == prefix]
+            where = unread[0] if unread else f"set {API_KEY_ENV if connection == 'anthropic' else prefix + '_URL'}"
             raise Unreachable(f"no connection {connection!r} for the model {model}: {where}", down=True)
         return backend
 
@@ -552,16 +559,14 @@ def models_for_run(cfg: Llm, backend: Backend | None) -> tuple[Llm, str]:
     return replace(cfg, **changes), "; ".join(dict.fromkeys(notes))
 
 
-def backend_from_env(cfg: Llm, connections: tuple[Connection, ...] | None = None) -> Backend | None:
-    """Anthropic when its key is set, and the connections set in the environment (or those
-    given); None when there are none: then the run falls back to newest first and says so in its
-    alert. A server on the network may need no key."""
+def backend_from_env(cfg: Llm) -> Backend | None:
+    """Anthropic when its key is set, and the connections set in the environment; None when
+    there are none: then the run falls back to newest first and says so in its alert. A server
+    on the network may need no key."""
     backends: dict[str, Backend] = {}
     if key := os.environ.get(API_KEY_ENV, ""):
         backends["anthropic"] = AnthropicBackend(cfg, key)
-    problems: list[str] = []
-    if connections is None:
-        connections, problems = connections_from_env()
+    connections, problems = connections_from_env()
     for connection in connections:
         backends[connection.name] = OpenAIBackend(connection)
     return Router(backends, problems) if backends else None

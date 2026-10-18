@@ -1703,6 +1703,8 @@ async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
     let page = admin.get(&site, "/settings").await;
     let csrf = page.csrf();
     assert!(page.text.contains(r#"<button formaction="/settings/test">Save and test</button>"#));
+    let save = page.text.find(r#"<button class="primary">Save</button>"#).unwrap();
+    assert!(save < page.text.find("/settings/test").unwrap(), "Enter in a field saves: Save comes first");
     assert!(page.text.contains("<code>FORENOON_LLM_LAN_URL</code>"), "where a connection is set is said");
 
     // Every field as the page shows it, with the models given.
@@ -1749,7 +1751,7 @@ async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
             .get(&site, "/settings?testing=1")
             .await
             .text
-            .contains("Test asked for: the pipeline runs it within a minute.")
+            .contains("Test asked for: the pipeline, if it is running, runs it within a minute.")
     );
 
     // The pipeline's answer is shown, a line per model.
