@@ -53,6 +53,15 @@ SIDENOTE_CHROME = {"margin-toggle", "sidenote-number"}
 INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", "mono"}
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
+# A box beside the text that is mostly links is a teaser for other pages ("Recommended",
+# "You may like", a topic tag), not part of the article. Real notes and callouts carry a few
+# links in their sentences: in the saved pages none was over 40% link text.
+TEASER_LINK_SHARE = 0.6
+# A pull quote repeats a sentence of the article, set apart for the eye; in a book it is read
+# twice. Shorter than this, a phrase may repeat by chance. What else the box holds beside it
+# (the speaker's name, a caption) is no more than ATTRIBUTION_MAX_WORDS.
+QUOTE_REPEAT_MIN_WORDS = 6
+ATTRIBUTION_MAX_WORDS = 12
 # Syntax highlighting, in the class names of highlight.js, Prism and Pygments. On a
 # greyscale screen the two worth keeping are comments (italic) and keywords (bold).
 CODE_COMMENT_CLASSES = {"comment", "hljs-comment", "c", "c1", "cm", "cs"}
@@ -170,13 +179,17 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
+    page_text = _visible_text(root)
     for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
             el.drop_tree()
             continue
         in_code = any(ancestor.tag == "pre" for ancestor in el.iterancestors())
-        if classes & SIDENOTE_CHROME:
+        boxed = el.tag in ("div", "aside", "section", "p") and (classes & CALLOUT_CLASSES or el.tag == "aside")
+        if classes & SIDENOTE_CHROME or (
+            boxed and el is not root and not classes & SIDENOTE_CLASSES and (_promo(el) or _repeats(el, page_text))
+        ):
             el.drop_tree()
         elif el.tag in ("span", "tt", "font") and in_code:
             if classes & CODE_COMMENT_CLASSES:
@@ -186,8 +199,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         elif el.tag == "tt" or (el.tag in ("span", "font") and classes & INLINE_CODE_CLASSES):
             el.tag = "code"
         elif (
-            el.tag in ("div", "aside", "section", "p")
-            and (classes & CALLOUT_CLASSES or el.tag == "aside")
+            boxed
             and not classes & SIDENOTE_CLASSES
             and el is not root
             and 0 < _words(el.text_content()) <= CALLOUT_MAX_WORDS
@@ -311,6 +323,37 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         if top is not None and top.getparent() is not None:
             top.drop_tree()
     return holder
+
+
+def _promo(box: lxml.html.HtmlElement) -> bool:
+    """Whether a box beside the text sells something else: a sign-up form, or links to other pages."""
+    if box.find(".//form") is not None:
+        return True
+    words = _words(box.text_content())
+    linked = sum(_words(a.text_content()) for a in box.xpath(".//a[not(ancestor::a)]"))
+    return words > 0 and linked >= TEASER_LINK_SHARE * words
+
+
+def _visible_text(root: lxml.html.HtmlElement) -> str:
+    """The page's text as a reader sees it, normalised: not the scripts, which often hold the
+    article a second time as data."""
+    shown = copy.deepcopy(root)
+    for el in list(shown.iter("script", "style", "template", "noscript")):
+        el.drop_tree()
+    return _norm(shown.text_content())
+
+
+def _repeats(box: lxml.html.HtmlElement, page_text: str) -> bool:
+    """Whether a box beside the text is a pull quote: a sentence the page also has elsewhere,
+    with at most a name or a caption beside it."""
+    words = _words(box.text_content())
+    for el in (box, *box.iterdescendants("div", "p", "span", "blockquote", "q")):
+        quote = _norm(el.text_content())
+        quoted = len(quote.split())
+        repeated = quoted >= QUOTE_REPEAT_MIN_WORDS and words - quoted <= ATTRIBUTION_MAX_WORDS
+        if repeated and page_text.count(quote) >= 2:
+            return True
+    return False
 
 
 def _unmark(root: lxml.html.HtmlElement) -> None:

@@ -297,6 +297,11 @@ All fetched content is treated as untrusted.
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
+  - Boxes beside the text that are not the article are dropped: an aside or callout that is
+    mostly link text (a "Recommended" teaser, "You may like", a topic tag), one holding a
+    form (a newsletter sign-up), and a pull quote, a box whose sentence the page already has
+    elsewhere with at most a name or caption beside it. Quotes the author wrote as block
+    quotes are kept even when repeated, since a reply quotes what it answers.
 
   No id or class from the page reaches the book: the ids and link targets are generated.
 

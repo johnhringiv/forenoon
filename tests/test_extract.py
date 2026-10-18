@@ -286,3 +286,30 @@ def test_a_notes_link_back_is_not_taken_for_a_reference():
     assert "A claim in the text." in text and "It goes on for a while" in text and "The note itself." not in text
     assert text.count('class="noteref"') == 1 and notes.count("<aside") == 1
     assert '<a href="#fnref-1">1</a> The note itself.' in notes
+
+
+def test_teasers_sign_ups_and_pull_quotes_are_dropped_but_notes_and_quotes_stay():
+    words = "Plain words about grid storage and the cost of transmission lines. " * 12
+    page = f"""<html><body><article>
+    <p>{words}</p>
+    <aside class="recommended"><p>Recommended</p><div><span>Interview</span>
+      <a href="/content/other">War in Ukraine</a> <a href="/content/other">Another story's headline here</a></div></aside>
+    <aside aria-label="newsletter promotion"><p>Sign up to The Long Read</p><p>Lose yourself in a great story</p>
+      <form><label>Enter your email</label><input type="email"><button>Sign up</button></form></aside>
+    <p>{words} The grid was never built for this much solar at noon.</p>
+    <aside class="post__aside"><div class="pullquote">The grid was never built for this much solar at noon.</div>
+      <p>Jane Doe, Grid Operator</p></aside>
+    <div class="callout">Update: this post has <a href="/follow-up">a follow-up</a> with the corrected figures.</div>
+    <blockquote><p>The grid was never built for this much solar at noon.</p></blockquote>
+    <p>{words}</p>
+    </article></body></html>"""
+    out = lxml.html.tostring(extract("https://news.example/grid", page, "").body, encoding="unicode")
+
+    # Boxes that point elsewhere or ask for an address are not the article.
+    assert "Recommended" not in out and "Another story" not in out
+    assert "Sign up" not in out and "Long Read" not in out
+    # A pull quote repeats a sentence the article has: it goes, its speaker with it.
+    assert "Jane Doe" not in out
+    # A note with a link in it is still a callout; a quote the author wrote stays, repeated or not.
+    assert "<blockquote>Update: this post has" in out and "corrected figures" in out
+    assert out.count("never built for this much solar") == 2  # the paragraph and the quote
