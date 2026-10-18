@@ -2420,6 +2420,14 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     let liked = kindle.get(&site, &link("why-more-topic")).await.text;
     assert!(liked.contains("More on this topic. Liked the depth or format."), "{liked}");
     kindle.get(&site, &link("partway")).await;
+    let skipped = kindle.get(&site, &link("skip")).await.text;
+    assert!(
+        skipped.contains("Why skip it?") && skipped.contains(">Finished<") && skipped.contains(">Stopped partway<")
+    );
+    kindle.get(&site, &link("end-more")).await;
+    kindle.get(&site, &link("why-depth")).await;
+    kindle.get(&site, &link("why-more-topic")).await;
+    kindle.get(&site, &link("partway")).await;
     // A fault in the delivery is reported apart from the rating, which it leaves as it was.
     let reported = kindle.get(&site, &link("problem")).await.text;
     assert!(reported.contains("Reported. Thank you.") && !reported.contains("Change it"));
@@ -2432,7 +2440,8 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     let events: Vec<(String, String)> =
         sqlx::query_as("SELECT signal, source FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
     let signals: Vec<&str> = events.iter().map(|(signal, _)| signal.as_str()).collect();
-    assert_eq!(signals, ["end-not-good", "why-padded", "more", "why-depth", "why-more-topic", "partway", "problem"]);
+    let want = ["end-not-good", "why-padded", "more", "why-depth", "why-more-topic", "partway", "skip", "end-more"];
+    assert_eq!(signals, [&want[..], &["why-depth", "why-more-topic", "partway", "problem"]].concat());
     assert!(events.iter().all(|(_, source)| source == "kindle-footer"));
     let review: String = sqlx::query_scalar("SELECT problem FROM extraction_reviews").fetch_one(pool).await.unwrap();
     assert_eq!(review, "reader: broken or incomplete");

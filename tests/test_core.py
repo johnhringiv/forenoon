@@ -111,6 +111,7 @@ def test_golden_epub_structure_is_stable_and_well_formed():
     assert "alert(" not in article and '<pre><code><span class="ln i0">fn main(' in article
     assert 'src="images/img001.jpg"' in article and "OEBPS/images/img001.jpg" in zf.namelist()
     assert article.count("/f/golden-") == 6
+    assert 'Did not finish it? <a href="https://feedback.example.com/f/golden-partway">' in article
     opf = zf.read("OEBPS/content.opf").decode()
     assert "<dc:title>FN 2026-01-02 · Forenoon · Golden rendering test</dc:title>" in opf
 
@@ -310,9 +311,12 @@ def test_skips_do_not_push_the_verdicts_out_of_what_the_model_sees():
     for n in range(60):  # weeks of "Done with this issue", all newer
         store.upsert_article(f"s{n}", f"https://x.example/s{n}", "Blog", f"Skipped {n}", "", None)
         store.record_feedback("john", f"s{n}", "skip", "kindle-footer", f"2026-10-10T00:{n:02d}:00+00:00")
+    store.upsert_article("p", "https://x.example/p", "Blog", "Progress only", "", None)
+    store.record_feedback("john", "p", "finished", "web", "2026-10-11T00:00:00+00:00")
     entries = rated_entries(User(id="john", name="John", kindle_addresses=()), store, 40)
     assert [e["title"] for e in entries if "verdict" in e] == ["Judged 0", "Judged 1", "Judged 2"]
     assert sum(e.get("progress") == "skipped" for e in entries) == 15
+    assert "Progress only" not in [e["title"] for e in entries]
 
 
 def test_done_with_this_issue_skips_only_what_was_delivered_and_given_nothing():
