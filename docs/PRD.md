@@ -444,7 +444,7 @@ source).
   start-of-run check and one small request, with its time and whether the answer matched,
   written back line by line. The results page refreshes itself (`<meta refresh>`, no
   scripts) until the answer is in, and stops, asking whether the pipeline is running, when the
-  test has not begun in a minute; it is not begun during the morning run
+  test has not begun in two and a half minutes; it is not begun during the morning run
   (`forenoon test-models` from the terminal). Test calls are logged like any other. Three settings: every call uses `llm.model` (Claude Haiku
   5.5), except the choosing of the issue (section 7f), which can have its own
   (`llm.choose_model`): one small call a day that decides what the reader gets, where a
