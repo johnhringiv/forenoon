@@ -167,13 +167,18 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         None => router,
     };
     // Outside everything: a demo host is decided on before any other layer sees the request.
-    let router = match options.demo.is_empty() {
+    let personas: Arc<[demo::Persona]> = Arc::from(options.demo);
+    let router = match personas.is_empty() {
         true => router,
-        false => router.layer(middleware::from_fn_with_state(Arc::from(options.demo), demo::gate)),
+        false => router.layer(middleware::from_fn_with_state(personas.clone(), demo::gate)),
     };
     // Outside everything: the landing host is decided on before any other layer sees the request.
+    // The demo hosts are needed here too: the sitemap lists their pages.
     let router = match options.landing {
-        Some(host) => router.layer(middleware::from_fn_with_state(Arc::<str>::from(host), landing::gate)),
+        Some(host) => {
+            let landing = Arc::new(landing::Landing::new(host, &personas));
+            router.layer(middleware::from_fn_with_state(landing, landing::gate))
+        }
         None => router,
     };
     Ok(router.with_state(state))

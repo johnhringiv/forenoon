@@ -271,8 +271,11 @@ the pages a visitor sees are the product's, so a demo cannot drift from what you
 
 A demo host serves that persona's Newsstand, Archive and Sources, with a banner that names
 the demo, links to the other personas and shows the persona's interests. Nothing on it can be
-changed, and every other address there, the sign-in page included, is 404. Like every page,
-these ask search engines not to index them; a landing page of your own is what gets found.
+changed, and every other address there, the sign-in page included, is 404. Unlike the
+install's own pages, these three may be indexed by search engines (the thumbnails may not).
+With a landing host (`FORENOON_WEB_LANDING`) as well, its `/sitemap.xml` lists the landing
+page and each persona's three pages, and every one of those hosts serves a `/robots.txt`
+that names the sitemap.
 Your own hostname is unchanged: sign in there to look after the personas. Keep your own
 account off the list: a persona is shown as a reader whatever its role, but its Archive shows
 everything weighed for it, so a persona should hold nothing you would not publish.
