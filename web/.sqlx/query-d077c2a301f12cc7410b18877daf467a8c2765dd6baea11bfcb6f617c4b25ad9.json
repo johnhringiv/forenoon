@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT requested_at, answered, started, tested_at, result FROM model_tests WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "requested_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "answered",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "started",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "tested_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "result",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d077c2a301f12cc7410b18877daf467a8c2765dd6baea11bfcb6f617c4b25ad9"
+}

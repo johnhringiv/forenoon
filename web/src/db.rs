@@ -42,7 +42,10 @@ pub async fn pipeline_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 pub struct Usage {
+    /// Priced tokens: what the daily cap counts.
     pub tokens: i64,
+    /// Tokens on servers you run, which cost nothing.
+    pub free_tokens: i64,
     pub cost: f64,
     /// Calls to a model whose price the pipeline does not know: not in `cost`.
     pub unpriced: i64,
@@ -52,9 +55,12 @@ pub struct Usage {
 pub async fn usage_since(pool: &SqlitePool, start: &str) -> Result<Usage, sqlx::Error> {
     sqlx::query_as!(
         Usage,
-        r#"SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS "tokens!: i64",
+        r#"SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
+                    FILTER (WHERE cost IS NULL OR cost > 0), 0) AS "tokens!: i64",
+           COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
+                    FILTER (WHERE cost = 0), 0) AS "free_tokens!: i64",
            COALESCE(SUM(cost), 0.0) AS "cost!: f64",
-           COUNT(*) FILTER (WHERE cost IS NULL AND status != 'error') AS "unpriced!: i64"
+           COUNT(*) FILTER (WHERE cost IS NULL AND status NOT IN ('error', 'unreachable')) AS "unpriced!: i64"
            FROM llm_calls WHERE created_at >= ?"#,
         start
     )

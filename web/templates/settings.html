@@ -9,7 +9,7 @@
 <div class="views"><span>Jump to</span>
 {% if !usage.is_empty() %}<a href="#model-use">Model use</a>{% endif %}
 {% for section in sections %}<a href="#{{ section.id }}">{{ section.title }}</a>
-{% endfor %}</div>
+{% endfor %}<a href="#model-test">Test the models</a></div>
 <form class="sheet wide settings" method="post" action="/settings">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 {% if !usage.is_empty() %}<h2 id="model-use">Model use</h2>
@@ -26,13 +26,21 @@
 {% else if field.kind == "time" %}<input name="{{ field.key }}" type="time" value="{{ field.value }}" required>
 {% else if field.kind == "int" %}<input name="{{ field.key }}" type="number" step="1"{% if let Some(min) = field.min %} min="{{ min }}"{% endif %}{% if let Some(max) = field.max %} max="{{ max }}"{% endif %} value="{{ field.value }}" required>
 {% else if field.kind == "float" %}<input name="{{ field.key }}" type="number" step="any"{% if let Some(min) = field.min %} min="{{ min }}"{% endif %}{% if let Some(max) = field.max %} max="{{ max }}"{% endif %} value="{{ field.value }}" required>
+{% else if field.kind == "model" %}<input name="{{ field.key }}" list="shipped-models" maxlength="200" value="{{ field.value }}" autocomplete="off" spellcheck="false"{% if field.same.is_empty() %} required{% else %} placeholder="{{ field.same }}"{% endif %}>
 {% else if field.kind == "email" %}<input name="{{ field.key }}" type="email" maxlength="254" value="{{ field.value }}" autocomplete="off">
 {% else %}<input name="{{ field.key }}" maxlength="200" value="{{ field.value }}" required>{% endif %}</label>
 {% endif %}
-{% if !field.hint.is_empty() %}<p class="hint">{{ field.hint }}</p>{% endif %}
+{% if !field.hint.is_empty() %}<p class="hint">{{ field.hint }}{% if !field.same.is_empty() %} Empty: {{ field.same|lower }}.{% endif %}</p>{% endif %}
 {% endfor %}
 {% endfor %}
+<datalist id="shipped-models">{% for (id, label) in models %}<option value="{{ id }}">{{ label }}</option>{% endfor %}</datalist>
 <button class="primary">Save</button>
 <p class="hint">Where mail is sent from, the time zone, the public address for rating links and the API keys belong to the deploy and are set in its env file, not here.</p>
+{# After Save, so Enter in a field saves rather than tests. #}
+<h2 id="model-test">Test the models</h2>
+<p class="hint">Saves this page, then sends one small request to each model in Ranking, Claude's as well as your own servers', the way a morning run would, so you know they work before a run depends on them. A model is named with its connection: <code>anthropic/…</code> uses <code>FORENOON_ANTHROPIC_API_KEY</code>; any other is a server that speaks the OpenAI API (OpenAI, Ollama, LM Studio, llama.cpp, vLLM) set in the env file as <code>FORENOON_LLM_&lt;NAME&gt;_URL</code>, so <code>FORENOON_LLM_LAN_URL</code> gives <code>lan/&lt;model id&gt;</code>. See docs/setup-deploy.md.</p>
+<button formaction="/settings/test">Save and test</button>
+{% if let Some(test) = test %}{% if test.state == "done" %}<p class="hint">Last tested {{ test.tested_at }} UTC (<a href="/settings/test">details</a>):</p>
+<ul class="test-result">{% for line in test.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% else if test.refresh() %}<p class="hint"><a href="/settings/test">A test is under way.</a></p>{% else if test.state == "late" %}<p class="hint"><a href="/settings/test">The last test was not begun: see why.</a></p>{% else %}<p class="hint"><a href="/settings/test">The last test did not finish: see why.</a></p>{% endif %}{% endif %}
 </form>
 {% endblock %}

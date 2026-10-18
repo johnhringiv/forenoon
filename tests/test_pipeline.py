@@ -359,6 +359,7 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     rank_module.random = random
 
     assert report.ranking == "model" and len(report.delivered) == 3
+    assert report.model == cfg.llm.model and report.models == "", "no fallback was needed"
     system, prompt = backend.prompts[0]
     assert "untrusted" in system and "Compilers. Not watches." in prompt
     assert '"title": "An old favourite"' in prompt and '"rating": 5' in prompt
@@ -367,11 +368,12 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
     assert set(rows) == set(report.delivered)
     policies = sorted(r["policy"] for r in rows.values())
-    assert policies == ["claude-rank-v2", "claude-rank-v2", "pinned"]
-    ranked = [r for r in rows.values() if r["policy"] == "claude-rank-v2"]
+    assert policies == ["pinned", "rank-v2", "rank-v2"]
+    ranked = [r for r in rows.values() if r["policy"] == "rank-v2"]
     # Two slots after the pinned article: the top score, and one exploration pick.
     assert min(r["rank"] for r in ranked) == 1 and sum(r["explore"] for r in ranked) == 1
     assert all(0 < r["propensity"] <= 1 and len(r["reason"]) <= 140 for r in ranked)
+    assert {r["model"] for r in ranked} == {cfg.llm.model}, "each pick records the model that scored it"
 
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     book = "".join(epub.read(n).decode() for n in epub.namelist() if n.endswith(".xhtml"))
@@ -396,7 +398,10 @@ def test_ranking_falls_back_on_failure_bad_output_and_token_cap(env):
     assert empty.ranking.startswith("fallback: model scored only 0") and len(empty.delivered) == 3
 
     no_key = run(cfg, store, fetcher, user, now=NOW, dry_run=True, backend=None)
-    assert no_key.ranking == "fallback: no API key; set FORENOON_ANTHROPIC_API_KEY in the deploy's env file"
+    assert (
+        no_key.ranking
+        == "fallback: no API key; set FORENOON_ANTHROPIC_API_KEY in the deploy's env file, or a model server as FORENOON_LLM_<NAME>_URL"
+    )
     assert any("Ranking was skipped (no API key" in p for p in problems(no_key, cfg)), "a missing key is alerted"
 
     capped = dataclasses.replace(cfg, llm=dataclasses.replace(cfg.llm, daily_token_cap=1000))
@@ -838,7 +843,7 @@ def test_candidates_on_the_same_event_are_delivered_as_one_story(env):
     assert store.delivered_on("john", "2000", "3000") == 2
     assert ("group", "ok") in [(r["purpose"], r["status"]) for r in store.llm_call_rows()]
     rows = {r["article_id"]: r["policy"] for r in store.selection_rows(user.id)}
-    assert sorted(rows.values()) == ["claude-rank-v2", "claude-rank-v2", "pinned"]
+    assert sorted(rows.values()) == ["pinned", "rank-v2", "rank-v2"]
 
     epub = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
     contents = epub.read("OEBPS/contents.xhtml").decode()

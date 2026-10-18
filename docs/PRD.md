@@ -156,8 +156,10 @@ what its own users configure and delivers only to the addresses its readers have
   start on port 465 instead of STARTTLS; both programs read the same variables), the web
   pages' public address (`FORENOON_PUBLIC_URL`), the shipped model list
   (`FORENOON_MODELS`, set by the image) and the secrets (`FORENOON_FEEDBACK_SECRET`,
-  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`). There is no configuration file.
-- The API key is required: the model chooses the articles. Alerts are on by default and go
+  `FORENOON_SMTP_PASSWORD`, `FORENOON_ANTHROPIC_API_KEY`), and each OpenAI-compatible model
+  server (`FORENOON_LLM_<NAME>_URL` and the variables beside it, section 7). There is no
+  configuration file.
+- A model is required (the Anthropic key, or a model server): it chooses the articles. Alerts are on by default and go
   to every admin's sign-in address unless another address is set.
 
 ## 3. The daily run
@@ -260,7 +262,7 @@ The whole process for one reader's day, in order. The sections named give the de
 9. **Following links** (section 7e). A short pointer post is replaced by the pages it is
    about; a longer article is delivered with the page it responds to, in one story.
 10. **Recorded.** Every score and reason, delivered or not (the archive shows what was
-    passed over and why); for each delivery the policy (`claude-rank-v2`), score, rank,
+    passed over and why); for each delivery the policy (`rank-v2`, and the model that scored it), score, rank,
     whether it was the exploration pick and the probability it was put forward (1 when the
     model chose it); and in the run's report, the model's choice with what became of each.
 
@@ -426,23 +428,55 @@ source).
   goes to one article chosen uniformly at random from those outside the top picks
   (exploration). If an article then fails extraction, the next in order takes its place.
 - **Models.** A model is named with the connection it is reached through,
-  `anthropic/claude-haiku-5-5`; Anthropic is the only connection so far. Two settings: every
-  call uses `llm.model` (Claude Haiku 5.5), except the choosing of the issue (section 7f),
-  which can have its own (`llm.choose_model`): one small call a day that decides what the
-  reader gets, where a stronger model costs cents. Every call is logged and priced under the
-  model it used. The models offered, and their prices, are listed in `web/models.json`,
-  shipped with the app and read-only: the web pages build it in for the Settings page's lists
+  `anthropic/claude-haiku-5-5`. Anthropic is built in. Any other server that speaks the
+  OpenAI chat completions API (OpenAI itself, or LM Studio, Ollama, llama.cpp or vLLM on the
+  network) is a connection set in the pipeline's environment, as with the self-hosted apps
+  that call a model in the background: `FORENOON_LLM_<NAME>_URL`, and optionally its key,
+  the context size the server holds (32,768), an answer limit (16,384), a time limit (300 s),
+  whether the model may reason first (no; not sent to OpenAI) and whether it is free (yes: a
+  server you run costs nothing and stays outside the token cap; only one on a private or
+  local address can be). Its models are then named `<name>/<model id>`, the name in lower
+  case, and typed into the model settings; the shipped models are suggested. A connection
+  whose variables cannot be read is left out, and why is said wherever a model on it is
+  missed. More than one can be set. The web pages never reach a server: the Settings page's
+  **Save and test** saves the page and asks for a test, which the scheduler, looking at the
+  database every five seconds, runs: for each model the settings name, Anthropic's too, the
+  start-of-run check and one small request, with its time and whether the answer matched,
+  written back line by line. The results page refreshes itself (`<meta refresh>`, no
+  scripts) until the answer is in, and stops, asking whether the pipeline is running, when the
+  test has not begun in two and a half minutes; it is not begun during the morning run
+  (`forenoon test-models` from the terminal). Test calls are logged like any other. Three settings: every call uses `llm.model` (Claude Haiku
+  5.5), except the choosing of the issue (section 7f), which can have its own
+  (`llm.choose_model`): one small call a day that decides what the reader gets, where a
+  stronger model costs cents. `llm.fallback_model` replaces a model for the whole run when,
+  at its start, a two-second look at its connection's model list fails or does not list it
+  (Anthropic is taken as reachable when its key is set);
+  the report and the alert say so. Only an unreachable connection moves a run on, never a
+  bad answer. Every call is logged and priced under the model it used, and logged as
+  `unreachable` or `error` when it got no usable answer. The models offered, and their prices, are listed in `web/models.json`,
+  shipped with the app and read-only: the web pages build it in for the Settings page's suggestions
   and the pipeline reads it for prices and for how each model is asked. The answer is a call
   of one tool, forced where the model allows it; a model that refuses a forced tool call
   (Sonnet 5.5, Opus 5.5, so marked in the file) or one not listed is asked for it in the
-  prompt instead.
+  prompt instead. An OpenAI-compatible server is sent the schema in strict mode (every
+  object closed, optional fields made nullable) and in the prompt as well, since a server
+  that enforces it by grammar does not show it to the model. Reasoning left in the text
+  (`<think>`) and a Markdown fence are removed; an answer that is not a JSON object is asked
+  for once more, saying what was wrong; an answer cut off at the answer limit is a bad
+  answer. Ranking and reading-pass batches are sized to the connection's context size, less
+  the whole answer limit: a local server may drop what does not fit without saying. The other
+  calls are not batched and fit 16,384 tokens, the smallest context allowed, at the default
+  settings; choosing the issue grows with the articles read in full, so reading many more
+  than 40 needs a larger context. A connection that cannot be reached (refused, a key refused, or no model list at the start), or whose calls time out twice in a row, is not tried again for the rest of the run; a single timeout or server error loses only that call; a
+  rate limit loses only the one call.
 - **In the book.** Each chosen article shows "Picked because: …" under its byline and on the
   contents page, unless the reader turned that off on their Reading page.
-- **Recorded per delivered article:** policy, score, reason, rank among the day's candidates,
+- **Recorded per delivered article:** policy, the model that scored it, score, reason, rank among the day's candidates,
   whether it was the exploration pick, and the probability the policy put it forward.
 - **Limits.** Before each call the day's logged token use plus an estimate for this call is
   checked against `llm.daily_token_cap` (600,000); over the cap, the call is not made and
-  later batches are skipped; the cap counts cached input too. Every call is logged with
+  later batches are skipped; the cap counts cached input too, and only priced calls: one to
+  a server you run costs nothing and is left out. Every call is logged with
   model, input, cache-write, cache-read and output tokens, outcome and cost. The cost is
   worked out when the call is logged, from each model's published prices in
   `web/models.json` (the API does not report prices), so cached input is priced at the
@@ -941,8 +975,9 @@ See `docs/setup-deploy.md`, `docs/setup-email.md` and `docs/setup-sessions.md`.
 
 ## 15. Not built yet
 
-- Summaries; an OpenAI-compatible connection (OpenAI, or a local model through LM Studio,
-  Ollama, llama.cpp or vLLM) beside Anthropic; a ranker that needs no model call.
+- Summaries; a ranker that needs no model call; shadow mode (a second model ranking beside
+  the real run for a while, reported against the ratings); reasoning set per step rather
+  than per connection.
 - Searching Hacker News and Lobsters by topic rather than by popularity; a watch list for vendor
   announcements.
 - The whole archive of a followed blog; full-text search of stored articles; expiring

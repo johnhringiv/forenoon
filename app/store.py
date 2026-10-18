@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import models
 from .config import Source, User
+from .llm import LlmError, Unreachable
 from .tokens import PROBLEM, REASON_SIGNALS, meaning, with_reason
 
 SCHEMA = """
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS selections (
     rank INTEGER,
     explore INTEGER NOT NULL DEFAULT 0,
     propensity REAL,
+    model TEXT NOT NULL DEFAULT '',  -- the model that scored it, named with its connection
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS extraction_reviews (
@@ -179,6 +181,9 @@ class Store:
         if "deferred_at" not in {row["name"] for row in self.db.execute("PRAGMA table_info(assessments)")}:
             with self.db:
                 self.db.execute("ALTER TABLE assessments ADD COLUMN deferred_at TEXT NOT NULL DEFAULT ''")
+        if "model" not in {row["name"] for row in self.db.execute("PRAGMA table_info(selections)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE selections ADD COLUMN model TEXT NOT NULL DEFAULT ''")
         for column in ("image_url", "description"):
             if column not in have:
                 with self.db:
@@ -360,6 +365,29 @@ class Store:
             )
 
     # send requests (queued by the web app's "Send to Kindle" button)
+
+    # model tests (asked for by the Settings page's Test button; see web/migrations/0027_model_tests.sql)
+
+    def model_test_asked(self) -> str:
+        """When a test of the models was asked for and not yet answered; "" when none is."""
+        if not self._has_table("model_tests"):
+            return ""
+        row = self.db.execute("SELECT requested_at FROM model_tests WHERE requested_at != answered").fetchone()
+        return row["requested_at"] if row else ""
+
+    def record_model_test(self, requested_at: str, result: str, done: bool = True) -> bool:
+        """The answer to the test asked for at `requested_at`, a line per model; with `done`
+        False, the lines so far of one under way. Dropped when another was asked for while it
+        ran, and False then: that one is run next."""
+        with self.db:
+            return (
+                self.db.execute(
+                    "UPDATE model_tests SET started = requested_at, tested_at = ?, result = ?,"
+                    " answered = CASE WHEN ? THEN requested_at ELSE answered END WHERE requested_at = ?",
+                    (now_iso(), result[:4000], int(done), requested_at),
+                ).rowcount
+                > 0
+            )
 
     def send_requests(self) -> list[sqlite3.Row]:
         """Requests not yet handled, oldest first; none until the web app has made its table."""
@@ -774,9 +802,11 @@ class Store:
         error: str = "",
         cache_write: int = 0,
         cache_read: int = 0,
+        priced: bool = True,
     ) -> None:
-        """One call, with what it cost at the model's published prices (none when unknown)."""
-        spent = models.cost(model, input_tokens, output_tokens, cache_write, cache_read)
+        """One call, with what it cost at the model's published prices (none when unknown). A call
+        to a server you run (`priced` False) cost nothing."""
+        spent = models.cost(model, input_tokens, output_tokens, cache_write, cache_read) if priced else 0.0
         with self.db:
             self.db.execute(
                 "INSERT INTO llm_calls (created_at, purpose, model, input_tokens, output_tokens, status, error,"
@@ -788,23 +818,36 @@ class Store:
         """A call that was answered: its tokens as the API counted them."""
         self.log_llm_call(
             purpose, model, reply.input_tokens, reply.output_tokens, status,
-            cache_write=reply.cache_write_tokens, cache_read=reply.cache_read_tokens,
+            cache_write=reply.cache_write_tokens, cache_read=reply.cache_read_tokens, priced=reply.priced,
         )  # fmt: skip
 
+    def log_llm_error(self, purpose: str, model: str, exc: LlmError) -> None:
+        """A call that got no usable answer: "unreachable" when the connection could not be used,
+        "error" when the model answered with something unusable."""
+        status = "unreachable" if isinstance(exc, Unreachable) else "error"
+        self.log_llm_call(
+            purpose, model, exc.input_tokens, exc.output_tokens, status, str(exc)[:300], priced=exc.priced
+        )
+
     def llm_tokens_since(self, start: str) -> int:
-        """Every token since `start`, cached ones too: what the daily cap counts."""
+        """Every priced token since `start`, cached ones too: what the daily cap counts. Calls to a
+        server you run cost nothing (`cost` 0) and are left out; an unknown price counts."""
         row = self.db.execute(
             "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS n"
-            " FROM llm_calls WHERE created_at >= ?",
+            " FROM llm_calls WHERE created_at >= ? AND (cost IS NULL OR cost > 0)",
             (start,),
         ).fetchone()
         return row["n"]
 
     def llm_usage_since(self, start: str) -> sqlite3.Row:
-        """Tokens and cost since `start`. `unpriced` counts calls to a model with no known price."""
+        """Tokens and cost since `start`: `tokens` are the priced ones the daily cap counts,
+        `free_tokens` those on servers you run. `unpriced` counts calls to a model with no known price."""
         return self.db.execute(
-            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS tokens,"
-            " COALESCE(SUM(cost), 0) AS cost, COUNT(*) FILTER (WHERE cost IS NULL AND status != 'error') AS unpriced"
+            "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
+            " FILTER (WHERE cost IS NULL OR cost > 0), 0) AS tokens,"
+            " COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
+            " FILTER (WHERE cost = 0), 0) AS free_tokens,"
+            " COALESCE(SUM(cost), 0) AS cost, COUNT(*) FILTER (WHERE cost IS NULL AND status NOT IN ('error', 'unreachable')) AS unpriced"
             " FROM llm_calls WHERE created_at >= ?",
             (start,),
         ).fetchone()
@@ -823,12 +866,13 @@ class Store:
         rank: int | None,
         explore: bool,
         propensity: float | None,
+        model: str = "",
     ) -> None:
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO selections"
-                " (user_id, article_id, selected_at, policy, score, reason, rank, explore, propensity)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " (user_id, article_id, selected_at, policy, score, reason, rank, explore, propensity, model)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id,
                     article_id,
@@ -839,6 +883,7 @@ class Store:
                     rank,
                     int(explore),
                     propensity,
+                    model,
                 ),
             )
 

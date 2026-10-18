@@ -375,7 +375,7 @@ footer .by { line-height:1 }
 <p>What it needs:</p>
 <ul class="needs">
 <li>A machine that runs Docker and is on in the morning. A NAS is plenty.</li>
-<li>An Anthropic API key. A day's choosing costs about two cents. Without one it still delivers: pinned sources first, then the newest articles in turn across sources.</li>
+<li>A model. An Anthropic API key, at about two cents a day, or any server that speaks the OpenAI API: Ollama, LM Studio, llama.cpp or vLLM on your own GPU. Without one it still delivers: pinned sources first, then the newest articles in turn across sources.</li>
 <li>A mail relay your Kindle accepts, to deliver the book.</li>
 <li>A Cloudflare tunnel, if you want the pages and the rating links reachable away from home.</li>
 </ul>
@@ -390,7 +390,7 @@ footer .by { line-height:1 }
 <p class="lead">Two containers, the pipeline and the web pages, with the tunnel beside them if you want one. Everything is kept in one SQLite file and a folder.</p>
 <pre>git clone https://github.com/johnhringiv/forenoon
 cd forenoon/deploy
-cp .env.example .env    <span class="c"># the mail server, the API key, your time zone</span>
+cp .env.example .env    <span class="c"># the mail server, your time zone, the model: an API key or your own server</span>
 docker compose up -d</pre>
 <p>Then create your reader, add your feeds and write your interests in the browser. The <a href="https://github.com/johnhringiv/forenoon/blob/main/docs/setup-deploy.md">setup guide</a> covers the mail relay, Amazon's approved sender list and the tunnel; the <a href="https://github.com/johnhringiv/forenoon/blob/main/docs/PRD.md">product document</a> describes everything it does today.</p>
 </div>

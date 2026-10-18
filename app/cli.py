@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import logging
+import sqlite3
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -90,7 +92,9 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             print(f"Report written to {path}", file=sys.stderr)
             if not args.dry_run:
                 notify_run(cfg, report)
-                _learn(own, store, backend, user)
+                # On the model the run used: the fallback, when the first could not be reached.
+                used = dataclasses.replace(own.llm, model=report.model or own.llm.model)
+                _learn(dataclasses.replace(own, llm=used), store, backend, user)
             failed += bool(report.delivery_error)
     finally:
         fetcher.close()
@@ -188,15 +192,63 @@ def _check_sources(cfg: Config) -> int:
         return 0
 
 
+TEST_POLL_SECONDS = 5
+
+
+def _test_models(cfg: Config) -> bool:
+    """Run the model test asked for on the Settings page, if there is one. Every few seconds,
+    from the scheduler: only the database is looked at unless a test was asked for."""
+    from .model_test import run_asked
+
+    try:
+        # A cheap look first: opening the Store checks the whole schema.
+        with contextlib.closing(sqlite3.connect(Path(cfg.db_path).as_uri() + "?mode=ro", uri=True)) as db:
+            if not db.execute("SELECT 1 FROM model_tests WHERE requested_at != answered").fetchone():
+                return False
+    except sqlite3.Error as exc:
+        log.debug("no model test looked for: %s", exc)  # no database yet, or no table: the web app makes it
+        return False
+    try:
+        store = Store(cfg.db_path)
+        try:
+            # The settings as just saved with the button: the scheduler's own are a day old.
+            return run_asked(store, load(store).llm)
+        finally:
+            store.close()
+    except Exception:
+        log.exception("the model test failed")
+        return False
+
+
+def _test_models_now(cfg: Config) -> int:
+    from .model_test import test_models
+
+    store = Store(cfg.db_path)
+    try:
+        lines = test_models(cfg.llm, store)
+    finally:
+        store.close()
+    print("\n".join(lines))
+    # A variable listed as ignored changes nothing; a model that failed, or one not read, does.
+    tested = [line for line in lines if not line.startswith("Ignored: ")]
+    return 0 if tested and all(": OK" in line for line in tested) else 1
+
+
 def _schedule(cfg: Config, args: argparse.Namespace) -> int:
     while True:
         cfg = _reload(cfg)
         zone = ZoneInfo(cfg.timezone)
         target = _next_run(cfg, datetime.now(zone))
         log.info("next delivery at %s", target.isoformat())
+        last = time.monotonic()
         while (wait := (target - datetime.now(zone)).total_seconds()) > 0:
-            time.sleep(min(wait, 60))
-            if not args.dry_run:
+            # Every few seconds for a model test, which someone is waiting on; every minute for the rest.
+            time.sleep(min(wait, TEST_POLL_SECONDS))
+            if args.dry_run:
+                continue
+            _test_models(cfg)
+            if time.monotonic() - last >= 60:
+                last = time.monotonic()
                 _add_queue(cfg)  # before sending: a link added to be sent now is queued by it
                 _send_queue(cfg)
                 _check_sources(cfg)
@@ -259,6 +311,10 @@ def _usage(cfg: Config, args: argparse.Namespace) -> int:
     month = store.llm_usage_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
     print(f"\nToday: {today['tokens']} of {cfg.llm.daily_token_cap} tokens, about ${today['cost']:.4f}.")
     print(f"This month: {month['tokens']} tokens, about ${month['cost']:.2f}.")
+    if month["free_tokens"]:
+        print(
+            f"Also {today['free_tokens']} today and {month['free_tokens']} this month on servers you run, at no cost."
+        )
     if month["unpriced"]:
         print(f"{month['unpriced']} calls this month were to a model with no known price, and are not counted.")
     print(
@@ -355,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("send-queue", help="send the articles readers asked for on the web pages, now")
     sub.add_parser("feedback-log", help="print logged feedback")
     sub.add_parser("usage", help="print recent model calls and today's token use")
+    sub.add_parser("test-models", help="send one small request to each model the settings name")
     p = sub.add_parser("checks", help="print articles the model thought were badly extracted")
     p.add_argument("--all", action="store_true", help="include the ones it judged fine")
     sub.add_parser("thumbs", help="make the web pages' thumbnails for articles delivered earlier")
@@ -393,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
             return _replay(cfg, args)
         if args.command == "usage":
             return _usage(cfg, args)
+        if args.command == "test-models":
+            return _test_models_now(cfg)
         return _feedback_log(cfg, args)
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)

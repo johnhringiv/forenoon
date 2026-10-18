@@ -1,9 +1,13 @@
 //! The settings page: how the pipeline behaves, for the whole install. Admins only.
 //!
 //! `settings.json` describes every setting offered and its default; a Python test holds it to
-//! the pipeline's own defaults. The model settings offer the models in `models.json`, the list
-//! shipped with the app that the pipeline also reads for prices. Only a value that differs from the default is stored, so a
-//! default that changes in a later version reaches an install that never touched it.
+//! the pipeline's own defaults. A model setting is typed, named with its connection, and
+//! suggests the models in `models.json`, the list shipped with the app that the pipeline also
+//! reads for prices. Only a value that differs from the default is stored, so a default that
+//! changes in a later version reaches an install that never touched it.
+//!
+//! The Test button asks the pipeline, which holds the connections and their keys, to send one
+//! small request to each model named (see `app/model_test.py`); its answer is shown here.
 
 use std::{collections::HashMap, sync::LazyLock};
 
@@ -22,7 +26,7 @@ use chrono_tz::Tz;
 use std::str::FromStr;
 
 use crate::{
-    auth::AuthSession,
+    auth::{AuthSession, User},
     db::{self, now_iso},
     pages::{AppState, NOT_FROM_HERE, Nav, Page, allowed, csrf_token, html, reader, refused, thousands},
 };
@@ -34,8 +38,7 @@ const ADMINS_ONLY: &str = "Settings are managed by an admin.";
 struct Spec {
     section: String,
     key: String,
-    /// "time", "choice", "int", "float", "bool", "text" or "email"; "model" is read as a choice
-    /// of the shipped models.
+    /// "time", "choice", "int", "float", "bool", "text", "email" or "model".
     kind: String,
     default: serde_json::Value,
     label: String,
@@ -45,13 +48,9 @@ struct Spec {
     max: Option<f64>,
     #[serde(default)]
     choices: Vec<(String, String)>,
-    /// For a model setting: the label of the empty choice, "the same as another", if it has one.
+    /// For a model setting: what leaving it empty means ("the model above"), if it may be empty.
     #[serde(default)]
     same: String,
-    /// A model setting: its choices are the shipped models, and a model not among them (one
-    /// saved before it left the list) is kept, not replaced by the first in the list.
-    #[serde(skip)]
-    models: bool,
 }
 
 #[derive(Deserialize)]
@@ -65,16 +64,13 @@ struct Models {
     models: Vec<Model>,
 }
 
-static SPECS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
-    let mut specs: Vec<Spec> = serde_json::from_str(include_str!("../settings.json")).expect("settings.json is valid");
+static SPECS: LazyLock<Vec<Spec>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("../settings.json")).expect("settings.json is valid"));
+
+/// The shipped models, suggested in the model settings: (id, label).
+static SHIPPED: LazyLock<Vec<(String, String)>> = LazyLock::new(|| {
     let models: Models = serde_json::from_str(include_str!("../models.json")).expect("models.json is valid");
-    for spec in specs.iter_mut().filter(|spec| spec.kind == "model") {
-        spec.kind = "choice".to_owned();
-        spec.models = true;
-        spec.choices = (!spec.same.is_empty()).then(|| (String::new(), spec.same.clone())).into_iter().collect();
-        spec.choices.extend(models.models.iter().map(|model| (model.id.clone(), model.label.clone())));
-    }
-    specs
+    models.models.into_iter().map(|model| (model.id, model.label)).collect()
 });
 
 impl Spec {
@@ -103,9 +99,16 @@ impl Spec {
                     });
                 if ok { Ok(text.to_owned()) } else { bad("give a time such as 06:00") }
             }
-            "choice" => match self.choices.iter().any(|(value, _)| value == text) || self.models && model_name(text) {
+            "choice" => match self.choices.iter().any(|(value, _)| value == text) {
                 true => Ok(text.to_owned()),
                 false => bad("choose one of the options"),
+            },
+            "model" if text.is_empty() && !self.same.is_empty() => Ok(String::new()),
+            "model" => match model_name(text) {
+                true => Ok(text.to_owned()),
+                false => bad(
+                    "name a model with its connection in lower case, as in anthropic/claude-haiku-5-5 or lan/qwen3.8-27b",
+                ),
             },
             "int" | "float" => {
                 let number =
@@ -129,11 +132,16 @@ impl Spec {
     }
 }
 
-/// A model named with its connection, as in anthropic/claude-haiku-5-5.
+/// A model named with its connection, as in anthropic/claude-haiku-5-5. The connection is in
+/// lower case, as the pipeline names it: FORENOON_LLM_LAN_URL is `lan`.
 fn model_name(text: &str) -> bool {
     text.len() <= MAX_TEXT
         && !text.chars().any(|c| c.is_control() || c.is_whitespace())
-        && text.split_once('/').is_some_and(|(connection, model)| !connection.is_empty() && !model.is_empty())
+        && text.split_once('/').is_some_and(|(connection, model)| {
+            !connection.is_empty()
+                && connection.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                && !model.is_empty()
+        })
 }
 
 struct Field {
@@ -141,6 +149,8 @@ struct Field {
     kind: &'static str,
     label: &'static str,
     hint: &'static str,
+    /// For a model setting: what leaving it empty means.
+    same: &'static str,
     value: String,
     on: bool,
     changed: bool,
@@ -171,6 +181,79 @@ struct SettingsPage {
     saved: bool,
     /// What the model has used today and this month, and what it cost.
     usage: Vec<String>,
+    /// Suggested in the model settings.
+    models: &'static [(String, String)],
+    test: Option<TestView>,
+}
+
+/// Seconds a test may wait for the pipeline to begin before the page stops refreshing and
+/// asks whether it is running: it looks every few seconds, but not during the morning run, and
+/// one asked for again begins when the request under way for the last returns (two minutes
+/// at most).
+const TEST_PICKUP: i64 = 150;
+/// Seconds without word from a test under way before the page gives up on it (each model has
+/// two minutes at most).
+const TEST_SILENCE: i64 = 300;
+
+/// The last test of the models: asked for, under way, or answered.
+struct TestView {
+    /// "waiting", "late" (not begun in TEST_PICKUP), "running", "silent" or "done".
+    state: &'static str,
+    tested_at: String,
+    lines: Vec<String>,
+}
+
+impl TestView {
+    fn refresh(&self) -> bool {
+        matches!(self.state, "waiting" | "running")
+    }
+}
+
+fn seconds_since(stamp: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(stamp)
+        .map(|at| (Utc::now() - at.with_timezone(&Utc)).num_seconds())
+        .unwrap_or(0)
+}
+
+async fn test_view(state: &AppState) -> Result<Option<TestView>, sqlx::Error> {
+    let row = sqlx::query!("SELECT requested_at, answered, started, tested_at, result FROM model_tests WHERE id = 1")
+        .fetch_optional(&state.pool)
+        .await?;
+    Ok(row.map(|row| {
+        let state = if row.answered == row.requested_at {
+            "done"
+        } else if row.started == row.requested_at {
+            if seconds_since(&row.tested_at) > TEST_SILENCE { "silent" } else { "running" }
+        } else if seconds_since(&row.requested_at) > TEST_PICKUP {
+            "late"
+        } else {
+            "waiting"
+        };
+        TestView {
+            state,
+            tested_at: row.tested_at.get(..16).unwrap_or(&row.tested_at).replace('T', " "),
+            lines: row.result.lines().map(str::to_owned).collect(),
+        }
+    }))
+}
+
+#[derive(Template)]
+#[template(path = "model_test.html")]
+struct TestPage {
+    nav: Option<Nav>,
+    test: TestView,
+}
+
+/// The test's progress and result, refreshing itself while the pipeline works on it.
+pub async fn test_page(State(state): State<AppState>, auth: AuthSession) -> Page {
+    let user = reader(&auth)?;
+    if !user.is_admin() {
+        return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
+    }
+    let Some(test) = test_view(&state).await? else {
+        return Ok(Redirect::to("/settings#model-test").into_response());
+    };
+    html(StatusCode::OK, TestPage { nav: Nav::new(&state, &user, "settings").await?, test })
 }
 
 /// Today's and this month's use of the model, in the install's time zone (the pipeline's day).
@@ -200,6 +283,13 @@ async fn usage(state: &AppState, stored: &HashMap<String, String>) -> Result<Vec
         ),
         format!("This month: {} tokens, about ${:.2}.", thousands(month.tokens), month.cost),
     ];
+    if month.free_tokens > 0 {
+        lines.push(format!(
+            "Also {} tokens today and {} this month on servers you run, which cost nothing and are not capped.",
+            thousands(day.free_tokens),
+            thousands(month.free_tokens)
+        ));
+    }
     if month.unpriced > 0 {
         lines.push(format!(
             "{} calls this month were to a model with no known price and are not in the cost.",
@@ -220,16 +310,14 @@ fn sections(shown: &HashMap<String, String>, stored: &HashMap<String, String>) -
     for spec in SPECS.iter() {
         let default = spec.default_text();
         let value = shown.get(&spec.key).cloned().unwrap_or_else(|| default.clone());
-        let mut choices: Vec<(String, String, bool)> =
+        let choices: Vec<(String, String, bool)> =
             spec.choices.iter().map(|(key, label)| (key.clone(), label.clone(), *key == value)).collect();
-        if spec.models && !choices.iter().any(|(_, _, selected)| *selected) {
-            choices.push((value.clone(), format!("{value} (not in the list)"), true));
-        }
         let field = Field {
             key: &spec.key,
             kind: &spec.kind,
             label: &spec.label,
             hint: &spec.hint,
+            same: &spec.same,
             on: value == "1",
             changed: stored.get(&spec.key).is_some_and(|saved| *saved != default),
             choices,
@@ -250,6 +338,30 @@ pub struct PageQuery {
     saved: Option<String>,
 }
 
+/// The page, with `typed` in the fields when a form was refused (else what is stored) and the
+/// problem said; a 400 then.
+async fn render(
+    state: &AppState,
+    user: &User,
+    session: &Session,
+    typed: Option<HashMap<String, String>>,
+    error: Option<String>,
+    saved: bool,
+) -> Page {
+    let stored = stored(state).await?;
+    let page = SettingsPage {
+        nav: Nav::new(state, user, "settings").await?,
+        csrf: csrf_token(session).await?,
+        sections: sections(typed.as_ref().unwrap_or(&stored), &stored),
+        saved,
+        usage: usage(state, &stored).await?,
+        models: &SHIPPED,
+        test: test_view(state).await?,
+        error,
+    };
+    html(if page.error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK }, page)
+}
+
 pub async fn page(
     State(state): State<AppState>,
     auth: AuthSession,
@@ -260,24 +372,17 @@ pub async fn page(
     if !user.is_admin() {
         return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
     }
-    let stored = stored(&state).await?;
-    let page = SettingsPage {
-        nav: Nav::new(&state, &user, "settings").await?,
-        csrf: csrf_token(&session).await?,
-        sections: sections(&stored, &stored),
-        error: None,
-        saved: query.saved.is_some(),
-        usage: usage(&state, &stored).await?,
-    };
-    html(StatusCode::OK, page)
+    render(&state, &user, &session, None, None, query.saved.is_some()).await
 }
 
-pub async fn save(
-    State(state): State<AppState>,
+/// Saves the form; with `test`, also asks the pipeline to test the models it names.
+async fn save_form(
+    state: AppState,
     auth: AuthSession,
     session: Session,
     headers: HeaderMap,
-    Form(form): Form<HashMap<String, String>>,
+    form: HashMap<String, String>,
+    test: bool,
 ) -> Page {
     let user = reader(&auth)?;
     if !user.is_admin() {
@@ -296,16 +401,7 @@ pub async fn save(
                 for spec in SPECS.iter().filter(|spec| spec.kind == "bool") {
                     typed.insert(spec.key.clone(), if form.contains_key(&spec.key) { "1" } else { "0" }.to_owned());
                 }
-                let stored = stored(&state).await?;
-                let page = SettingsPage {
-                    nav: Nav::new(&state, &user, "settings").await?,
-                    csrf: csrf_token(&session).await?,
-                    sections: sections(&typed, &stored),
-                    error: Some(problem),
-                    saved: false,
-                    usage: usage(&state, &stored).await?,
-                };
-                return html(StatusCode::BAD_REQUEST, page);
+                return render(&state, &user, &session, Some(typed), Some(problem), false).await;
             }
         }
     }
@@ -327,8 +423,38 @@ pub async fn save(
             .await?;
         }
     }
+    if test {
+        sqlx::query!(
+            "INSERT INTO model_tests (id, requested_at) VALUES (1, ?)
+             ON CONFLICT (id) DO UPDATE SET requested_at = excluded.requested_at, answered = '', started = '', result = ''",
+            now
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
-    Ok(Redirect::to("/settings?saved=1").into_response())
+    Ok(Redirect::to(if test { "/settings/test" } else { "/settings?saved=1" }).into_response())
+}
+
+pub async fn save(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<HashMap<String, String>>,
+) -> Page {
+    save_form(state, auth, session, headers, form, false).await
+}
+
+/// The Test button: saves the form, then asks for the test.
+pub async fn test(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Form(form): Form<HashMap<String, String>>,
+) -> Page {
+    save_form(state, auth, session, headers, form, true).await
 }
 
 #[cfg(test)]
@@ -359,8 +485,10 @@ mod tests {
         assert!(check("alerts.to", "").is_ok() && check("alerts.to", "nope").is_err());
         assert!(check("llm.model", "anthropic/claude-sonnet-5-5").is_ok());
         assert!(check("llm.model", "").is_err() && check("llm.model", "claude-haiku-5-5").is_err());
-        // One no longer listed, saved before, is kept; it must still name its connection.
+        // Any model typed is kept, as long as it names its connection.
         assert!(check("llm.model", "anthropic/claude-haiku-5-5-20261001").is_ok());
+        assert!(check("llm.model", "lan/unsloth/Qwen3.8-27B-GGUF").is_ok());
+        assert!(check("llm.model", "gpu_box/qwen").is_ok() && check("llm.model", "LAN/qwen").is_err());
         assert!(check("llm.model", "anthropic/").is_err() && check("llm.model", "anthropic/a b").is_err());
         assert!(
             check("llm.choose_model", "").is_ok() && check("llm.choose_model", "anthropic/claude-opus-5-5").is_ok()

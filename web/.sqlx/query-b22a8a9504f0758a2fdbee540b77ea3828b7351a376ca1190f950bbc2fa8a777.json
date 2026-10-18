@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)\n                    FILTER (WHERE cost IS NULL OR cost > 0), 0) AS \"tokens!: i64\",\n           COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)\n                    FILTER (WHERE cost = 0), 0) AS \"free_tokens!: i64\",\n           COALESCE(SUM(cost), 0.0) AS \"cost!: f64\",\n           COUNT(*) FILTER (WHERE cost IS NULL AND status NOT IN ('error', 'unreachable')) AS \"unpriced!: i64\"\n           FROM llm_calls WHERE created_at >= ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "tokens!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "free_tokens!: i64",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "cost!: f64",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "unpriced!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b22a8a9504f0758a2fdbee540b77ea3828b7351a376ca1190f950bbc2fa8a777"
+}
