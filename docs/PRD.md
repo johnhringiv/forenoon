@@ -565,15 +565,15 @@ source).
     internet addresses alone, by the address it resolves itself: https only, and never this
     machine, the LAN or the Docker host, whatever a redirect, socket, worker or DNS answer
     says. Service workers are blocked.
-  Chrome refuses the page if its figures are not as many as the saved page's, opens any
-  closed `<details>`, and photographs each figure as it first appears, caption hidden. The
-  picture replaces what the figure held, with a line saying it is interactive on the
-  original page; without a picture (none taken, or not kept for the article's picture
-  budget) the figure keeps its own text, with the line. The container touches
-  `<data>/sessions/.fetch/alive` every five seconds, and nothing is asked for while it is
-  stale, so an install without it never waits; a page whose pictures time out is not
-  followed by more requests for pictures in that run, and a request for a subscriber's page
-  that waits behind a busy container does not count as the container being down.
+    Chrome refuses the page if its figures are not as many as the saved page's, opens any
+    closed `<details>`, and photographs each figure as it first appears, caption hidden. The
+    picture replaces what the figure held, with a line saying it is interactive on the
+    original page; without a picture (none taken, or not kept for the article's picture
+    budget) the figure keeps its own text, with the line. The container touches
+    `<data>/sessions/.fetch/alive` every five seconds, and nothing is asked for while it is
+    stale, so an install without it never waits; a page whose pictures time out is not
+    followed by more requests for pictures in that run, and a request for a subscriber's page
+    that waits behind a busy container does not count as the container being down.
 - There were Calibre news recipes here until October 2026, fetching whole papers once a day.
   They went once every source had a feed: the subscriber sessions above fetch only what the
   ranking picks. Articles that came in through a recipe keep the route `recipe`.
