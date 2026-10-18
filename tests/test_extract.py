@@ -313,3 +313,29 @@ def test_teasers_sign_ups_and_pull_quotes_are_dropped_but_notes_and_quotes_stay(
     # A note with a link in it is still a callout; a quote the author wrote stays, repeated or not.
     assert "<blockquote>Update: this post has" in out and "corrected figures" in out
     assert out.count("never built for this much solar") == 2  # the paragraph and the quote
+
+
+def test_boxes_of_real_text_are_never_dropped_as_teasers_or_repeats():
+    words = "<p>" + "Plain words about grid storage and the cost of transmission lines. " * 12 + "</p>"
+    note = "Editor's note: this story was updated on Friday to include a response from the ministry."
+    caption = "Residents wade through the flooded high street in Tewkesbury on Sunday morning"
+    cases = {
+        # Every copy is in a box, so none is the article's own: one of them stays.
+        "response from the ministry": f"<aside><p>{note}</p></aside>{words}<div class='notice'><p>{note}</p></div>",
+        "Polls close": "<aside class='callout'><p>Polls close at 8pm on Thursday in every district.</p>"
+        "<p>Polls close at 8pm on Thursday in every district.</p></aside>",
+        # A note whose sentence is one link, and a footnote that is all citation.
+        "follow-up post": "<div class='notice'><b>Update:</b> <a href='/f'>I wrote a follow-up post with new numbers</a>.</div>",
+        "Department of Energy": "<p>Claim<a href='#fn1' id='r1'>1</a>.</p><aside id='fn1'><a href='#r1'>1</a> "
+        "<a href='https://example.com/r.pdf'>Department of Energy annual report</a></aside>",
+        # Repeated only in a hidden lightbox: the picture's caption is not a pull quote.
+        "Tewkesbury": f"<aside><figure><img src='https://e.com/a.jpg'><figcaption>{caption}</figcaption></figure></aside>"
+        f"<div class='lightbox' hidden><p>{caption}</p></div>",
+    }
+    for needle, box in cases.items():
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
+    # A short article in a callout-classed wrapper with a comment form under it is the article.
+    page = f"<html><body><div class='notice'><article>{words * 3}</article><form><textarea></textarea></form></div></body></html>"
+    assert extract("https://news.example/b", page, "", "page").status == "clean"

@@ -57,6 +57,9 @@ CALLOUT_MAX_WORDS = 400
 # "You may like", a topic tag), not part of the article. Real notes and callouts carry a few
 # links in their sentences: in the saved pages none was over 40% link text.
 TEASER_LINK_SHARE = 0.6
+# A sign-up box is a form and a line or two selling it; a box with more text than this beside
+# its form (an article with a comment form under it) is not one.
+FORM_BOX_MAX_WORDS = 60
 # A pull quote repeats a sentence of the article, set apart for the eye; in a book it is read
 # twice. Shorter than this, a phrase may repeat by chance. What else the box holds beside it
 # (the speaker's name, a caption) is no more than ATTRIBUTION_MAX_WORDS.
@@ -179,17 +182,25 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
-    page_text = _visible_text(root)
+    # Boxes are judged against the page as it was, before any is dropped: the text outside
+    # every box (where a pull quote's sentence must also be), and what in-page links point at.
+    outside = _visible_text(root, without_boxes=True)
+    linked_to = {href[1:] for href in root.xpath("//a/@href") if href.startswith("#") and len(href) > 1}
     for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
             el.drop_tree()
             continue
         in_code = any(ancestor.tag == "pre" for ancestor in el.iterancestors())
-        boxed = el.tag in ("div", "aside", "section", "p") and (classes & CALLOUT_CLASSES or el.tag == "aside")
-        if classes & SIDENOTE_CHROME or (
-            boxed and el is not root and not classes & SIDENOTE_CLASSES and (_promo(el) or _repeats(el, page_text))
-        ):
+        boxed = _boxed(el, classes)
+        droppable = (
+            boxed
+            and el is not root
+            and not classes & SIDENOTE_CLASSES
+            and _words(el.text_content()) <= CALLOUT_MAX_WORDS
+            and not any(target in linked_to for target in el.xpath("descendant-or-self::*/@id"))
+        )
+        if classes & SIDENOTE_CHROME or (droppable and (_promo(el) or _repeats(el, outside))):
             el.drop_tree()
         elif el.tag in ("span", "tt", "font") and in_code:
             if classes & CODE_COMMENT_CLASSES:
@@ -325,33 +336,47 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     return holder
 
 
+def _boxed(el: lxml.html.HtmlElement, classes: set[str]) -> bool:
+    """A box beside the text: an aside, or a block classed as a callout."""
+    return el.tag in ("div", "aside", "section", "p") and (bool(classes & CALLOUT_CLASSES) or el.tag == "aside")
+
+
 def _promo(box: lxml.html.HtmlElement) -> bool:
     """Whether a box beside the text sells something else: a sign-up form, or links to other pages."""
-    if box.find(".//form") is not None:
+    forms = box.findall(".//form")
+    if forms and _words(box.text_content()) - sum(_words(f.text_content()) for f in forms) <= FORM_BOX_MAX_WORDS:
         return True
+    # Two links at least: a note may be one sentence that is all one link ("Update: I wrote a
+    # follow-up"); a teaser links a section and a headline, or several stories.
+    links = box.xpath(".//a[not(ancestor::a)]")
     words = _words(box.text_content())
-    linked = sum(_words(a.text_content()) for a in box.xpath(".//a[not(ancestor::a)]"))
-    return words > 0 and linked >= TEASER_LINK_SHARE * words
+    linked = sum(_words(a.text_content()) for a in links)
+    return len(links) >= 2 and words > 0 and linked >= TEASER_LINK_SHARE * words
 
 
-def _visible_text(root: lxml.html.HtmlElement) -> str:
-    """The page's text as a reader sees it, normalised: not the scripts, which often hold the
-    article a second time as data."""
+def _visible_text(root: lxml.html.HtmlElement, without_boxes: bool = False) -> str:
+    """The page's text as a reader sees it, normalised: not the head, hidden elements or the
+    scripts, which often hold the article a second time as data. `without_boxes`: nor the
+    text of any box beside it."""
     shown = copy.deepcopy(root)
-    for el in list(shown.iter("script", "style", "template", "noscript")):
+    hidden = ".//head | .//script | .//style | .//template | .//noscript | .//*[@hidden] | .//*[@aria-hidden='true']"
+    for el in shown.xpath(hidden):
         el.drop_tree()
+    if without_boxes:
+        for el in list(shown.iter("div", "aside", "section", "p")):
+            if el is not shown and _boxed(el, _classes(el)):
+                el.drop_tree()  # one inside a box already dropped goes with it, harmlessly
     return _norm(shown.text_content())
 
 
-def _repeats(box: lxml.html.HtmlElement, page_text: str) -> bool:
-    """Whether a box beside the text is a pull quote: a sentence the page also has elsewhere,
-    with at most a name or a caption beside it."""
+def _repeats(box: lxml.html.HtmlElement, outside: str) -> bool:
+    """Whether a box beside the text is a pull quote: a sentence that is also in the text
+    outside every box, with at most a name or a caption beside it."""
     words = _words(box.text_content())
     for el in (box, *box.iterdescendants("div", "p", "span", "blockquote", "q")):
         quote = _norm(el.text_content())
         quoted = len(quote.split())
-        repeated = quoted >= QUOTE_REPEAT_MIN_WORDS and words - quoted <= ATTRIBUTION_MAX_WORDS
-        if repeated and page_text.count(quote) >= 2:
+        if quoted >= QUOTE_REPEAT_MIN_WORDS and words - quoted <= ATTRIBUTION_MAX_WORDS and quote in outside:
             return True
     return False
 
