@@ -1811,6 +1811,14 @@ def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, mon
         # A figure with a picture shows it in place of its own text; one without keeps the text.
         assert out.count("<img") == (1 if "paper" in url else 0)
         assert out.count("Noon 40") == (1 if "paper" in url else 2)
+    # A picture that cannot be kept (not a picture at all, here) gives the figure its text back.
+    monkeypatch.setattr(sessions, "figure_shots", lambda sessions_dir, session, url, figures, total: {0: b"not a jpeg"})
+    result = extract("https://bad.example/grid", page, "", "page")
+    article, _ = app.pipeline._assemble(types.SimpleNamespace(url="https://bad.example/grid", id="x", title="Grid",
+        site="", author="", published=None, discussion_url="", also=(), source=Source("Blog"),
+        sources=lambda: [Source("Blog")]), result, None, cfg)  # fmt: skip
+    out = etree.tostring(article.body, encoding="unicode")
+    assert "<img" not in out and out.count("Noon 40") == 2
     # Asked with the site's session, or with none; each article once.
     assert asked == [
         ("site-paper.example", "https://www.paper.example/grid", [0, 1], 2),

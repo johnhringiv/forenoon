@@ -33,10 +33,11 @@ MAX_BYTES = 5 * 1024 * 1024
 SIGNED_OUT = "Sign-in needed: "
 
 _silent_until = 0.0  # nothing answered: the browser container is not running
+_no_shots_until = 0.0  # a page's pictures timed out: the container is busy with it
 STATUS = "status.json"  # where the browser container says how each session last went
 ALIVE = "alive"  # in FOLDER, touched by the browser container every few seconds
 ALIVE_SECONDS = 30.0
-SHOTS_WAIT = 300.0  # seconds for one page's pictures: the pause between pages, then each figure
+SHOTS_WAIT = 150.0  # seconds for one page's pictures; the container stops at this too
 MAX_SHOTS_BYTES = 40 * 1024 * 1024
 
 
@@ -85,8 +86,11 @@ def figure_shots(
     it was saved), as JPEG, from the browser container: with the named session, or none when
     `session` is "". A figure it could not take is missing from the answer. Raises FetchError
     when there is no answer at all, or the live page's figures are not the saved page's."""
+    global _no_shots_until
     if not browser_running(sessions_dir):
         raise FetchError("the browser container is not running")
+    if time.monotonic() < _no_shots_until:
+        raise FetchError("pictures timed out earlier in this run")
     folder = sessions_dir / FOLDER
     name = uuid.uuid4().hex
     request, answer, error = folder / f"{name}.json", folder / f"{name}.shots", folder / f"{name}.err"
@@ -109,6 +113,7 @@ def figure_shots(
                 except (ValueError, TypeError, AttributeError) as exc:
                     raise FetchError(f"unreadable pictures: {exc}") from exc
             time.sleep(poll)
+        _no_shots_until = time.monotonic() + RETRY_AFTER  # a page that hangs it; not again this run
         raise FetchError(f"pictures took longer than {wait:.0f}s")
     finally:
         for path in (request, answer, error):
@@ -138,6 +143,8 @@ def fetch(sessions_dir: Path, session: str, url: str, wait: float = WAIT, poll: 
                 return page.read_text(encoding="utf-8", errors="replace")
             time.sleep(poll)
         if request.exists():  # never picked up
+            if browser_running(sessions_dir):  # running, and busy with something else
+                raise FetchError(f"the browser container was busy for {wait:.0f}s")
             _silent_until = time.monotonic() + RETRY_AFTER
             raise FetchError("session fetcher is not answering; is the browser container running?")
         raise FetchError(f"session fetch took longer than {wait:.0f}s")

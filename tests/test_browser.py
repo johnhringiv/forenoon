@@ -262,3 +262,36 @@ def test_the_browser_takes_pictures_with_the_sites_session_or_with_none(tmp_path
     ]
     # A failed picture says nothing about the session: the Sources page shows how its pages go.
     assert not (out / "status.json").exists()
+
+
+def test_the_pictures_proxy_reaches_nothing_but_public_https():
+    import socket
+
+    runner = _fetcher()
+    proxy = runner._PublicProxy()
+    proxy.start()
+    for target in ("127.0.0.1:443", "localhost:443", "10.0.0.5:443", "192.168.1.1:443", "[::1]:443", "example.com:80"):
+        with socket.create_connection(("127.0.0.1", proxy.port)) as client:
+            client.sendall(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+            assert client.recv(100).startswith(b"HTTP/1.1 403"), target
+    with socket.create_connection(("127.0.0.1", proxy.port)) as client:
+        client.sendall(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        assert client.recv(100).startswith(b"HTTP/1.1 403")
+
+
+def test_a_busy_browser_is_not_taken_for_a_stopped_one(tmp_path):
+    from app import sessions
+    from app.fetch import FetchError
+
+    (tmp_path / ".fetch").mkdir()
+    (tmp_path / ".fetch" / "alive").touch()  # running, but never picks the request up
+    sessions._silent_until = 0.0
+    with pytest.raises(FetchError, match="busy"):
+        sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=0.05, poll=0.01)
+    assert sessions._silent_until == 0.0, "the next page is still asked for"
+    # Pictures that time out are not asked for again in the same run.
+    with pytest.raises(FetchError, match="longer than"):
+        sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=0.05, poll=0.01)
+    with pytest.raises(FetchError, match="timed out earlier"):
+        sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=5)
+    sessions._no_shots_until = 0.0

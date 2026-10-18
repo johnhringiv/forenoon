@@ -47,6 +47,7 @@ FETCH_GAP = 20.0  # seconds between two pages from one site: a reader, not a cra
 ALIVE = "alive"
 MAX_SHOTS = 20
 MAX_SHOT_BYTES = 2 * 1024 * 1024
+MAX_SHOTS_TOTAL = 24 * 1024 * 1024  # one answer, under the pipeline's limit once in base64
 MAX_SHOT_HEIGHT = 3000  # CSS pixels: taller is a page section, not a figure
 # Roughly the width an article's column has on a desktop, so a figure is laid out as its
 # author drew it; pictures are scaled down for the Kindle later.
@@ -286,17 +287,18 @@ def take_shots(
 ) -> dict[int, bytes]:
     """Pictures of a page's figures as it first draws them, by their number in document order
     (of `total`, as the pipeline counted them in the saved page). With a session, the page is
-    read signed in as the reader. A figure that cannot be shown (hidden, too tall) is left out,
-    and so is every one once `until` has passed. Raises ValueError saying why there are none."""
+    read signed in as the reader. A figure that cannot be shown (hidden, too tall) is left out.
+
+    The page is any public site's, scripts and all, so Chrome runs in its own sandbox, in a
+    process of its own that is killed at `until` whatever the page does, and reaches the
+    network only through a proxy that connects to public addresses alone. Raises ValueError
+    saying why there are no pictures."""
     domain = session.get("domain", "").lower()
     if session and not (session.get("cookie") and on_site(url, domain)):
         raise ValueError(f"not a page on {domain}")
     parts = urlsplit(url)
     if parts.scheme != "https" or not _public(parts.hostname or ""):
         raise ValueError("not a public https address")
-    from playwright.sync_api import Error as BrowserError  # only in the image; not needed to test the rest
-    from playwright.sync_api import sync_playwright
-
     site = domain or (parts.hostname or "").lower()
     wait = _last_visit.get(site, 0.0) + FETCH_GAP - time.monotonic()
     if wait > 0:
@@ -305,46 +307,153 @@ def take_shots(
         raise ValueError("nobody is waiting for these pictures any more")
     _start_display()
     state = _state_file(name or domain, session, state_dir) if session else None
+    job = {
+        "url": url,
+        "cookie": session.get("cookie", ""),
+        "domain": domain,
+        "state": str(state) if state is not None and state.exists() else "",
+        "figures": figures[:MAX_SHOTS],
+        "total": total,
+        "until": until,
+    }
     try:
-        return _shoot(sync_playwright, BrowserError, url, session, domain, state, figures[:MAX_SHOTS], total, until)
-    except BrowserError as exc:
-        raise ValueError(f"the browser failed: {str(exc).splitlines()[0][:200]}") from exc
+        return _shoot_apart(job, until)
     finally:
         _last_visit[site] = time.monotonic()
 
 
-def _public_only(route) -> None:
-    """Let a page (its pictures, scripts, frames and calls) reach the public internet only:
-    never this machine, the LAN or the Docker host."""
-    host = (urlsplit(route.request.url).hostname or "").lower()
-    if route.request.url.startswith(("data:", "blob:")) or (host and _public_cached(host)):
-        route.continue_()
-    else:
-        route.abort()
+def _shoot_apart(job: dict, until: float) -> dict[int, bytes]:
+    """Run the pictures in a child process (`fetcher.py --shoot`), killed with everything it
+    started once `until` has passed: a page that never stops running cannot hold this up."""
+    child = subprocess.Popen(
+        [sys.executable, __file__, "--shoot"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+    )  # fmt: skip
+    try:
+        out, err = child.communicate(json.dumps(job).encode(), timeout=max(1.0, until - time.time()))
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, 9)
+        child.communicate()
+        raise ValueError("the page took longer than anyone would wait") from None
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, 9)
+    if child.returncode != 0:
+        lines = err.decode(errors="replace").strip().splitlines()
+        raise ValueError(lines[-1][:300] if lines else "the browser failed")
+    return {int(n): base64.b64decode(data) for n, data in json.loads(out).items()}
 
 
-_public_hosts: dict[str, bool] = {}
+def _shoot_job() -> int:
+    """In the child: read the job, take the pictures, print them as JSON of base64 by number."""
+    from playwright.sync_api import Error as BrowserError
+    from playwright.sync_api import sync_playwright
+
+    job = json.loads(sys.stdin.read())
+    proxy = _PublicProxy()
+    proxy.start()
+    try:
+        taken = _shoot(sync_playwright, BrowserError, job, proxy.port)
+    except BrowserError as exc:
+        print(f"the browser failed: {str(exc).splitlines()[0][:200]}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(str(exc)[:300], file=sys.stderr)
+        return 1
+    print(json.dumps({str(n): base64.b64encode(picture).decode() for n, picture in taken.items()}))
+    return 0
 
 
-def _public_cached(host: str) -> bool:
-    if host not in _public_hosts:
-        _public_hosts[host] = _public(host)
-    return _public_hosts[host]
+class _PublicProxy(threading.Thread):
+    """An HTTPS proxy for Chrome that opens connections to public internet addresses only, by
+    the address it resolved and connects to itself: no redirect, socket, worker or DNS trick
+    can reach this machine, the LAN or the Docker host through it. Plain http is refused."""
+
+    def __init__(self) -> None:
+        super().__init__(daemon=True)
+        self.server = socket.socket()
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(64)
+        self.port = self.server.getsockname()[1]
+
+    def run(self) -> None:
+        while True:
+            client, _ = self.server.accept()
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    @staticmethod
+    def _serve(client: socket.socket) -> None:
+        upstream = None
+        try:
+            client.settimeout(30)
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 8192:
+                chunk = client.recv(4096)
+                if not chunk:
+                    return
+                head += chunk
+            method, target, *_ = head.split(b"\r\n", 1)[0].decode("latin-1").split(" ")
+            host, _, port = target.rpartition(":")
+            if method != "CONNECT" or port != "443":
+                client.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                return
+            found = socket.getaddrinfo(host.strip("[]"), 443, proto=socket.IPPROTO_TCP)
+            addresses = [entry[4] for entry in found if ipaddress.ip_address(entry[4][0]).is_global]
+            if not addresses or len(addresses) != len(found):
+                client.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                return
+            upstream = socket.create_connection(addresses[0][:2], timeout=30)
+            client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            _relay(client, upstream)
+        except (OSError, ValueError, UnicodeError):
+            pass
+        finally:
+            client.close()
+            if upstream is not None:
+                upstream.close()
 
 
-def _shoot(sync_playwright, browser_error, url, session, domain, state, figures, total, until) -> dict[int, bytes]:
+def _relay(a: socket.socket, b: socket.socket) -> None:
+    import select
+
+    a.settimeout(None)
+    b.settimeout(None)
+    while True:
+        ready, _, _ = select.select([a, b], [], [], 60)
+        if not ready:
+            return
+        for source in ready:
+            data = source.recv(65536)
+            if not data:
+                return
+            (b if source is a else a).sendall(data)
+
+
+def _shoot(sync_playwright, browser_error, job: dict, proxy_port: int) -> dict[int, bytes]:
+    url, figures, total, until = job["url"], job["figures"], job["total"], job["until"]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=False,
-            args=["--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+            chromium_sandbox=True,
+            proxy={"server": f"http://127.0.0.1:{proxy_port}", "bypass": "<-loopback>"},
+            args=[
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-quic",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            ],
             ignore_default_args=["--enable-automation"],
         )
         try:
-            saved = str(state) if state is not None and state.exists() else None
-            context = browser.new_context(viewport=SHOT_VIEWPORT, device_scale_factor=1.5, storage_state=saved)
-            context.route("**/*", _public_only)
-            if session and saved is None:
-                context.add_cookies(_cookies(session["cookie"], domain))
+            context = browser.new_context(
+                viewport=SHOT_VIEWPORT,
+                device_scale_factor=1.5,
+                storage_state=job["state"] or None,
+                service_workers="block",
+            )
+            if job["cookie"] and not job["state"]:
+                context.add_cookies(_cookies(job["cookie"], job["domain"]))
+            context.set_default_timeout(15_000)
             page = context.new_page()
             _load(page, url)
             # Figures in a closed <details> are not drawn until it is opened.
@@ -356,8 +465,9 @@ def _shoot(sync_playwright, browser_error, url, session, domain, state, figures,
             if count != total:
                 raise ValueError(f"the page has {count} figures now, not the {total} it was saved with")
             taken: dict[int, bytes] = {}
+            size = 0
             for number in figures:
-                if time.time() > until:
+                if time.time() > until or size > MAX_SHOTS_TOTAL:
                     break
                 if not 0 <= number < count:
                     continue
@@ -375,8 +485,9 @@ def _shoot(sync_playwright, browser_error, url, session, domain, state, figures,
                     picture = figure.screenshot(type="jpeg", quality=90, timeout=15_000)
                 except browser_error:
                     continue  # this figure only
-                if len(picture) <= MAX_SHOT_BYTES:
+                if len(picture) <= MAX_SHOT_BYTES and size + len(picture) <= MAX_SHOTS_TOTAL:
                     taken[number] = picture
+                    size += len(picture)
             return taken
         finally:
             browser.close()
@@ -497,6 +608,8 @@ def sign_in_ends(name: str, session: dict[str, str], state_dir: Path = BROWSER_S
 
 
 def main(argv: list[str]) -> int:
+    if argv[1:] == ["--shoot"]:
+        return _shoot_job()
     log("fetching pages for subscriber sessions")
     # The pipeline asks for pictures only while this is fresh.
     threading.Thread(target=_beat, args=(OUT / FETCH / ALIVE,), daemon=True).start()
