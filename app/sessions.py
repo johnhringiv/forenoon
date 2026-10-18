@@ -73,18 +73,27 @@ def browser_running(sessions_dir: Path) -> bool:
 
 
 def figure_shots(
-    sessions_dir: Path, session: str, url: str, figures: list[int], wait: float = SHOTS_WAIT, poll: float = 0.5
+    sessions_dir: Path,
+    session: str,
+    url: str,
+    figures: list[int],
+    total: int,
+    wait: float = SHOTS_WAIT,
+    poll: float = 0.5,
 ) -> dict[int, bytes]:
-    """Pictures of the page's figures (numbered in document order), as JPEG, from the browser
-    container: with the named session, or none when `session` is "". A figure it could not
-    take is missing from the answer. Raises FetchError when there is no answer at all."""
+    """Pictures of the page's figures (numbered in document order, of `total` on the page as
+    it was saved), as JPEG, from the browser container: with the named session, or none when
+    `session` is "". A figure it could not take is missing from the answer. Raises FetchError
+    when there is no answer at all, or the live page's figures are not the saved page's."""
     if not browser_running(sessions_dir):
         raise FetchError("the browser container is not running")
     folder = sessions_dir / FOLDER
     name = uuid.uuid4().hex
     request, answer, error = folder / f"{name}.json", folder / f"{name}.shots", folder / f"{name}.err"
     partial = folder / f".{name}.tmp"
-    partial.write_text(json.dumps({"session": session, "url": url, "shots": figures}), encoding="utf-8")
+    until = time.time() + wait  # past this nobody waits: the container drops the request
+    asked = {"session": session, "url": url, "shots": figures, "figures": total, "until": until}
+    partial.write_text(json.dumps(asked), encoding="utf-8")
     partial.replace(request)
     deadline = time.monotonic() + wait
     try:

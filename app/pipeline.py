@@ -251,33 +251,43 @@ MAX_FIGURE_SHOTS = 20  # pictures of interactive figures per article; each takes
 
 def _figure_shots(item: Item, result: Extracted, cfg: Config) -> None:
     """Put a picture of each interactive figure (see extract.SHOT_ID) where the page drew it,
-    as it first appears, taken by the browser container; and under it, or alone when there is
-    no picture, a line saying the figure is interactive on the original page."""
+    as it first appears, taken by the browser container, in place of what the figure held
+    without the page's scripts; and a line saying the figure is interactive on the original
+    page. Without a picture the figure keeps its own text, with that line above it."""
     holders = result.body.xpath(f'.//p[starts-with(@id, "{SHOT_ID}")]')
     if not holders:
         return
-    numbers = [int(holder.get("id").removeprefix(SHOT_ID)) for holder in holders]
+    numbers, total = [], 0
+    for holder in holders:
+        number, _, total_text = holder.get("id").removeprefix(SHOT_ID).partition("-")
+        numbers.append(int(number))
+        total = int(total_text)
     room = min(MAX_FIGURE_SHOTS, cfg.images.max_count_per_article - len(result.body.xpath(".//img")))
     shots: dict[int, bytes] = {}
     if room > 0:
         site = sessions.for_url(cfg.sessions, item.url)
+        session = sessions.name(site) if site else ""
         try:
-            shots = sessions.figure_shots(
-                cfg.sessions_dir, sessions.name(site) if site else "", item.url, numbers[:room]
-            )
+            shots = sessions.figure_shots(cfg.sessions_dir, session, item.url, numbers[:room], total)
         except FetchError as exc:
             log.info("no pictures of interactive figures for %s: %s", item.url, exc)
     for holder, number in zip(holders, numbers, strict=True):
         del holder.attrib["id"]
-        if number in shots:
-            picture = lxml.html.Element("img", src="data:image/jpeg;base64," + base64.b64encode(shots[number]).decode())
-            picture.set("alt", "An interactive figure, as the original page first shows it")
-            holder.addprevious(picture)
         holder.text = "Interactive on the "
         link = lxml.html.Element("a", href=item.url)
         link.text = "original page"
         link.tail = "."
         holder.append(link)
+        figure = holder.getparent()
+        if number not in shots or figure is None or figure.tag != "figure":
+            continue
+        for child in list(figure):
+            if child is not holder and child.tag != "figcaption":
+                figure.remove(child)
+        holder.tail = None
+        picture = lxml.html.Element("img", src="data:image/jpeg;base64," + base64.b64encode(shots[number]).decode())
+        picture.set("alt", "An interactive figure, as the original page first shows it")
+        holder.addprevious(picture)
 
 
 def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> tuple[Article | None, int]:

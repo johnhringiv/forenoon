@@ -305,12 +305,18 @@ def test_interactive_figures_leave_a_placeholder_and_ordinary_ones_are_kept():
     result = extract("https://blog.example/codecs", page, "", "page")
     out = lxml.html.tostring(result.body, encoding="unicode")
 
-    # The chart is the page's second figure: its labels are gone, its caption stays.
-    assert '<figure><p id="shot-1">An interactive figure from the original page.</p>' in out
-    assert "Encode time by quality" in out and "0 ms" not in out and "Scale" not in out
+    # The chart is the page's second of five figures: a placeholder leads it, and its own
+    # text and caption stay for a book made without a picture.
+    assert '<figure><p id="shot-1-5">An interactive figure from the original page.</p>' in out
+    assert "Encode time by quality" in out
     # Pictures, code, quotes and players are kept as they are.
     assert "car.jpg" in out and "let x = 1;" in out and "A quote worth keeping" in out
     assert out.count('id="shot-') == 1
+    # Figures a browser running scripts does not count are not counted.
+    hidden = f"<html><body><article>{words}<noscript><figure><img src='https://e.com/a.jpg'></figure></noscript>{chart}{words}</article></body></html>"
+    assert 'id="shot-0-1"' in lxml.html.tostring(
+        extract("https://blog.example/x", hidden, "", "page").body, encoding="unicode"
+    )
     # A feed's copy is not the page a browser shows: no placeholder there.
     fed = extract("https://blog.example/codecs", None, f"{words}{chart}{words}{words}", "feed")
     assert "shot-" not in lxml.html.tostring(fed.body, encoding="unicode")

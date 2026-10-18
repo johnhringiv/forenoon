@@ -54,9 +54,10 @@ INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", 
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
 # A figure drawn by the page's own scripts (a chart, a slider comparing pictures): without
-# them it is only its labels, run together. It has controls, a canvas or a script, or a
-# drawing beside a button, and none of what a figure keeps as it is (a picture, a video or
-# audio player, a table, code or a quote, an embedded tweet among them).
+# them it is often only its labels, run together. It has controls, a canvas or a script, and
+# none of what a figure keeps as it is (a picture, a video or audio player, a table, code or
+# a quote, an embedded tweet among them). A drawing with a button is not enough: static
+# diagrams have download buttons.
 WIDGET_MARKERS = ".//input | .//select | .//textarea | .//fieldset | .//canvas | .//script"
 WIDGET_KEPT = ".//img | .//picture | .//video | .//audio | .//table | .//iframe | .//pre | .//code | .//blockquote"
 SHOT_ID = "shot-"  # the placeholder left for such a figure: the pipeline puts a picture of it here
@@ -68,6 +69,7 @@ INLINE_WRAPPERS = ("a", "sup", "sub", "span", "b", "i", "em", "strong", "small")
 MARK = "data-fn"  # our own marker attributes, set by _structure and read by sanitize
 MARK_N = "data-fn-n"
 MARK_FIRST = "data-fn-first"
+MARK_OF = "data-fn-of"  # a shot's placeholder: how many figures the page has
 
 MIN_WORDS = 40
 MAX_PREVIEW_URL = 2000
@@ -161,30 +163,30 @@ def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: 
 
 def _interactive(figure: lxml.html.HtmlElement) -> bool:
     """Whether a figure is drawn by the page's scripts; see WIDGET_MARKERS."""
-    if figure.xpath(WIDGET_KEPT):
-        return False
-    return bool(figure.xpath(WIDGET_MARKERS)) or bool(
-        figure.xpath(".//button") and figure.xpath(".//svg[not(ancestor::button)]")
-    )
+    return not figure.xpath(WIDGET_KEPT) and bool(figure.xpath(WIDGET_MARKERS))
 
 
 def _mark_widgets(root: lxml.html.HtmlElement) -> None:
-    """Replace each interactive figure's insides with a placeholder that says which of the
-    page's figures it was (counted in document order, as a browser counts them), keeping its
-    caption. A browser can then take a picture of that figure for the book."""
-    figures = list(root.iter("figure"))
+    """Put a placeholder first in each interactive figure, saying which of the page's figures
+    it is (counted in document order as a browser with scripts counts them: not inside
+    <noscript> or <template>) and how many the page has. A browser can then take a picture of
+    that figure for the book; the figure's own text stays for when it cannot."""
+    figures = [
+        figure
+        for figure in root.iter("figure")
+        if not any(ancestor.tag in ("noscript", "template") for ancestor in figure.iterancestors())
+    ]
     for number, figure in enumerate(figures):
-        if root not in figure.iterancestors() or not _interactive(figure):
-            continue  # inside a figure already replaced, or an ordinary one
-        captions = figure.findall(".//figcaption")
-        for child in list(figure):
-            figure.remove(child)
-        figure.text = None
-        holder = etree.SubElement(figure, "p")
+        if not _interactive(figure):
+            continue
+        holder = lxml.html.Element("p")
         holder.set(MARK, "shot")
         holder.set(MARK_N, str(number))
+        holder.set(MARK_OF, str(len(figures)))
         holder.text = "An interactive figure from the original page."
-        figure.extend(captions)
+        holder.tail = figure.text
+        figure.text = None
+        figure.insert(0, holder)
 
 
 def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False) -> lxml.html.HtmlElement | None:
@@ -413,8 +415,8 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
             keep.update({"id": f"fn-{number}", "class": "footnote"})
         elif mark == "target":
             keep["id"] = f"sec-{number}"
-        elif mark == "shot" and tag == "p":
-            keep["id"] = f"{SHOT_ID}{number}"
+        elif mark == "shot" and tag == "p" and el.get(MARK_OF, "").isdigit():
+            keep["id"] = f"{SHOT_ID}{number}-{el.get(MARK_OF)}"
         if tag == "a" and mark == "ref":
             keep.update({"href": f"#fn-{number}", "class": "noteref"})
             if el.get(MARK_FIRST):

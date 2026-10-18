@@ -1787,14 +1787,14 @@ def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, mon
     cfg, _, _ = env
     cfg = dataclasses.replace(cfg, sessions=("paper.example",))
     words = "<p>" + "Plain words about grid storage and the price of power at noon. " * 12 + "</p>"
-    chart = "<figure><canvas></canvas><figcaption>Prices by hour</figcaption></figure>"
+    chart = "<figure><canvas></canvas><p>Noon 40 · Night 12</p><figcaption>Prices by hour</figcaption></figure>"
     page = f"<html><body><article>{words}{chart}{words}{chart}{words}</article></body></html>"
     picture = io.BytesIO()
     Image.new("RGB", (400, 300), "white").save(picture, "JPEG")
     asked = []
 
-    def figure_shots(sessions_dir, session, url, figures):
-        asked.append((session, url, figures))
+    def figure_shots(sessions_dir, session, url, figures, total):
+        asked.append((session, url, figures, total))
         if "down" in url:
             raise FetchError("the browser container is not running")
         return {figures[0]: picture.getvalue()}  # the second could not be shown
@@ -1808,9 +1808,11 @@ def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, mon
         out = etree.tostring(article.body, encoding="unicode")
         notes = out.count(f'Interactive on the <a href="{url}">original page</a>.')
         assert notes == 2 and "shot-" not in out and out.count("Prices by hour") == 2
+        # A figure with a picture shows it in place of its own text; one without keeps the text.
         assert out.count("<img") == (1 if "paper" in url else 0)
+        assert out.count("Noon 40") == (1 if "paper" in url else 2)
     # Asked with the site's session, or with none; each article once.
     assert asked == [
-        ("site-paper.example", "https://www.paper.example/grid", [0, 1]),
-        ("", "https://down.example/grid", [0, 1]),
+        ("site-paper.example", "https://www.paper.example/grid", [0, 1], 2),
+        ("", "https://down.example/grid", [0, 1], 2),
     ]

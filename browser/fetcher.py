@@ -276,17 +276,24 @@ def _browse(sync_playwright, url: str, cookie: str, domain: str, state: Path) ->
 
 
 def take_shots(
-    url: str, session: dict[str, str], name: str, figures: list[int], state_dir: Path = BROWSER_STATE
+    url: str,
+    session: dict[str, str],
+    name: str,
+    figures: list[int],
+    total: int,
+    until: float,
+    state_dir: Path = BROWSER_STATE,
 ) -> dict[int, bytes]:
-    """Pictures of a page's figures as it first draws them, by their number in document order.
-    With a session, the page is read signed in as the reader. A figure that cannot be shown
-    (hidden, too tall) is left out. Raises ValueError saying why there are none."""
-    parts = urlsplit(url)
+    """Pictures of a page's figures as it first draws them, by their number in document order
+    (of `total`, as the pipeline counted them in the saved page). With a session, the page is
+    read signed in as the reader. A figure that cannot be shown (hidden, too tall) is left out,
+    and so is every one once `until` has passed. Raises ValueError saying why there are none."""
     domain = session.get("domain", "").lower()
-    if session and not on_site(url, domain):
+    if session and not (session.get("cookie") and on_site(url, domain)):
         raise ValueError(f"not a page on {domain}")
-    if parts.scheme not in ("http", "https") or not _public(parts.hostname or ""):
-        raise ValueError("not a public address")
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not _public(parts.hostname or ""):
+        raise ValueError("not a public https address")
     from playwright.sync_api import Error as BrowserError  # only in the image; not needed to test the rest
     from playwright.sync_api import sync_playwright
 
@@ -294,17 +301,38 @@ def take_shots(
     wait = _last_visit.get(site, 0.0) + FETCH_GAP - time.monotonic()
     if wait > 0:
         time.sleep(wait)
+    if time.time() > until:
+        raise ValueError("nobody is waiting for these pictures any more")
     _start_display()
     state = _state_file(name or domain, session, state_dir) if session else None
     try:
-        return _shoot(sync_playwright, BrowserError, url, session, domain, state, figures[:MAX_SHOTS])
+        return _shoot(sync_playwright, BrowserError, url, session, domain, state, figures[:MAX_SHOTS], total, until)
     except BrowserError as exc:
         raise ValueError(f"the browser failed: {str(exc).splitlines()[0][:200]}") from exc
     finally:
         _last_visit[site] = time.monotonic()
 
 
-def _shoot(sync_playwright, browser_error, url, session, domain, state, figures) -> dict[int, bytes]:
+def _public_only(route) -> None:
+    """Let a page (its pictures, scripts, frames and calls) reach the public internet only:
+    never this machine, the LAN or the Docker host."""
+    host = (urlsplit(route.request.url).hostname or "").lower()
+    if route.request.url.startswith(("data:", "blob:")) or (host and _public_cached(host)):
+        route.continue_()
+    else:
+        route.abort()
+
+
+_public_hosts: dict[str, bool] = {}
+
+
+def _public_cached(host: str) -> bool:
+    if host not in _public_hosts:
+        _public_hosts[host] = _public(host)
+    return _public_hosts[host]
+
+
+def _shoot(sync_playwright, browser_error, url, session, domain, state, figures, total, until) -> dict[int, bytes]:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=False,
@@ -314,6 +342,7 @@ def _shoot(sync_playwright, browser_error, url, session, domain, state, figures)
         try:
             saved = str(state) if state is not None and state.exists() else None
             context = browser.new_context(viewport=SHOT_VIEWPORT, device_scale_factor=1.5, storage_state=saved)
+            context.route("**/*", _public_only)
             if session and saved is None:
                 context.add_cookies(_cookies(session["cookie"], domain))
             page = context.new_page()
@@ -321,18 +350,25 @@ def _shoot(sync_playwright, browser_error, url, session, domain, state, figures)
             # Figures in a closed <details> are not drawn until it is opened.
             page.evaluate("() => document.querySelectorAll('details').forEach(d => { d.open = true; })")
             page.wait_for_timeout(1000)
-            found = page.locator("figure")
-            count = found.count()
+            # Counted as the pipeline counted the saved page: another count means another page,
+            # and figure 3 here would not be its figure 3.
+            count = page.evaluate("() => document.querySelectorAll('figure').length")
+            if count != total:
+                raise ValueError(f"the page has {count} figures now, not the {total} it was saved with")
             taken: dict[int, bytes] = {}
             for number in figures:
+                if time.time() > until:
+                    break
                 if not 0 <= number < count:
                     continue
-                figure = found.nth(number)
                 try:
-                    if not figure.is_visible():
+                    figure = page.evaluate_handle("n => document.querySelectorAll('figure')[n]", number).as_element()
+                    if figure is None or not figure.is_visible():
                         continue
                     figure.scroll_into_view_if_needed(timeout=5_000)
                     page.wait_for_timeout(1500)  # what it loads once it is in view
+                    # The caption stays in the book as text: not in the picture as well.
+                    figure.evaluate("f => f.querySelectorAll('figcaption').forEach(c => { c.style.display = 'none'; })")
                     box = figure.bounding_box()
                     if not box or box["height"] > MAX_SHOT_HEIGHT or box["width"] < 50 or box["height"] < 50:
                         continue
@@ -355,9 +391,12 @@ def _answer(path: Path, content: bytes) -> None:
 
 def _answer_shots(request: Path, wanted: dict, url: str, name: str, logins: Path, shooter) -> None:
     """Pictures of a page's figures, with the named session or with none ("")."""
-    figures = wanted["shots"]
-    if not isinstance(figures, list) or not all(isinstance(n, int) and not isinstance(n, bool) for n in figures):
+    figures, total, until = wanted["shots"], wanted.get("figures"), wanted.get("until")
+    numbers = (figures if isinstance(figures, list) else []) + [total]
+    if not isinstance(figures, list) or not all(isinstance(n, int) and not isinstance(n, bool) for n in numbers):
         raise ValueError("not a list of figures")
+    if not isinstance(until, int | float) or isinstance(until, bool) or time.time() > until:
+        raise ValueError("nobody is waiting for these pictures any more")
     session: dict[str, str] = {}
     if name:
         named = SESSION.fullmatch(name)
@@ -366,10 +405,28 @@ def _answer_shots(request: Path, wanted: dict, url: str, name: str, logins: Path
         session = read_session(name, logins)
         if session and session.get("domain", "").lower() != named.group(1):
             raise ValueError("the session is saved for another site")
-    taken = shooter(url, session, name, figures)
+    taken = shooter(url, session, name, figures, total, until)
     encoded = {str(n): base64.b64encode(picture).decode() for n, picture in taken.items()}
     _answer(request.with_suffix(".shots"), json.dumps(encoded).encode())
     log(f"took {len(taken)} of {len(figures)} figures on {urlsplit(url).hostname}")
+
+
+def _asked_at(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _beat(alive: Path, every: float = 5.0) -> None:
+    """Touch `alive` for as long as this runs, a long page included."""
+    while True:
+        try:
+            alive.parent.mkdir(parents=True, exist_ok=True)
+            alive.touch()
+        except OSError as exc:
+            log(f"cannot touch {alive}: {exc}")
+        time.sleep(every)
 
 
 def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page, shooter=take_shots) -> int:
@@ -381,12 +438,15 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page, s
     for stale in folder.iterdir():  # answers nobody collected
         if stale.is_file() and stale.stat().st_mtime < cutoff:
             stale.unlink(missing_ok=True)
-    asked = sorted(p for p in folder.iterdir() if REQUEST.fullmatch(p.name))
+    # In the order they were asked, not by their random names.
+    asked = sorted((p for p in folder.iterdir() if REQUEST.fullmatch(p.name)), key=_asked_at)
     for request in asked:
         name, pictures = "?", False
         try:
             wanted = json.loads(request.read_text(encoding="utf-8"))
             request.unlink()  # taken: the pipeline now waits for the answer
+            if not isinstance(wanted, dict):
+                raise TypeError("not a request")
             name, url = str(wanted.get("session", "")), str(wanted.get("url", ""))
             pictures = "shots" in wanted
             if pictures:
@@ -401,7 +461,7 @@ def answer_fetches(out: Path = OUT, logins: Path = LOGINS, fetcher=fetch_page, s
             page = fetcher(url, session, name)
             _answer(request.with_suffix(".html"), page)
             record(out, name, True, f"fetched a page ({len(page)} bytes)", expires=sign_in_ends(name, session))
-        except (OSError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - every request is answered, so nobody waits for nothing
             request.unlink(missing_ok=True)
             _answer(request.with_suffix(".err"), str(exc)[:300].encode())
             if SESSION.fullmatch(name) and not pictures:  # a session's status is about its pages
@@ -438,11 +498,10 @@ def sign_in_ends(name: str, session: dict[str, str], state_dir: Path = BROWSER_S
 
 def main(argv: list[str]) -> int:
     log("fetching pages for subscriber sessions")
+    # The pipeline asks for pictures only while this is fresh.
+    threading.Thread(target=_beat, args=(OUT / FETCH / ALIVE,), daemon=True).start()
     while True:
         try:
-            alive = OUT / FETCH / ALIVE
-            alive.parent.mkdir(parents=True, exist_ok=True)
-            alive.touch()  # the pipeline asks for pictures only while this is fresh
             answer_fetches()
         except Exception as exc:  # noqa: BLE001 - one bad request must not stop the fetcher
             log(f"page fetcher: {exc}")
