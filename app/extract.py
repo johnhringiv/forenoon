@@ -46,13 +46,12 @@ LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 NOTE_LABEL = re.compile(r"^[\[(]?(\d{1,3}|[*†‡§¶]{1,3}|[a-z])[\])]?$")
 NOTE_MAX_CHARS = 4000
-# "Figure 3", "Equation (2)", "Sec. 4": the name of something numbered in the text, then its
-# number as a link. That is a cross-reference to it, not a footnote. "Boston 1" and "see
-# Note 3" are footnotes.
+# "Figure 3", "Equation (2)", "Fig. 4": the capitalised name of something numbered in the
+# text, right before its number as a link. That is a cross-reference to it, not a footnote.
+# "Boston 1", "see Note 3" and a sentence ending "…in the appendix." before a note are notes.
 CROSS_REFERENCE = re.compile(
-    r"\b(fig(ure)?s?|tab(le)?s?|eq(uation)?s?|eqn|app(endix)?|chap(ter)?|alg(orithm)?|"
-    r"listing|theorem|thm|lemma|corollary|proposition|definition)\.?\s*\(?$|§\s*$",
-    re.IGNORECASE,
+    r"\b(Fig(ure)?s?|Tables?|Eq(uation)?s?|Eqn|Appendix|Chapter|Algorithm|Listing|Theorem|Lemma|"
+    r"Corollary|Proposition|Definition)\s+\(?$|\b(Figs?|Eqs?|Eqn|Tab|App|Chap|Alg|Thm)\.\s*\(?$|§\s*$"
 )
 NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
@@ -90,19 +89,23 @@ FURNITURE_CLASS = re.compile(
     r"\bad\b|widget|menu|breadcrumb|pagination|pager|popup|modal|signup|sign-up|recommend",
     re.IGNORECASE,
 )
-# Page furniture by its heading, as the text of the heading reads in lower case.
-FURNITURE_HEADING = re.compile(
-    r"^(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
-    r"replies|discussion|recommended|popular|trending|read next|up next|follow us|elsewhere|"
-    r"advertisement|sponsored|support us)\W*$|"
-    r"\b(newsletter|subscribe to|sign up (for|to)|get the app|download (the|our) app|leave a (reply|comment)|post a comment|join the (discussion|"
-    r"conversation)|about the authors?|more from|more (stories|posts|articles) (from|by|like)|you (may|"
-    r"might) (also )?like|related (posts|stories|articles|reading|content|links|coverage)|share (this|"
-    r"on)|\d+ (comments|responses|replies)|recommended (reading|for you|posts|stories|articles))\b"
+# What is left at the end of an article of a box of page furniture, as its whole heading reads.
+TRAILING_FURNITURE = re.compile(
+    r"(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
+    r"replies|discussion|recommended( reading| for you)?|popular|trending|read next|up next|follow us|"
+    r"elsewhere|advertisement|sponsored|support us|leave a (reply|comment)( cancel reply)?|post a comment|"
+    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like)\W*$"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
 NOTES_HEADING = re.compile(
     r"^((foot|end|side ?)?notes?|references?|sources|bibliography|citations|works cited|"
+    r"notes (and|&) references|references (and|&) notes)\W*$"
+)
+# The headings of sections readability empties wrongly, of reference and reading lists: the only
+# ones that are put back.
+REFILL_HEADING = re.compile(
+    r"((foot|end)?notes?|references?|sources|bibliography|citations|works cited|further reading|"
+    r"see also|resources|more resources|reading list|links|technical references|"
     r"notes (and|&) references|references (and|&) notes)\W*$"
 )
 LINK_LIST_SHARE = 0.9  # of a section's letters in links, as in a list of tags or share buttons
@@ -121,24 +124,6 @@ COOKIE_WALL = re.compile(
     re.IGNORECASE,
 )
 XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*\?>")
-# A call to subscribe to the publication itself, as publishers end their articles with it: to
-# "our" newsletter, mailing list or emails, or "sign up to receive" one. Signing up for a rebate through the city's
-# newsletter, people subscribing to newsletters, an author's "my newsletter": the article's own.
-PROMOTION = re.compile(
-    r"\b(sign up|sign-up|subscribe)\b[^.!?]{0,60}\bour\b[^.!?]{0,40}\b(newsletters?|mailing list|emails?|"
-    r"inbox)\b|\bour\b[^.!?]{0,30}\bnewsletters?\b[^.!?]{0,40}\b(sign up|subscribe)\b|"
-    r"\b(sign up|subscribe) to receive\b[^.!?]{0,60}\bnewsletters?\b",
-    re.IGNORECASE,
-)
-# A bare "Subscribe now", only as the article's very last line (elsewhere it may be a label the
-# article talks about).
-PROMOTION_BARE = re.compile(r"^(sign up|subscribe)( now| today| here)?\W*$", re.IGNORECASE)
-# What a promotion says around its call ("Power up with unlimited access to WIRED.").
-PROMOTION_PITCH = re.compile(r"\bsubscri(ber|ption)s?\b|\bunlimited access\b", re.IGNORECASE)
-PROMOTION_MAX_WORDS = 30  # a promotion is no longer than this
-PROMOTION_SHARE = 0.6  # of its words in the sentences that ask
-PROMOTION_STOP_WORDS = 60  # a paragraph this long is the article's own: none before it is looked at
-PROMOTION_LOOKBACK = 3  # how many of the last paragraphs may be one
 TRUNCATED_TAIL = re.compile(
     r"(\[(…|\.\.\.)\]|…|\.\.\.|read more|continue reading|read the (full|rest)[^.]{0,40})\W*$",
     re.IGNORECASE,
@@ -647,8 +632,9 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     kept = _norm(body.text_content())
     for heading in empty:
         found = by_text.get(_norm(heading.text_content()), [])
-        # Not on the page as it is, or not only once; or a heading of page furniture.
-        if len(found) != 1 or FURNITURE_HEADING.search(_norm(heading.text_content())):
+        # Not on the page as it is, or not only once; or not a heading of references or reading:
+        # under any other, what readability left out was its own judgement (often rightly).
+        if len(found) != 1 or not REFILL_HEADING.match(_norm(heading.text_content())):
             continue
         source = found[0]
         if FURNITURE_CLASS.search(_names(source)):
@@ -696,46 +682,6 @@ def _short_links(section: list[lxml.html.HtmlElement]) -> bool:
     return bool(links) and linked >= LINK_LIST_SHARE * letters and words <= LINK_LIST_WORDS * len(links)
 
 
-def _drop_trailing_promotions(body: lxml.html.HtmlElement) -> None:
-    """Remove the publisher's sign-up lines from the end of an article ("Sign up for our
-    Politics Essential newsletter", "Enjoying Nautilus? Subscribe to our free newsletter."):
-    short paragraphs among the last few that do nothing but ask the reader to subscribe. Never
-    an item of a list, which is the article's ("Next steps"), nor the only paragraph. A
-    paywall's message is kept, so that the article is still judged a stub."""
-    leaves = [
-        el
-        for el in body.iterdescendants("p", "blockquote", "div")
-        if el.text_content().strip()
-        and next(el.iterdescendants(*BLOCK, "li"), None) is None
-        and next(el.iterancestors("li"), None) is None
-    ]
-    if len(leaves) < 2:
-        return
-    for back, last in enumerate(reversed(leaves[-PROMOTION_LOOKBACK:])):
-        text = " ".join(last.text_content().split())
-        if _words(text) > PROMOTION_STOP_WORDS:
-            return  # the article's own text: anything before it is too
-        if _promotion(text, final=back == 0) and not PAYWALL.search(text):
-            while last.getparent() is not body and _norm(last.getparent().text_content()) == _norm(text):
-                last = last.getparent()  # wrappers that hold only this line
-            last.drop_tree()
-
-
-def _promotion(text: str, final: bool = False) -> bool:
-    """Whether a paragraph is a call to subscribe and little else: the call, and the pitch
-    for a subscription around it. `final`: it is the article's last line."""
-    words = _words(text)
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-
-    def asks(sentence: str) -> bool:
-        return bool(PROMOTION.search(sentence) or (final and PROMOTION_BARE.search(sentence)))
-
-    if words > PROMOTION_MAX_WORDS or not any(asks(sentence) for sentence in sentences):
-        return False
-    asking = sum(_words(s) for s in sentences if asks(s) or PROMOTION_PITCH.search(s))
-    return asking >= PROMOTION_SHARE * words
-
-
 def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
     """Remove headings that end the article with nothing under them: what is left of a
     "Related posts" or "Leave a reply" box, or of a "Notes" section whose notes are
@@ -745,7 +691,7 @@ def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
         if heading.xpath("following::text()[normalize-space()] | following::img"):
             break
         text = _norm(heading.text_content())
-        if not FURNITURE_HEADING.search(text) and not NOTES_HEADING.search(text):
+        if not TRAILING_FURNITURE.match(text) and not NOTES_HEADING.search(text):
             break
         heading.drop_tree()
 
@@ -978,7 +924,6 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
-    _drop_trailing_promotions(body)
     _drop_trailing_headings(body)
     words = _words(body.text_content())
     if page_html:

@@ -377,20 +377,6 @@ def test_headings_with_nothing_under_them_do_not_end_the_article():
     assert "<h2>Demo</h2>" in out and "Related stories" not in out
 
 
-def test_a_closing_call_to_subscribe_is_left_out():
-    filler = "<p>" + "Plain words about alliances and their guarantees. " * 30 + "</p>"
-    page = f"""<html><body><article>{filler}<p><em>A Writer is the chief commentator.</em></p>
-    <p><em>Find out about our latest stories first — follow us on</em> <a href="/x">X</a>, and
-    <a href="/signup"><em>sign up</em></a> to receive the Weekend newsletter</p>
-    <p><em>Lead image: A Photographer</em></p></article></body></html>"""
-    out = extract("https://news.example/story", page, "").body.text_content()
-    assert "newsletter" not in out and "A Writer is the chief commentator." in out and "Lead image" in out
-    # A paywall's message is not a promotion to remove: the article is still judged a stub.
-    stub = "<p>" + "Opening words of the story. " * 20 + "</p><p>Subscribe now to continue reading.</p>"
-    result = extract("https://news.example/story", None, stub)
-    assert "paywall marker" in result.reasons and "Subscribe now" in result.body.text_content()
-
-
 def test_an_xhtml_page_declaring_its_encoding_is_still_read_whole():
     filler = "<p>" + "Plain words about declarative system configuration. " * 30 + "</p>"
     page = f"""<?xml version="1.0" encoding="utf-8" standalone="no"?>
@@ -477,31 +463,6 @@ def test_furniture_under_a_bare_heading_is_not_put_back():
     assert "How bees navigate" in extract("https://blog.example/post", page, "").body.text_content()
 
 
-def test_a_closing_paragraph_that_mentions_signing_up_is_kept():
-    """Only a paragraph that does nothing but ask for a subscription to the publication goes."""
-    filler = "<p>" + "Plain words about the city budget and its rebates. " * 30 + "</p>"
-    kept = [
-        "<p>Residents who qualify can sign up for the rebate program now at the city website.</p>",
-        "<p>Voter registration closes on Friday, so sign up today at your county office.</p>",
-        "<p>To follow development, subscribe to the mailing list of the project now.</p>",
-        "<p>Next steps:</p><ul><li>Install it.</li><li>Subscribe to our newsletter today.</li></ul>",
-    ]
-    for ending in kept:
-        page = f"<html><body><article>{filler}{ending}</article></body></html>"
-        out = extract("https://news.example/story", page, "").body.text_content()
-        assert lxml.html.fromstring(f"<div>{ending}</div>").text_content() in out
-    # Nor is the only paragraph of a feed entry, and the words are counted without what goes.
-    entry = "Plain words about the harbour and its tides. " * 10 + "Sign up for our newsletter today."
-    result = extract("https://news.example/story", None, f"<p>{entry}</p>")
-    assert "Sign up for our newsletter" in result.body.text_content()
-    page = f"<html><body><article>{filler}<p>Enjoying it? Subscribe to our free newsletter.</p></article></body></html>"
-    result = extract("https://news.example/story", page, "")
-    assert "newsletter" not in result.body.text_content() and result.word_count == 9 * 30
-    pitch = "<p>Power up with unlimited access to Example. Get exclusive subscriber content. Subscribe Today.</p>"
-    result = extract("https://news.example/story", page.replace("</article>", pitch + "</article>"), "")
-    assert "Example" not in result.body.text_content() and result.word_count == 9 * 30
-
-
 def test_sentences_about_newsletters_and_headings_over_media_stay():
     words = "<p>" + "Plain words about the council and its budget for the new bridge this year. " * 10 + "</p>"
     for needle, tail in {
@@ -533,3 +494,25 @@ def test_sentences_about_newsletters_and_headings_over_media_stay():
     page = f"<html><body><article>{words}{photos}</article></body></html>"
     out = lxml.html.tostring(extract("https://news.example/b", page, page, "page").body, encoding="unicode")
     assert out.count("a.jpg") == 1
+
+
+def test_notes_after_sentence_ends_and_boxes_beside_the_end_are_left_as_they_were():
+    words = "<p>" + "Plain words about the county budget and the clerk's long records of it. " * 10 + "</p>"
+    url = "https://news.example/post/"
+    # A footnote after a sentence that ends in "appendix." is a footnote.
+    page = (
+        f"<html><body><article>{words}<p>The figures are in the appendix.<a href='#fn1'>1</a></p>{words}"
+        "<ol class='footnotes'><li id='fn1'>Ibid., the county clerk's records for the year.</li></ol></article></body></html>"
+    )
+    out = lxml.html.tostring(extract(url, page, "", "page").body, encoding="unicode")
+    assert 'class="noteref"' in out and "the county clerk's records for the year" in out
+    for needle, tail in {
+        # A heading over a player the book cannot show stays, whatever it says.
+        "More from the summit": "<h2>More from the summit</h2><iframe src='https://v.example/x'></iframe>",
+        # A box of links under a heading readability emptied is not put back.
+        "!Mastodon": "<h2>Follow me</h2><ul><li><a href='https://m.example/@a'>Mastodon profile here</a></li>"
+        "<li><a href='https://b.example/a'>Bluesky profile here</a></li></ul>",
+    }.items():
+        page = f"<html><body><article>{words}{words}{tail}</article></body></html>"
+        out = lxml.html.tostring(extract(url, page, "", "page").body, encoding="unicode")
+        assert (needle[1:] not in out) if needle.startswith("!") else (needle in out), needle
