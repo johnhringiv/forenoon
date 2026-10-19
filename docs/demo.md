@@ -166,8 +166,12 @@ The landing page is served by the web program itself, at the hostname in
 behind it and needs nothing else running. On a persona host the wordmark at the top left
 leads back to it, so a visitor who came in from the landing page can return. It is one HTML page with its styles inline and no
 scripts, built into the binary from `web/site` with its pictures: a merge to `main` that
-changes it reaches the site with the next image. Only the page, its pictures, the icons and
-the health check answer on that host; everything else there is 404. The Kindle pictures are the
+changes it reaches the site with the next image. Only the page, its pictures, the icons,
+`/robots.txt`, `/sitemap.xml` and the health check answer on that host; everything else there
+is 404. The sitemap lists the landing page and each persona's Newsstand, Archive and Sources
+(all https); each persona host's own `/robots.txt` names it, which is what lets one sitemap
+list another host's pages. Cloudflare's managed robots.txt, when it is on, is put in front of
+ours. The Kindle pictures are the
 device's own screenshots (1264 by 1680) saved as WebP; the newsstand picture is the README's,
 taken with `tools/screenshots.py`, and should be retaken from a persona's demo host once the
 demo install runs, so that it shows the persona switcher rather than an admin's pages.

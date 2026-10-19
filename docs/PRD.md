@@ -298,6 +298,12 @@ All fetched content is treated as untrusted.
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
+  - Asides that are not the article are dropped: a teaser (a short label and then only
+    links, two or more, such as "Recommended" or "You may like") and one holding a form with an
+    address field and little else (a newsletter sign-up). Never dropped: a box classed as a callout (a warning,
+    a tip, "see also"), one of over 400 words or half the page's text, one holding something
+    an in-page link points at (a footnote), and one whose label is an author's ("Update:", "References",
+    "Correction:", "By", "Photo", "Part 2 of 3"). Pull quotes stay, as the editors set them.
 
   No id or class from the page reaches the book: the ids and link targets are generated.
 
@@ -871,7 +877,8 @@ database with the pipeline.
   A session lasts 30 days from its last use, in an `HttpOnly`, `SameSite=Lax` cookie.
   Changing a password signs out every other browser.
 - **Newsstand.** Delivered articles grouped by issue, newest first, 14 issues to a page, in
-  the reader's time zone. Each card shows source, author, title linked to the original, lead
+  the reader's time zone. Within an issue the cards follow the book's order (the pipeline
+  records each delivery's place in it); picks shown only as links come after. Each card shows source, author, title linked to the original, lead
   image and description when the page had them, word count and reading time, how it was
   chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
   `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
@@ -966,8 +973,10 @@ database with the pipeline.
   pages stand.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
-  icons and the health check; everything else there is 404. It is the one page meant to be
-  indexed, and it carries `Cache-Control: public, max-age=300`. Unset on an ordinary install.
+  icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
+  It carries `Cache-Control: public, max-age=300`. It and the demo hosts' three pages are the
+  only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
+  names it. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the

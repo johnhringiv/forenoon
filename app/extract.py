@@ -46,11 +46,21 @@ LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 NOTE_LABEL = re.compile(r"^[\[(]?(\d{1,3}|[*†‡§¶]{1,3}|[a-z])[\])]?$")
 NOTE_MAX_CHARS = 4000
+# "Figure 3", "Equation (2)", "Fig. 4": the capitalised name of something numbered in the
+# text, right before its number as a link. That is a cross-reference to it, not a footnote.
+# "Boston 1", "see Note 3" and a sentence ending "…in the appendix." before a note are notes.
+CROSS_REFERENCE = re.compile(
+    r"\b(Fig(ure)?s?|Tables?|Eq(uation)?s?|Eqn|Appendix|Chapter|Algorithm|Listing|Theorem|Lemma|"
+    r"Corollary|Proposition|Definition)\s+\(?$|\b(Figs?|Eqs?|Eqn|Tab|App|Chap|Alg|Thm)\.\s*\(?$|§\s*$"
+)
 NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
-SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note"}
-SIDENOTE_CHROME = {"margin-toggle", "sidenote-number"}
+# LaTeXML (arXiv's HTML) writes each footnote in the text the same way, with its number twice.
+SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note", "ltx_role_footnote"}
+SIDENOTE_CHROME = {"margin-toggle", "sidenote-number", "ltx_note_mark", "ltx_tag_note", "ltx_note_type"}
 INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", "mono"}
+# Substack's section headings. Readability deletes them for the "header" in the class.
+SECTION_HEADING_CLASSES = {"header-anchor-post"}
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
 # A figure drawn by the page's own scripts (a chart, a slider comparing pictures): without
@@ -61,6 +71,23 @@ CALLOUT_MAX_WORDS = 400
 WIDGET_MARKERS = ".//input | .//select | .//textarea | .//fieldset | .//canvas | .//script"
 WIDGET_KEPT = ".//img | .//picture | .//video | .//audio | .//table | .//iframe | .//pre | .//code | .//blockquote"
 SHOT_ID = "shot-"  # the placeholder left for such a figure: the pipeline puts a picture of it here
+
+# A box beside the text that is mostly links is a teaser for other pages ("Recommended",
+# "You may like", a topic tag), not part of the article. Real notes and callouts carry a few
+# links in their sentences: in the saved pages none was over 40% link text.
+TEASER_LINK_SHARE = 0.6
+TEASER_LABEL_MAX_WORDS = 4  # "Recommended", "You may like", "More on this story"
+# How an author starts a note that may be only links ("Update: part two is out"): never a teaser.
+NOTE_LABEL_START = re.compile(
+    r"\W*(updates?|updated|corrections?|corrected|notes?|editor.s note|edit|addendum|erratum"
+    r"|by|authors?|written by|reporting by|photos?|images?|credits?|sources?|via|clarifications?"
+    r"|see also|deprecated|part \d|references?|bibliography|further reading|resources|reading list)\b",
+    re.IGNORECASE,
+)
+BOX_MAX_SHARE = 0.5  # of the page's words: a box holding more is the article
+# A sign-up box is a form and a line or two selling it; a box with more text than this beside
+# its form (an article with a comment form under it) is not one.
+FORM_BOX_MAX_WORDS = 60
 # Syntax highlighting, in the class names of highlight.js, Prism and Pygments. On a
 # greyscale screen the two worth keeping are comments (italic) and keywords (bold).
 CODE_COMMENT_CLASSES = {"comment", "hljs-comment", "c", "c1", "cm", "cs"}
@@ -80,6 +107,50 @@ WIDEN_MIN_WORDS = 500
 WIDEN_COVERAGE = 0.9  # share of the page text an element must hold to be the article
 WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page text is rejected
 WORDS_PER_MINUTE = 230
+REFILL_MAX_WORDS = 400
+DATA_TABLE_CLASS = "forenoon-data-table"
+DATA_TABLE_LINK_SHARE = (
+    0.5  # of a table's text in links, at most (citations in cells are links): more is a list of links
+)
+# A table named as a site's or a post's header or footer is page furniture, header cells or not.
+LAYOUT_TABLE_NAME = re.compile(
+    r"(^|[\s_-])(site|page|post|global)?[_-]?(header|footer|masthead|nav)(\s|$)", re.IGNORECASE
+)
+TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
+# What a box of the site's own links says, under a heading that would otherwise be refilled.
+REFILL_FURNITURE = re.compile(
+    r"\b(subscribe|newsletter|follow (me|us)|previous (post|article)|next (post|article)|become a "
+    r"member|webinar|rss feed|donate|patreon|ko-fi|free ebook)\b",
+    re.IGNORECASE,
+)  # the most text put back under a heading readability left empty
+REFILL_BLOCKS = {"p", "ul", "ol", "dl", "table", "pre", "blockquote", "figure"}
+# Page furniture by its class name or id, for what readability left out.
+FURNITURE_CLASS = re.compile(
+    r"comment|related|share|social|sidebar|footer|newsletter|subscribe|promo|sponsor|advert|"
+    r"\bad\b|widget|menu|breadcrumb|pagination|pager|popup|modal|signup|sign-up|recommend",
+    re.IGNORECASE,
+)
+# What is left at the end of an article of a box of page furniture, as its whole heading reads.
+TRAILING_FURNITURE = re.compile(
+    r"(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
+    r"replies|discussion|recommended( reading| for you)?|popular|trending|read next|up next|follow us|"
+    r"elsewhere|advertisement|sponsored|support us|leave a (reply|comment)( cancel reply)?|post a comment|"
+    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like)\W*$"
+)
+# The heading of a section of notes or references, which may be gathered at the end by other means.
+NOTES_HEADING = re.compile(
+    r"^((foot|end|side ?)?notes?|references?|sources|bibliography|citations|works cited|"
+    r"notes (and|&) references|references (and|&) notes)\W*$"
+)
+# The headings of sections readability empties wrongly, of reference and reading lists: the only
+# ones that are put back.
+REFILL_HEADING = re.compile(
+    r"((foot|end)?notes?|references?|sources|bibliography|citations|works cited|further reading|"
+    r"see also|resources|more resources|reading list|links|technical references|"
+    r"notes (and|&) references|references (and|&) notes)\W*$"
+)
+LINK_LIST_SHARE = 0.9  # of a section's letters in links, as in a list of tags or share buttons
+LINK_LIST_WORDS = 1.25  # the most words such a list's links have on average: one, mostly
 
 PAYWALL = re.compile(
     r"subscribe to (continue|read|unlock|keep reading)|already a subscriber|sign in to (read|"
@@ -93,6 +164,7 @@ COOKIE_WALL = re.compile(
     r" (a )?human|checking your browser",
     re.IGNORECASE,
 )
+XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*\?>")
 TRUNCATED_TAIL = re.compile(
     r"(\[(…|\.\.\.)\]|…|\.\.\.|read more|continue reading|read the (full|rest)[^.]{0,40})\W*$",
     re.IGNORECASE,
@@ -136,6 +208,15 @@ def _parse_fragment(html: str) -> lxml.html.HtmlElement | None:
         return None
 
 
+def _join(base: str, address: str) -> str:
+    """An address made absolute against the page's, or "" when it cannot be read as one
+    ("http://[::1#top", an unclosed IPv6 host): such a link goes nowhere, so it is dropped."""
+    try:
+        return urljoin(base, address)
+    except ValueError:
+        return ""
+
+
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
@@ -149,8 +230,26 @@ def _classes(el: lxml.html.HtmlElement) -> set[str]:
     return set((el.get("class") or "").lower().split())
 
 
+def _cross_reference(ref: lxml.html.HtmlElement, label: str) -> bool:
+    """Whether a numbered link reads as "Figure 3" rather than as a footnote's marker."""
+    el = ref
+    while el.getparent() is not None and " ".join(el.getparent().text_content().split()) == label:
+        el = el.getparent()  # wrappers holding only the link, such as a <sup>
+    if not label.isdigit() or any(e.tag == "sup" for e in (el, *el.iterdescendants())):
+        return False
+    before = el.getprevious()
+    text = (before.tail if before is not None else el.getparent().text if el.getparent() is not None else "") or ""
+    return bool(CROSS_REFERENCE.search(text))
+
+
 def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: lxml.html.HtmlElement):
-    """The element holding the note a link points at, or None when the target is not a note."""
+    """The element holding the note a link points at, or None when the target is not a note:
+    a figure, or anything the link names as numbered in the text ("see Figure 3")."""
+    # A footnote's own shape (an item of a list, or classed as a note) is a note whatever the
+    # text before its link says ("…told in the Appendix 1").
+    shaped = target.tag == "li" or next(target.iterancestors("li"), None) is not None or "note" in _names(target)
+    if target.tag == "figure" or (not shaped and _cross_reference(ref, " ".join(ref.text_content().split()))):
+        return None
     el = target
     # The id is often on a marker inside the note; the note is the block around it.
     while el.tag in INLINE_WRAPPERS and el.getparent() is not None and el.getparent() is not root:
@@ -189,6 +288,41 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         figure.insert(0, holder)
 
 
+def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
+    """Take the furniture-sounding class names off real tables, their rows and cells, and mark the
+    table for readability to keep (it drops a small table of numbers as layout): readability
+    deletes anything classed with "header" or "foot" in it, and arXiv classes its tables
+    "ltx_guessed_headers", so a paper lost every table it left in the text.
+
+    A real table has header cells, a caption or a figure around it, and is not itself named as a
+    site's or a post's header or footer; any other table keeps its classes. Only one in a figure
+    that is mostly text, not links, is marked, and its rows go in a <tbody> when they are not,
+    so that the mark only keeps the table: without one, readability weighs the table itself as
+    the article."""
+    for table in root.iter("table"):
+        real = table.xpath(".//th | .//thead | .//caption") or next(table.iterancestors("figure"), None) is not None
+        if not real or LAYOUT_TABLE_NAME.search(_names(table)):
+            continue
+        text = len(" ".join(table.text_content().split()))
+        linked = sum(len(" ".join(a.text_content().split())) for a in table.iter("a"))
+        # Marked only in a figure, as papers number their tables: elsewhere the mark can make
+        # readability take a long table beside a short article for the article.
+        in_figure = next(table.iterancestors("figure"), None) is not None
+        mark = in_figure and text > 0 and linked <= DATA_TABLE_LINK_SHARE * text
+        rows = [child for child in table if isinstance(child.tag, str) and child.tag == "tr"]
+        if mark and rows:
+            body = lxml.html.Element("tbody")
+            rows[0].addprevious(body)
+            body.extend(rows)
+        for el in (table, *table.iter("thead", "tbody", "tfoot", "tr", "th", "td")):
+            names = (el.get("class") or "").split()
+            kept = [name for name in names if not TABLE_FURNITURE_NAME.search(name)]
+            if el is table and mark:
+                kept.append(DATA_TABLE_CLASS)  # and readability is told to keep it: see _readability
+            if kept != names:
+                el.set("class", " ".join(kept))
+
+
 def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
@@ -209,13 +343,31 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     _unmark(root)
     if whole_page:  # a feed's copy is not the page a browser would show
         _mark_widgets(root)
-    for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
+    # The page's own quotes only: before asides and callouts are made quotes below.
+    _unclass_quotes(root)
+    # Boxes are judged against the page as it was, before any is dropped.
+    page_words = _words(_visible_text(root))
+    linked_to = _in_page_targets(root, base_url)
+    for el in list(root.iter("span", "sup", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
             el.drop_tree()
             continue
         in_code = any(ancestor.tag == "pre" for ancestor in el.iterancestors())
-        if classes & SIDENOTE_CHROME:
+        boxed = _boxed(el, classes)
+        droppable = (
+            boxed
+            and el is not root
+            and not classes & SIDENOTE_CLASSES
+            and _words(el.text_content()) <= CALLOUT_MAX_WORDS
+            # Not the article itself, in a box: a links roundup, a short post in an aside.
+            and _words(el.text_content()) < BOX_MAX_SHARE * page_words
+            and not any(
+                target in linked_to for target in el.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name")
+            )
+        )
+        # Promos are asides; a box classed as a callout (a warning, a tip, "see also") is the author's.
+        if classes & SIDENOTE_CHROME or (droppable and el.tag == "aside" and _promo(el)):
             el.drop_tree()
         elif el.tag in ("span", "tt", "font") and in_code:
             if classes & CODE_COMMENT_CLASSES:
@@ -225,8 +377,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
         elif el.tag == "tt" or (el.tag in ("span", "font") and classes & INLINE_CODE_CLASSES):
             el.tag = "code"
         elif (
-            el.tag in ("div", "aside", "section", "p")
-            and (classes & CALLOUT_CLASSES or el.tag == "aside")
+            boxed
             and not classes & SIDENOTE_CLASSES
             and el is not root
             and 0 < _words(el.text_content()) <= CALLOUT_MAX_WORDS
@@ -247,8 +398,9 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
 
     def in_page(anchor: lxml.html.HtmlElement) -> str:
         href = (anchor.get("href") or "").strip()
-        if href.startswith(page + "#"):
-            href = href[len(page) :]
+        if not href.startswith("#"):  # also "/post/#fn-1": the page's own address, written out
+            resolved = _join(page, href) if "#" in href else ""
+            href = resolved[len(page) :] if resolved.startswith(page + "#") else ""
         return unquote(href[1:]) if href.startswith("#") else ""
 
     # lxml hands out element objects on demand, and an id() is only unique while its object
@@ -285,6 +437,15 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
                 anchor.set(MARK_FIRST, "1")
             anchor.set(MARK, "ref")
             anchor.set(MARK_N, str(numbers[id(body)]))
+            # Readability deletes anything with a class or id that reads like page furniture
+            # ("footnote-ref" has "foot" in it), so the reference and the wrappers that hold
+            # only it lose theirs here. The allowlist would remove them anyway, and the
+            # targets were all found above.
+            wrapper = anchor
+            while wrapper is not None and wrapper is not root and " ".join(wrapper.text_content().split()) == label:
+                wrapper.attrib.pop("class", None)
+                wrapper.attrib.pop("id", None)
+                wrapper = wrapper.getparent()
             continue
         heading = target if target.tag in HEADINGS else target.getparent()
         if heading is not None and heading.tag in HEADINGS:
@@ -296,12 +457,26 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
             anchor.set(MARK, "jump")
             anchor.set(MARK_N, number)
     for el in list(root.iter("span", "aside", "small", "div", "blockquote")):
-        if _classes(el) & SIDENOTE_CLASSES and id(el) not in numbers and el is not root and el.getparent() is not None:
-            notes.append((str(len(notes) + 1), el))
-            numbers[id(el)] = len(notes)
-            ref = etree.Element("a", {MARK: "ref", MARK_N: str(len(notes)), MARK_FIRST: "1"})
-            ref.text = str(len(notes))
-            el.addprevious(ref)
+        if not _classes(el) & SIDENOTE_CLASSES or id(el) in numbers or el is root or el.getparent() is None:
+            continue
+        if any(id(ancestor) in numbers for ancestor in el.iterancestors()):
+            continue  # a side note inside a note stays where it is, as part of that note
+        notes.append((str(len(notes) + 1), el))
+        numbers[id(el)] = len(notes)
+        ref = lxml.html.Element("a", {MARK: "ref", MARK_N: str(len(notes)), MARK_FIRST: "1"})
+        ref.text = str(len(notes))
+        el.addprevious(ref)
+    # Readability deletes a heading whose class merely sounds like page furniture, as
+    # Substack's "header-anchor-post" does (it has "header" in it), and an article loses its
+    # section titles. That class goes, unless the class of the box the heading is in names
+    # something that is furniture to us too ("newsletter", "subscription-widget"). Other
+    # such classes stay: they are a site's header or footer as often as not.
+    for heading in root.iter(*HEADINGS):
+        parent = heading.getparent()
+        names = _names(heading) + " " + (_names(parent) if parent is not None else "")
+        if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
+            heading.attrib.pop("class", None)
+    _unclass_data_tables(root)
     if not notes:
         return None
     holder = lxml.html.Element("div")
@@ -309,15 +484,21 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     etree.SubElement(holder, "h3").text = "Notes"
     emptied = []
     for number, (label, body) in enumerate(notes, 1):
-        emptied.append(body.getparent())
-        body.drop_tree()  # keeps the text that followed it in place
+        if body.getparent() is not None:  # not already taken out with a link inside a note
+            emptied.append(body.getparent())
+            body.drop_tree()  # keeps the text that followed it in place
         body.tail = None
         for link in list(body.iter("a")):  # "back to the text" links; ours replaces them
             if link.get(MARK) is None and (in_page(link) in targets):
                 text = " ".join(link.text_content().split())
                 link.drop_tree() if len(text) <= 2 or text.lower() in BACK_LABELS else link.drop_tag()
-        for child in body.iter():  # the note's own printed number, which ours repeats
-            if child is not body and " ".join(child.text_content().split()) == label and not len(child):
+        for child in body.iter(etree.Element):  # the note's own printed number, which ours repeats
+            if (
+                child is not body
+                and id(child) not in numbers
+                and _norm(child.text_content()) == _norm(label)
+                and not len(child)
+            ):
                 child.drop_tree()
                 break
         body.tag = "div"
@@ -345,11 +526,127 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
             and el is not root
             and _words(el.text_content()) <= NOTE_CHROME_WORDS
             and not el.xpath(".//img | .//pre")
+            # A sentence a side note sat in keeps its reference: it is text, not a box of notes.
+            and not el.xpath(f".//a[@{MARK}='ref']")
         ):
             top, el = el, el.getparent()
         if top is not None and top.getparent() is not None:
             top.drop_tree()
     return holder
+
+
+EMBED_CLASS = re.compile(r"tweet|twitter", re.IGNORECASE)
+EMBED_WRAPPER_DEPTH = 3  # figure > div > blockquote, as embed plugins nest them
+EMBED_WRAPPER_CHILDREN = 8  # the quote, its loader and a caption at most: no longer a wrapper past this
+
+
+def _unclass_quotes(root: lxml.html.HtmlElement) -> None:
+    """Take the tweet class names off embedded posts and the wrappers that hold only them:
+    picking the article out of the page throws away anything classed like page furniture,
+    and that includes "tweet" and "twitter" ("twitter-tweet", "wp-block-embed-twitter").
+    Every other class name stays, for the passes that read them."""
+    for quote in root.iter("blockquote"):
+        el = quote
+        for _ in range(EMBED_WRAPPER_DEPTH + 1):
+            classes = (el.get("class") or "").split()
+            if any(EMBED_CLASS.search(name) for name in classes):
+                el.set("class", " ".join(name for name in classes if not EMBED_CLASS.search(name)))
+            wrapper = el.getparent()
+            if wrapper is None or wrapper is root or wrapper.tag in ("body", "html") or not _holds_only(wrapper, el):
+                break
+            el = wrapper
+
+
+def _holds_only(wrapper: lxml.html.HtmlElement, child: lxml.html.HtmlElement) -> bool:
+    """Whether `child` is all `wrapper` shows: no text of its own, and beside it only scripts
+    and empty elements (the embed's loader, an empty caption)."""
+    if (wrapper.text or "").strip() or len(wrapper) > EMBED_WRAPPER_CHILDREN:
+        return False
+    for other in wrapper:
+        if (other.tail or "").strip():
+            return False
+        loader = other is child or not isinstance(other.tag, str) or other.tag in ("script", "style", "noscript")
+        if not loader and ((other.text or "").strip() or len(other)):
+            return False
+    return True
+
+
+def _boxed(el: lxml.html.HtmlElement, classes: set[str]) -> bool:
+    """A box beside the text: an aside, or a block classed as a callout."""
+    return el.tag in ("div", "aside", "section", "p") and (bool(classes & CALLOUT_CLASSES) or el.tag == "aside")
+
+
+def _promo(box: lxml.html.HtmlElement) -> bool:
+    """Whether a box beside the text sells something else: a sign-up form, or links to other pages."""
+    if NOTE_LABEL_START.match(" ".join(box.text_content().split())):
+        return False
+    # A sign-up asks for an address: a form with a text or email field, not a "Save" button.
+    forms = [f for f in box.findall(".//form") if f.xpath(".//input[not(@type) or @type='email' or @type='text']")]
+    if forms and _words(box.text_content()) - sum(_words(f.text_content()) for f in forms) <= FORM_BOX_MAX_WORDS:
+        return True
+    # A teaser is a short label and then only links: a section and a headline, or several
+    # stories. A note has words of its own among its links ("Update: I wrote X and Y."), and
+    # a picture's linked credit has no label.
+    links = box.xpath(".//a[@href][not(ancestor::a[@href])]")
+    words = _words(box.text_content())
+    linked = sum(_words(a.text_content()) for a in links)
+    if len(links) < 2 or not words or linked < TEASER_LINK_SHARE * words:
+        return False
+    label, rest = _around_first_link(box)
+    if NOTE_LABEL_START.match(label) or WORD.search(rest):
+        return False
+    return 1 <= len(WORD.findall(label)) <= TEASER_LABEL_MAX_WORDS
+
+
+WORD = re.compile(r"\w+")
+
+
+def _around_first_link(box: lxml.html.HtmlElement) -> tuple[str, str]:
+    """The box's text before its first link, and its text after that outside any link. Read
+    only: the tree is not touched, so no character in the page can make this fail."""
+    before: list[str] = []
+    after: list[str] = []
+    seen_link = False
+
+    def walk(el: lxml.html.HtmlElement, in_link: bool) -> None:
+        nonlocal seen_link
+        link = el.tag == "a" and el.get("href") is not None
+        linked = in_link or link
+        if link and not in_link:
+            seen_link = True
+        if el.text and not linked:
+            (after if seen_link else before).append(el.text)
+        for child in el:
+            if isinstance(child.tag, str):
+                walk(child, linked)
+            if child.tail and not linked:
+                (after if seen_link else before).append(child.tail)
+
+    walk(box, False)
+    return " ".join(before), " ".join(after)
+
+
+def _in_page_targets(root: lxml.html.HtmlElement, base_url: str) -> set[str]:
+    """The ids and names that links on the page point at, written as the notes code reads them."""
+    page = base_url.split("#")[0]
+    targets = set()
+    for href in root.xpath("//a/@href"):
+        href = href.strip()
+        if href.startswith(page + "#"):
+            href = href[len(page) :]
+        if href.startswith("#") and len(href) > 1:
+            targets.add(unquote(href[1:]))
+    return targets
+
+
+def _visible_text(root: lxml.html.HtmlElement) -> str:
+    """The page's text as a reader sees it, normalised: not the head, hidden elements or the
+    scripts, which often hold the article a second time as data."""
+    shown = copy.deepcopy(root)
+    hidden = ".//head | .//script | .//style | .//template | .//noscript | .//*[@hidden] | .//*[@aria-hidden='true']"
+    for el in shown.xpath(hidden):
+        el.drop_tree()
+    return _norm(shown.text_content())
 
 
 def _unmark(root: lxml.html.HtmlElement) -> None:
@@ -424,7 +721,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
         elif tag == "a" and mark in ("back", "jump"):
             keep["href"] = f"#fnref-{number}" if mark == "back" else f"#sec-{number}"
         elif tag == "a":
-            href = urljoin(base_url, (el.get("href") or "").strip())
+            href = _join(base_url, (el.get("href") or "").strip())
             if href.startswith(("http://", "https://", "mailto:")):
                 keep["href"] = href
         elif tag == "img":
@@ -432,7 +729,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
             if src.startswith("data:image/"):
                 keep["src"] = src
             elif src:
-                src = urljoin(base_url, src)
+                src = _join(base_url, src)
                 if src.startswith(("http://", "https://")):
                     keep["src"] = src
             keep["alt"] = (el.get("alt") or "")[:300]
@@ -522,9 +819,142 @@ def _fix_nesting(root: lxml.html.HtmlElement) -> None:
 
 def _readability(page_html: str) -> lxml.html.HtmlElement | None:
     try:
-        return _parse_fragment(Document(page_html).summary(html_partial=True))
+        document = Document(page_html, positive_keywords=[DATA_TABLE_CLASS])
+        return _parse_fragment(document.summary(html_partial=True))
     except Exception:  # noqa: BLE001 - third-party parsers on hostile input
         return None
+
+
+def _level(el: lxml.html.HtmlElement) -> int:
+    """A heading's level, 1 to 6; 0 for anything else."""
+    return int(el.tag[1]) if isinstance(el.tag, str) and el.tag in HEADINGS else 0
+
+
+def _empty_section(heading: lxml.html.HtmlElement) -> bool:
+    """Whether no text follows a heading before the next heading of its level or above."""
+    if (heading.tail or "").strip():
+        return False
+    for el in heading.xpath("following::*"):
+        if 0 < _level(el) <= _level(heading):
+            return True
+        if (el.text or "").strip() or (el.tail or "").strip():
+            return False
+    return True
+
+
+def _pictures_already(el: lxml.html.HtmlElement, body: lxml.html.HtmlElement) -> bool:
+    """Whether a block is only pictures the article already has (compared by file name, as the
+    article's addresses are made absolute and the page's may not be)."""
+    if el.text_content().strip():
+        return False
+    names = {(img.get("src") or "").rsplit("/", 1)[-1] for img in el.iter("img")}
+    have = {(img.get("src") or "").rsplit("/", 1)[-1] for img in body.iter("img")}
+    return bool(names) and names <= have
+
+
+def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
+    """Put back what readability removed from under a heading it kept.
+
+    Readability judges each list and table on its own, and drops one that is mostly links:
+    the list of references under "References" goes, its heading stays, and the article
+    seems to end at a heading. When a kept heading has nothing under it, what follows the
+    same heading on the page is put back, up to the next heading; not when it looks like
+    page furniture (a form, navigation, a class such as "related" or "comments", a heading
+    such as "Share this" or "More from Example", nothing but short links), and not a long
+    run of text, which readability had a better reason to leave out.
+    """
+    empty = [h for h in body.iter(*HEADINGS) if _empty_section(h)]
+    if not empty:
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    for junk in page.xpath("//script | //style | //noscript | //template"):
+        junk.drop_tree()
+    by_text: dict[str, list[lxml.html.HtmlElement]] = {}
+    for h in page.iter(*HEADINGS):
+        by_text.setdefault(_norm(h.text_content()), []).append(h)
+    kept = _norm(body.text_content())
+    for heading in empty:
+        found = by_text.get(_norm(heading.text_content()), [])
+        # Not on the page as it is, or not only once; or not a heading of references or reading:
+        # under any other, what readability left out was its own judgement (often rightly).
+        if len(found) != 1 or not REFILL_HEADING.match(_norm(heading.text_content())):
+            continue
+        source = found[0]
+        if FURNITURE_CLASS.search(_names(source)):
+            continue
+        # A heading wrapped on its own ("<div><h3>References</h3></div><ul>"): its wrapper's
+        # neighbours are its section.
+        while (
+            source.getparent() is not None
+            and source.getparent().tag != "body"
+            and not [el for el in source.itersiblings() if isinstance(el.tag, str)]
+            and _norm(source.getparent().text_content()) == _norm(source.text_content())
+        ):
+            source = source.getparent()
+        section = []
+        for el in source.itersiblings():
+            if not isinstance(el.tag, str):
+                continue
+            if _level(el) or el.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6"):
+                break  # the next section
+            if not _plain_blocks(el) or el.xpath(".//form | .//nav") or FURNITURE_CLASS.search(_names(el)):
+                break
+            section.append(el)
+        words = sum(_words(el.text_content()) for el in section)
+        already = any(text and text in kept for text in (_norm(el.text_content()) for el in section))
+        if not words or words > REFILL_MAX_WORDS or already or _short_links(section):
+            continue
+        if any(REFILL_FURNITURE.search(" ".join(el.itertext())) for el in section):  # items apart
+            continue  # the site's own links ("Follow me on Mastodon"), not the article's
+        anchor = heading
+        for el in section:
+            if _pictures_already(el, body):
+                continue  # a picture the article kept under the heading: not twice
+            copied = copy.deepcopy(el)
+            copied.tail = None
+            anchor.addnext(copied)
+            anchor = copied
+        anchor.tail, heading.tail = heading.tail, None
+
+
+def _short_links(section: list[lxml.html.HtmlElement]) -> bool:
+    """Whether a run of blocks is nearly all links of a word each: tags, share buttons. A
+    list of references or further reading names what it links to."""
+    links = [" ".join(a.text_content().split()) for el in section for a in el.iter("a")]
+    linked = sum(c.isalnum() for text in links for c in text)
+    letters = sum(c.isalnum() for el in section for c in el.text_content())
+    words = sum(map(_words, links))
+    return bool(links) and linked >= LINK_LIST_SHARE * letters and words <= LINK_LIST_WORDS * len(links)
+
+
+def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
+    """Remove headings that end the article with nothing under them: what is left of a
+    "Related posts" or "Leave a reply" box, or of a "Notes" section whose notes are
+    gathered at the end by other means. Any other heading stays: what was under it may be
+    a video or a drawing the book cannot show, and the heading says it was there."""
+    for heading in reversed(list(body.iter(*HEADINGS))):
+        if heading.xpath("following::text()[normalize-space()] | following::img"):
+            break
+        text = _norm(heading.text_content())
+        if not TRAILING_FURNITURE.match(text) and not NOTES_HEADING.search(text):
+            break
+        heading.drop_tree()
+
+
+def _plain_blocks(el: lxml.html.HtmlElement) -> bool:
+    """Whether an element is paragraphs, lists, tables and the like, or a wrapper of only
+    those: what a section of an article is made of, unlike a box of buttons and links."""
+    if el.tag in REFILL_BLOCKS:
+        return True
+    children = [child for child in el if isinstance(child.tag, str)]
+    return el.tag in ("div", "section") and bool(children) and all(map(_plain_blocks, children))
+
+
+def _names(el: lxml.html.HtmlElement) -> str:
+    return f"{el.get('class', '')} {el.get('id', '')}"
 
 
 def _widest(page_html: str, reference: int) -> lxml.html.HtmlElement | None:
@@ -621,7 +1051,7 @@ def _page_pictures(page_html: str, url: str, body: lxml.html.HtmlElement, most: 
             if _norm(el.text_content()).startswith(opening[:60]):
                 return found[:most]
             continue
-        src = urljoin(url, (el.get("src") or "").strip())
+        src = _join(url, (el.get("src") or "").strip())
         if NOT_A_PICTURE.search(" ".join(el.get(name) or "" for name in ("class", "id", "src", "alt"))):
             continue
         if src.startswith(("http://", "https://")) and len(src) <= MAX_PREVIEW_URL and src not in found:
@@ -679,7 +1109,7 @@ def _opening(body: lxml.html.HtmlElement) -> str:
 
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
     """Lead image and summary for listing an article; falls back to the body's own."""
-    image = urljoin(url, image.strip()) if image.strip() else ""
+    image = _join(url, image.strip()) if image.strip() else ""
     if not image:
         image = next((img.get("src", "") for img in body.iter("img")), "")
     if not image.startswith(("http://", "https://")) or len(image) > MAX_PREVIEW_URL:
@@ -704,10 +1134,14 @@ def extract(
     pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
     if page_html and mode != "feed":
+        # An XHTML page's "<?xml ... encoding=...?>": the text is decoded already, and lxml
+        # refuses to parse a string that still declares an encoding.
+        page_html = XML_DECLARATION.sub("", page_html, count=1)
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
         notes["page-wide"] = notes["page"]
         page = _readability(page_html)
         if page is not None:
+            _refill_sections(page, page_html)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
@@ -738,6 +1172,8 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    _drop_trailing_headings(body)
+    words = _words(body.text_content())
     if page_html:
         pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
     if page_html and description:

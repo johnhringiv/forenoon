@@ -658,7 +658,10 @@ pub async fn delivered(
                WHERE d2.user_id = d.user_id AND d2.delivered_at = d.delivered_at
                AND (d2.article_id = d.article_id OR (d.story != '' AND d2.story = d.story))
                AND (?4 = 'rated') = (r2.rating IS NOT NULL)))
-           ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title"#,
+           -- In the issue's order; link-only picks, never in it, and deliveries recorded before
+           -- the order was, after it as the ranking had them.
+           ORDER BY d.delivered_at DESC, d.position IS NULL, d.position,
+           s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title"#,
         user,
         oldest,
         newest,

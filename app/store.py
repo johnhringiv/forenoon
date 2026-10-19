@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     delivered_at TEXT NOT NULL,
     story TEXT NOT NULL DEFAULT '',
     link_only INTEGER NOT NULL DEFAULT 0,
+    position INTEGER,
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS feedback_events (
@@ -198,6 +199,9 @@ class Store:
         if "link_only" not in delivered:
             with self.db:
                 self.db.execute("ALTER TABLE deliveries ADD COLUMN link_only INTEGER NOT NULL DEFAULT 0")
+        if "position" not in delivered:
+            with self.db:
+                self.db.execute("ALTER TABLE deliveries ADD COLUMN position INTEGER")
         if "deferred_at" not in {row["name"] for row in self.db.execute("PRAGMA table_info(assessments)")}:
             with self.db:
                 self.db.execute("ALTER TABLE assessments ADD COLUMN deferred_at TEXT NOT NULL DEFAULT ''")
@@ -696,8 +700,10 @@ class Store:
         when: datetime,
         stories: dict[str, str] | None = None,
         link_only: bool = False,
+        positions: dict[str, int] | None = None,
     ) -> None:
         """`stories` maps an article to its story; articles sharing one count once against the cap.
+        `positions` maps an article to its place in the issue, which the web pages show it in.
 
         `link_only`: picked, but its page could not be had, so only the link is shown on the web
         pages and nothing is sent. Sending it later turns it into a delivery on that day.
@@ -705,11 +711,15 @@ class Store:
         stamp = when.astimezone(UTC).isoformat(timespec="seconds")
         with self.db:
             self.db.executemany(
-                "INSERT INTO deliveries (user_id, article_id, delivered_at, story, link_only) VALUES (?, ?, ?, ?, ?)"
+                "INSERT INTO deliveries (user_id, article_id, delivered_at, story, link_only, position)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(user_id, article_id) DO UPDATE SET delivered_at = excluded.delivered_at,"
-                " story = excluded.story, link_only = 0"
+                " story = excluded.story, link_only = 0, position = excluded.position"
                 " WHERE deliveries.link_only = 1 AND excluded.link_only = 0",
-                [(user_id, a, stamp, (stories or {}).get(a, ""), int(link_only)) for a in article_ids],
+                [
+                    (user_id, a, stamp, (stories or {}).get(a, ""), int(link_only), (positions or {}).get(a))
+                    for a in article_ids
+                ],
             )
 
     def links_waiting(self, user_id: str, since: str) -> list[ArticleRow]:
