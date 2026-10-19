@@ -691,7 +691,7 @@ def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
     with pytest.raises(bookcheck.ToolError, match="in 2 blocks of the page"):
         article.copy("Same words", "end of it")
     # A block the page repeats word for word: the first, said so.
-    assert "the page has this passage's first block 2 times; this is the first" in article.copy("x = 1", "x = 1")
+    assert "the page has this block 2 times; this is the one nearest the end phrase" in article.copy("x = 1", "x = 1")
     with pytest.raises(bookcheck.ToolError, match="from the start phrase on"):
         article.copy("end of it", "Unique start")
     monkeypatch.setattr(bookcheck, "COPY_CHARS", 20)
@@ -721,9 +721,64 @@ def test_page_copy_keeps_spaces_parts_and_the_models_own_code():
     assert "the note and" in note and "#n1" not in note and 'href="https://blog.example/other#x"' in note
     # The model's own code keeps its words; a ">" in an attribute is not the end of the tag; a
     # copy named as a paragraph of its own is not put inside one.
-    article.insert(1, '<pre>build:\n  copy: 2\n  x = "copy:1"\n</pre>')
-    assert 'x = "copy:1"' in article.body.text_content() and "copy: 2" in article.body.text_content()
+    article.insert(1, "<pre>build:\n  copy: 2\n</pre>")
+    assert "copy: 2" in article.body.text_content()
+    # A copy's name inside a heading, emphasis or code is refused: it would print, or lose its wrapper.
+    for inside in (
+        "<h2>copy:1</h2>",
+        "<p><strong>copy:1</strong></p>",
+        "<pre>copy:1</pre>",
+        "<p>A <code/> b copy:1</p>",
+    ):
+        with pytest.raises(bookcheck.ToolError, match="between blocks"):
+            article.insert(1, inside)
     article.insert(1, '<p title="a > copy:4 b">kept</p>')
     assert "kept" in article.body.text_content() and "wrapped item" not in article.body.text_content()
     article.insert(1, "<h2>Sizes</h2><p>copy:4</p>")
     assert "<h2>Sizes</h2><table>" in lxml.html.tostring(article.body, encoding="unicode")
+
+
+def test_a_copy_goes_in_as_it_was_made_even_beside_the_models_own_html():
+    page = (
+        "<html><body><p>Intro.</p><p><a href='https://ex.com/f.png'><figure><img src='https://ex.com/f.png' "
+        "alt='A diagram'><figcaption>Figure 1. The packet path.</figcaption></figure></a></p>"
+        "<p>* * *</p><p>Part one text.</p><p>* * *</p><p>Part two text.</p>"
+        "<article><a href='#essay'>Skip to essay</a><header><a href='/'>An informal essay</a></header><p>Body.</p></article>"
+        "</body></html>"
+    )
+    article = bookcheck._Article(
+        lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images={"https://ex.com/f.png"}, page_html=page
+    )
+    alone = article.copy("Figure 1", "Figure 1")
+    article.insert(1, "<h2>Figures</h2>copy:1, ")
+    html = lxml.html.tostring(article.body, encoding="unicode")
+    assert '<img src="https://ex.com/f.png"' in html and "<figcaption>Figure 1. The packet path.</figcaption>" in html
+    assert "<p>,</p>" not in html and "<h2>Figures</h2>" in html and "img" in alone
+    # A block the page repeats: the one nearest the end phrase.
+    part_two = article.copy("* * *", "Part two")
+    assert "Part one" not in part_two and part_two.startswith("copy:2, 2 blocks")
+    # A box of its own beside a link does not run into it.
+    assert "Skip to essay</p>" in article.copy("Skip to essay", "Skip to essay")
+
+
+def test_a_passage_of_the_page_goes_in_with_one_call(check):
+    make, item, store = check
+    page = f"<html><body><article><p>First. {WORDS}</p><p>Second. {WORDS}</p><p>See <a href='https://x.example/t'>the talk</a>.</p></article></body></html>"
+    checker, client, result = make(
+        _reply(("insert_from_page", {"block": 2, "start": "See the talk", "end": "See the talk"})),
+        _reply(("replace_from_page", {"first": 4, "last": 4, "start": "First.", "end": "First."})),
+        _reply(_finish("fixed", "Restored a line.", [{"kind": "missing_content", "what": "x", "why": "y"}])),
+    )
+    archive.save(checker.cfg.pages_dir, item, page)
+    assert checker.check(item, result).verdict == "fixed"
+    html = _html(result)
+    assert (
+        '<p>See <a href="https://x.example/t">the talk</a>.</p>' in html and "Subscribe to our newsletter" not in html
+    )
+    answers = [m["content"] for m in client.asked[-1]["messages"] if m["role"] == "user"][1:]
+    assert (
+        answers[0][0]["content"].startswith("From the page: copy:1, 1 blocks of the page")
+        and "Done." in answers[0][0]["content"]
+    )
+    edits = json.loads(_rows(store)[0]["edits"])
+    assert [(e["tool"], e["copies"]) for e in edits] == [("insert_after", [1]), ("replace_blocks", [2])]

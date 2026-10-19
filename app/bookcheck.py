@@ -24,6 +24,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from html import escape
 from urllib.parse import urljoin, urlsplit
 
 import lxml.html
@@ -73,7 +74,7 @@ COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
 COPY_LIKE = re.compile(r"(?<![\w/])copy\s*:\s*\d", re.IGNORECASE)  # a copy's name mistyped
-TAG = re.compile(r"""(<(?:[^>"']|"[^"]*"|'[^']*')*>)""")  # a tag, with any ">" in its quoted attributes
+COPY_NAME = re.compile(r"(?<![\w/])copy:(\d{1,3})(?![\w/])")
 COPY_ALONE = re.compile(r"<p>\s*(copy:\d{1,3})\s*</p>")  # a copy's name as a paragraph of its own
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
 VERDICTS = ("ok", "fixed", "cannot_fix")
@@ -142,14 +143,15 @@ Rules for editing:
 - Edit only to restore what the source page has, or to remove what is not the article. Never \
 rewrite, shorten, summarise or correct the author's text, never add words of your own, and \
 never add commentary or notes about your changes.
-- Restore from the page with page_copy, and pass its copy as the html of insert_after or \
-replace_blocks (html "copy:1"): it brings the page's own markup, with its links, emphasis, \
-headings and quotes. Copy even a single heading, line or code block, and name a copy inside \
-your own HTML where you need to (html "<h2>Sponsors</h2>copy:2"). Write HTML yourself only to \
-fix formatting the page's markup does not give (a heading the page shows as a bold paragraph, \
-say), keeping the block's links and emphasis as they are, or when page_copy cannot take a \
-passage page_find shows, copying its text exactly. To leave out furniture in the middle of a \
-passage, copy it in parts and name each copy.
+- Restore from the page with insert_from_page or replace_from_page, naming where the passage \
+starts and ends on the page: they bring the page's own markup, with its links, emphasis, \
+headings and quotes, in one call. Use them even for a single heading, line or code block. To \
+leave out furniture in the middle of a passage, restore it in parts. page_copy makes the same \
+copy without placing it, to look at first or to put between blocks of your own HTML (html \
+"<h2>Sponsors</h2>copy:2"), never inside a block.
+- Write HTML yourself only to fix formatting the page's markup does not give (a heading the \
+page shows as a bold paragraph, say), keeping the block's links and emphasis as they are, or \
+when the tools cannot find a passage page_find shows; then copy its text exactly.
 - Change only the blocks that are wrong. Never replace a block that is right, or rewrite many \
 blocks to fix one.
 - Most articles are fine. When this one is, call finish with verdict "ok" at once, without \
@@ -240,6 +242,42 @@ TOOLS = [
             "type": "object",
             "properties": {"first": {"type": "integer"}, "last": {"type": "integer"}},
             "required": ["first", "last"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "insert_from_page",
+        "description": (
+            "Insert a passage of the saved page, as its own HTML, after the given block (0 for the start of the "
+            "article): from the block where `start` occurs to the block where `end` occurs. One call; what "
+            "page_copy then insert_after would do."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "block": {"type": "integer"},
+                "start": {"type": "string", "description": "A short phrase from the passage's first block."},
+                "end": {"type": "string", "description": "A short phrase from its last block."},
+            },
+            "required": ["block", "start", "end"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "replace_from_page",
+        "description": (
+            "Replace the article's blocks from first to last (inclusive) with a passage of the saved page, as its "
+            "own HTML, from the block where `start` occurs to the block where `end` occurs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "first": {"type": "integer"},
+                "last": {"type": "integer"},
+                "start": {"type": "string", "description": "A short phrase from the passage's first block."},
+                "end": {"type": "string", "description": "A short phrase from its last block."},
+            },
+            "required": ["first", "last", "start", "end"],
             "additionalProperties": False,
         },
     },
@@ -480,7 +518,7 @@ class _Article:
             "after": after[:RECORD_CHARS],
         }
         if copied:
-            edit["copies"] = copied  # the page's own HTML, not the model's
+            edit["copies"] = copied  # the copies it pasted, by number: the page's own HTML
         self.edits.append(edit)
         extract._prune_empty(self.body)
         _tidy_links(self.body)
@@ -511,15 +549,23 @@ class _Article:
             # phrase, and a heading before any other; a block the page repeats word for word, the first.
             whole = [n for n in at if start in texts[n]]  # the whole of the block's words, either way
             heads = [n for n in whole if found[n].tag in extract.HEADINGS]
-            same = {lxml.html.tostring(found[n], encoding="unicode", with_tail=False) for n in at}
-            picked = heads if len(heads) == 1 else whole if len(whole) == 1 else at[:1] if len(same) == 1 else at
-            if len(picked) == 1:
-                chose = (
-                    f" (the start phrase is in {len(at)} blocks of the page; this is the one that is only that phrase)"
-                )
-                if len(same) == 1:
-                    chose = f" (the page has this passage's first block {len(at)} times; this is the first)"
-            at = picked
+
+            def same(ns: list[int]) -> bool:  # a block the page repeats (for phone and desk), whatever its classes
+                return len({(found[n].tag, texts[n]) for n in ns}) == 1
+
+            def reach(n: int) -> int:  # how many blocks on the end phrase is from this start
+                ends = (m for m in range(n, len(texts)) if any(end in text for text in texts[m]))
+                return next(ends, 2 * len(texts)) - n
+
+            count = len(at)
+            for pick, what in ((heads, "the heading"), (whole, "the one that is only that phrase"), (at, "")):
+                if len(pick) == 1 or (pick and same(pick)):
+                    at = [min(pick, key=reach)]
+                    if len(pick) > 1:
+                        chose = f" (the page has this block {len(pick)} times; this is the one nearest the end phrase)"
+                    else:
+                        chose = f" (the start phrase is in {count} blocks of the page; this is {what})"
+                    break
         if len(at) > 1:
             raise ToolError(f"that start phrase is in {len(at)} blocks of the page; give a longer one")
         to = next((n for n in range(at[0], len(texts)) if any(end in text for text in texts[n])), None)
@@ -557,34 +603,69 @@ class _Article:
         return self._page
 
     def _html(self, html: str) -> tuple[list[lxml.html.HtmlElement], list[int]]:
-        """An edit's blocks, from copies (copy:N, alone or among the model's own HTML) or from the
-        model's own HTML, and the numbers of the copies it used."""
+        """An edit's blocks, from copies (copy:N, alone or between blocks of the model's own HTML)
+        and the model's own HTML, and the numbers of the copies it used. A copy goes in as it was
+        made: cleaned once, never again (a second pass is not the same as the first)."""
         used: list[int] = []
 
-        def paste(ref: re.Match) -> str:
-            n = int(ref.group(2))
+        def blocks_of(n: int) -> list[lxml.html.HtmlElement]:
             if not 1 <= n <= len(self.copies):
                 raise ToolError(f"there is no copy:{n}; page_copy has made {len(self.copies)}")
             used.append(n)
-            return self.copies[n - 1]
+            return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
-        if COPY_REF.fullmatch(html.strip()):  # the copy as it is: already cleaned
-            pasted = COPY_REF.sub(paste, html.strip())
-            return _as_blocks(lxml.html.fragment_fromstring(pasted, create_parent="div")), used
-        # Named between tags only, never inside one (an attribute) or in the model's own code,
-        # and none mistyped.
-        parts = TAG.split(COPY_ALONE.sub(r"\1", html))
-        code = 0
-        for n, part in enumerate(parts):
-            if n % 2:
-                tag = re.match(r"<(/?)\s*(pre|code)\b", part, re.IGNORECASE)
-                code += (-1 if tag.group(1) else 1) if tag else 0
-                code = max(code, 0)
-            elif not code:
-                if COPY_LIKE.search(COPY_REF.sub("", part)):
+        html = COPY_ALONE.sub(r"\1", html.strip())
+        if ref := COPY_REF.fullmatch(html):
+            return blocks_of(int(ref.group(2))), used
+        if not COPY_LIKE.search(html):
+            return self.clean(html), used
+        try:
+            root = lxml.html.fragment_fromstring(html, create_parent="div")
+        except (etree.ParserError, ValueError) as exc:
+            raise ToolError(f"that HTML cannot be read: {exc}") from exc
+        # A copy's name only between blocks: inside a heading, a paragraph's emphasis or the
+        # model's own code it would be printed, or lose what is around it.
+        for el in root.iter():
+            if not isinstance(el.tag, str):
+                continue
+            inside = [(el.text or "", el)] if el is not root else []
+            if el.getparent() is not None and el.getparent() is not root:
+                inside.append((el.tail or "", el.getparent()))
+            for text, holder in inside:
+                code = holder.tag in ("pre", "code") or next(holder.iterancestors("pre", "code"), None) is not None
+                if COPY_NAME.search(text):
+                    raise ToolError(
+                        f"name a copy between blocks, not inside <{holder.tag}>: to make a copy a heading, or "
+                        "to put it in a code block, write that block's HTML yourself"
+                    )
+                if COPY_LIKE.search(text) and not code:
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
-                parts[n] = COPY_REF.sub(paste, part)
-        return self.clean("".join(parts)), used
+        out: list[lxml.html.HtmlElement] = []
+        pending: list[str] = []
+
+        def flush() -> None:
+            own = "".join(pending)
+            pending.clear()
+            if re.search(r"<|\w", own):  # nothing for a comma or a space between two copies
+                out.extend(self.clean(own))
+
+        def loose(text: str) -> None:
+            if COPY_LIKE.search(COPY_NAME.sub("", text)):
+                raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
+            for n, piece in enumerate(COPY_NAME.split(text)):
+                if n % 2:
+                    flush()
+                    out.extend(blocks_of(int(piece)))
+                else:
+                    pending.append(escape(piece))
+
+        loose(root.text or "")
+        for child in root:
+            tail, child.tail = child.tail, None
+            pending.append(lxml.html.tostring(child, encoding="unicode"))
+            loose(tail or "")
+        flush()
+        return out, used
 
     def clean(self, html: str, from_page: bool = False) -> list[lxml.html.HtmlElement]:
         """The model's HTML as blocks the article may hold: through the extractor's allowlist,
@@ -637,14 +718,15 @@ class _Article:
 def _within(url: str, href: str) -> bool:
     """Whether a link goes to a place on the page itself ("#note-1", or the page's address with one)."""
     href = href.strip()
-    if href.startswith("#"):
-        return True
+    if not href or href.startswith("#"):
+        return True  # an anchor (<a name>), or a place on this page
     try:
         there = urlsplit(urljoin(url, href))
         here = urlsplit(url)
     except ValueError:
         return False
-    return bool(there.fragment) and (there.netloc, there.path, there.query) == (here.netloc, here.path, here.query)
+    place = (there.netloc, there.path.rstrip("/"), there.query)
+    return bool(there.fragment) and place == (here.netloc, here.path.rstrip("/"), here.query)
 
 
 def _plain(text: str) -> str:
@@ -653,6 +735,44 @@ def _plain(text: str) -> str:
 
 
 PAGE_BLOCKS = {*BLOCK_TAGS, "h1", "summary"}
+# What runs on inside a line; any other element is a box of its own (a <header>, a <section>).
+PHRASING = {
+    "a",
+    "abbr",
+    "b",
+    "bdi",
+    "bdo",
+    "br",
+    "cite",
+    "code",
+    "data",
+    "del",
+    "dfn",
+    "em",
+    "font",
+    "i",
+    "img",
+    "ins",
+    "kbd",
+    "label",
+    "mark",
+    "picture",
+    "q",
+    "s",
+    "samp",
+    "small",
+    "source",
+    "span",
+    "strike",
+    "strong",
+    "sub",
+    "sup",
+    "time",
+    "tt",
+    "u",
+    "var",
+    "wbr",
+}
 # Where each part of a list, table, definition list or figure belongs.
 PART_OF = {
     "li": ("ul", "ol", "menu"),
@@ -730,7 +850,7 @@ def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
         add(text)
     for child in children:
         tail, child.tail = child.tail, None
-        if blocky(child):
+        if blocky(child) or (isinstance(child.tag, str) and child.tag not in PHRASING):
             run = None
             out.append(child)
         else:
@@ -738,7 +858,7 @@ def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
         if tail and (tail.strip() or run is not None):  # a space between two inline elements too
             add(tail)
     for el in out:
-        if blocky(el) or el.text_content().strip() or el.xpath(".//img"):
+        if el.tag != "p" or el.text_content().strip() or el.xpath(".//img"):
             box.append(el)
 
 
@@ -1132,6 +1252,12 @@ class Checker:
             return self._view(item, str(args["text"]), started)
         if name == "page_copy":
             return article.copy(str(args["start"]), str(args["end"]))
+        if name in ("insert_from_page", "replace_from_page"):
+            made = article.copy(str(args["start"]), str(args["end"])).split("\n", 1)[0].rstrip(":")
+            ref = f"copy:{len(article.copies)}"
+            if name == "insert_from_page":
+                return f"From the page: {made}. " + article.insert(int(args["block"]), ref)
+            return f"From the page: {made}. " + article.replace(int(args["first"]), int(args["last"]), ref)
         if name == "article_read":
             return article.read(int(args["first"]), int(args["last"]))
         if name == "replace_blocks":
