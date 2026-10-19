@@ -803,3 +803,21 @@ def test_interactive_figures_leave_a_placeholder_and_ordinary_ones_are_kept():
     # A feed's copy is not the page a browser shows: no placeholder there.
     fed = extract("https://blog.example/codecs", None, f"{words}{chart}{words}{words}", "feed")
     assert "shot-" not in lxml.html.tostring(fed.body, encoding="unicode")
+
+
+def test_headings_in_their_own_boxes_or_with_unlucky_names_and_page_notices():
+    words = "<p>" + "Plain words about self-hosting and the services that run at home on a small box. " * 10 + "</p>"
+    readme = (
+        "<div class='markdown-heading'><h2 class='heading-element'>Debugging</h2>"
+        "<a class='anchor' href='#debugging' aria-label='Permalink: Debugging'><svg></svg></a></div>"
+    )
+    page = (
+        f"<html><body><article>{words}{readme}{words}<h3 id='freshrss'>FreshRSS</h3>{words}"
+        "<div class='o-message'><p>Some content could not load. Check your internet connection or browser settings.</p></div>"
+        "<p><em>If you rely on our team, please take a moment to </em>select us "
+        "<a href='https://www.google.com/preferences/source?q=dw.com'>as your Preferred Source</a> on Google.</p>"
+        f"{words}</article></body></html>"
+    )
+    out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
+    assert "<h2>Debugging</h2>" in out and "<h3>FreshRSS</h3>" in out
+    assert "could not load" not in out and "Preferred Source" not in out

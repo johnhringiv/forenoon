@@ -15,6 +15,7 @@ import lxml.html
 import trafilatura
 from lxml import etree
 from readability import Document
+from readability.readability import REGEXES as READABILITY_PATTERNS
 
 KEEP = {
     "p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "table", "thead",
@@ -116,6 +117,14 @@ DATA_TABLE_LINK_SHARE = (
 LAYOUT_TABLE_NAME = re.compile(
     r"(^|[\s_-])(site|page|post|global)?[_-]?(header|footer|masthead|nav)(\s|$)", re.IGNORECASE
 )
+# What a page shows where a script's content did not appear, as the whole of a short block.
+LOAD_FAILURE = re.compile(
+    r"^(some |this )?(content|chart|graphic|graphics|interactive|embed|map|video)( content)? (could not|couldn.t|"
+    r"failed to|did not|didn.t) (be )?(load|display|shown?)|^(please )?(enable|turn on|activate) javascript to "
+    r"(see|view|read|load)",
+    re.IGNORECASE,
+)
+NOTICE_MAX_WORDS = 40
 TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
 REFILL_FURNITURE = re.compile(
@@ -286,6 +295,62 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         holder.tail = figure.text
         figure.text = None
         figure.insert(0, holder)
+
+
+def _free_headings(root: lxml.html.HtmlElement) -> None:
+    """Keep readability from deleting a section's heading for how it is marked up.
+
+    - A heading's own class or id can sound like page furniture by accident: readability takes
+      "rss" in id="freshrss" for a feed box. Such names go, after in-page links to the heading
+      are recorded (sanitize gives it an id of our own); not when a whole part of the name is
+      the furniture word ("site-header-title"), nor when it names furniture to us too.
+    - GitHub puts each README heading in a box of its own with an empty anchor link beside it,
+      and readability deletes any box with under 25 letters: "Debugging" and "License" went.
+      A box holding only a heading and such links is unwrapped.
+    """
+    unlikely = READABILITY_PATTERNS["unlikelyCandidatesRe"]
+    maybe = READABILITY_PATTERNS["okMaybeItsACandidateRe"]
+    for heading in list(root.iter(*HEADINGS)):
+        names = _names(heading)
+        # Only by accident: the furniture word inside a longer word ("freshrss"), never a whole
+        # part of a name ("site-header-title", "comments").
+        parts = re.split(r"[\s_-]+", names.lower())
+        whole = any(unlikely.fullmatch(part) for part in parts if part)
+        if unlikely.search(names) and not whole and not maybe.search(names) and not FURNITURE_CLASS.search(names):
+            heading.attrib.pop("class", None)
+            heading.attrib.pop("id", None)
+        box = heading.getparent()
+        if box is None or box is root or box.tag not in ("div", "section") or (box.text or "").strip():
+            continue
+        others = [child for child in box if child is not heading]
+        if (
+            all(
+                isinstance(child.tag, str)
+                and child.tag in ("a", "span", "svg")
+                and not " ".join(child.text_content().split())
+                and not (child.tail or "").strip()
+                for child in others
+            )
+            and not (heading.tail or "").strip()
+        ):
+            for child in others:
+                child.drop_tree()
+            box.drop_tag()
+
+
+def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
+    """Remove what a page shows in place of a script that did not run ("Some content could not
+    load"), and a request to pick the site as a preferred source on Google: neither is the
+    article, and neither is ever more than a line."""
+    for el in list(root.iter("p", "div", "span")):
+        if el.getparent() is None or next(el.iterdescendants("p", "div", *HEADINGS), None) is not None:
+            continue
+        text = " ".join(el.text_content().split())
+        if not text or _words(text) > NOTICE_MAX_WORDS:
+            continue
+        preferred = any("google.com/preferences/source" in (a.get("href") or "") for a in el.iter("a"))
+        if LOAD_FAILURE.match(text) or preferred:
+            el.drop_tree()
 
 
 def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
@@ -476,6 +541,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
         names = _names(heading) + " " + (_names(parent) if parent is not None else "")
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
+    _free_headings(root)
+    _drop_page_notices(root)
     _unclass_data_tables(root)
     if not notes:
         return None
