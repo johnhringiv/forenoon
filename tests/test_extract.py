@@ -341,3 +341,21 @@ def test_latexml_footnotes_in_the_text_become_notes():
     assert "Whitespace may help." not in text and "5" not in text
     assert 'needed.<a href="#fn-1" class="noteref" id="fnref-1">1</a> The reuse' in text
     assert '<a href="#fnref-1">1</a> Whitespace may help.' in " ".join(notes.split())
+
+
+def test_a_list_of_links_under_a_kept_heading_is_put_back():
+    """Readability drops a list that is mostly links and keeps its heading, so the article
+    seemed to end at "References". Furniture under a heading stays out."""
+    filler = "<p>" + "Plain words about checksum offloads in the kernel. " * 30 + "</p>"
+    refs = "".join(
+        f'<li><b>Item {n}:</b> <a href="https://x.example/{n}">the linked source number {n}</a></li>' for n in range(4)
+    )
+    page = f"""<html><body><main><div class="prose">{filler}{filler}
+    <h3>Technical references</h3><ul>{refs}</ul>
+    <h3>Related posts</h3><ul class="related-posts"><li><a href="/a">Another post</a></li></ul>
+    <h3>Where to buy</h3><div><div><a href="https://shop.example">Shop $140</a></div></div>
+    </div></main></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
+    assert out.count("the linked source number") == 4 and "Item 3:" in out
+    assert out.index("Technical references") < out.index("the linked source number 0")
+    assert "Another post" not in out and "Shop" not in out

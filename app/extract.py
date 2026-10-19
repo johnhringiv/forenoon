@@ -75,6 +75,14 @@ WIDEN_MIN_WORDS = 500
 WIDEN_COVERAGE = 0.9  # share of the page text an element must hold to be the article
 WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page text is rejected
 WORDS_PER_MINUTE = 230
+REFILL_MAX_WORDS = 400  # the most text put back under a heading readability left empty
+REFILL_BLOCKS = {"p", "ul", "ol", "dl", "table", "pre", "blockquote", "figure"}
+# Page furniture by its class name or id, for what readability left out.
+FURNITURE_CLASS = re.compile(
+    r"comment|related|share|social|sidebar|footer|newsletter|subscribe|promo|sponsor|advert|"
+    r"\bad\b|widget|menu|breadcrumb|pagination|pager|popup|modal|signup|sign-up|recommend",
+    re.IGNORECASE,
+)
 
 PAYWALL = re.compile(
     r"subscribe to (continue|read|unlock|keep reading)|already a subscriber|sign in to (read|"
@@ -515,6 +523,97 @@ def _readability(page_html: str) -> lxml.html.HtmlElement | None:
         return None
 
 
+def _level(el: lxml.html.HtmlElement) -> int:
+    """A heading's level, 1 to 6; 0 for anything else."""
+    return int(el.tag[1]) if isinstance(el.tag, str) and el.tag in HEADINGS else 0
+
+
+def _empty_section(heading: lxml.html.HtmlElement) -> bool:
+    """Whether no text follows a heading before the next heading of its level or above."""
+    if (heading.tail or "").strip():
+        return False
+    for el in heading.xpath("following::*"):
+        if 0 < _level(el) <= _level(heading):
+            return True
+        if (el.text or "").strip() or (el.tail or "").strip():
+            return False
+    return True
+
+
+def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
+    """Put back what readability removed from under a heading it kept.
+
+    Readability judges each list and table on its own, and drops one that is mostly links:
+    the list of references under "References" goes, its heading stays, and the article
+    seems to end at a heading. When a kept heading has nothing under it, what follows the
+    same heading on the page is put back, up to the next heading; not when it looks like
+    page furniture (a form, navigation, a class such as "related" or "comments"), and not
+    a long run of text, which readability had a better reason to leave out.
+    """
+    empty = [h for h in body.iter(*HEADINGS) if _empty_section(h)]
+    if not empty:
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    for junk in page.xpath("//script | //style | //noscript | //template"):
+        junk.drop_tree()
+    by_text: dict[str, list[lxml.html.HtmlElement]] = {}
+    for h in page.iter(*HEADINGS):
+        by_text.setdefault(_norm(h.text_content()), []).append(h)
+    kept = _norm(body.text_content())
+    for heading in empty:
+        found = by_text.get(_norm(heading.text_content()), [])
+        if len(found) != 1:  # not on the page as it is, or not only once
+            continue
+        source = found[0]
+        if FURNITURE_CLASS.search(_names(source)):
+            continue
+        # A heading wrapped on its own ("<div><h3>References</h3></div><ul>"): its wrapper's
+        # neighbours are its section.
+        while (
+            source.getparent() is not None
+            and source.getparent().tag != "body"
+            and not [el for el in source.itersiblings() if isinstance(el.tag, str)]
+            and _norm(source.getparent().text_content()) == _norm(source.text_content())
+        ):
+            source = source.getparent()
+        section = []
+        for el in source.itersiblings():
+            if not isinstance(el.tag, str):
+                continue
+            if _level(el) or el.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6"):
+                break  # the next section
+            if not _plain_blocks(el) or el.xpath(".//form | .//nav") or FURNITURE_CLASS.search(_names(el)):
+                break
+            section.append(el)
+        words = sum(_words(el.text_content()) for el in section)
+        already = any(text and text in kept for text in (_norm(el.text_content()) for el in section))
+        if not words or words > REFILL_MAX_WORDS or already:
+            continue
+        anchor = heading
+        for el in section:
+            copied = copy.deepcopy(el)
+            copied.tail = None
+            anchor.addnext(copied)
+            anchor = copied
+        anchor.tail, heading.tail = heading.tail, None
+
+
+def _plain_blocks(el: lxml.html.HtmlElement) -> bool:
+    """Whether an element is paragraphs, lists, tables and the like, or a wrapper of only
+    those: what a section of an article is made of, unlike a box of buttons and links."""
+    if el.tag in REFILL_BLOCKS:
+        return True
+    children = [child for child in el if isinstance(child.tag, str)]
+    return el.tag in ("div", "section") and bool(children) and all(map(_plain_blocks, children))
+
+
+def _names(el: lxml.html.HtmlElement) -> str:
+    return f"{el.get('class', '')} {el.get('id', '')}"
+
+
 def _widest(page_html: str, reference: int) -> lxml.html.HtmlElement | None:
     """The smallest element holding nearly all of the page's article text.
 
@@ -696,6 +795,7 @@ def extract(
         notes["page-wide"] = notes["page"]
         page = _readability(page_html)
         if page is not None:
+            _refill_sections(page, page_html)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
