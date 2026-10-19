@@ -750,8 +750,8 @@ pub(crate) fn progress_choices(progress: Option<&str>) -> Vec<RateChoice> {
 }
 
 /// The reasons a reader can give for this rating, with the ones they chose marked.
-pub(crate) fn reason_options(verdict: Option<&str>, progress: Option<&str>, why: &str) -> Vec<ReasonOption> {
-    ratings::reasons_for(verdict, progress)
+pub(crate) fn reason_options(verdict: Option<&str>, why: &str) -> Vec<ReasonOption> {
+    ratings::reasons_for(verdict)
         .iter()
         .map(|(key, label)| ReasonOption {
             key,
@@ -920,7 +920,7 @@ fn card(row: Delivered) -> Card {
     }
     facts.extend(length(row.word_count));
     let (verdict, progress) = (row.verdict.as_deref(), row.progress.as_deref());
-    let reasons = reason_options(verdict, progress, &row.why);
+    let reasons = reason_options(verdict, &row.why);
     Card {
         link: web_url(&row.url),
         image: web_url(&row.image_url),
@@ -934,7 +934,7 @@ fn card(row: Delivered) -> Card {
         verdicts: verdict_choices(verdict),
         progress: progress_choices(progress),
         reasons,
-        question: ratings::question(verdict, progress),
+        question: ratings::question(verdict),
         several: ratings::several(verdict),
         sendable: false,
         sent: None,
@@ -1282,9 +1282,7 @@ pub async fn rate(
         }
     } else {
         match form.reason {
-            Some(reason) if ratings::fits(&reason, now.verdict.as_deref(), now.progress.as_deref()) => {
-                Some(Signal::Why(reason))
-            }
+            Some(reason) if ratings::fits(&reason, now.verdict.as_deref()) => Some(Signal::Why(reason)),
             _ => return back_to(&form.back, &form.article), // not a reason for this rating: ignored
         }
     };

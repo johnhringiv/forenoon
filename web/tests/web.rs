@@ -455,14 +455,13 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     assert_eq!(browser.post(&site, "/rate", &away).await.location, "/#a-a1");
     assert_eq!(rating("a1").await.unwrap(), stored(Some("worth-it"), Some("partway"), ""));
 
-    // Skipped drops the verdict and has reasons of its own; a verdict after it means read after
-    // all, how far not known. Clear leaves nothing.
+    // Skipped drops the verdict and asks for no reason; a verdict after it means read after all,
+    // how far not known. Clear leaves nothing.
     let second =
         |extra: &'static str, value: &'static str| [("csrf", csrf.as_str()), ("article", "a2"), (extra, value)];
     browser.post(&site, "/rate", &second("progress", "skipped")).await;
-    browser.post(&site, "/rate", &second("reason", "no-time")).await;
-    assert_eq!(rating("a2").await.unwrap(), stored(None, Some("skipped"), "no-time"));
-    assert!(browser.get(&site, "/").await.text.contains("Why skip it?"));
+    browser.post(&site, "/rate", &second("reason", "basic")).await;
+    assert_eq!(rating("a2").await.unwrap(), stored(None, Some("skipped"), ""));
     browser.post(&site, "/rate", &second("verdict", "not-for-me")).await;
     assert_eq!(rating("a2").await.unwrap(), stored(Some("not-for-me"), None, ""));
     browser.post(&site, "/rate", &second("clear", "1")).await;
@@ -2438,9 +2437,7 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert!(liked.contains("More on this topic. Liked the depth or format."), "{liked}");
     kindle.get(&site, &link("partway")).await;
     let skipped = kindle.get(&site, &link("skip")).await.text;
-    assert!(
-        skipped.contains("Why skip it?") && skipped.contains(">Finished<") && skipped.contains(">Stopped partway<")
-    );
+    assert!(!skipped.contains("(optional)") && skipped.contains(">Finished<") && skipped.contains(">Stopped partway<"));
     kindle.get(&site, &link("end-more")).await;
     kindle.get(&site, &link("why-depth")).await;
     kindle.get(&site, &link("why-more-topic")).await;

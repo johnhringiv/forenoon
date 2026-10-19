@@ -353,10 +353,8 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     store.record_feedback(user.id, "old", "end-more", "kindle-footer")
     store.upsert_article("passed", "https://x.example/passed", "Blog", "Passed over", "", None)
     store.record_feedback(user.id, "passed", "skip", "kindle-footer")
-    store.record_feedback(user.id, "passed", "why-no-time", "kindle-footer")
-    store.upsert_article("dull", "https://x.example/dull", "Blog", "Passed over, not wanted", "", None)
-    store.record_feedback(user.id, "dull", "skip", "kindle-footer")
-    store.record_feedback(user.id, "dull", "why-no-interest", "kindle-footer")
+    store.upsert_article("half", "https://x.example/half", "Blog", "Half read", "", None)
+    store.record_feedback(user.id, "half", "partway", "kindle-footer")
 
     def scores(ids):
         # Reverse of the order given, plus entries that must be ignored.
@@ -374,8 +372,9 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     system, prompt = backend.prompts[0]
     assert "untrusted" in system and "Compilers. Not watches." in prompt
     assert '"title": "An old favourite"' in prompt and '"verdict": "more like this", "progress": "finished"' in prompt
-    # A skip counts, lightly; one for want of time says nothing and is left out.
-    assert '"progress": "skipped", "reader_said": "Not interested"' in prompt and "Just no time" not in prompt
+    # A skip counts, lightly; progress with no verdict says too little and is left out.
+    assert '"title": "Passed over"' in prompt and '"progress": "skipped"' in prompt
+    assert '"title": "Half read"' not in prompt
     assert "<script" not in prompt  # abstracts are plain text
 
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}

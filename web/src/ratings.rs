@@ -26,8 +26,6 @@ const MORE: [(&str, &str); 3] = [
     ("more-source", "More from this source"),
     ("depth", "Liked the depth or format"),
 ];
-const SKIPPED: [(&str, &str); 3] =
-    [("no-interest", "Not interested"), ("seen", "Already saw it elsewhere"), ("no-time", "Just no time")];
 
 pub fn verdict_label(key: &str) -> Option<&'static str> {
     VERDICTS.iter().find(|(k, _)| *k == key).map(|(_, label)| *label)
@@ -37,18 +35,13 @@ pub fn progress_label(key: &str) -> Option<&'static str> {
     PROGRESS.iter().find(|(k, _)| *k == key).map(|(_, label)| *label)
 }
 
-/// What the reasons answer to: the verdict, or a skip when there is none.
-pub fn standing<'a>(verdict: Option<&'a str>, progress: Option<&str>) -> Option<&'a str> {
-    verdict.or((progress == Some("skipped")).then_some("skipped"))
-}
-
-/// The reasons that fit a rating; none for "worth it" or with nothing to answer to.
-pub fn reasons_for(verdict: Option<&str>, progress: Option<&str>) -> &'static [(&'static str, &'static str)] {
-    match standing(verdict, progress) {
+/// The reasons that fit a verdict; none for "worth it", and none without a verdict: a skip is
+/// a deliberate act and says enough, and an article already seen elsewhere can be rated.
+pub fn reasons_for(verdict: Option<&str>) -> &'static [(&'static str, &'static str)] {
+    match verdict {
         Some("not-for-me") => &NOT_FOR_ME,
         Some("not-good") => &NOT_GOOD,
         Some("more") => &MORE,
-        Some("skipped") => &SKIPPED,
         _ => &[],
     }
 }
@@ -68,8 +61,8 @@ pub fn chosen(reason: &str) -> impl Iterator<Item = &str> {
 /// Pressing a chosen reason again takes it back. What was liked adds up (the topic and the
 /// depth); anything else is one thing, so a new choice replaces the old. Reasons that do not
 /// fit the rating are dropped; an empty `key` only does that.
-pub fn with_reason(reason: &str, key: &str, verdict: Option<&str>, progress: Option<&str>) -> String {
-    let fitting = reasons_for(verdict, progress);
+pub fn with_reason(reason: &str, key: &str, verdict: Option<&str>) -> String {
+    let fitting = reasons_for(verdict);
     let fits = |k: &str| fitting.iter().any(|(f, _)| *f == k);
     let mut now: Vec<&str> = chosen(reason).filter(|k| fits(k)).collect();
     if now.contains(&key) {
@@ -83,16 +76,15 @@ pub fn with_reason(reason: &str, key: &str, verdict: Option<&str>, progress: Opt
     fitting.iter().map(|(k, _)| *k).filter(|k| now.contains(k)).collect::<Vec<_>>().join(",")
 }
 
-pub fn fits(reason: &str, verdict: Option<&str>, progress: Option<&str>) -> bool {
-    reasons_for(verdict, progress).iter().any(|(key, _)| *key == reason)
+pub fn fits(reason: &str, verdict: Option<&str>) -> bool {
+    reasons_for(verdict).iter().any(|(key, _)| *key == reason)
 }
 
 /// What the reason buttons are asked under: they read as answers to it.
-pub fn question(verdict: Option<&str>, progress: Option<&str>) -> &'static str {
-    match standing(verdict, progress) {
+pub fn question(verdict: Option<&str>) -> &'static str {
+    match verdict {
         Some("not-for-me") => "Why not for you?",
         Some("more") => "What did you like?",
-        Some("skipped") => "Why skip it?",
         _ => "What was wrong?",
     }
 }
@@ -103,7 +95,6 @@ pub fn short(reason: &str) -> &'static str {
         "basic" => "Too basic",
         "specialist" => "Too specialised",
         "known" => "Nothing new",
-        "seen" => "Seen it",
         "thin" => "Too thin",
         "padded" => "Padded",
         "oversold" => "Oversold",
@@ -111,14 +102,12 @@ pub fn short(reason: &str) -> &'static str {
         "more-topic" => "The topic",
         "more-source" => "This source",
         "depth" => "The depth",
-        "no-interest" => "No interest",
-        "no-time" => "No time",
         _ => "",
     }
 }
 
 pub fn label(reason: &str) -> Option<&'static str> {
-    NOT_FOR_ME.iter().chain(&NOT_GOOD).chain(&MORE).chain(&SKIPPED).find(|(key, _)| *key == reason).map(|(_, l)| *l)
+    NOT_FOR_ME.iter().chain(&NOT_GOOD).chain(&MORE).find(|(key, _)| *key == reason).map(|(_, l)| *l)
 }
 
 /// What gets written to the event log, in the same words the Kindle links use.
@@ -208,27 +197,38 @@ mod tests {
             .iter()
             .flat_map(|(v, _)| [Signal::Verdict(v), Signal::End(v)])
             .chain([Signal::Finished, Signal::Partway, Signal::Skip, Signal::Why("thin".into())])
-            .chain([Signal::Why("depth".into()), Signal::Why("no-time".into())]);
+            .chain([Signal::Why("depth".into()), Signal::Why("specialist".into())]);
         for signal in all {
             assert_eq!(signal.to_string().parse::<Signal>(), Ok(signal.clone()), "{signal}");
         }
         assert_eq!("end-more".parse::<Signal>(), Ok(Signal::End("more")));
-        for text in ["", "f4", "r2", "end-", "end-great", "great", "done", "why-", "why-broken", "why-topic", "problem"]
-        {
+        for text in [
+            "",
+            "f4",
+            "r2",
+            "end-",
+            "end-great",
+            "great",
+            "done",
+            "why-",
+            "why-broken",
+            "why-topic",
+            "why-no-time",
+            "why-seen",
+            "problem",
+        ] {
             assert_eq!(text.parse::<Signal>(), Err(()), "{text}");
         }
     }
 
     #[test]
-    fn reasons_follow_the_verdict_or_the_skip() {
-        assert!(reasons_for(Some("worth-it"), Some("finished")).is_empty());
-        assert!(reasons_for(None, Some("finished")).is_empty());
-        assert!(fits("seen", None, Some("skipped")) && !fits("seen", Some("not-for-me"), None));
-        assert!(!fits("no-time", Some("not-for-me"), None));
+    fn reasons_follow_the_verdict() {
+        assert!(reasons_for(Some("worth-it")).is_empty() && reasons_for(None).is_empty());
+        assert!(fits("basic", Some("not-for-me")) && !fits("basic", Some("not-good")));
         // One reason, except for what was liked.
-        assert_eq!(with_reason("thin", "padded", Some("not-good"), None), "padded");
-        assert_eq!(with_reason("depth", "more-topic", Some("more"), None), "more-topic,depth");
-        assert_eq!(with_reason("depth", "depth", Some("more"), None), "");
-        assert_eq!(with_reason("thin,depth", "", Some("more"), None), "depth");
+        assert_eq!(with_reason("thin", "padded", Some("not-good")), "padded");
+        assert_eq!(with_reason("depth", "more-topic", Some("more")), "more-topic,depth");
+        assert_eq!(with_reason("depth", "depth", Some("more")), "");
+        assert_eq!(with_reason("thin,depth", "", Some("more")), "depth");
     }
 }

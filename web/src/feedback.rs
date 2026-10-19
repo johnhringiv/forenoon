@@ -156,7 +156,7 @@ fn plain(status: StatusCode, message: &str, detail: &str) -> Page {
     html(status, page)
 }
 
-/// "Worth it, finished." "Skipped. Just no time."
+/// "Worth it, finished." "Skipped."
 fn stated(rating: &Rating) -> String {
     let (verdict, progress) = (rating.verdict.as_deref(), rating.progress.as_deref());
     let mut message = match (verdict.and_then(ratings::verdict_label), progress) {
@@ -224,7 +224,7 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     // Same reader, article and expiry as the link that was tapped.
     let sign = |signal: &str| make(secret, &claim.user, &claim.article, signal, claim.expires);
     // One more tap says why. Always offered, never required: the rating already counts.
-    let reasons = ratings::reasons_for(verdict, progress)
+    let reasons = ratings::reasons_for(verdict)
         .iter()
         .map(|(key, label)| Pick {
             token: sign(&format!("why-{key}")),
@@ -249,7 +249,7 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     let page = FeedbackPage {
         message: stated(&rating),
         detail: title,
-        question: ratings::question(verdict, progress),
+        question: ratings::question(verdict),
         reasons,
         several: ratings::several(verdict),
         verdicts,

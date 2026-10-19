@@ -1176,8 +1176,8 @@ pub fn after(was: &Rating, signal: &Signal) -> Rating {
         Change::Keep => was.progress.clone(),
     };
     let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
-    let (v, p) = (verdict.as_deref(), progress.as_deref());
-    let reason = ratings::with_reason(&ratings::with_reason(&was.reason, "", v, p), pressed, v, p);
+    let v = verdict.as_deref();
+    let reason = ratings::with_reason(&ratings::with_reason(&was.reason, "", v), pressed, v);
     Rating { verdict, progress, reason }
 }
 

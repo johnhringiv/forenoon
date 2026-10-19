@@ -23,7 +23,7 @@ PROGRESS = {"finished": "finished", "partway": "stopped partway", "skipped": "sk
 #   finished, partway progress only
 #   skip              skipped: drops the verdict
 #   skip-rest         "Done with this issue": skip every article of the book given nothing
-#   why-<reason>      the reason, one optional tap after a verdict or a skip
+#   why-<reason>      the reason, one optional tap after a verdict
 # The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
 # not in SIGNALS; anything replaying feedback_events must handle it.
 END_SIGNALS = tuple(f"end-{verdict}" for verdict in VERDICTS)
@@ -49,8 +49,9 @@ REASONS_BY = {
         "more-source": "More from this source",
         "depth": "Liked the depth or format",
     },
-    "skipped": {"no-interest": "Not interested", "seen": "Already saw it elsewhere", "no-time": "Just no time"},
 }
+# A skip has no reasons: skipping is deliberate and says enough, and an article already seen
+# elsewhere can be rated.
 # What was liked can be several things at once; anything else is one.
 SEVERAL = "more"
 REASONS = {key: label for reasons in REASONS_BY.values() for key, label in reasons.items()}
@@ -70,25 +71,19 @@ def reason_labels(reason: str) -> list[str]:
     return [REASONS[key] for key in chosen(reason) if key in REASONS]
 
 
-def standing(verdict: str | None, progress: str | None) -> str | None:
-    """What the reasons answer to: the verdict, or a skip when there is none."""
-    return verdict or ("skipped" if progress == "skipped" else None)
-
-
-def with_reason(reason: str, key: str, verdict: str | None, progress: str | None) -> str:
+def with_reason(reason: str, key: str, verdict: str | None) -> str:
     """The stored reasons after one more tap on `key`.
 
     Tapping a chosen reason again takes it back. What was liked adds up (the topic and the
     depth); anything else is one thing, so a new choice replaces the old. Reasons that do not
     fit the rating are dropped; an empty `key` only does that.
     """
-    on = standing(verdict, progress)
-    fitting = REASONS_BY.get(on or "", {})
+    fitting = REASONS_BY.get(verdict or "", {})
     now = [k for k in chosen(reason) if k in fitting]
     if key in now:
         now.remove(key)
     elif key in fitting:
-        now = [*now, key] if on == SEVERAL else [key]
+        now = [*now, key] if verdict == SEVERAL else [key]
     return ",".join(k for k in fitting if k in now)
 
 

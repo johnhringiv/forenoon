@@ -141,12 +141,12 @@ def rated_entries(user: User, store: Store, latest: int) -> list[dict]:
     """The reader's latest ratings as the model is shown them, oldest first.
 
     The latest with a verdict, and apart from them the latest skips: "Done with this issue"
-    skips several a day, and would otherwise push the verdicts out. One skipped for want of
-    time counts for nothing and is left out, as is progress with no verdict.
+    skips several a day, and would otherwise push the verdicts out. Progress with no verdict
+    says too little and is left out.
     """
     rows = store.rating_rows(user.id)
     rated = [row for row in rows if row["verdict"]]  # progress alone says too little to use
-    skips = [row for row in rows if row["progress"] == "skipped" and "no-time" not in row["reason"].split(",")]
+    skips = [row for row in rows if row["progress"] == "skipped"]
     chosen = sorted(rated[-latest:] + skips[-(latest * 3 // 8) :], key=lambda row: row["updated_at"])
     out = []
     for row in chosen:

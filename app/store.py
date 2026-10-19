@@ -803,7 +803,7 @@ class Store:
             progress = None if verdict and before.progress == "skipped" else before.progress
         pressed = signal.removeprefix("why-") if signal in REASON_SIGNALS else ""
         # An empty key leaves the choice alone and only drops what no longer fits.
-        reason = with_reason(with_reason(before.reason, "", verdict, progress), pressed, verdict, progress)
+        reason = with_reason(with_reason(before.reason, "", verdict), pressed, verdict)
         if was is None and not (verdict or progress or reason):
             return  # a reason for nothing: no rating to keep it on
         self.db.execute(

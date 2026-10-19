@@ -31,7 +31,7 @@ day's choices.
   opening; the best 40 are then read in full before the day is chosen, so a teaser with a
   good title loses to an article with something in it.
 - **Learns from you.** Say "not for me", "not good", "worth it" or "more like this" from the
-  Kindle or the web pages, or that you skipped it, with an optional one-tap reason. Describe your interests in your own words and change them whenever you like.
+  Kindle or the web pages, with an optional one-tap reason, or that you skipped it. Describe your interests in your own words and change them whenever you like.
 - **Stories, not links.** A short post that only points at an article is replaced by the
   article. Several reports of one event share one place in the day.
 - **Your subscriptions.** Publications you pay for come in through their feeds; the articles

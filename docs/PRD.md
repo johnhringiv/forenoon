@@ -403,12 +403,13 @@ it was worth to them (**verdict**). Either can be given without the other.
   every other choice a link that changes it. Besides sign-in, the
   forgotten-password and email-link pages and `GET /healthz`, it is the only page that needs
   no login, and it takes no other input.
-- **Why (optional).** After a verdict or a skip, the page always offers one more tap for the
+- **Why (optional).** After a verdict, the page always offers one more tap for the
   reason. Not for me, about the reader's level: too basic for me, too specialised for me.
   Not good: too thin, nothing new in it, longer than it needed to be, the headline oversold
   it, wrong or misleading. More like this: more
-  on this topic, more from this source, liked the depth or format. Skipped: not interested,
-  already saw it elsewhere, just no time. Worth it has none. The rating counts without a
+  on this topic, more from this source, liked the depth or format. Worth it has none, and nor
+  has a skip: skipping is deliberate and says enough, and an article already seen elsewhere
+  can be given a verdict. The rating counts without a
   reason. What was liked can be several of these at once; anything else is one, so a new
   choice replaces the old. Tapping a chosen reason again takes it back. A later tap that
   leaves a reason not fitting drops it. A reason for an article with nothing else recorded is
@@ -431,8 +432,8 @@ it was worth to them (**verdict**). Either can be given without the other.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
 not use them). The model is given the 40 most recent with a verdict, and with them the 15
-most recent skips, so that "Done with this issue" cannot push the verdicts out; a skip for
-want of time, and progress with no verdict, are left out. Each comes with its verdict and progress, the article's length, why
+most recent skips, so that "Done with this issue" cannot push the verdicts out; progress with
+no verdict is left out. Each comes with its verdict and progress, the article's length, why
 it was picked and the reader's reason when there is one. The model is told what each means: a
 verdict is strong, "not for me" about the subject (or the reader's level, when the reason
 says so) and "not good" about the article; how far the reader got against the article's
