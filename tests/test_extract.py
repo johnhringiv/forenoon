@@ -1756,6 +1756,30 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
         "https://me.substack.com/p/x",
     )
     assert "read these" in body.text_content()
+    # Lines that open like a pitch but do not name the piece, over the article's own lists.
+    for line, own_items in (
+        (
+            "If you like, you can get the new release via",
+            "<li><a href='/download'>downloads</a></li><li><a href='/feed.xml'>our RSS feed</a></li>",
+        ),
+        ("Want more detail? The design notes are on the wiki, and", "<li><a href='/wiki/design'>Design notes</a></li>"),
+        (
+            "If you found a bug in this release, please",
+            "<li><a href='/issues'>the tracker</a></li><li>follow us on <a href='https://mastodon.social/@a'>Mastodon</a></li><li><a href='/forum'>the forum</a></li>",
+        ),
+    ):
+        assert line in left(line, own_items), line
+    # A pitch over a list mostly of the article's own links.
+    mostly = "<li><a href='/a'>Arenas</a></li><li><a href='/b'>Pools</a></li><li><a href='/newsletter'>my newsletter</a></li>"
+    assert "If you liked this post, please" in left("If you liked this post, please", mostly)
+    # A video under the heading: the heading stays, saying it was there.
+    body = lxml.html.fromstring(
+        f"<div>{article}<h2>Watch the talk</h2><p>If you liked this article, please</p><video src='/t.mp4'></video></div>"
+    )
+    page = f"<html><body>{article}<h2>Watch the talk</h2><p>If you liked this article, please</p><ul>{items}</ul><video src='/t.mp4'></video></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "Watch the talk" in body.text_content()
+
     # A picture in the line goes nowhere with it: the line stays.
     pitch = "<p><img src='https://blog.example/chart.png'><br>If you liked this article, please</p>"
     body = lxml.html.fromstring(f"<div>{article}{pitch}</div>")

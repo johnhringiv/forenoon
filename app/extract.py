@@ -132,6 +132,7 @@ NOTICE_MAX_WORDS = 25
 # own "negative" words are too broad here: code editors put theirs in a "cm-scroller").
 CODE_BOX_FURNITURE = re.compile(r"masthead|promo|outbrain|shopping|banner", re.IGNORECASE)
 # What makes an element beside a heading or a code block more than an empty link or button.
+MEDIA_TAGS = {"img", "picture", "video", "audio", "iframe", "object", "embed"}
 MEDIA_XPATH = ".//img | .//picture | .//video | .//audio | .//iframe | .//object | .//embed"
 # A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
 # quoted in a story about an outage is not.
@@ -1864,11 +1865,14 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
 DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of the site's links
 # A closing pitch that breaks off where its list began: "If you liked this article, please",
 # "Enjoyed this post? Follow me on".
+# It names the piece, unlike "If you like, you can…" or "If you found a bug…".
 CLOSING_PITCH = re.compile(
-    r"^(if you (liked|enjoyed|found|like|enjoy|appreciated)\b|enjoy(ed)? (this|reading)\b|"
-    r"(want|like) (more|to read more)\b|support (me|us|my work|this (blog|site|newsletter))\b)",
+    r"^(if you (liked|enjoyed|like|enjoy|appreciated|found value in) (this|my|reading)\b|"
+    r"if you found (this|my) \w+ (useful|helpful|interesting|valuable)\b|enjoy(ed)? (this|reading)\b|"
+    r"support (me|us|my work|this (blog|site|newsletter))\b)",
     re.IGNORECASE,
 )
+ITEM_PITCH = re.compile(r"\blike button\b|\bclap\b", re.IGNORECASE)  # with LEAD_PITCH and REFILL_FURNITURE
 BROKEN_OFF = re.compile(r"(,|\b(please|and|or|via))\s*$", re.IGNORECASE)
 
 
@@ -1892,7 +1896,8 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     last = texts[0].getparent()
     while last is not None and last.tag != "p" and last is not body:
         last = last.getparent()
-    if last is None or last.tag != "p" or last.xpath(f"{MEDIA_XPATH} | following::img"):
+    media = "following::img | following::picture | following::video | following::audio | following::iframe"
+    if last is None or last.tag != "p" or last.xpath(f"{MEDIA_XPATH} | {media}"):
         return
     text = " ".join(last.text_content().split())
     if _words(text) > DANGLING_MAX_WORDS or not CLOSING_PITCH.search(text) or not BROKEN_OFF.search(text):
@@ -1911,17 +1916,33 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     listed = " ".join(" ".join(after.itertext()).split())
     if not listed or _norm(listed) in _norm(body.text_content()):
         return  # the list is in the article: the sentence leads into it
-    if not (LEAD_PITCH.search(listed) or REFILL_FURNITURE.search(listed)):
-        return  # what the sentence led to is not a pitch
     # The site by its whole host: one blog on a platform's domain ("me.substack.com") is not another.
     site = _host(url)
+
+    def pitch(item: lxml.html.HtmlElement) -> bool:
+        words = " ".join(" ".join(item.itertext()).split())
+        hrefs = [(a.get("href") or "").strip() for a in item.iter("a")]
+        return bool(
+            LEAD_PITCH.search(words)
+            or REFILL_FURNITURE.search(words)
+            or ITEM_PITCH.search(words)
+            or any(SHARE_LINK.search(href) or SOCIAL_HOST.fullmatch(_host(url, href)) for href in hrefs)
+        )
+
+    items = [li for li in after if isinstance(li.tag, str) and li.tag == "li"]
+    if not items or sum(map(pitch, items)) * 2 <= len(items):
+        return  # most of what the sentence led to is not a pitch
     hosts = [_host(url, a.get("href") or "") for a in after.iter("a")]
     shares = [a for a in after.iter("a") if SHARE_LINK.search(a.get("href") or "")]
     if not shares and not any(host and (host == site or SOCIAL_HOST.fullmatch(host)) for host in hosts):
         return  # its links go only to other sites: an appeal or a reading list of the author's
     heading = next((el for el in last.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
     over = next((el for el in lead.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
-    rest = [el for el in after.itersiblings() if isinstance(el.tag, str) and el.text_content().strip()]
+    rest = [
+        el
+        for el in after.itersiblings()
+        if isinstance(el.tag, str) and (el.text_content().strip() or el.tag in MEDIA_TAGS or el.xpath(MEDIA_XPATH))
+    ]
     last.drop_tree()
     if (
         heading is not None
@@ -1930,7 +1951,7 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
         and over.tag in HEADINGS
         and _norm(over.text_content()) == _norm(heading.text_content())
         and not rest
-        and not heading.xpath("following::text()[normalize-space()] | following::img")
+        and not heading.xpath(f"following::text()[normalize-space()] | {media}")
     ):
         heading.drop_tree()
 
