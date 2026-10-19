@@ -371,3 +371,17 @@ def test_headings_with_nothing_under_them_do_not_end_the_article():
     pictured = page.replace("</h2>", '</h2><p><img src="/diagram.png"></p>')
     out = lxml.html.tostring(extract("https://blog.example/post", pictured, "").body, encoding="unicode")
     assert "Notes and references" in out and "Related stories" not in out
+
+
+def test_a_closing_call_to_subscribe_is_left_out():
+    filler = "<p>" + "Plain words about alliances and their guarantees. " * 30 + "</p>"
+    page = f"""<html><body><article>{filler}<p><em>A Writer is the chief commentator.</em></p>
+    <p><em>Find out about our latest stories first — follow us on</em> <a href="/x">X</a>, and
+    <a href="/signup"><em>sign up</em></a> to receive the Weekend newsletter</p>
+    <p><em>Lead image: A Photographer</em></p></article></body></html>"""
+    out = extract("https://news.example/story", page, "").body.text_content()
+    assert "newsletter" not in out and "A Writer is the chief commentator." in out and "Lead image" in out
+    # A paywall's message is not a promotion to remove: the article is still judged a stub.
+    stub = "<p>" + "Opening words of the story. " * 20 + "</p><p>Subscribe now to continue reading.</p>"
+    result = extract("https://news.example/story", None, stub)
+    assert "paywall marker" in result.reasons and "Subscribe now" in result.body.text_content()

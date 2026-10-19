@@ -96,6 +96,14 @@ COOKIE_WALL = re.compile(
     r" (a )?human|checking your browser",
     re.IGNORECASE,
 )
+# A call to subscribe, as publishers end their articles with it.
+PROMOTION = re.compile(
+    r"\b(sign up|subscribe)\b[^.]{0,80}\b(newsletter|to our|today|now)\b|"
+    r"\bnewsletter\b[^.]{0,40}\b(sign up|subscribe)\b",
+    re.IGNORECASE,
+)
+PROMOTION_MAX_WORDS = 60
+PROMOTION_LOOKBACK = 3  # how many of the last paragraphs may be one
 TRUNCATED_TAIL = re.compile(
     r"(\[(…|\.\.\.)\]|…|\.\.\.|read more|continue reading|read the (full|rest)[^.]{0,40})\W*$",
     re.IGNORECASE,
@@ -601,6 +609,26 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
         anchor.tail, heading.tail = heading.tail, None
 
 
+def _drop_trailing_promotions(body: lxml.html.HtmlElement) -> None:
+    """Remove the publisher's sign-up lines from the end of an article ("Sign up for our
+    Politics Essential newsletter", "Enjoying Nautilus? Subscribe to our free newsletter."):
+    short paragraphs among the last few that ask the reader to subscribe. A paywall's
+    message is kept, so that the article is still judged a stub."""
+    leaves = [
+        el
+        for el in body.iter(*PROSE, "div")
+        if el.text_content().strip() and next(el.iterdescendants(*BLOCK, "li"), None) is None
+    ]
+    for last in reversed(leaves[-PROMOTION_LOOKBACK:]):
+        text = " ".join(last.text_content().split())
+        if _words(text) > PROMOTION_MAX_WORDS:
+            return  # the article's own text: anything before it is too
+        if PROMOTION.search(text) and not PAYWALL.search(text):
+            while last.getparent() is not body and _norm(last.getparent().text_content()) == _norm(text):
+                last = last.getparent()  # wrappers that hold only this line
+            last.drop_tree()
+
+
 def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
     """Remove headings that end the article with nothing under them: what is left of a
     "Related posts" or "Leave a reply" box, or of a "Notes" section whose notes are
@@ -836,6 +864,7 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    _drop_trailing_promotions(body)
     _drop_trailing_headings(body)
     if page_html:
         pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
