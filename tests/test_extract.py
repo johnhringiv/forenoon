@@ -1612,3 +1612,23 @@ def test_a_digest_item_with_a_plain_summary_or_a_named_digest_section_stays():
     for block, needle in ((item, "forty percent"), (section, "new bridge")):
         page = f"<html><body><article><h1>Digest</h1>{words}{block}{words}</article></body></html>"
         assert needle in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_digest_of_story_cards_named_like_promotions_stays():
+    cards = "".join(
+        f"<div class='story-promo'><h3><a href='https://news.com/s{n}'>Council approves story {n}</a></h3>"
+        f"<p>The city voted 7-2 to fund lanes on Main St.</p><a href='https://news.com/s{n}'>Read more</a></div>"
+        for n in range(5)
+    )
+    feed = f"<h2>Today's top stories</h2>{cards}{_paragraphs('Closing', 3)}"
+    out = extract("https://news.com/digest", None, feed, "feed").body.text_content()
+    assert "Council approves story 4" in out
+    for name in ("next-story", "newsletter"):
+        repeated = "".join(
+            f"<div class='{name}'><h3>Item {n}</h3><p>A line about item {n}.</p><a href='/i{n}'>Read next</a></div>"
+            for n in range(3)
+        )
+        out = extract(
+            "https://news.com/digest", None, f"{_paragraphs('Lead', 4)}{repeated}", "feed"
+        ).body.text_content()
+        assert "Item 2" in out

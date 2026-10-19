@@ -590,7 +590,7 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
 # One of a box's class names or its id, whole: "newsletter", "ars-newsletter-shortcode",
 # "next-post"; not "sponsored-content" or "subscribe-model", which may be an article's.
 SELLS_NAME = re.compile(
-    r"([a-z0-9]+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|promo|next-(post|article|story))"
+    r"([a-z0-9]+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|next-(post|article|story))"
     r"([_-]+(box|wrap|wrapper|shortcode|widget|form|cta|signup|inline))?",
     re.IGNORECASE,
 )
@@ -698,6 +698,12 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
         if box.getparent() is None or not ok(box):
             continue
         if not _sells_name(box):
+            continue
+        # A run of boxes of one class is a list of stories, not a pitch made once.
+        if any(
+            isinstance(sib.tag, str) and sib.get("class") == box.get("class")
+            for sib in (*box.itersiblings(), *box.itersiblings(preceding=True))
+        ):
             continue
         if _words(box.text_content()) > SELLS_MAX_WORDS or box.xpath(CONTENT_XPATH):
             continue
