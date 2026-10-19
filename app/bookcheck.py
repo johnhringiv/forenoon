@@ -73,9 +73,10 @@ COPY_RAW_CHARS = 400_000  # the most of the page's own HTML it reads for one cop
 COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
-COPY_LIKE = re.compile(r"(?<![\w/])copy\s*:\s*\d", re.IGNORECASE)  # a copy's name mistyped
+TOOL_NAME = re.compile(r"(?<![\w/])copy:\d", re.IGNORECASE)  # the tool's own syntax left in the text
+COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name a copy
+MISTYPED = re.compile(r"\s*[\[(]?copy\s*:\s*\d+\S*\s*", re.IGNORECASE)  # a copy's name mistyped, standing alone
 COPY_NAME = re.compile(r"(?<![\w/])copy:(\d{1,3})(?![\w/])")
-COPY_ALONE = re.compile(r"<p>\s*(copy:\d{1,3})\s*</p>")  # a copy's name as a paragraph of its own
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
 VERDICTS = ("ok", "fixed", "cannot_fix")
 KINDS = ("cut_short", "missing_content", "page_furniture", "broken_media", "formatting", "wrong_article", "other")
@@ -469,7 +470,7 @@ class _Article:
             spent += len(line)
         return "\n".join(lines)
 
-    def replace(self, first: int, last: int, html: str) -> str:
+    def replace(self, first: int, last: int, html: str, tool: str = "replace_blocks") -> str:
         old = self._range(first, last)
         new, copied = self._html(html)
         if not new:
@@ -481,7 +482,7 @@ class _Article:
             old[0].addprevious(el)
         for el in old:
             el.drop_tree()
-        return self._done("replace_blocks", first, last, before, new, copied)
+        return self._done(tool, first, last, before, new, copied)
 
     def delete(self, first: int, last: int) -> str:
         old = self._range(first, last)
@@ -490,7 +491,7 @@ class _Article:
             el.drop_tree()
         return self._done("delete_blocks", first, last, before, [])
 
-    def insert(self, after: int, html: str) -> str:
+    def insert(self, after: int, html: str, tool: str = "insert_after") -> str:
         found = blocks(self.body)
         if not 0 <= after <= len(found):
             raise ToolError(f"block {after} is not in the article, which has {len(found)}")
@@ -505,7 +506,7 @@ class _Article:
             for el in new:
                 anchor.addnext(el)
                 anchor = el
-        return self._done("insert_after", after + 1, after, "", new, copied)
+        return self._done(tool, after + 1, after, "", new, copied)
 
     def _done(self, tool: str, first: int, last: int, before: str, new: list, copied: list | None = None) -> str:
         """Record the edit and tidy the article; the new blocks around it, renumbered."""
@@ -560,7 +561,13 @@ class _Article:
             count = len(at)
             for pick, what in ((heads, "the heading"), (whole, "the one that is only that phrase"), (at, "")):
                 if len(pick) == 1 or (pick and same(pick)):
-                    at = [min(pick, key=reach)]
+                    near = min(pick, key=reach)
+                    if any(set(range(m + 1, near)) - set(pick) for m in pick if m < near):
+                        raise ToolError(
+                            f"that start phrase is the whole of {len(pick)} blocks of the page with other text between "
+                            "them; start from a phrase of the block after it"
+                        )
+                    at = [near]
                     if len(pick) > 1:
                         chose = f" (the page has this block {len(pick)} times; this is the one nearest the end phrase)"
                     else:
@@ -614,31 +621,30 @@ class _Article:
             used.append(n)
             return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
-        html = COPY_ALONE.sub(r"\1", html.strip())
-        if ref := COPY_REF.fullmatch(html):
+        if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
-        if not COPY_LIKE.search(html):
+        root = _fragment(html)
+        if not COPY_HINT.search(root.text_content()):
             return self.clean(html), used
-        try:
-            root = lxml.html.fragment_fromstring(html, create_parent="div")
-        except (etree.ParserError, ValueError) as exc:
-            raise ToolError(f"that HTML cannot be read: {exc}") from exc
-        # A copy's name only between blocks: inside a heading, a paragraph's emphasis or the
-        # model's own code it would be printed, or lose what is around it.
-        for el in root.iter():
-            if not isinstance(el.tag, str):
-                continue
-            inside = [(el.text or "", el)] if el is not root else []
-            if el.getparent() is not None and el.getparent() is not root:
-                inside.append((el.tail or "", el.getparent()))
-            for text, holder in inside:
-                code = holder.tag in ("pre", "code") or next(holder.iterancestors("pre", "code"), None) is not None
+        for p in [p for p in root if p.tag == "p" and not len(p) and COPY_NAME.fullmatch((p.text or "").strip())]:
+            p.drop_tag()  # <p>copy:2</p> between blocks: the copy itself
+        # A copy's name only between blocks: inside a heading, a quote, emphasis or code it would
+        # be printed, or lose what is around it. A name mistyped is refused too, but not the
+        # model's own code.
+        for node in root.iter():
+            places = []
+            if isinstance(node.tag, str) and node is not root:
+                places.append((node.text or "", node))
+            if node is not root and node.getparent() is not root:
+                places.append((node.tail or "", node.getparent()))
+            for text, holder in places:
                 if COPY_NAME.search(text):
                     raise ToolError(
-                        f"name a copy between blocks, not inside <{holder.tag}>: to make a copy a heading, or "
-                        "to put it in a code block, write that block's HTML yourself"
+                        f"name a copy between blocks, not inside <{holder.tag}>: to make a copy a heading, a quote or "
+                        "a code block, write that block's HTML yourself"
                     )
-                if COPY_LIKE.search(text) and not code:
+                code = holder.tag in ("pre", "code") or next(holder.iterancestors("pre", "code"), None) is not None
+                if MISTYPED.fullmatch(text) and not code:
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
         out: list[lxml.html.HtmlElement] = []
         pending: list[str] = []
@@ -646,16 +652,26 @@ class _Article:
         def flush() -> None:
             own = "".join(pending)
             pending.clear()
-            if re.search(r"<|\w", own):  # nothing for a comma or a space between two copies
-                out.extend(self.clean(own))
+            if not re.search(r"<|\w", own):
+                return  # a comma or a space between two copies
+            blocks = self.clean(own)
+            words = " ".join(
+                text
+                for el in blocks
+                if el.tag not in ("pre", "code")
+                for text in el.xpath(".//text()[not(ancestor::pre) and not(ancestor::code)]")
+            )
+            if TOOL_NAME.search(words):
+                raise ToolError("a copy's name is hidden in that HTML; name each copy on its own between blocks")
+            out.extend(el for el in blocks if el.text_content().strip() or el.xpath(".//img") or el.tag == "hr")
 
         def loose(text: str) -> None:
-            if COPY_LIKE.search(COPY_NAME.sub("", text)):
-                raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
             for n, piece in enumerate(COPY_NAME.split(text)):
                 if n % 2:
                     flush()
                     out.extend(blocks_of(int(piece)))
+                elif MISTYPED.fullmatch(piece):
+                    raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
                 else:
                     pending.append(escape(piece))
 
@@ -672,10 +688,7 @@ class _Article:
         its links to the article's own notes and headings kept, its images the article's own or
         the page's. The page's own HTML (`from_page`) has its lazy images' addresses found and
         its h1 made an h2, as the extractor does."""
-        try:
-            fragment = lxml.html.fragment_fromstring(html, create_parent="div")
-        except (etree.ParserError, ValueError) as exc:
-            raise ToolError(f"that HTML cannot be read: {exc}") from exc
+        fragment = _fragment(html)
         within: list[lxml.html.HtmlElement] = []
         for el in fragment.iter():
             if not isinstance(el.tag, str):
@@ -715,6 +728,14 @@ class _Article:
         return {img.get("src", "") for img in self.body.iter("img")}
 
 
+def _fragment(html: str) -> lxml.html.HtmlElement:
+    """The model's HTML parsed in a <div>, or a ToolError: lxml refuses some ("<html>" alone)."""
+    try:
+        return lxml.html.fragment_fromstring(html, create_parent="div")
+    except (etree.ParserError, ValueError, AssertionError) as exc:
+        raise ToolError(f"that HTML cannot be read: {exc}") from exc
+
+
 def _within(url: str, href: str) -> bool:
     """Whether a link goes to a place on the page itself ("#note-1", or the page's address with one)."""
     href = href.strip()
@@ -738,6 +759,14 @@ PAGE_BLOCKS = {*BLOCK_TAGS, "h1", "summary"}
 # What runs on inside a line; any other element is a box of its own (a <header>, a <section>).
 PHRASING = {
     "a",
+    "acronym",
+    "big",
+    "math",
+    "nobr",
+    "rp",
+    "rt",
+    "ruby",
+    "svg",
     "abbr",
     "b",
     "bdi",
@@ -850,7 +879,7 @@ def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
         add(text)
     for child in children:
         tail, child.tail = child.tail, None
-        if blocky(child) or (isinstance(child.tag, str) and child.tag not in PHRASING):
+        if blocky(child) or (isinstance(child.tag, str) and child.tag not in PHRASING and "-" not in child.tag):
             run = None
             out.append(child)
         else:
@@ -1236,7 +1265,7 @@ class Checker:
         args = call.input if isinstance(call.input, dict) else {}
         try:
             content = self._tool(call.name, args, item, article, text, started)
-        except (ToolError, KeyError, TypeError, ValueError) as exc:
+        except (ToolError, KeyError, TypeError, ValueError, AssertionError) as exc:
             return {"type": "tool_result", "tool_use_id": call.id, "content": str(exc)[:500], "is_error": True}
         return {"type": "tool_result", "tool_use_id": call.id, "content": content}
 
@@ -1256,8 +1285,8 @@ class Checker:
             made = article.copy(str(args["start"]), str(args["end"])).split("\n", 1)[0].rstrip(":")
             ref = f"copy:{len(article.copies)}"
             if name == "insert_from_page":
-                return f"From the page: {made}. " + article.insert(int(args["block"]), ref)
-            return f"From the page: {made}. " + article.replace(int(args["first"]), int(args["last"]), ref)
+                return f"From the page: {made}. " + article.insert(int(args["block"]), ref, name)
+            return f"From the page: {made}. " + article.replace(int(args["first"]), int(args["last"]), ref, name)
         if name == "article_read":
             return article.read(int(args["first"]), int(args["last"]))
         if name == "replace_blocks":

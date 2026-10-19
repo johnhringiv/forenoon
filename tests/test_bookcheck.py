@@ -754,11 +754,26 @@ def test_a_copy_goes_in_as_it_was_made_even_beside_the_models_own_html():
     html = lxml.html.tostring(article.body, encoding="unicode")
     assert '<img src="https://ex.com/f.png"' in html and "<figcaption>Figure 1. The packet path.</figcaption>" in html
     assert "<p>,</p>" not in html and "<h2>Figures</h2>" in html and "img" in alone
-    # A block the page repeats: the one nearest the end phrase.
-    part_two = article.copy("* * *", "Part two")
-    assert "Part one" not in part_two and part_two.startswith("copy:2, 2 blocks")
+    # A block the page repeats with other text between: which one is meant is not known.
+    with pytest.raises(bookcheck.ToolError, match="with other text between them"):
+        article.copy("* * *", "Part two")
     # A box of its own beside a link does not run into it.
     assert "Skip to essay</p>" in article.copy("Skip to essay", "Skip to essay")
+    # A copy's name as a paragraph inside a quote or a list item, after a comment or as an
+    # entity: refused, never printed. Prose that only looks like one is the model's own.
+    for hidden in (
+        "<blockquote>He said<p>copy:1</p></blockquote>",
+        "<ul><li>Point one<p>copy:1</p></li></ul>",
+        "<h2>T<!--x-->copy:1</h2>",
+    ):
+        with pytest.raises(bookcheck.ToolError):
+            article.insert(1, hidden)
+    article.insert(1, "&#99;opy:1")  # an entity is read as the name it spells: the copy, not its name
+    assert "copy:1" not in article.body.text_content()
+    article.insert(1, "<p>Price per copy: 3 dollars.</p>")
+    assert "Price per copy: 3 dollars." in article.body.text_content()
+    with pytest.raises(bookcheck.ToolError, match="cannot be read"):
+        article.insert(1, "<html>")
 
 
 def test_a_passage_of_the_page_goes_in_with_one_call(check):
@@ -781,4 +796,4 @@ def test_a_passage_of_the_page_goes_in_with_one_call(check):
         and "Done." in answers[0][0]["content"]
     )
     edits = json.loads(_rows(store)[0]["edits"])
-    assert [(e["tool"], e["copies"]) for e in edits] == [("insert_after", [1]), ("replace_blocks", [2])]
+    assert [(e["tool"], e["copies"]) for e in edits] == [("insert_from_page", [1]), ("replace_from_page", [2])]
