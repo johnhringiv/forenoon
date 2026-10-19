@@ -606,16 +606,23 @@ Sonnet 5.5).
 - **Its tools**: `page_find` (where a phrase is on the page, with 300 characters around each
   of up to 10 places), `page_read` (up to 6,000 characters from an offset), `page_view` (a
   screenshot of the live page, section 7d; unavailable while the browser container is not
-  running), `article_read` (blocks in full, up to 16,000 characters, saying where it stops),
-  `replace_blocks`, `delete_blocks`,
-  `insert_after`, and `finish` (a verdict, `ok`, `fixed` or `cannot_fix`, a summary of at most
+  running), `page_copy` (the page's own HTML from the block where one phrase is to the block
+  where another is after it, reduced to the allowlist and kept as `copy:N`; a start the page
+  repeats, such as a heading over each section, is the one nearest before the end), `article_read` (blocks in
+  full, up to 16,000 characters, saying where it stops), `replace_blocks`, `delete_blocks`,
+  `insert_after`, `insert_from_page` and `replace_from_page` (a copy made and placed in one
+  call), and `finish` (a verdict, `ok`, `fixed` or `cannot_fix`, a summary of at most
   300 characters, and each problem found: its kind, what was wrong and why it thinks so). The
   kinds are cut short, missing content, page furniture, broken media, formatting, wrong
   article and other. Blocks are numbered afresh after each edit, and the edit's answer lists
   the blocks around it with their new numbers.
 - **What it may do.** It is told to edit only to restore what the page has or remove what is
-  not the article, and never to rewrite, summarise or add to the author's text. Everything it
-  writes goes through the extractor's allowlist (section 4) before it is put in the article;
+  not the article, and never to rewrite, summarise or add to the author's text; to restore with
+  `insert_from_page` or `replace_from_page`, so the page's links, emphasis, heading levels and
+  quotes come back as the page has them (a copy from `page_copy` may also stand between blocks
+  of its own HTML as `copy:N`, never inside one); to write HTML itself only to fix formatting the
+  page's markup does not give, or for a passage the tools cannot find; and to change only the
+  blocks that are wrong. An edit made from copies is recorded with their numbers. Everything it writes goes through the extractor's allowlist (section 4) before it is put in the article;
   links to the article's own notes and headings stay links in the book, and a link left
   pointing at nothing is unwrapped. An image must be one the article has or one whose address
   is on the saved page; it is fetched and converted with the rest (section 5).

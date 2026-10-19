@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS book_checks (
     verdict TEXT NOT NULL,  -- ok, fixed, cannot_fix, incomplete or error
     summary TEXT NOT NULL DEFAULT '',
     fixes TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"kind", "what", "why"}], as the model gave them
-    edits TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"tool", "first", "last", "before", "after"}]
+    edits TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"tool", "first", "last", "before", "after", "copies"?}]
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,

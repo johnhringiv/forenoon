@@ -585,3 +585,281 @@ def test_a_block_past_the_listing_budget_says_its_markup_is_not_shown(monkeypatc
         "pictures; article_read first=2 last=2 shows it]"
     )
     assert listing[2].startswith("[3] <figure> Smoke [not the whole block: block 3")
+
+
+def test_page_copy_brings_the_pages_own_markup_into_an_edit(check):
+    make, item, store = check
+    page = (
+        "<html><body><nav>Home</nav><article><h1>Robots</h1>"
+        f"<p>First. {WORDS}</p><p>Second. {WORDS}</p>"
+        "<h3 id='why'>Why it’s hard</h3>"
+        "<p>Ken Goldberg <a href='https://video.example/talk'>argues</a> that <em>Digger</em> is "
+        "<strong>not</strong> enough <span onclick='x()'>today</span>.</p>"
+        "<div class='lazy'><img src='data:image/gif;base64,R0lGOD' data-src='/robot.jpg' alt='A robot'></div>"
+        "<blockquote><p>A quote from the page.</p></blockquote><section>Loose words and a "
+        "<a href='https://code.example/r'>link</a></section></article></body></html>"
+    )
+    checker, client, result = make(
+        _reply(("page_copy", {"start": "Why it's hard", "end": "A quote from"})),
+        _reply(
+            ("insert_after", {"block": 2, "html": " copy:1 "}), ("page_copy", {"start": "Loose words", "end": "Loose"})
+        ),
+        _reply(("replace_blocks", {"first": 7, "last": 7, "html": "copy:2"})),
+        _reply(("insert_after", {"block": 1, "html": "copy:7"})),
+        _reply(
+            ("page_copy", {"start": "Second.", "end": "Ken"}), ("page_copy", {"start": "nowhere at all", "end": "x"})
+        ),
+        _reply(_finish("fixed", "Restored the last section.", [{"kind": "cut_short", "what": "x", "why": "y"}])),
+    )
+    archive.save(checker.cfg.pages_dir, item, page)
+    outcome = checker.check(item, result)
+    assert outcome.verdict == "fixed"
+    html = _html(result)
+    # The page's links, emphasis, heading level and quote, as the page has them; its lazy
+    # image by its real address; no handler, id or class.
+    assert "<h3>Why it’s hard</h3>" in html
+    assert '<a href="https://video.example/talk">argues</a>' in html and "<em>Digger</em>" in html
+    assert "<strong>not</strong>" in html and "<blockquote><p>A quote from the page.</p></blockquote>" in html
+    assert 'src="https://blog.example/robot.jpg"' in html
+    for unsafe in ("onclick", "id=", "class="):
+        assert unsafe not in html, unsafe
+    # A box of loose words is a block of its own, replacing the newsletter prompt.
+    assert '<a href="https://code.example/r">link</a>' in html and "Subscribe to our newsletter" not in html
+    answers = [m["content"] for m in client.asked[-1]["messages"] if m["role"] == "user"][1:]
+    assert answers[0][0]["content"].startswith("copy:1, 4 blocks of the page")
+    assert answers[3][0]["is_error"] and "there is no copy:7; page_copy has made 2" in answers[3][0]["content"]
+    assert answers[4][0]["content"].startswith("copy:3")  # across blocks the article has too
+    assert answers[4][1]["is_error"] and "in no block of the page" in answers[4][1]["content"]
+    edits = json.loads(_rows(store)[0]["edits"])
+    assert [(e["tool"], e.get("copies")) for e in edits] == [("insert_after", [1]), ("replace_blocks", [2])]
+
+
+def test_a_copy_named_inside_the_models_own_html_is_pasted_not_printed():
+    page = "<html><body><p>Our sponsors are <a href='https://s.example'>Acme</a>.</p></body></html>"
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=page)
+    article.copy("Our sponsors", "Acme")
+    article.insert(1, "<h2>Sponsors</h2> <p>copy:1</p>")
+    html = lxml.html.tostring(article.body, encoding="unicode")
+    assert '<h2>Sponsors</h2><p>Our sponsors are <a href="https://s.example">Acme</a>.</p>' in html
+    assert "copy:1" not in html and article.edits[-1]["copies"] == [1]
+    with pytest.raises(bookcheck.ToolError, match="there is no copy:4"):
+        article.insert(1, "<h2>More</h2>copy:4")
+    article.insert(1, "<p>The file is at http://x.example/copy:1 today.</p>")  # not the name of a copy
+    assert "http://x.example/copy:1" in article.body.text_content()
+    # A name mistyped is refused, not printed; and a copy is never pasted inside a tag.
+    for typo in ("Copy:1", "COPY:1", "copy: 1", "copy:1000", "[copy:1]"):
+        with pytest.raises(bookcheck.ToolError, match="exactly as copy:N|between blocks"):
+            article.insert(1, f"<p>{typo}</p>")
+    article.insert(1, '<p><a title="copy:1" href="https://s.example">t</a></p>')
+    assert "Our sponsors" not in article.body.xpath("//a[@href='https://s.example']")[-1].get("title", "")
+
+
+def test_page_copy_reaches_every_word_the_page_shows():
+    page = (
+        "<html><body><main><w-article><p>Inside a site's own element.</p></w-article>"
+        "<div>At the recently concluded meeting, <a href='/m'>members</a> agreed.<blockquote><p>A quote.</p>"
+        "</blockquote>The end result was a new rule.</div>"
+        "<a href='/h'><h2>Linked heading</h2></a><details><summary>Show me the graphs</summary><p>Graphs.</p></details>"
+        "<ul class='toc'><li><a href='#c'>Conclusion</a></li></ul><h2 id='c'>Conclusion</h2>"
+        "<p>Line one<br>line two, and see <a href='#note-1'>note 1</a>.</p>"
+        "<aside class='footnote'><dt>[1]</dt><dd>The note.</dd></aside></main></body></html>"
+    )
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=page)
+    assert "Inside a site's own element." in article.copy("Inside a site", "own element")
+    loose = article.copy("At the recently concluded", "The end result")
+    assert (
+        '<a href="https://blog.example/m">members</a>' in loose and "<blockquote><p>A quote.</p></blockquote>" in loose
+    )
+    assert loose.startswith("copy:2, 3 blocks")
+    assert "<h2>Linked heading</h2>" in article.copy("Linked heading", "Linked heading")
+    assert "Show me the graphs" in article.copy("Show me the graphs", "Graphs.")
+    # A heading whose words a table of contents has too.
+    assert "<h2>Conclusion</h2>" in article.copy("Conclusion", "Conclusion")
+    # A phrase across a line break, as page_find shows it; a link within the web page unwrapped.
+    lines = article.copy("one line two", "note 1")
+    assert "Line one<br>line two, and see note 1.</p>" in lines and "#note-1" not in lines
+    # A part outside its whole, as footnotes are written on some sites: taken, not refused.
+    assert "The note." in article.copy("[1]", "The note.")
+
+
+def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
+    words = "<p>Same words, one.</p><p>Same words, two.</p><p>Unique start.</p><p>end of it</p><pre>x = 1</pre>" * 1
+    words += "<pre>x = 1</pre>"
+    article = bookcheck._Article(
+        lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=f"<html><body>{words}</body></html>"
+    )
+    with pytest.raises(bookcheck.ToolError, match="in 2 blocks of the page"):
+        article.copy("Same words", "end of it")
+    # A block the page repeats word for word: the first, said so.
+    assert "the page has this block 2 times; this is the one nearest before the end phrase" in article.copy(
+        "x = 1", "x = 1"
+    )
+    with pytest.raises(bookcheck.ToolError, match="from the start phrase on"):
+        article.copy("end of it", "Unique start")
+    monkeypatch.setattr(bookcheck, "COPY_CHARS", 20)
+    with pytest.raises(bookcheck.ToolError, match="copy it in parts"):
+        article.copy("Unique start", "end of it")
+
+
+def test_page_copy_keeps_spaces_parts_and_the_models_own_code():
+    page = (
+        "<html><body><div><b>Alpha</b> <i>Beta</i><p>para here</p></div>"
+        "<ul><div><li>wrapped item</li></div></ul>"
+        "<figure><img src='/i.png'><div><figcaption>A caption here</figcaption></div></figure>"
+        "<table><thead><th>Filename</th><th>Size</th></thead><tr><td>a</td><td>1</td></tr></table>"
+        f"<p>See <a href='{URL}#n1'>the note</a> and <a href='/other#x'>another page</a>.</p></body></html>"
+    )
+    article = bookcheck._Article(
+        lxml.html.fragment_fromstring("<div><p>x</p></div>"),
+        URL,
+        page_images={"https://blog.example/i.png"},
+        page_html=page,
+    )
+    assert "<p><b>Alpha</b> <i>Beta</i></p>" in article.copy("Alpha", "Beta")
+    assert "<li>wrapped item</li>" in article.copy("wrapped item", "wrapped item")
+    assert "<figcaption>A caption here</figcaption>" in article.copy("A caption here", "A caption here")
+    assert "<th>Filename</th>" in article.copy("Filename", "Filename")
+    note = article.copy("See the note", "another page")  # copy:5
+    assert "the note and" in note and "#n1" not in note and 'href="https://blog.example/other#x"' in note
+    # The model's own code keeps its words; a ">" in an attribute is not the end of the tag; a
+    # copy named as a paragraph of its own is not put inside one.
+    article.insert(1, "<pre>build:\n  copy: 2\n</pre>")
+    assert "copy: 2" in article.body.text_content()
+    # A copy's name inside a heading, emphasis or code is refused: it would print, or lose its wrapper.
+    for inside in (
+        "<h2>copy:1</h2>",
+        "<p><strong>copy:1</strong></p>",
+        "<pre>copy:1</pre>",
+        "<p>A <code/> b copy:1</p>",
+    ):
+        with pytest.raises(bookcheck.ToolError, match="between blocks"):
+            article.insert(1, inside)
+    article.insert(1, '<p title="a > copy:4 b">kept</p>')
+    assert "kept" in article.body.text_content() and "wrapped item" not in article.body.text_content()
+    article.insert(1, "<h2>Sizes</h2><p>copy:4</p>")
+    assert "<h2>Sizes</h2><table>" in lxml.html.tostring(article.body, encoding="unicode")
+
+
+def test_a_copy_goes_in_as_it_was_made_even_beside_the_models_own_html():
+    page = (
+        "<html><body><p>Intro.</p><p><a href='https://ex.com/f.png'><figure><img src='https://ex.com/f.png' "
+        "alt='A diagram'><figcaption>Figure 1. The packet path.</figcaption></figure></a></p>"
+        "<p>* * *</p><p>Part one text.</p><p>* * *</p><p>Part two text.</p>"
+        "<article><a href='#essay'>Skip to essay</a><header><a href='/'>An informal essay</a></header><p>Body.</p></article>"
+        "</body></html>"
+    )
+    article = bookcheck._Article(
+        lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images={"https://ex.com/f.png"}, page_html=page
+    )
+    alone = article.copy("Figure 1", "Figure 1")
+    article.insert(1, "<h2>Figures</h2>copy:1, ")
+    html = lxml.html.tostring(article.body, encoding="unicode")
+    assert '<img src="https://ex.com/f.png"' in html and "<figcaption>Figure 1. The packet path.</figcaption>" in html
+    assert "<p>,</p>" not in html and "<h2>Figures</h2>" in html and "img" in alone
+    # A block the page repeats (a heading over each section): the one nearest before the end phrase.
+    part_two = article.copy("* * *", "Part two")
+    assert "Part one" not in part_two and "nearest before the end phrase" in part_two
+    # Punctuation or quotes between copies are not blocks; a mistyped name among them is refused.
+    article.insert(1, '"copy:1" & copy:2')
+    article.insert(1, '"<h2>Sponsors</h2>copy:2"')
+    marks = [p for p in article.body.iter("p") if p.text_content().strip() in ('"', "&", "'", ",")]
+    assert not marks, "a paragraph of only the punctuation between copies"
+    for typo in ("copy:1, copy: 2", "copy:1, Copy:2", "copy:1 then copy: 2"):
+        with pytest.raises(bookcheck.ToolError, match="exactly as copy:N"):
+            article.insert(1, typo)
+    # A box of its own beside a link does not run into it.
+    assert "Skip to essay</p>" in article.copy("Skip to essay", "Skip to essay")
+    # A copy's name as a paragraph inside a quote or a list item, after a comment or as an
+    # entity: refused, never printed. Prose that only looks like one is the model's own.
+    for hidden in (
+        "<blockquote>He said<p>copy:1</p></blockquote>",
+        "<ul><li>Point one<p>copy:1</p></li></ul>",
+        "<h2>T<!--x-->copy:1</h2>",
+    ):
+        with pytest.raises(bookcheck.ToolError):
+            article.insert(1, hidden)
+    article.insert(1, "&#99;opy:1")  # an entity is read as the name it spells: the copy, not its name
+    assert "copy:1" not in article.body.text_content()
+    for own in (
+        "<p>Price per copy: 3 dollars.</p>",
+        "<table><tr><td>Copy: 14pt</td></tr></table>",
+        "<p>Copy:2 pages</p>",
+    ):
+        article.insert(1, own)
+    # Two copies as paragraphs side by side, and a copy as a paragraph after words of its own.
+    before = len(article.copies)
+    article.insert(1, "<p>copy:1</p><p>copy:1</p>")
+    article.insert(1, "Thanks to<p>copy:1</p>")
+    assert (
+        article.edits[-2]["copies"] == [1, 1] and article.edits[-1]["copies"] == [1] and before == len(article.copies)
+    )
+    assert "Thanks tocopy" not in article.body.text_content()
+    article.insert(1, "<p>Price per copy: 3 dollars.</p>")
+    assert "Price per copy: 3 dollars." in article.body.text_content()
+    with pytest.raises(bookcheck.ToolError, match="cannot be read"):
+        article.insert(1, "<html>")
+
+
+def test_a_passage_of_the_page_goes_in_with_one_call(check):
+    make, item, store = check
+    page = f"<html><body><article><p>First. {WORDS}</p><p>Second. {WORDS}</p><p>See <a href='https://x.example/t'>the talk</a>.</p></article></body></html>"
+    checker, client, result = make(
+        _reply(("insert_from_page", {"block": 2, "start": "See the talk", "end": "See the talk"})),
+        _reply(("replace_from_page", {"first": 4, "last": 4, "start": "First.", "end": "First."})),
+        _reply(_finish("fixed", "Restored a line.", [{"kind": "missing_content", "what": "x", "why": "y"}])),
+    )
+    archive.save(checker.cfg.pages_dir, item, page)
+    assert checker.check(item, result).verdict == "fixed"
+    html = _html(result)
+    assert (
+        '<p>See <a href="https://x.example/t">the talk</a>.</p>' in html and "Subscribe to our newsletter" not in html
+    )
+    answers = [m["content"] for m in client.asked[-1]["messages"] if m["role"] == "user"][1:]
+    assert (
+        answers[0][0]["content"].startswith("From the page: copy:1, 1 blocks of the page")
+        and "Done." in answers[0][0]["content"]
+    )
+    edits = json.loads(_rows(store)[0]["edits"])
+    assert [(e["tool"], e["copies"]) for e in edits] == [("insert_from_page", [1]), ("replace_from_page", [2])]
+
+
+def test_the_start_is_one_the_end_phrase_follows():
+    page = (
+        "<html><body><p>Our pricing is simple.</p><p>It costs five dollars.</p><h2>Pricing</h2><p>Plans vary.</p>"
+        "<p>Hello \u200b world again</p></body></html>"
+    )
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=page)
+    copied = article.copy("pricing", "five dollars")
+    assert "Our pricing is simple." in copied and "<h2>" not in copied
+    assert "Hello" in article.copy("Hello world", "again")
+    # Punctuation alone between the model's block and a copy is left out; a section break is not.
+    article.insert(1, "<p>Mine</p>, copy:1 * * * copy:2")
+    texts = [p.text_content().strip() for p in article.body.iter("p")]
+    assert "," not in texts and "* * *" in texts
+    # Punctuation that opens or closes a line of the model's own stays; alone between copies,
+    # with an empty element or a picture the article may not have, it goes.
+    article.insert(1, '<p>own</p>"<b>Quoted</b>" he said. copy:1 (<i>see</i> below) more')
+    assert '"Quoted" he said.' in article.body.text_content() and "(see below) more" in article.body.text_content()
+    article.insert(1, '<b>A</b><!-- c -->, <b>B</b> copy:1 <span></span>, copy:1 <img src="nope.png">. copy:1')
+    assert "A, B" in article.body.text_content()
+    assert not [p for p in article.body.iter("p") if p.text_content().strip() in (",", ".")]
+    # An image with an empty srcset, a name split by a tag, a lone surrogate.
+    article.insert(1, 'copy:1 <img srcset=","> copy:1')
+    with pytest.raises(bookcheck.ToolError, match="hidden"):
+        article.insert(1, "copy:<b>1</b> and copy:1")
+    # The end of one line and the start of the next are not a name.
+    for own in (
+        "<p>Steps to copy:</p><p>1. Open the file.</p>",
+        "<p>Paste copy:<br>3 times</p>",
+        "<p>a=</p><p>b</p> copy:1",
+        "copy:1 <table><tr><td>Press copy:</td><td>1 time</td></tr></table>",
+        "copy:1 <div>Steps to copy:<pre>x</pre>1 more</div>",
+    ):
+        article.insert(1, own)
+    with pytest.raises(bookcheck.ToolError, match="hidden"):
+        article.insert(1, "copy:1 <p>copy:<code></code>1</p>")
+    article.insert(1, "copy:1 \ud800 <p>after it</p>")
+    assert "after it" in article.body.text_content()
+    # Punctuation in a line of the model's own stays in it.
+    article.insert(1, "<b>Note</b>: <i>see below</i>, <b>Tom</b> &amp; <b>Jerry</b>. copy:1")
+    assert "Note: see below, Tom & Jerry." in article.body.text_content()

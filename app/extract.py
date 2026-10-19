@@ -242,12 +242,43 @@ def _join(base: str, address: str) -> str:
         return ""
 
 
+SRCSET_SPACE = "\t\n\f\r "  # the spec's whitespace, not Python's wider one
+SRCSET_SKIP = SRCSET_SPACE + ","
+
+
+def srcset_urls(srcset: str) -> list[str]:
+    """The addresses in a srcset, as a browser reads it: an address runs to a space (so a data:
+    address keeps its commas), a comma it ends with closes its candidate, and otherwise the
+    candidate's descriptors run to the next comma outside brackets."""
+    urls, n = [], 0
+    while n < len(srcset):
+        while n < len(srcset) and srcset[n] in SRCSET_SKIP:
+            n += 1
+        start = n
+        while n < len(srcset) and srcset[n] not in SRCSET_SPACE:
+            n += 1
+        url = srcset[start:n]
+        if url.endswith(","):
+            url = url.rstrip(",")
+        else:
+            bracket = False  # "(" opens, the next ")" closes: not nested
+            while n < len(srcset) and (srcset[n] != "," or bracket):
+                bracket = srcset[n] == "(" or (bracket and srcset[n] != ")")
+                n += 1
+        if url:
+            urls.append(url)
+    return urls
+
+
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
     if not src and el.get("srcset"):
-        src = el.get("srcset").split(",")[-1].split()[0]
+        # The last candidate's address ("a.jpg 1x, b.jpg 2x"), not a data: placeholder's (whose
+        # own commas are part of it); none in a blank or "," srcset.
+        found = srcset_urls(el.get("srcset"))
+        src = next((part for part in reversed(found) if not part.lower().startswith("data:")), "")
     return src
 
 
