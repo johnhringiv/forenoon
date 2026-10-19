@@ -48,6 +48,7 @@ MIN_CALL_SECONDS = 30  # left of MAX_SECONDS: below this no call is started
 # and the extractor's minimum: an untrusted page may talk the model into gutting the article.
 KEEP_AT_LEAST = 0.5
 MAX_OUTPUT_TOKENS = 16_000
+FALLBACK_BETA = "server-side-fallback-2026-07-01"  # with fallbacks="default"
 EFFORT = "medium"
 CALL_ESTIMATE = 4_000  # tokens a call adds beyond the prompt it repeats, for the caps
 PAGE_START_CHARS = 8_000  # of the saved page's text, in the first message
@@ -785,6 +786,10 @@ class Checker:
                 output_config={"effort": EFFORT},
                 cache_control={"type": "ephemeral"},  # the conversation so far, for the next turn
                 messages=messages,
+                # A security write-up can trip a safety classifier ("cyber"): the API then runs the
+                # same request on the model Anthropic recommends for that case, in the same call.
+                extra_headers={"anthropic-beta": FALLBACK_BETA},
+                extra_body={"fallbacks": "default"},
             )
         except anthropic.APIError as exc:
             status = "unreachable" if isinstance(exc, anthropic.APIConnectionError) else "error"
@@ -801,6 +806,9 @@ class Checker:
         ]
         outcome.tokens = [a + b for a, b in zip(outcome.tokens, spent, strict=True)]
         model_name = self.cfg.llm.check_model
+        served = f"anthropic/{getattr(response, 'model', '')}"
+        if served != model_name and models.cost(served, 1, 1, 0, 0) is not None:
+            model_name = served  # a fallback model answered: priced and logged as itself
         outcome.cost += models.cost(model_name, spent[0], spent[1], spent[3], spent[2]) or 0.0
         status = "ok" if response.stop_reason in ("tool_use", "end_turn") else str(response.stop_reason)
         self.store.log_llm_call(
