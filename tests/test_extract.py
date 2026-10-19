@@ -1460,3 +1460,222 @@ def test_a_furniture_heading_with_a_slug_id_or_promoted_lists_stay_out():
     ):
         page = f"<html><body><article><h1>Story</h1>{words}{block}</article></body></html>"
         assert needle not in extract("https://blog.example/a", page, "", "page").body.text_content(), needle
+
+
+def test_boxes_that_sell_credit_or_play_are_dropped():
+    words = _paragraphs("Article", 8)
+
+    def out(block, url="https://news.example/2026/10/story/"):
+        # An author box ends the post; the rest sit in the middle of it.
+        after = "" if "sabox" in block else words
+        page = f"<html><body><article><h1>Story</h1>{words}{words}{block}{after}</article></body></html>"
+        return extract(url, page, "", "page").body.text_content()
+
+    furniture = {
+        "The Quanta Newsletter": "<section id='newsletter' class='newsletter'><h2>The Quanta Newsletter</h2>"
+        "<p>Get highlights delivered to your email inbox</p><form><input type='email' name='EMAIL'><button>Subscribe</button></form></section>",
+        "Sign Me Up": "<div class='ars-newsletter-shortcode'><p>Keep up with the latest launches.</p>"
+        "<a href='/newsletters/?subscribe=space'>Sign Me Up!</a></div>",
+        "Get the report": "<div class='article-callout'><a rel='noopener nofollow' href='https://hubs.li/abc'><img src='/r.png'></a>"
+        "<h3><a rel='noopener nofollow' href='https://hubs.li/abc'>The Blue Report 2026</a></h3><p>Measures defenses technique by technique.</p>"
+        "<a rel='noopener nofollow' href='https://hubs.li/abc'>Get the report</a></div>",
+        "security professional": "<div class='saboxplugin-wrap'><a class='vcard author' href='https://news.example/author/admin/'>Dave Farquhar</a>"
+        "<p>David Farquhar is a computer security professional, entrepreneur, and author who writes about old computers.</p></div>",
+        "Listen to this article": "<div class='tts-player'><span>Listen to this article instead</span><button>Play</button>"
+        "<span>0:00 / 0:00</span><audio src='/a.mp3'></audio></div>",
+        "AutoTOC": "<h4>Table of Contents</h4><ul class='table-of-contents toc'><li>AutoTOC</li></ul>",
+        "Share": "<p class='button-wrapper'><a class='button' href='https://news.example/2026/10/story/?utm=share'>Share</a></p>",
+    }
+    for needle, block in furniture.items():
+        assert needle not in out(block), needle
+
+
+def test_boxes_that_tell_stay_though_they_look_like_furniture():
+    words = _paragraphs("Article", 8)
+
+    def out(block):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}{words}</article></body></html>"
+        return extract("https://news.example/2026/10/story/", page, "", "page").body.text_content()
+
+    # A form beside a long paragraph of the article; a link to the page in a sentence; an
+    # author's own words about someone else; a newsletter named in prose.
+    assert "The council asked" in out(
+        "<div class='newsletter-story'><p>The council asked residents to sign up for flood alerts by email, and more "
+        "than four thousand did so in the first week, the town clerk said on Monday.</p>"
+        "<form><input type='email'><button>Sign up</button></form></div>"
+    )
+    assert "as I wrote" in out(
+        "<p>See <a href='https://news.example/2026/10/story/'>as I wrote</a> before, for the history.</p>"
+    )
+    assert "the first engineer" in out(
+        "<div class='profile'><a href='https://news.example/people/ada'>Ada Lovelace</a> was, in Babbage's words, "
+        "<p>the first engineer of the engine Lovelace described, whose notes ran longer than the paper.</p></div>"
+    )
+
+
+def test_short_articles_and_sections_beside_a_form_or_named_like_furniture_stay():
+    form = "<form><input type='email' name='email'><button>Remind me</button></form>"
+    nav = "<nav>" + "".join(f"<a href='/s{n}'>Section {n}</a>" for n in range(60)) + "</nav>"
+    footer = "<footer>" + _paragraphs("Footer", 15) + "</footer>"
+    brief = "".join(f"<p>Short news line {n} about the council vote today.</p>" for n in range(5))
+    page = (
+        f"<html><body>{nav}<div class='post'><h1>Council votes</h1><div class='entry-content'>{brief}"
+        f"<div class='nl'>{form}</div></div></div>{footer}</body></html>"
+    )
+    assert "Short news line 4" in extract("https://news.example/a", page, "", "page").body.text_content()
+    words = _paragraphs("Article", 10)
+
+    def out(block):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}{words}</article></body></html>"
+        return extract("https://news.example/a", page, "", "page").body.text_content()
+
+    assert "40,000 voters" in out(
+        "<div class='wp-block-group'><p>Registration closes Friday. Here is how to check.</p>"
+        f"<p>Officials say 40,000 voters were purged.</p>{form}</div>"
+    )
+    assert "Sen. Smith" in out(
+        "<div class='sponsored-content'><p>The sponsor of the bill, Sen. Smith, said it would pass.</p><a href='/bill'>The bill</a></div>"
+    )
+    assert "Readers pay" in out(
+        "<div class='subscribe-model'><h3>How it pays</h3><p>Readers pay $5 a month.</p><a href='/x'>Details</a></div>"
+    )
+    gallery = (
+        "<figure class='gallery'><a href='https://nasa.gov/img'><img src='/m1.jpg'></a><a href='https://nasa.gov/img'><img src='/m2.jpg'></a>"
+        "<h3><a href='https://nasa.gov/img'>Images of Mars</a></h3><figcaption>Photos from the rover show dust storms. "
+        "<a href='https://nasa.gov/img'>NASA</a></figcaption></figure>"
+    )
+    assert "dust storms" in out(gallery)
+    assert "this essay recounts" in out(
+        "<div class='bio'><a href='/author/sam-lee/'>Sam Lee</a><p>Sam Lee is a nurse in Ohio, and this essay recounts "
+        "the night Lee lost three patients.</p></div>"
+    )
+    page = f"<html><body><article><h1>Story</h1>{words}<p><a href='https://news.example/a?page=2'>Continue to page 2</a></p></article></body></html>"
+    assert "Continue to page 2" in extract("https://news.example/a", page, "", "page").body.text_content()
+
+
+def test_comments_beside_an_author_box_do_not_stop_the_notes():
+    # A comment node among the box's siblings made the author-box rule raise, and the page went
+    # through without its notes, silently.
+    words = _paragraphs("Article", 8)
+    page = (
+        f"<html><body><article><h1>Story</h1>{words}<p>A claim.<sup><a href='#fn-1' id='fnref-1'>1</a></sup></p>"
+        "<div class='author-box'><a rel='author' href='/author/ada/'>Ada Byron</a><p>Ada Byron writes about engines and "
+        "the notes she keeps on them for the society.</p></div><!-- end author box -->"
+        "<ol class='wp-block-footnotes'><li id='fn-1'>The note itself, with its source. <a href='#fnref-1'>↩</a></li></ol>"
+        "</article></body></html>"
+    )
+    assert "The note itself" in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_malformed_address_or_a_bare_byline_costs_nothing():
+    words = _paragraphs("Article", 8)
+    page = (
+        f"<html><body><article><h1>Story</h1>{words}<p>A claim.<sup><a href='#fn1' id='r1'>1</a></sup></p>"
+        "<div class='tags'><a href='http://[bad/x'>bad link</a></div>"
+        "<ol class='footnotes'><li id='fn1'>The note itself, with its source. <a href='#r1'>↩</a></li></ol></article></body></html>"
+    )
+    assert "The note itself" in extract("https://blog.example/a", page, "", "page").body.text_content()
+    byline = f"<html><body><article><h1>Story</h1><div><a href='https://news.example/author/jeremy-white/'>Jeremy White</a></div>{words}</article></body></html>"
+    assert "Jeremy White" in extract("https://news.example/story/", byline, "", "page").body.text_content()
+    more = f"<html><body><article><h1>Story</h1>{words}<p><a href='https://news.example/author/jeremy-white/'>More from Jeremy White</a></p></article></body></html>"
+    assert "More from" not in extract("https://news.example/story/", more, "", "page").body.text_content()
+
+
+def test_a_digests_items_and_a_wrapped_guest_bio_stay():
+    words = _paragraphs("Article", 6)
+    item = (
+        "<div><h3><a href='https://www.nature.com/articles/a'>A study on a</a></h3><p>A new "
+        "<a href='https://www.nature.com/articles/a'>paper</a> finds that the river had warmed by two degrees over a "
+        "decade, changing which fish could live there.</p><p><a href='https://www.nature.com/articles/a'>Read the study</a></p></div>"
+    )
+    page = f"<html><body><article><h1>Digest</h1>{words}{item}{words}</article></body></html>"
+    assert "river had warmed" in extract("https://blog.example/a", page, "", "page").body.text_content()
+    bio = (
+        "<div class='wp-block-group'><div class='author-bio'><a href='/author/sam-lee'>Sam Lee</a><p>Sam Lee is a guest "
+        "contributor and the director of a nonprofit that studies rural water systems.</p></div></div>"
+    )
+    page = f"<html><body><article><h1>Title</h1><div class='entry-content'>{bio}{words}</div></article></body></html>"
+    assert "guest contributor" in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_digest_item_with_a_plain_summary_or_a_named_digest_section_stays():
+    words = _paragraphs("Article", 6)
+    item = (
+        "<div class='item'><h3><a href='https://other.org/a'>Item 1 headline about a thing</a></h3>"
+        "<a href='https://other.org/a'><img src='https://img.example/1.jpg'></a><p>Summary of item 1: researchers found "
+        "that the widget decreases cost by forty percent in trials.</p><a href='https://other.org/a'>Read more</a></div>"
+    )
+    section = (
+        "<div class='newsletter-section'><h2>Story 0</h2><p>The council voted to approve the plan for the new bridge.</p>"
+        "<a href='/bridge'>Read the story</a></div>"
+    )
+    for block, needle in ((item, "forty percent"), (section, "new bridge")):
+        page = f"<html><body><article><h1>Digest</h1>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_digest_of_story_cards_named_like_promotions_stays():
+    cards = "".join(
+        f"<div class='story-promo'><h3><a href='https://news.com/s{n}'>Council approves story {n}</a></h3>"
+        f"<p>The city voted 7-2 to fund lanes on Main St.</p><a href='https://news.com/s{n}'>Read more</a></div>"
+        for n in range(5)
+    )
+    feed = f"<h2>Today's top stories</h2>{cards}{_paragraphs('Closing', 3)}"
+    out = extract("https://news.com/digest", None, feed, "feed").body.text_content()
+    assert "Council approves story 4" in out
+    for name in ("next-story", "newsletter"):
+        repeated = "".join(
+            f"<div class='{name}'><h3>Item {n}</h3><p>A line about item {n}.</p><a href='/i{n}'>Read next</a></div>"
+            for n in range(3)
+        )
+        out = extract(
+            "https://news.com/digest", None, f"{_paragraphs('Lead', 4)}{repeated}", "feed"
+        ).body.text_content()
+        assert "Item 2" in out
+
+
+def test_a_short_post_opening_with_its_byline_or_held_in_a_named_box_stays():
+    nav = (
+        "<nav><ul>"
+        + "".join(f"<li><a href='/s{n}'>Section number {n} here</a></li>" for n in range(60))
+        + "</ul></nav>"
+    )
+    footer = "<footer>" + "Footer filler words about the site and its many sections. " * 40 + "</footer>"
+    post = (
+        "<div class='post'><p><a rel='author' href='/author/wei-li'>Wei Li</a></p>"
+        "<p>Like many of you I have been testing the new Linux release on a little laptop this week.</p>"
+        "<p>It boots fast, the battery lasts, and the trackpad finally works after years of trouble.</p>"
+        "<p>Sleep and wake are reliable now, and the fan stays quiet under an ordinary load of browsing and mail.</p></div>"
+    )
+    page = f"<html><body>{nav}<article><h1>Testing</h1>{post}</article>{footer}</body></html>"
+    assert "trackpad finally works" in extract("https://blog.example/a", page, "", "page").body.text_content()
+    issue = (
+        "<div class='newsletter'>"
+        + "".join(f"<p>Issue line {n} about this week in the town and what the council did.</p>" for n in range(4))
+        + "<a href='/last'>Read last week</a></div>"
+    )
+    page = f"<html><body>{nav}<article><h1>This week</h1>{issue}</article>{footer}</body></html>"
+    assert "Issue line 3" in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_picture_by_a_form_a_series_list_and_a_written_outline_stay():
+    words = _paragraphs("Article", 8)
+
+    def out(block, url="https://news.example/2026/vote/"):
+        page = f"<html><body><article><h1>Vote</h1>{words}{block}{words}</article></body></html>"
+        return extract(url, page, "", "page").body.text_content()
+
+    assert "The mayor at the vote" in out(
+        "<div><figure><img src='/m.jpg'><figcaption>The mayor at the vote.</figcaption></figure>"
+        "<form><input type='email'><button>Alerts</button></form></div>"
+    )
+    series = (
+        "<p>This story is part of a series on the vote:</p><ul><li><a href='https://news.example/2026/count/'>Part 1: The count</a></li>"
+        "<li><a href='https://news.example/2026/vote/'>Part 2: The vote</a></li><li><a href='https://news.example/2026/after/'>Part 3: After</a></li></ul>"
+    )
+    body = lxml.html.fromstring(f"<div>{series}</div>")
+    extract_module._drop_lone_links(body, "https://news.example/2026/vote/")
+    assert "Part 2: The vote" in body.text_content()
+    assert "Background of the dispute" in out(
+        "<h4>Contents</h4><ul class='toc'><li>Background of the dispute</li><li>What the council decided</li></ul>"
+    )

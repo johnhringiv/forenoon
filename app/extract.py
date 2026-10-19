@@ -586,6 +586,323 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
                 el.set("class", " ".join(kept))
 
 
+# A box named for what it sells, as a whole word of its class or id.
+# One of a box's class names or its id, whole: "newsletter", "ars-newsletter-shortcode",
+# "next-post"; not "sponsored-content" or "subscribe-model", which may be an article's.
+SELLS_NAME = re.compile(
+    r"([a-z0-9]+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|next-(post|article|story))"
+    r"([_-]+(box|wrap|wrapper|shortcode|widget|form|cta|signup|inline))?",
+    re.IGNORECASE,
+)
+CALL_TO_ACTION = re.compile(
+    r"(sign|subscribe|join|get|read|next|learn|download|try|register|start|claim|follow|listen)\b", re.IGNORECASE
+)
+SIGNUP_CLIMB_WORDS = 15  # of text outside the form, in a box that is not named as a sign-up
+SELLS_MAX_WORDS = 60
+SELLS_CLIMB = 4
+SIGNUP_PROSE_WORDS = 25  # a paragraph this long outside the form is the article's, not the pitch
+CARD_MAX_WORDS = 80
+CTA_MAX_WORDS = 4
+BIO_MAX_WORDS = 120
+BIO_MIN_WORDS = 12
+BIO_NAME_WORDS = 4  # a bio names its subject at its start: "David Farquhar is a…"
+OWN_PARAGRAPHS_MAX = 2  # a box with more paragraphs of its own than this is writing, not furniture
+AUTHOR_PATH = re.compile(r"/(author|authors|people|staff|contributors?)/[^/?#]+/?$", re.IGNORECASE)
+AUTHOR_BOX = re.compile(r"author|vcard|byline|\bbio\b|sabox", re.IGNORECASE)
+LONE_LINK_MAX_WORDS = 5
+MORE_BY = re.compile(r"(more|all|other|read more) (from|by|of|stories|articles|posts|pieces|work)\b", re.IGNORECASE)
+SELF_LINK_LABEL = re.compile(r"share( this( post| article)?)?|read more\W*", re.IGNORECASE)
+CONTROL_TEXT_MAX_WORDS = 12
+PLAYER_NAME = re.compile(r"(^|[\s_-])(player|audio-player|tts-player)([\s_-]|$)", re.IGNORECASE)
+TOC_ITEM_WORDS = 2
+TOC_NAME = re.compile(r"(^|[\s_-])(toc|table-of-contents)([\s_-]|$)", re.IGNORECASE)
+TOC_HEADING = re.compile(r"(table of )?contents\W*", re.IGNORECASE)
+CONTENT_XPATH = ".//table | .//pre | .//blockquote | .//video | .//audio | .//iframe | .//h1"
+
+
+def _host_path(href: str) -> str:
+    """A link's host and path, or "" for one that does not parse ("http://[link]")."""
+    try:
+        parts = urlsplit(href)
+        return (parts.hostname or "").removeprefix("www.") + parts.path.rstrip("/")
+    except ValueError:
+        return ""
+
+
+def _off_site(href: str, base_url: str) -> bool:
+    try:
+        a, b = (urlsplit(x).hostname or "" for x in (href, base_url))
+    except ValueError:
+        return False
+    return bool(a) and a.removeprefix("www.") != b.removeprefix("www.")
+
+
+def _author_link(a) -> bool:
+    if "author" in (a.get("rel") or "").split():
+        return True
+    try:
+        return bool(AUTHOR_PATH.search(urlsplit(a.get("href") or "").path))
+    except ValueError:
+        return False
+
+
+INLINE_LINK_WORDS = 8  # of a paragraph's own text around a link, for a link in a sentence
+
+
+def _inline_link(p) -> bool:
+    """Whether a paragraph has a link inside prose rather than being a link or a label."""
+    links = list(p.iter("a"))
+    own = _words(p.text_content()) - sum(_words(a.text_content()) for a in links)
+    return bool(links) and own >= INLINE_LINK_WORDS
+
+
+def _text_after(box) -> bool:
+    """Whether text of some length follows a box in what holds it, up to the article: an author
+    box ends a post, and a guest post's introduction comes before it, however it is wrapped."""
+    el = box
+    while el is not None and el.tag not in ("article", "main", "body"):
+        if any(
+            isinstance(after.tag, str) and _words(after.text_content()) >= BIO_MIN_WORDS for after in el.itersiblings()
+        ):
+            return True
+        el = el.getparent()
+    return False
+
+
+def _sells_name(el) -> bool:
+    return any(SELLS_NAME.fullmatch(name) for name in [el.get("id") or "", *(el.get("class") or "").split()])
+
+
+def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> None:
+    """Remove boxes that sell, credit or play rather than tell, by their markup:
+    - a short box named for a newsletter, sign-up, sponsor, promotion or the next story,
+      with a link or button in it (Ars Technica's newsletter box, Quanta's "Next article");
+    - an advert card: three or more links all to one address off the site, one of them a
+      heading, ending in a short link of its own ("Get the report");
+    - an author box: it opens with a link to the author's page, and a paragraph of it
+      names them (a bio);
+    - a player's controls with a few words of label and nothing to read ("Listen to this
+      article", "0:00 / 0:00");
+    - a table of contents a script fills, still empty of links ("AutoTOC"), and its heading.
+    Never the article, a box of half the page or more, one holding a table, code, a quote, a
+    video or a title, or one a note or in-page link points at."""
+
+    def ok(box) -> bool:  # never the article or anything a note or a jump points at
+        if box is root or box.getparent() is None or box.tag in ("body", "html", "article", "main"):
+            return False
+        if box.get(MARK) or box.xpath(f".//*[@{MARK}]"):
+            return False
+        if len(box.xpath(".//p")) > OWN_PARAGRAPHS_MAX:
+            return False
+        if _words(box.text_content()) >= BOX_MAX_SHARE * max(page_words, 1):
+            return False
+        return not any(t in linked_to for t in box.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name"))
+
+    # Rule 1b: a box named as a newsletter, sponsor or promo, short, with a call to action in it.
+    for box in list(root.iter("div", "section", "aside")):
+        if box.getparent() is None or not ok(box):
+            continue
+        if not _sells_name(box):
+            continue
+        # A run of boxes of one class is a list of stories, not a pitch made once.
+        if any(
+            isinstance(sib.tag, str) and sib.get("class") == box.get("class")
+            for sib in (*box.itersiblings(), *box.itersiblings(preceding=True))
+        ):
+            continue
+        if _words(box.text_content()) > SELLS_MAX_WORDS or box.xpath(CONTENT_XPATH):
+            continue
+        # A call to act on, as a button or a short link, or a heading naming the next story.
+        calls = [
+            " ".join(el.text_content().split()) for el in box.xpath(".//a[@href] | .//button | .//h2 | .//h3 | .//h4")
+        ]
+        if not any(text and _words(text) <= CTA_MAX_WORDS and CALL_TO_ACTION.match(text) for text in calls):
+            continue
+        box.drop_tree()
+    # Rule 1c: an ad card: every link in it goes to one off-site address, a heading is that link,
+    # and it ends in a short link of its own (the button).
+    for box in list(root.iter("div", "section", "aside")):
+        if (
+            box.getparent() is None
+            or not ok(box)
+            or box.xpath(".//figure | .//figcaption")
+            or len(box.xpath(".//img")) > 1
+        ):
+            continue  # not a gallery: pictures credited to one source
+        links = box.xpath(".//a[@href]")
+        hrefs = {a.get("href").strip() for a in links}
+        if len(links) < 3 or len(hrefs) != 1 or not _off_site(next(iter(hrefs)), base_url):
+            continue
+        if _words(box.text_content()) > CARD_MAX_WORDS or box.xpath(CONTENT_XPATH):
+            continue
+        if any(_inline_link(p) for p in box.iter("p")):
+            continue  # a digest's item: a summary that cites its source in a sentence
+        if not all({"nofollow", "sponsored"} & set((a.get("rel") or "").lower().split()) for a in links):
+            continue  # an advert's links are marked as not the site's say-so; a digest's are not
+        headed = any(
+            " ".join(h.text_content().split()) == " ".join(a.text_content().split())
+            for h in box.iter("h2", "h3", "h4", "h5", "h6")
+            for a in h.iter("a")
+        )
+        last = links[-1]
+        tail_text = " ".join(box.text_content().split())
+        cta = " ".join(last.text_content().split())
+        if (
+            headed
+            and cta
+            and _words(cta) <= CTA_MAX_WORDS
+            and tail_text.endswith(cta)
+            and next(last.iterancestors(*HEADINGS), None) is None
+        ):
+            box.drop_tree()
+    # Rule 1d: an author box: it starts with a link to the author's page, and a bio sentence names them.
+    for box in list(root.iter("div", "section", "aside")):
+        if box.getparent() is None or not ok(box):
+            continue
+        text = " ".join(box.text_content().split())
+        if not text or _words(text) > BIO_MAX_WORDS or box.xpath(CONTENT_XPATH):
+            continue
+        first = next((a for a in box.iter("a") if _author_link(a) and " ".join(a.text_content().split())), None)
+        # Marked as an author's, not only a link to someone's page: a passage may open so.
+        if first is not None and not AUTHOR_BOX.search(_names(box)):
+            first = None  # the box is named as the author's: a post may open with its byline
+        if first is None:
+            continue
+        # At the end of what it is in: a guest post's introduction comes before the post.
+        if _text_after(box):
+            continue
+        name = " ".join(first.text_content().split())
+        if not text.startswith(name):
+            continue
+        surname = name.split()[-1]
+        named = re.compile(rf"\b{re.escape(surname)}\b")
+        if not any(
+            _words(p.text_content()) >= BIO_MIN_WORDS
+            and named.search(" ".join(p.text_content().split()[:BIO_NAME_WORDS]))
+            for p in box.iter("p")
+        ):
+            continue
+        box.drop_tree()
+    # Rule 3: a player's controls, with nothing to read: a box named as a player, holding buttons
+    # and a few words of label ("Listen to this article", "0:00 / 0:00"), no link and no heading.
+    for box in list(root.iter("div", "section")):
+        if box.getparent() is None or not ok(box) or not PLAYER_NAME.search(_names(box)):
+            continue
+        if not box.xpath(".//button") or box.xpath(
+            ".//a[@href] | .//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | .//pre | .//table | .//figure | .//img"
+        ):
+            continue
+        clone = copy.deepcopy(box)
+        for c in list(clone.iter("button", "select", "audio", "video", "noscript")):
+            c.drop_tree()  # and a player's fallback text ("Your browser does not support…")
+        if _words(clone.text_content()) > CONTROL_TEXT_MAX_WORDS:
+            continue
+        box.drop_tree()
+    for lst in list(root.iter("ul", "ol")):
+        if lst.getparent() is None or not TOC_NAME.search(_names(lst)) or lst.xpath(".//a[@href]") or not ok(lst):
+            continue
+        if any(_words(li.text_content()) > TOC_ITEM_WORDS for li in lst.iter("li")):
+            continue  # an outline written out, not a placeholder
+        before = lst.getprevious()
+        if (
+            before is not None
+            and before.tag in HEADINGS
+            and TOC_HEADING.fullmatch(" ".join(before.text_content().split()))
+        ):
+            before.drop_tree()
+        lst.drop_tree()
+
+
+def _drop_signup_forms(root, page_words: int, linked_to: set) -> None:
+    """Remove a sign-up form (it has an email field) and the box around it that only sells it,
+    climbing while the words outside forms stay few and no paragraph of the article's length
+    is reached. Before the inputs are removed, which would hide what the form asks for."""
+
+    def ok(box) -> bool:
+        if box is root or box.getparent() is None or box.tag in ("body", "html", "article", "main"):
+            return False
+        if _words(box.text_content()) >= BOX_MAX_SHARE * max(page_words, 1):
+            return False
+        if len([p for p in box.xpath(".//p") if next(p.iterancestors("form"), None) is None]) > OWN_PARAGRAPHS_MAX:
+            return False
+        # A box named as a sign-up may be what the site's menu jumps to ("#newsletter"); any
+        # other a link points at may hold a note.
+        targets = box.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name")
+        if _sells_name(box):
+            targets = [t for t in targets if t != box.get("id")]
+        return not any(t in linked_to for t in targets)
+
+    # Rule 1a: a sign-up form (an email field) and the box around it that only sells it.
+    for form in list(root.iter("form")):
+        if form.getparent() is None:
+            continue
+        if not form.xpath(".//input[@type='email' or contains(translate(@name,'EMAIL','email'),'email')]"):
+            continue
+        box = None
+        for anc in [form, *list(form.iterancestors())[:SELLS_CLIMB]]:
+            if not ok(anc) and anc is not form:
+                break
+            outside = _words(anc.text_content()) - sum(_words(f.text_content()) for f in anc.iter("form"))
+            prose = any(
+                _words(p.text_content()) >= SIGNUP_PROSE_WORDS and next(p.iterancestors("form"), None) is None
+                for p in anc.iter("p")
+            )
+            # Past the form, only a box that sells it: one named as a sign-up, or one with a line
+            # or two of its own and no paragraph, item or heading outside the form.
+            named = anc is form or _sells_name(anc)
+            blocks = [
+                el
+                for el in anc.iter("p", "li", *HEADINGS)
+                if next(el.iterancestors("form"), None) is None and el is not anc
+            ]
+            limit = SELLS_MAX_WORDS if named else SIGNUP_CLIMB_WORDS
+            if outside > limit or prose or anc.xpath(CONTENT_XPATH) or anc.xpath(".//figure | .//img | .//picture"):
+                break
+            if blocks and not named:
+                continue  # not this box on its name's say-so; a sign-up box around it may be
+            box = anc
+        # The form alone is left to the rules that drop an aside holding one, which look for it.
+        if box is not None and box is not form and box.getparent() is not None:
+            box.drop_tree()
+
+
+def _drop_lone_links(body, url: str) -> None:
+    """Remove a block that is one short link and nothing else, to the page itself ("Share",
+    "Read more") or to an author's page ("More from X"). On the finished body, after the
+    truncation check, so a feed's "Read more" still marks the article as cut."""
+    page = _host_path(url)
+    for el in list(body.iter("p", "div", "li")):
+        if (
+            el.getparent() is None
+            or el.xpath(MEDIA_XPATH)
+            or next(el.iterancestors("aside", *HEADINGS), None) is not None
+        ):
+            continue
+        if el.xpath(".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"):
+            continue
+        if el.tag == "li" and any(
+            isinstance(sib.tag, str) for sib in (*el.itersiblings(), *el.itersiblings(preceding=True))
+        ):
+            continue  # one item of a list, such as a series' parts: this part, linked like the rest
+        text = " ".join(el.text_content().split())
+        links = [a for a in el.iter("a") if a.get("href")]
+        if not text or len(links) != 1 or _words(text) > LONE_LINK_MAX_WORDS:
+            continue
+        a = links[0]
+        href = a.get("href").strip()
+        if " ".join(a.text_content().split()) != text or "#" in href or a.get("class"):
+            continue  # a class here is ours: a note reference, a card
+        try:
+            query = urlsplit(href).query
+        except ValueError:
+            continue
+        if query and not SELF_LINK_LABEL.fullmatch(text):
+            continue  # "Continue to page 2": the same page, another part of it
+        # A link to the author's page that offers more of them, not a byline that is their name.
+        if (page and _host_path(href) == page) or (_author_link(a) and MORE_BY.match(text)):
+            el.drop_tree()
+
+
 def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
@@ -611,6 +928,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     # Boxes are judged against the page as it was, before any is dropped.
     page_words = _words(_visible_text(root))
     linked_to = _in_page_targets(root, base_url)
+    _drop_signup_forms(root, page_words, linked_to)
     for el in list(root.iter("span", "sup", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
@@ -744,6 +1062,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     _free_code_blocks(root)
     _drop_page_notices(root)
     _drop_skip_targets(root)
+    _drop_furniture(root, base_url, page_words, linked_to)
     _unclass_data_tables(root)
     if not notes:
         return None
@@ -1900,6 +2219,7 @@ def extract(
         reasons.append("cookie or bot wall marker")
     if TRUNCATED_TAIL.search(text[-300:]):
         reasons.append("looks truncated")
+    _drop_lone_links(body, url)
     status = "degraded" if reasons else "clean"
     image, description = _preview(body, url, image, description)
     return Extracted(body, status, reasons, words, method, title, author, image, description, pictures)
