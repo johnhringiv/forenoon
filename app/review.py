@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from .config import Llm
 from .llm import Backend, LlmError, free
+from .read import CUT_COMPLAINT, SENTENCE_END
 from .render import Article
 from .store import Store
 
@@ -97,6 +98,7 @@ def review(
         log.warning("extraction check skipped: daily token cap reached")
         return {}
     samples = [_sample(article) for article in articles]
+    ends = {sample["id"]: sample["end"] or sample["start"] for sample in samples}
     prompt = f"<articles>\n{json.dumps(samples, ensure_ascii=False)}\n</articles>"
     try:
         reply = backend.structured(SYSTEM, prompt, SCHEMA, model=cfg.model)
@@ -113,7 +115,12 @@ def review(
         if entry.get("verdict") not in VERDICTS:
             continue
         problem = " ".join(str(entry.get("problem", "")).split())[:MAX_PROBLEM_CHARS]
-        out[entry["id"]] = Review(entry["verdict"], "" if entry["verdict"] == "ok" else problem)
+        verdict = entry["verdict"]
+        # Shown a beginning and an ending, the model can take the gap for a cut: not when the
+        # ending it saw finishes a sentence.
+        if verdict == "suspect" and CUT_COMPLAINT.search(problem) and SENTENCE_END.search(ends[entry["id"]]):
+            verdict = "ok"
+        out[entry["id"]] = Review(verdict, "" if verdict == "ok" else problem)
     store.log_llm_reply("check", cfg.model, reply, "ok" if out else "invalid")
     for article_id, verdict in out.items():
         store.record_review(article_id, verdict.verdict, verdict.problem, cfg.model)

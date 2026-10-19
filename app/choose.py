@@ -32,7 +32,7 @@ scored on its own.
 You are given the reader's interests, articles they rated recently, and the candidates: for
 each its title, source, length in words, how long it stays worth reading, the score and reason
 from reading it, a story id shared by candidates on the same event (those are delivered
-together and take one place), and whether it was deferred. Choose exactly as many articles as
+together and take one place), whether it was deferred, and whether it was read in part. Choose exactly as many articles as
 the number of places given, best first: every place is filled, and a place you leave empty
 goes to the next highest score with no thought for the issue as a whole. Choose one candidate
 per story.
@@ -49,6 +49,9 @@ Choose the set, not just the highest scores:
 - A candidate marked deferred was left out of an earlier issue for variety. Prefer it over an
   equal candidate; it has no claim over a better one.
 - Respect each source's limit on places, where one is given.
+- A candidate read in part is a long article of which the reading saw the beginning and the
+  ending, as the reading pass always does with long ones. That is not a mark against it: do not
+  take it, or a reason that mentions it, for an incomplete article.
 
 Then list reserves: up to the number of reserves given, in the order to use them if a chosen
 article or another of the day's articles cannot be sent, so that a place freed late still goes
@@ -95,6 +98,7 @@ class Candidate:
     lasting: str = ""
     story: str = ""  # shared by candidates on the same event
     deferred: bool = False  # left out of an earlier issue for variety
+    read_in_part: bool = False  # longer than the reading pass reads: only its beginning and ending were read
 
 
 def _listing(
@@ -116,6 +120,7 @@ def _listing(
             "reason": c.reason,
             "story": c.story,
             "deferred": c.deferred,
+            "read_in_part": c.read_in_part,
         }
         for c in candidates
     ]

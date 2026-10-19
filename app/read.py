@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field, replace
 
 from .config import Llm, User
@@ -29,6 +30,14 @@ BATCH_TOKENS = 30_000
 TOKENS_PER_WORD = 1.4
 TOKENS_PER_ARTICLE = 250  # title, links and the answer
 TOKENS_OVERHEAD = 2500
+ENDING_WORDS = 150  # of a longer article, shown after its beginning so its end can be judged
+# A complaint that the text stops early, about an article whose ending was shown and finishes
+# a sentence: the model was judging the gap between beginning and ending, not a real cut.
+CUT_COMPLAINT = re.compile(
+    r"truncat|cut off|cuts off|cut short|stops? (mid|before|partway)|mid-(sentence|article)|before (its|the) end",
+    re.IGNORECASE,
+)
+SENTENCE_END = re.compile(r"""[.!?…)\]"'”’]\s*$""")
 
 SYSTEM = """\
 You choose articles for one reader's daily digest by reading them.
@@ -37,8 +46,9 @@ You are given the reader's interests, articles they rated recently (1 = less lik
 5 = more like this, with length, why each was picked and sometimes the reader's own reason:
 trust "reader_said", and read a low rating on a short post as a verdict on thin posts rather
 than on its source), and the text of today's best candidates as it would be delivered. When
-"truncated" is true you were shown only the beginning of a longer article. For each article
-return:
+"truncated" is true you were shown only the beginning of a longer article, and its last words
+as "ending": the words in between are left out on purpose, so judge whether it is complete
+from the ending alone. For each article return:
 
 - score: 0 to 10 for how much this reader will want to read it today. Judge the substance:
   depth, original work, new information. A quote, a teaser or a note with little in it scores
@@ -50,7 +60,8 @@ return:
 - complete: "ok" when it reads as a whole article matching its title; "suspect" when
   something may be wrong (stops mid-thought, menu or sign-up text mixed in); "bad" when it is
   clearly not the article: a paywall or login notice, a bot wall, an error page, only a
-  teaser. Never report a truncated article as cut off: judge only what you were shown.
+  teaser. A truncated article is not cut off unless its ending stops mid-thought, and its
+  score is for the whole article: never lower it because you were shown only part.
 - problem: at most 20 words, or an empty string for "ok".
 - lasting: how long it stays worth reading. "days" for news and anything tied to this week's
   events (an election result, a release announcement, a market report); "months" for
@@ -108,6 +119,11 @@ class Reading:
     words: int  # in the whole article
     text: str  # the first `Llm.read_words` of them
     links: list[dict] = field(default_factory=list)  # site, text, context; numbered from 1
+    ending: str = ""  # the last ENDING_WORDS, when `text` is not all of it
+
+    @property
+    def truncated(self) -> bool:
+        return len(self.text.split()) < self.words
 
 
 @dataclass(frozen=True)
@@ -132,9 +148,20 @@ def _batches(readings: list[Reading], limit: int = BATCH_TOKENS) -> list[list[Re
     out: list[list[Reading]] = [[]]
     size = 0
     for reading in readings:
-        cost = _tokens(reading.text) + len(json.dumps(reading.links)) // CHARS_PER_TOKEN + TOKENS_PER_ARTICLE
+        cost = (
+            _tokens(reading.text)
+            + _tokens(reading.ending)
+            + len(json.dumps(reading.links)) // CHARS_PER_TOKEN
+            + TOKENS_PER_ARTICLE
+        )
         if cost > limit:  # alone too long: cut, its links still sent whole
-            room = max(100, limit - TOKENS_PER_ARTICLE - len(json.dumps(reading.links)) // CHARS_PER_TOKEN)
+            room = max(
+                100,
+                limit
+                - TOKENS_PER_ARTICLE
+                - _tokens(reading.ending)
+                - len(json.dumps(reading.links)) // CHARS_PER_TOKEN,
+            )
             words = max(1, int(room / TOKENS_PER_WORD))
             text = " ".join(reading.text.split()[:words])[: room * CHARS_PER_TOKEN]
             reading = replace(reading, text=text)
@@ -154,8 +181,9 @@ def _listing(batch: list[Reading], limit: int) -> str:
             "title": r.title,
             "source": r.source,
             "words": r.words,
-            "truncated": len(r.text.split()) < r.words,  # cut at read_words, or to fit the context
+            "truncated": r.truncated,  # cut at read_words, or to fit the context
             "text": r.text,
+            **({"ending": r.ending} if r.truncated and r.ending else {}),
             "links": [{"n": n, **link} for n, link in enumerate(r.links, 1)],
         }
         for r in batch
@@ -165,6 +193,7 @@ def _listing(batch: list[Reading], limit: int) -> str:
 
 def _validated(data: dict, batch: list[Reading]) -> dict[str, Verdict]:
     counts = {r.id: len(r.links) for r in batch}
+    by_id = {r.id: r for r in batch}
     out: dict[str, Verdict] = {}
     entries = data.get("articles")
     for entry in entries if isinstance(entries, list) else []:
@@ -174,6 +203,15 @@ def _validated(data: dict, batch: list[Reading]) -> dict[str, Verdict]:
         if isinstance(score, bool) or not isinstance(score, int | float) or math.isnan(score):
             continue
         complete = entry.get("complete") if entry.get("complete") in COMPLETE else "ok"
+        reading = by_id[entry["id"]]
+        problem = " ".join(str(entry.get("problem", "")).split())
+        if (
+            complete == "suspect"
+            and reading.truncated
+            and CUT_COMPLAINT.search(problem)
+            and SENTENCE_END.search(reading.ending or reading.text)
+        ):
+            complete = "ok"  # see CUT_COMPLAINT
         numbers = entry.get("links")
         links = [
             n
@@ -184,7 +222,7 @@ def _validated(data: dict, batch: list[Reading]) -> dict[str, Verdict]:
             min(10.0, max(0.0, float(score))),
             " ".join(str(entry.get("reason", "")).split())[:MAX_REASON_CHARS],
             complete,
-            "" if complete == "ok" else " ".join(str(entry.get("problem", "")).split())[:MAX_PROBLEM_CHARS],
+            "" if complete == "ok" else problem[:MAX_PROBLEM_CHARS],
             list(dict.fromkeys(links))[:MAX_SUBJECT_LINKS],
             entry.get("lasting") if entry.get("lasting") in LASTING else "",
         )
