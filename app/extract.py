@@ -130,9 +130,9 @@ PREFERRED_SOURCE = re.compile(r"\b(select|add|choose|set|make|pick) us\b.{0,40}\
 NOTICE_MAX_WORDS = 25
 # A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
 # quoted in a story about an outage is not.
-NOTICE_CLASS = re.compile(r"message|notice|fallback|placeholder|error|unavailable", re.IGNORECASE)
+NOTICE_CLASS = re.compile(r"(^|[\s_-])(message|notice|fallback|placeholder|error|unavailable)([\s_-]|$)", re.IGNORECASE)
 NOTICE_DEPTH = 4  # how far up the notice's own boxes are looked at
-QUOTE_MARKS = re.compile(r"[“”\"«»]")
+QUOTE_MARKS = re.compile(r"[“”\"«»]|['‘]\s*(select|add|choose|set|make|pick) us\b", re.IGNORECASE)
 PROMPT_MAX_WORDS = 45  # a "select us as your Preferred Source" request, which says why at some length
 TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
@@ -322,14 +322,18 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
         # A heading's text wrapped in an element classed like furniture ("group/mdHeader") is
         # deleted on its own, and the heading is left empty: the wrappers inside lose their
         # classes (the book keeps none).
-        whole = len(" ".join(heading.text_content().split()))
+        length = len(" ".join(heading.text_content().split()))
         for inner in heading.iterdescendants():
             if not isinstance(inner.tag, str) or not unlikely.search(_names(inner)):
                 continue
             # The heading's text, not a permalink beside it ("#", "¶"), which may well go.
-            if len(" ".join(inner.text_content().split())) * 2 > whole:
+            if len(" ".join(inner.text_content().split())) * 2 > length:
                 inner.attrib.pop("class", None)
-        if unlikely.search(heading.get("id") or "") and _slug(heading.get("id") or "") == _slug(heading.text_content()):
+        anchor = heading.get("id") or ""
+        # By accident only when the word is buried in a longer one ("freshrss"); a whole part of
+        # the id ("tweet-this", "sponsor", "comments") names the furniture on purpose.
+        whole = any(_names_word(unlikely, part) for part in re.split(r"[\s_-]+", anchor.lower()) if part)
+        if unlikely.search(anchor) and not whole and _slug(anchor) == _slug(heading.text_content()):
             heading.attrib.pop("id", None)  # the heading's own text as its anchor: named by accident
         box = heading.getparent()
         if box is None or box is root or box.tag not in ("div", "section") or (box.text or "").strip():
@@ -351,6 +355,13 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
             for child in others:
                 child.drop_tree()
             box.drop_tag()
+
+
+def _names_word(pattern: re.Pattern, part: str) -> bool:
+    """Whether a part of a name is the pattern's word itself, give or take a short ending
+    ("footer", "sponsored", "comments"), rather than a longer word holding it ("freshrss")."""
+    found = pattern.match(part)
+    return found is not None and len(part) - found.end() <= 3
 
 
 def _slug(text: str) -> str:
@@ -398,7 +409,10 @@ def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
         notice = (
             _words(text) <= NOTICE_MAX_WORDS
             and LOAD_FAILURE.fullmatch(text)
-            and any(NOTICE_CLASS.search(_names(box)) for box in (el, *list(el.iterancestors())[:NOTICE_DEPTH]))
+            and any(
+                NOTICE_CLASS.search(_names(box)) and " ".join(box.text_content().split()) == text
+                for box in (el, *list(el.iterancestors())[:NOTICE_DEPTH])
+            )
         )
         asks = preferred and not quoted and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
         if notice or asks:

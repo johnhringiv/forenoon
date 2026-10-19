@@ -852,3 +852,32 @@ def test_quoted_notices_and_prompts_are_the_articles_own():
     }.items():
         page = f"<html><body><article>{words}{block}{words}</article></body></html>"
         assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle
+
+
+def test_furniture_ids_and_notice_boxes_with_more_in_them_stay_as_they_were():
+    words = "<p>" + "Plain words about the outage and how the county's systems coped with demand. " * 10 + "</p>"
+    for needle, block in {
+        "This video did not load.": "<div class='notice'><p>If the player stays blank:</p><p>This video did not load.</p>"
+        "<p>Then clear your cache and reload.</p></div>",
+        "preferred source": "<p>Sites now ask readers to 'select us as your <a href='https://www.google.com/preferences/source'>"
+        "preferred source</a>' on Google.</p>",
+    }.items():
+        page = f"<html><body><article class='post category-terrorism'>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle
+    for heading in (
+        "<h3 id='tweet-this'>Tweet this</h3>",
+        "<h3 id='sponsored'>Sponsored</h3>",
+        "<h3 id='footer'>Footer</h3>",
+    ):
+        page = f"<html><body><article>{words}{words}{heading}</article></body></html>"
+        text = extract("https://news.example/b", page, "", "page").body.text_content()
+        assert lxml.html.fromstring(heading).text_content() not in text, heading
+
+
+def test_one_line_code_blocks_and_wrapped_heading_text_survive():
+    words = "<p>" + "Plain words about traits, supertraits and who proves what in a type system. " * 10 + "</p>"
+    code = "<div class='highlight'><pre><code>trait Magic: Copy { }</code></pre><button class='copy'></button></div>"
+    heading = "<h2 id='user-content-setup'><span class='group/mdHeader'>Setup</span><a class='headerlink' href='#x'>#</a></h2>"
+    page = f"<html><body><article>{words}{code}{words}{heading}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
+    assert "trait Magic: Copy { }" in out and "<h2>Setup</h2>" in out
