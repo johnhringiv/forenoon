@@ -298,10 +298,10 @@ All fetched content is treated as untrusted.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
   - Asides that are not the article are dropped: a teaser (a short label and then only
-    links, two or more, such as "Recommended" or "You may like") and one holding a form and
-    little else (a newsletter sign-up). Never dropped: a box classed as a callout (a warning,
+    links, two or more, such as "Recommended" or "You may like") and one holding a form with an
+    address field and little else (a newsletter sign-up). Never dropped: a box classed as a callout (a warning,
     a tip, "see also"), one of over 400 words or half the page's text, one holding something
-    an in-page link points at (a footnote), and one whose label is an author's ("Update:",
+    an in-page link points at (a footnote), and one whose label is an author's ("Update:", "References",
     "Correction:", "By", "Photo", "Part 2 of 3"). Pull quotes stay, as the editors set them.
 
   No id or class from the page reaches the book: the ids and link targets are generated.

@@ -62,7 +62,7 @@ TEASER_LABEL_MAX_WORDS = 4  # "Recommended", "You may like", "More on this story
 NOTE_LABEL_START = re.compile(
     r"\W*(updates?|updated|corrections?|corrected|notes?|editor.s note|edit|addendum|erratum"
     r"|by|authors?|written by|reporting by|photos?|images?|credits?|sources?|via|clarifications?"
-    r"|see also|deprecated|part \d)\b",
+    r"|see also|deprecated|part \d|references?|bibliography|further reading|resources|reading list)\b",
     re.IGNORECASE,
 )
 BOX_MAX_SHARE = 0.5  # of the page's words: a box holding more is the article
@@ -351,7 +351,10 @@ def _boxed(el: lxml.html.HtmlElement, classes: set[str]) -> bool:
 
 def _promo(box: lxml.html.HtmlElement) -> bool:
     """Whether a box beside the text sells something else: a sign-up form, or links to other pages."""
-    forms = box.findall(".//form")
+    if NOTE_LABEL_START.match(" ".join(box.text_content().split())):
+        return False
+    # A sign-up asks for an address: a form with a text or email field, not a "Save" button.
+    forms = [f for f in box.findall(".//form") if f.xpath(".//input[not(@type) or @type='email' or @type='text']")]
     if forms and _words(box.text_content()) - sum(_words(f.text_content()) for f in forms) <= FORM_BOX_MAX_WORDS:
         return True
     # A teaser is a short label and then only links: a section and a headline, or several

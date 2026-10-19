@@ -411,3 +411,16 @@ def test_callout_boxes_and_anchors_are_never_teasers():
         page = f"<html><body><article>{words}{box}{words}</article></body></html>"
         out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
         assert needle in out, needle
+
+
+def test_author_asides_with_buttons_or_reference_lists_stay():
+    words = "<p>" + "Plain words about the bridge vote and what the council decided. " * 12 + "</p>"
+    for needle, box in {
+        "seven votes to two": "<aside><h3>Key takeaways</h3><ul><li>The budget passed by seven votes to two.</li></ul>"
+        "<form method='post' action='/save'><button type='submit'>Save article</button></form></aside>",
+        "Rivers and towns": "<aside><h4>References</h4><ol><li><a href='/r1'>Smith 2019, Bridges of the North</a></li>"
+        "<li><a href='/r2'>Jones 2021, Rivers and towns</a></li></ol></aside>",
+    }.items():
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
