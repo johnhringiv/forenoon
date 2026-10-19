@@ -647,8 +647,8 @@ def test_a_copy_named_inside_the_models_own_html_is_pasted_not_printed():
     article.insert(1, "<p>The file is at http://x.example/copy:1 today.</p>")  # not the name of a copy
     assert "http://x.example/copy:1" in article.body.text_content()
     # A name mistyped is refused, not printed; and a copy is never pasted inside a tag.
-    for typo in ("Copy:1", "COPY:1", "copy: 1", "copy:1000", "copy:1copy:2", "copy:12a"):
-        with pytest.raises(bookcheck.ToolError, match="exactly as copy:N"):
+    for typo in ("Copy:1", "COPY:1", "copy: 1", "copy:1000", "[copy:1]"):
+        with pytest.raises(bookcheck.ToolError, match="exactly as copy:N|between blocks"):
             article.insert(1, f"<p>{typo}</p>")
     article.insert(1, '<p><a title="copy:1" href="https://s.example">t</a></p>')
     assert "Our sponsors" not in article.body.xpath("//a[@href='https://s.example']")[-1].get("title", "")
@@ -770,6 +770,20 @@ def test_a_copy_goes_in_as_it_was_made_even_beside_the_models_own_html():
             article.insert(1, hidden)
     article.insert(1, "&#99;opy:1")  # an entity is read as the name it spells: the copy, not its name
     assert "copy:1" not in article.body.text_content()
+    for own in (
+        "<p>Price per copy: 3 dollars.</p>",
+        "<table><tr><td>Copy: 14pt</td></tr></table>",
+        "<p>Copy:2 pages</p>",
+    ):
+        article.insert(1, own)
+    # Two copies as paragraphs side by side, and a copy as a paragraph after words of its own.
+    before = len(article.copies)
+    article.insert(1, "<p>copy:1</p><p>copy:1</p>")
+    article.insert(1, "Thanks to<p>copy:1</p>")
+    assert (
+        article.edits[-2]["copies"] == [1, 1] and article.edits[-1]["copies"] == [1] and before == len(article.copies)
+    )
+    assert "Thanks tocopy" not in article.body.text_content()
     article.insert(1, "<p>Price per copy: 3 dollars.</p>")
     assert "Price per copy: 3 dollars." in article.body.text_content()
     with pytest.raises(bookcheck.ToolError, match="cannot be read"):

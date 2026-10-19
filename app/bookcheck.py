@@ -72,11 +72,14 @@ COPY_CHARS = 40_000  # the most HTML one `page_copy` gives, once cleaned
 COPY_RAW_CHARS = 400_000  # the most of the page's own HTML it reads for one copy
 COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
-COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
-TOOL_NAME = re.compile(r"(?<![\w/])copy:\d", re.IGNORECASE)  # the tool's own syntax left in the text
+COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/=])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # in a page's text, refused by lxml when set again
+TOOL_NAME = re.compile(r"(?<![/=])copy:\d")  # the tool's own syntax left in the text, not a link's
 COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name a copy
-MISTYPED = re.compile(r"\s*[\[(]?copy\s*:\s*\d+\S*\s*", re.IGNORECASE)  # a copy's name mistyped, standing alone
-COPY_NAME = re.compile(r"(?<![\w/])copy:(\d{1,3})(?![\w/])")
+# A copy's name mistyped, standing alone: "Copy:1", "copy: 1", "copy:1000", "[copy:1]".
+MISTYPED = re.compile(r"\s*[\[(]?copy\s*:\s*\d+[\])]?\s*", re.IGNORECASE)
+COPY_NAME = re.compile(r"(?<![\w/=])copy:(\d{1,3})(?![\w/])")
+RUN_ON = re.compile(r"(copy:\d{1,3})(?=copy:\d)")  # two names with no space between: "copy:1copy:2"
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
 VERDICTS = ("ok", "fixed", "cannot_fix")
 KINDS = ("cut_short", "missing_content", "page_furniture", "broken_media", "formatting", "wrong_article", "other")
@@ -359,8 +362,8 @@ def page_text(page_html: str) -> str:
         el.drop_tree()
     for el in root.iter():
         if isinstance(el.tag, str) and el.tag in TEXT_BREAKS:
-            el.tail = "\n" + (el.tail or "")
-            el.text = "\n" + (el.text or "")
+            el.tail = "\n" + CONTROL.sub("", el.tail or "")
+            el.text = "\n" + CONTROL.sub("", el.text or "")
     lines = (" ".join(line.split()) for line in root.text_content().splitlines())
     return "\n".join(line for line in lines if line)
 
@@ -562,7 +565,8 @@ class _Article:
             for pick, what in ((heads, "the heading"), (whole, "the one that is only that phrase"), (at, "")):
                 if len(pick) == 1 or (pick and same(pick)):
                     near = min(pick, key=reach)
-                    if any(set(range(m + 1, near)) - set(pick) for m in pick if m < near):
+                    others = [m for m in pick if m != near and reach(m) < len(texts)]  # the end phrase follows them too
+                    if any(set(range(min(m, near) + 1, max(m, near))) - set(pick) for m in others):
                         raise ToolError(
                             f"that start phrase is the whole of {len(pick)} blocks of the page with other text between "
                             "them; start from a phrase of the block after it"
@@ -623,11 +627,17 @@ class _Article:
 
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
-        root = _fragment(html)
+        root = _fragment(RUN_ON.sub(r"\1 ", html))
         if not COPY_HINT.search(root.text_content()):
             return self.clean(html), used
         for p in [p for p in root if p.tag == "p" and not len(p) and COPY_NAME.fullmatch((p.text or "").strip())]:
-            p.drop_tag()  # <p>copy:2</p> between blocks: the copy itself
+            # <p>copy:2</p> between blocks: the copy itself, apart from the words around it.
+            words, before = f" {p.text.strip()} {p.tail or ''}", p.getprevious()
+            if before is None:
+                root.text = (root.text or "") + words
+            else:
+                before.tail = (before.tail or "") + words
+            root.remove(p)
         # A copy's name only between blocks: inside a heading, a quote, emphasis or code it would
         # be printed, or lose what is around it. A name mistyped is refused too, but not the
         # model's own code.
@@ -876,7 +886,7 @@ def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
             run.append(piece)
 
     if text and text.strip():
-        add(text)
+        add(CONTROL.sub("", text))
     for child in children:
         tail, child.tail = child.tail, None
         if blocky(child) or (isinstance(child.tag, str) and child.tag not in PHRASING and "-" not in child.tag):
@@ -885,7 +895,7 @@ def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
         else:
             add(child)
         if tail and (tail.strip() or run is not None):  # a space between two inline elements too
-            add(tail)
+            add(CONTROL.sub("", tail))
     for el in out:
         if el.tag != "p" or el.text_content().strip() or el.xpath(".//img"):
             box.append(el)
