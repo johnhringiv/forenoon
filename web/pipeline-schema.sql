@@ -103,3 +103,18 @@ CREATE TABLE IF NOT EXISTS assessments (
     deferred_at TEXT NOT NULL DEFAULT '',  -- left out of an issue for variety, when
     PRIMARY KEY (user_id, article_id)
 );
+CREATE TABLE IF NOT EXISTS book_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    verdict TEXT NOT NULL,  -- ok, fixed, cannot_fix, incomplete or error
+    summary TEXT NOT NULL DEFAULT '',
+    fixes TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"kind", "what", "why"}], as the model gave them
+    edits TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"tool", "first", "last", "before", "after"}]
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0
+);

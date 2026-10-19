@@ -7,6 +7,7 @@ SCHEMA regenerate the copy and run `web/dev-db.sh`.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -121,6 +122,21 @@ CREATE TABLE IF NOT EXISTS assessments (
     deferred_at TEXT NOT NULL DEFAULT '',  -- left out of an issue for variety, when
     PRIMARY KEY (user_id, article_id)
 );
+CREATE TABLE IF NOT EXISTS book_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    verdict TEXT NOT NULL,  -- ok, fixed, cannot_fix, incomplete or error
+    summary TEXT NOT NULL DEFAULT '',
+    fixes TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"kind", "what", "why"}], as the model gave them
+    edits TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"tool", "first", "last", "before", "after"}]
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -153,6 +169,10 @@ class Rating:
     rating: int | None  # 1-5, None when only "finished" was recorded
     finished: bool
     reason: str = ""  # keys of tokens.REASONS, comma-separated, when the reader said why
+
+
+# Work whose tokens are counted against a budget of its own, not the daily token cap.
+OWN_BUDGET = ("book-check",)
 
 
 class Store:
@@ -839,27 +859,35 @@ class Store:
             purpose, model, exc.input_tokens, exc.output_tokens, status, str(exc)[:300], priced=exc.priced
         )
 
-    def llm_tokens_since(self, start: str) -> int:
+    def llm_tokens_since(self, start: str, purpose: str = "") -> int:
         """Every priced token since `start`, cached ones too: what the daily cap counts. Calls to a
-        server you run cost nothing (`cost` 0) and are left out; an unknown price counts."""
+        server you run cost nothing (`cost` 0) and are left out; an unknown price counts.
+
+        With a `purpose` (one of OWN_BUDGET), that work's tokens alone; without one, everything
+        but that work, which has a budget of its own."""
+        same = "purpose = ?" if purpose else f"purpose NOT IN ({', '.join('?' * len(OWN_BUDGET))})"
         row = self.db.execute(
             "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS n"
-            " FROM llm_calls WHERE created_at >= ? AND (cost IS NULL OR cost > 0)",
-            (start,),
+            f" FROM llm_calls WHERE created_at >= ? AND (cost IS NULL OR cost > 0) AND {same}",
+            (start, *((purpose,) if purpose else OWN_BUDGET)),
         ).fetchone()
         return row["n"]
 
     def llm_usage_since(self, start: str) -> sqlite3.Row:
-        """Tokens and cost since `start`: `tokens` are the priced ones the daily cap counts,
-        `free_tokens` those on servers you run. `unpriced` counts calls to a model with no known price."""
+        """Tokens and cost since `start`: `tokens` are the priced ones the daily cap counts (not the
+        work with a budget of its own, which is `own_tokens`), `free_tokens` those on servers you
+        run. `unpriced` counts calls to a model with no known price. `cost` is all of it."""
+        own = ", ".join("?" * len(OWN_BUDGET))
         return self.db.execute(
             "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
-            " FILTER (WHERE cost IS NULL OR cost > 0), 0) AS tokens,"
+            f" FILTER (WHERE (cost IS NULL OR cost > 0) AND purpose NOT IN ({own})), 0) AS tokens,"
+            " COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
+            f" FILTER (WHERE (cost IS NULL OR cost > 0) AND purpose IN ({own})), 0) AS own_tokens,"
             " COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)"
             " FILTER (WHERE cost = 0), 0) AS free_tokens,"
             " COALESCE(SUM(cost), 0) AS cost, COUNT(*) FILTER (WHERE cost IS NULL AND status NOT IN ('error', 'unreachable')) AS unpriced"
             " FROM llm_calls WHERE created_at >= ?",
-            (start,),
+            (*OWN_BUDGET, *OWN_BUDGET, start),
         ).fetchone()
 
     def llm_call_rows(self, limit: int = 30) -> list[sqlite3.Row]:
@@ -911,6 +939,34 @@ class Store:
                 " VALUES (?, ?, ?, ?, ?)",
                 (article_id, now_iso(), verdict, problem, model),
             )
+
+    def record_book_check(
+        self,
+        article_id: str,
+        user_id: str,
+        model: str,
+        verdict: str,
+        summary: str,
+        fixes: list[dict],
+        edits: list[dict],
+        tokens: tuple[int, int, int, int],
+    ) -> None:
+        """What the book check made of an article (app/bookcheck.py). "fixed" and "cannot_fix"
+        are listed on the web pages' Problems page; `tokens` are input, output, cache read and
+        cache write, summed over the check's calls."""
+        with self.db:
+            self.db.execute(
+                "INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict, summary, fixes, edits,"
+                " input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    article_id, user_id, now_iso(), model, verdict, summary,
+                    json.dumps(fixes, ensure_ascii=False), json.dumps(edits, ensure_ascii=False), *tokens,
+                ),
+            )  # fmt: skip
+
+    def book_check_rows(self, limit: int = 200) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM book_checks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
 
     def review_rows(self, limit: int = 200) -> list[sqlite3.Row]:
         """Newest first, with the article and the extractor's own verdict beside the model's."""

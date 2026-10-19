@@ -42,8 +42,10 @@ pub async fn pipeline_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 pub struct Usage {
-    /// Priced tokens: what the daily cap counts.
+    /// Priced tokens, as the daily cap counts them: all but the book check's, which has its own.
     pub tokens: i64,
+    /// The book check's priced tokens (`llm.check_daily_tokens`).
+    pub check_tokens: i64,
     /// Tokens on servers you run, which cost nothing.
     pub free_tokens: i64,
     pub cost: f64,
@@ -56,7 +58,9 @@ pub async fn usage_since(pool: &SqlitePool, start: &str) -> Result<Usage, sqlx::
     sqlx::query_as!(
         Usage,
         r#"SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
-                    FILTER (WHERE cost IS NULL OR cost > 0), 0) AS "tokens!: i64",
+                    FILTER (WHERE (cost IS NULL OR cost > 0) AND purpose != 'book-check'), 0) AS "tokens!: i64",
+           COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
+                    FILTER (WHERE (cost IS NULL OR cost > 0) AND purpose = 'book-check'), 0) AS "check_tokens!: i64",
            COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
                     FILTER (WHERE cost = 0), 0) AS "free_tokens!: i64",
            COALESCE(SUM(cost), 0.0) AS "cost!: f64",
@@ -1131,8 +1135,63 @@ pub async fn problems(pool: &SqlitePool, limit: i64) -> Result<Vec<Problem>, sql
     .await
 }
 
+/// Reports, and what the book check found wrong (fixed or not): what the Problems page lists.
 pub async fn problem_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar!("SELECT COUNT(*) FROM feedback_events WHERE signal = 'problem'").fetch_one(pool).await
+    let reports =
+        sqlx::query_scalar!("SELECT COUNT(*) FROM feedback_events WHERE signal = 'problem'").fetch_one(pool).await?;
+    if !has_book_checks(pool).await? {
+        return Ok(reports);
+    }
+    let found = sqlx::query_scalar!("SELECT COUNT(*) FROM book_checks WHERE verdict IN ('fixed', 'cannot_fix')")
+        .fetch_one(pool)
+        .await?;
+    Ok(reports + found)
+}
+
+/// Whether the pipeline has made its book check table yet: it is newer than the others, and
+/// these pages may be upgraded first.
+async fn has_book_checks(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
+    let found = sqlx::query_scalar!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'book_checks'")
+        .fetch_one(pool)
+        .await?;
+    Ok(found > 0)
+}
+
+pub struct BookCheck {
+    pub checked_at: String,
+    pub user_id: String,
+    /// "fixed" or "cannot_fix".
+    pub verdict: String,
+    pub summary: String,
+    /// JSON, as the pipeline stored it: [{"kind", "what", "why"}].
+    pub fixes: String,
+    /// Whether the check's edits were kept in the article.
+    pub edited: bool,
+    pub title: String,
+    pub url: String,
+    pub source: String,
+    pub words: i64,
+    pub extraction: String,
+}
+
+/// What the book check found wrong with articles (app/bookcheck.py), newest first, with what
+/// the extractor itself made of each.
+pub async fn book_problems(pool: &SqlitePool, limit: i64) -> Result<Vec<BookCheck>, sqlx::Error> {
+    if !has_book_checks(pool).await? {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as!(
+        BookCheck,
+        r#"SELECT b.checked_at, b.user_id, b.verdict, b.summary, b.fixes, b.edits != '[]' AS "edited!: bool",
+           COALESCE(a.title, b.article_id) AS "title!: String", COALESCE(a.url, '') AS "url!: String",
+           COALESCE(a.source, '') AS "source!: String", COALESCE(a.word_count, 0) AS "words!: i64",
+           COALESCE(a.status || CASE WHEN a.reason = '' THEN '' ELSE ': ' || a.reason END, '') AS "extraction!: String"
+           FROM book_checks b LEFT JOIN articles a ON a.id = b.article_id
+           WHERE b.verdict IN ('fixed', 'cannot_fix') ORDER BY b.id DESC LIMIT ?"#,
+        limit
+    )
+    .fetch_all(pool)
+    .await
 }
 
 // ratings

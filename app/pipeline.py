@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 import lxml.html
 
-from . import archive, sessions, thumbs
+from . import archive, bookcheck, sessions, thumbs
 from .choose import Candidate, choose
 from .config import Config, Source, User
 from .deliver import (
@@ -131,6 +132,7 @@ class RunReport:
     chosen: list[dict[str, str | bool]] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)  # left out of the issue only for variety
     retired: list[str] = field(default_factory=list)  # added links never had: now shown as links
+    book_check: str = ""  # what the book check did (app/bookcheck.py), when it is on
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -156,6 +158,8 @@ class RunReport:
         if self.reviews:
             counts = ", ".join(f"{n} {verdict}" for verdict, n in sorted(self.reviews.items()))
             lines += [f"Extraction check by the model: {counts}.", ""]
+        if self.book_check:
+            lines += [f"Book check: {self.book_check}.", ""]
         if self.chosen:
             lines += ["Chosen for the issue by the model, best first, then its reserves:", ""]
             for n, c in enumerate(self.chosen, 1):
@@ -312,11 +316,32 @@ def _restore_figures(placed: list[tuple[lxml.html.HtmlElement, list]]) -> None:
             figure.insert(index, child)
 
 
-def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> tuple[Article | None, int]:
-    """The article as it goes in a book, with its images fetched; None when nothing was extracted."""
+def _assemble(
+    item: Item,
+    result: Extracted,
+    fetcher: Fetcher,
+    cfg: Config,
+    check: Callable[[Item, Extracted, list], object] | None = None,
+) -> tuple[Article | None, int]:
+    """The article as it goes in a book, with its images fetched; None when nothing was extracted.
+
+    `check` is the book check (app/bookcheck.py), which may edit `result.body`: after the
+    pictures of interactive figures, so it sees them, and before the images are fetched, so a
+    picture it puts back is fetched like the rest."""
     if result.body is None:
         return None, 0
     placed = _figure_shots(item, result, cfg)
+    if check is not None:
+        # The pictures and their placeholders are followed into the edited article, so a
+        # picture that is not kept still gives its figure its text back.
+        held = [el for picture, (holder, _, _) in placed for el in (picture, holder)]
+        moved = getattr(check(item, result, held), "moved", None)
+        if moved:
+            placed = [
+                (moved[2 * n], [moved[2 * n + 1], held_tail, kept])
+                for n, (_, (_, held_tail, kept)) in enumerate(placed)
+                if moved[2 * n] is not None and moved[2 * n + 1] is not None
+            ]
     assets, dropped = embed_images(result.body, fetcher, cfg.images)
     _restore_figures(placed)
     article = Article(
@@ -835,6 +860,10 @@ def run(
     places: dict[str, int] = {}  # the day's places each source has taken
     skipped: dict[str, str] = {}  # article id -> why it was passed over when its turn came
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
+    # Every article going in a book is checked by an agent against its page, when that is on.
+    checker = (
+        bookcheck.Checker.for_run(cfg, store, user, backend, today) if cfg.llm.book_check and not dry_run else None
+    )
 
     def outbound(item: Item, body) -> list[_Link]:
         if item.id in found_ids:
@@ -921,7 +950,11 @@ def run(
         if result.signed_out:
             report.sign_in_needed[site] = result.signed_out
         pictures = _pictures(result)
-        article, dropped = _assemble(item, result, fetcher, cfg)
+        verdict = verdicts.get(item.id)
+        # Not for an article that will be held back whatever the check finds.
+        held = (verdict and verdict.complete == "bad") or result.word_count > MAX_ARTICLE_WORDS
+        check = checker.check if checker is not None and not held else None
+        article, dropped = _assemble(item, result, fetcher, cfg, check)
         if article is not None and not dry_run:
             thumbs.save(cfg.thumbs_dir, item.id, pictures, fetcher)
         if not item.title:
@@ -935,7 +968,6 @@ def run(
         if result.image_url or result.description:  # else the feed's summary stays
             store.set_preview(item.id, result.image_url, result.description)
         entry = _item_report(item, result, dropped)
-        verdict = verdicts.get(item.id)
         if verdict:
             entry.review = ": ".join(filter(None, [verdict.complete, verdict.problem]))
             report.reviews[verdict.complete] = report.reviews.get(verdict.complete, 0) + 1
@@ -1176,6 +1208,8 @@ def run(
             )
         )
 
+    if checker is not None:
+        report.book_check = checker.report()
     if not dry_run and cfg.keep_pages_days > 0:
         archive.prune(cfg.pages_dir, cfg.keep_pages_days)
     if not dry_run and cfg.keep_issues_days > 0:

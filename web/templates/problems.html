@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Problems · Forenoon{% endblock %}
 {% block header %}
-<p class="intro">Articles readers reported as broken or incomplete. Newest first.</p>
+<p class="intro">Articles readers reported as broken or incomplete, and what the book check found wrong before an article was sent. Newest first.</p>
 {% endblock %}
 {% block main %}
 {% if rows.is_empty() %}<p class="empty">No problems reported.</p>{% endif %}
@@ -9,7 +9,13 @@
 <div class="problem">
 <p class="kicker">{{ row.source }}</p>
 <h4>{% if let Some(link) = row.link %}<a href="{{ link }}" rel="noopener noreferrer">{{ row.title }}</a>{% else %}{{ row.title }}{% endif %}</h4>
-<p class="hint">Reported {{ row.when }} by {{ row.who }}. {{ row.detail }}</p>
+<p class="hint">{{ row.when }} {{ row.who }}. {{ row.detail }}</p>
+{% if let Some(check) = row.check %}
+<p>{{ check.outcome }}{% if !check.summary.is_empty() %} {{ check.summary }}{% endif %}</p>
+{% if !check.fixes.is_empty() %}<ul>
+{% for fix in check.fixes %}<li>{{ fix }}</li>
+{% endfor %}</ul>{% endif %}
+{% endif %}
 </div>
 {% endfor %}
 {% endblock %}

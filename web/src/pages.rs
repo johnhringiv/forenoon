@@ -1121,12 +1121,22 @@ pub async fn report(
 }
 
 struct ProblemRow {
+    /// When it was reported or found, as stored: the rows are put in order by it.
+    stamp: String,
     when: String,
     who: String,
     title: String,
     link: Option<String>,
     source: String,
     detail: String,
+    /// Found by the book check: what it said, and each problem as "kind: what (why)".
+    check: Option<CheckFound>,
+}
+
+struct CheckFound {
+    outcome: &'static str,
+    summary: String,
+    fixes: Vec<String>,
 }
 
 #[derive(Template)]
@@ -1136,34 +1146,88 @@ struct ProblemsPage {
     rows: Vec<ProblemRow>,
 }
 
-/// For admins: the articles readers reported as broken or incomplete.
+const PROBLEMS_SHOWN: i64 = 200;
+
+#[derive(Deserialize)]
+struct Fix {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    what: String,
+    #[serde(default)]
+    why: String,
+}
+
+/// The fixes the book check stored, as lines; none when they cannot be read.
+fn fix_lines(stored: &str) -> Vec<String> {
+    let fixes: Vec<Fix> = serde_json::from_str(stored).unwrap_or_default();
+    fixes
+        .into_iter()
+        .map(|fix| {
+            let kind = fix.kind.replace('_', " ");
+            if fix.why.is_empty() {
+                format!("{kind}: {}", fix.what)
+            } else {
+                format!("{kind}: {} ({})", fix.what, fix.why)
+            }
+        })
+        .collect()
+}
+
+fn extracted(words: i64, extraction: &str) -> String {
+    format!("{} words. Extractor: {}", thousands(words), if extraction.is_empty() { "no record" } else { extraction })
+}
+
+/// For admins: the articles readers reported as broken or incomplete, and what the book check
+/// found wrong before an article was sent, together, newest first.
 pub async fn problems(State(state): State<AppState>, auth: AuthSession) -> Page {
     let user = reader(&auth)?;
     if !user.is_admin() {
         return refused(StatusCode::FORBIDDEN, "Problem reports are for an admin.");
     }
     let zone = Tz::from_str(&user.timezone).unwrap_or(Tz::UTC);
-    let found = if db::pipeline_ready(&state.pool).await? { db::problems(&state.pool, 200).await? } else { Vec::new() };
-    let rows = found
+    let shown =
+        |stamp: &str| local(stamp, zone).map_or(stamp.to_owned(), |at| at.format("%-d %B %Y, %H:%M").to_string());
+    let ready = db::pipeline_ready(&state.pool).await?;
+    let reports = if ready { db::problems(&state.pool, PROBLEMS_SHOWN).await? } else { Vec::new() };
+    let checks = if ready { db::book_problems(&state.pool, PROBLEMS_SHOWN).await? } else { Vec::new() };
+    let mut rows: Vec<ProblemRow> = reports
         .into_iter()
         .map(|problem| ProblemRow {
-            when: local(&problem.reported_at, zone)
-                .map_or(problem.reported_at.clone(), |at| at.format("%-d %B %Y, %H:%M").to_string()),
+            when: format!("Reported {}", shown(&problem.reported_at)),
             who: format!(
-                "{}, {}",
+                "by {}, {}",
                 problem.user_id,
                 if problem.via == "web" { "on the web pages" } else { "from the Kindle" }
             ),
             link: web_url(&problem.url),
             title: problem.title,
             source: problem.source,
-            detail: format!(
-                "{} words. Extractor: {}",
-                thousands(problem.words),
-                if problem.extraction.is_empty() { "no record" } else { &problem.extraction }
-            ),
+            detail: extracted(problem.words, &problem.extraction),
+            check: None,
+            stamp: problem.reported_at,
         })
         .collect();
+    rows.extend(checks.into_iter().map(|found| ProblemRow {
+        when: format!("Found {}", shown(&found.checked_at)),
+        who: format!("by the book check, for {}", found.user_id),
+        link: web_url(&found.url),
+        title: found.title,
+        source: found.source,
+        detail: extracted(found.words, &found.extraction),
+        check: Some(CheckFound {
+            outcome: match (found.verdict.as_str(), found.edited) {
+                ("fixed", _) => "Fixed before it went in the book.",
+                (_, true) => "Could not be fixed in full; partly edited before it went in the book.",
+                _ => "Could not be fixed; it went in the book as it was.",
+            },
+            summary: found.summary,
+            fixes: fix_lines(&found.fixes),
+        }),
+        stamp: found.checked_at,
+    }));
+    rows.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+    rows.truncate(PROBLEMS_SHOWN as usize);
     let nav = Nav::new(&state, &user, "problems").await?;
     html(StatusCode::OK, ProblemsPage { nav, rows })
 }

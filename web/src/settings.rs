@@ -272,17 +272,30 @@ async fn usage(state: &AppState, stored: &HashMap<String, String>) -> Result<Vec
     let cap = stored.get("llm.daily_token_cap").cloned().unwrap_or_else(|| {
         SPECS.iter().find(|spec| spec.key == "llm.daily_token_cap").map(Spec::default_text).unwrap_or_default()
     });
+    let check_cap = stored.get("llm.check_daily_tokens").cloned().unwrap_or_else(|| {
+        SPECS.iter().find(|spec| spec.key == "llm.check_daily_tokens").map(Spec::default_text).unwrap_or_default()
+    });
     let day = db::usage_since(&state.pool, &start(today)).await?;
     let month = db::usage_since(&state.pool, &start(today.with_day(1).unwrap_or(today))).await?;
     let mut lines = vec![
         format!(
-            "Today: {} of {} tokens, about ${:.4}.",
+            "Today: {} of {} tokens, about ${:.4} in all.",
             thousands(day.tokens),
             thousands(cap.parse().unwrap_or(0)),
             day.cost
         ),
-        format!("This month: {} tokens, about ${:.2}.", thousands(month.tokens), month.cost),
+        format!("This month: {} tokens, about ${:.2}.", thousands(month.tokens + month.check_tokens), month.cost),
     ];
+    if month.check_tokens > 0 {
+        lines.insert(
+            1,
+            format!(
+                "Of today's, the book check's own: {} of {} tokens.",
+                thousands(day.check_tokens),
+                thousands(check_cap.parse().unwrap_or(0))
+            ),
+        );
+    }
     if month.free_tokens > 0 {
         lines.push(format!(
             "Also {} tokens today and {} this month on servers you run, which cost nothing and are not capped.",
