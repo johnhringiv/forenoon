@@ -1571,6 +1571,9 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     assert!(page.text.contains(r#"<input name="delivery_time" type="time" value="06:00" required>"#));
     assert!(page.text.contains(r#"name="alerts.enabled" value="1" checked"#) && !page.text.contains("changed"));
     assert!(!page.text.contains(r#"name="llm.enabled""#), "the model is required, not switched on");
+    // The book check costs money for every article: off until an admin turns it on.
+    assert!(page.text.contains(r#"<h2 id="checking">Checking</h2>"#));
+    assert!(page.text.contains(r#"<input type="checkbox" name="llm.book_check" value="1"> Check every article"#));
     assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/settings">Settings</a>"#));
     // What the model used, priced by the pipeline when it logged each call; a call to a model
     // with no known price is said apart. Nothing about prices is a setting.
@@ -1636,6 +1639,7 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         ("llm.model", "anthropic/claude-haiku-5-5"),
         ("llm.daily_token_cap", "600000"),
         ("llm.read_candidates", "40"),
+        ("llm.check_model", "anthropic/claude-sonnet-5-5"),
         ("alerts.enabled", "1"),
         ("alerts.source_failures", "3"),
         ("keep_pages_days", "-1"),
@@ -1715,6 +1719,7 @@ async fn the_test_button_saves_and_asks_the_pipeline_to_test_the_models() {
             ("max_age_days", "3"),
             ("llm.daily_token_cap", "600000"),
             ("llm.read_candidates", "40"),
+            ("llm.check_model", "anthropic/claude-sonnet-5-5"),
             ("alerts.enabled", "1"),
             ("alerts.on_empty", "1"),
             ("alerts.source_failures", "3"),
@@ -1990,6 +1995,56 @@ async fn a_broken_article_is_reported_to_the_admin_apart_from_its_rating() {
             && text.contains("by mary, on the web pages")
             && text.contains("Extractor:")
     );
+}
+
+#[tokio::test]
+async fn what_the_book_check_found_is_listed_with_the_reports() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    article(pool, "a1", "https://blog.example/a", "Blog", "Grid storage", "john", "2026-10-10T10:00:00+00:00").await;
+    article(pool, "a2", "https://blog.example/b", "Blog", "Walled", "mary", "2026-10-10T10:00:00+00:00").await;
+    db::report_problem(pool, "mary", "a2", "web").await.unwrap();
+    let fixes = r#"[{"kind": "page_furniture", "what": "A newsletter <b>prompt</b>", "why": "The page's footer"},
+                    {"kind": "cut_short", "what": "The last paragraph was missing", "why": ""}]"#;
+    for (article, verdict, summary, fixes, at) in [
+        ("a1", "fixed", "Removed a footer.", fixes, "2026-10-11T10:00:00+00:00"),
+        ("a2", "cannot_fix", "Only the teaser.", "[]", "2026-10-11T11:00:00+00:00"),
+        ("a2", "ok", "", "[]", "2026-10-11T12:00:00+00:00"),
+        ("a2", "incomplete", "", "[]", "2026-10-11T12:00:00+00:00"),
+    ] {
+        sqlx::query(
+            "INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict, summary, fixes)
+             VALUES (?, 'john', ?, 'anthropic/claude-sonnet-5-5', ?, ?, ?)",
+        )
+        .bind(article)
+        .bind(at)
+        .bind(verdict)
+        .bind(summary)
+        .bind(fixes)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let mut admin = Browser::default();
+    admin.sign_in(&site, "john").await;
+    // A fine article, or a check that did not finish, is not a problem.
+    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/problems">Problems (3)</a>"#));
+    let text = admin.get(&site, "/problems").await.text;
+    assert!(
+        text.contains("by the book check, for john") && text.contains("Fixed before it was sent. Removed a footer.")
+    );
+    assert!(
+        text.contains("<li>page furniture: A newsletter &#60;b&#62;prompt&#60;/b&#62; (The page&#39;s footer)</li>")
+    );
+    assert!(text.contains("<li>cut short: The last paragraph was missing</li>"));
+    assert!(text.contains("Could not be fixed; sent as it was. Only the teaser."));
+    // Newest first, among the reports: Mary's was made just now.
+    let order = ["by mary, on the web pages", "Could not be fixed", "Fixed before"].map(|t| text.find(t).unwrap());
+    assert!(order[0] < order[1] && order[1] < order[2]);
+    // An install whose pipeline has not made the table yet still shows its reports.
+    sqlx::query("DROP TABLE book_checks").execute(pool).await.unwrap();
+    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/problems">Problems (1)</a>"#));
+    assert!(admin.get(&site, "/problems").await.text.contains("by mary, on the web pages"));
 }
 
 #[tokio::test]

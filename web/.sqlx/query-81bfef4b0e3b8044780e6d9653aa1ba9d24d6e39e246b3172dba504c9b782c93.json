@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.checked_at, b.user_id, b.verdict, b.summary, b.fixes,\n           COALESCE(a.title, b.article_id) AS \"title!: String\", COALESCE(a.url, '') AS \"url!: String\",\n           COALESCE(a.source, '') AS \"source!: String\", COALESCE(a.word_count, 0) AS \"words!: i64\",\n           COALESCE(a.status || CASE WHEN a.reason = '' THEN '' ELSE ': ' || a.reason END, '') AS \"extraction!: String\"\n           FROM book_checks b LEFT JOIN articles a ON a.id = b.article_id\n           WHERE b.verdict IN ('fixed', 'cannot_fix') ORDER BY b.id DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "checked_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "user_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "verdict",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "summary",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "fixes",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "title!: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "url!: String",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "source!: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "words!: i64",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "extraction!: String",
+        "ordinal": 9,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "81bfef4b0e3b8044780e6d9653aa1ba9d24d6e39e246b3172dba504c9b782c93"
+}
