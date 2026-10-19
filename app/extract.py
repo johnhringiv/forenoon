@@ -1868,7 +1868,8 @@ DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of
 # It names the piece, unlike "If you like, you can…" or "If you found a bug…".
 CLOSING_PITCH = re.compile(
     r"^(if you (liked|enjoyed|like|enjoy|appreciated|found value in) (this|my|reading)\b|"
-    r"if you found (this|my) \w+ (useful|helpful|interesting|valuable)\b|enjoy(ed)? (this|reading)\b|"
+    r"if you found (this|my) \w+ (useful|helpful|interesting|valuable)\b|"
+    r"enjoyed (this|my) (article|post|piece|essay|story|newsletter)\b|"
     r"support (me|us|my work|this (blog|site|newsletter))\b)",
     re.IGNORECASE,
 )

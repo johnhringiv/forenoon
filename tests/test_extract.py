@@ -1746,6 +1746,8 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
         "<li><a href='/about'>Jane Doe</a></li><li><a href='https://twitter.com/jane'>Follow me on Twitter</a></li>"
     )
     assert "Thanks for reading," in left("Thanks for reading,", author)
+    for line in ("Enjoy reading,", "Enjoy this week's issue, and"):
+        assert line in left(line, author), line
     # Other blogs on the same platform are not the site's own.
     article_html = f"<div>{article}<p>If you enjoyed this, read these,</p></div>"
     picks = "<ul><li><a href='https://money.substack.com/'>Money Stuff newsletter</a></li></ul>"
