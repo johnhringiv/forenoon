@@ -385,3 +385,12 @@ def test_a_closing_call_to_subscribe_is_left_out():
     stub = "<p>" + "Opening words of the story. " * 20 + "</p><p>Subscribe now to continue reading.</p>"
     result = extract("https://news.example/story", None, stub)
     assert "paywall marker" in result.reasons and "Subscribe now" in result.body.text_content()
+
+
+def test_an_xhtml_page_declaring_its_encoding_is_still_read_whole():
+    filler = "<p>" + "Plain words about declarative system configuration. " * 30 + "</p>"
+    page = f"""<?xml version="1.0" encoding="utf-8" standalone="no"?>
+    <html xmlns="http://www.w3.org/1999/xhtml"><body><article><p>A claim.<a href="#fn1">1</a></p>
+    {filler}<ol><li id="fn1">The note.</li></ol></article></body></html>"""
+    out = lxml.html.tostring(extract("https://docs.example/manual", page, "").body, encoding="unicode")
+    assert out.count('class="noteref"') == 1 and '<a href="#fnref-1">1</a> The note.' in out

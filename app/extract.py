@@ -96,6 +96,7 @@ COOKIE_WALL = re.compile(
     r" (a )?human|checking your browser",
     re.IGNORECASE,
 )
+XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*\?>")
 # A call to subscribe, as publishers end their articles with it.
 PROMOTION = re.compile(
     r"\b(sign up|subscribe)\b[^.]{0,80}\b(newsletter|to our|today|now)\b|"
@@ -829,6 +830,9 @@ def extract(
     pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
     if page_html and mode != "feed":
+        # An XHTML page's "<?xml ... encoding=...?>": the text is decoded already, and lxml
+        # refuses to parse a string that still declares an encoding.
+        page_html = XML_DECLARATION.sub("", page_html, count=1)
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
         notes["page-wide"] = notes["page"]
         page = _readability(page_html)
