@@ -955,6 +955,9 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
 
     listing = _listing([Candidate(post1, "Post 1", "Blog", 350, 9, "read", "years", "", True)], 1, 2, 2, {})
     assert '"deferred": true' in listing and "<most_per_subject>2</most_per_subject>" in listing
+    assert '"read_in_part": false' in listing
+    long_one = Candidate("x", "Long", "Blog", 9000, 8, "read", "years", "", False, True)
+    assert '"read_in_part": true' in _listing([long_one], 1, 0, 2, {})
 
     # A reply naming nothing usable leaves the reading's order: the best read goes.
     fresh = Store(cfg.data_dir / "second.sqlite3")

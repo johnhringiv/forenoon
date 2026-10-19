@@ -431,6 +431,7 @@ def _chosen(
         Candidate(
             item.id, item.title, item.source.name, words.get(item.id, 0), verdicts[item.id].score,
             verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""), item.id in deferred,
+            words.get(item.id, 0) > cfg.llm.read_words,
         )
         for item in read
     ]  # fmt: skip

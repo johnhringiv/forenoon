@@ -60,7 +60,8 @@ from the ending alone. For each article return:
 - complete: "ok" when it reads as a whole article matching its title; "suspect" when
   something may be wrong (stops mid-thought, menu or sign-up text mixed in); "bad" when it is
   clearly not the article: a paywall or login notice, a bot wall, an error page, only a
-  teaser. A truncated article is not cut off unless its ending stops mid-thought.
+  teaser. A truncated article is not cut off unless its ending stops mid-thought, and its
+  score is for the whole article: never lower it because you were shown only part.
 - problem: at most 20 words, or an empty string for "ok".
 - lasting: how long it stays worth reading. "days" for news and anything tied to this week's
   events (an election result, a release announcement, a market report); "months" for
