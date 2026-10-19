@@ -634,6 +634,20 @@ def test_page_copy_brings_the_pages_own_markup_into_an_edit(check):
     assert [(e["tool"], e.get("copy")) for e in edits] == [("insert_after", 1), ("replace_blocks", 2)]
 
 
+def test_a_copy_named_inside_the_models_own_html_is_pasted_not_printed():
+    page = "<html><body><p>Our sponsors are <a href='https://s.example'>Acme</a>.</p></body></html>"
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=page)
+    article.copy("Our sponsors", "Acme")
+    article.insert(1, "<h2>Sponsors</h2> <p>copy:1</p>")
+    html = lxml.html.tostring(article.body, encoding="unicode")
+    assert '<h2>Sponsors</h2><p>Our sponsors are <a href="https://s.example">Acme</a>.</p>' in html
+    assert "copy:1" not in html and article.edits[-1]["copy"] == 1
+    with pytest.raises(bookcheck.ToolError, match="there is no copy:4"):
+        article.insert(1, "<h2>More</h2>copy:4")
+    article.insert(1, "<p>The file is at http://x.example/copy:1 and runs copy:12a.</p>")  # not names of copies
+    assert "http://x.example/copy:1" in article.body.text_content() and "copy:12a" in article.body.text_content()
+
+
 def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
     words = "<p>Same words here.</p>" * 2 + "<p>Unique start.</p>" + "<p>end of it</p>"
     article = bookcheck._Article(

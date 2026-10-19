@@ -69,7 +69,8 @@ READ_BLOCKS_CHARS = 16_000  # the most `article_read` returns
 RECORD_CHARS = 4_000  # of each edit's before and after, as recorded
 COPY_CHARS = 40_000  # the most HTML one `page_copy` takes from the page
 COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
-COPY_REF = re.compile(r"\s*copy:(\d{1,3})\s*")
+# A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
+COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " "})
 VERDICTS = ("ok", "fixed", "cannot_fix")
 KINDS = ("cut_short", "missing_content", "page_furniture", "broken_media", "formatting", "wrong_article", "other")
@@ -139,9 +140,10 @@ rewrite, shorten, summarise or correct the author's text, never add words of you
 never add commentary or notes about your changes.
 - Restore from the page with page_copy, and pass its copy as the html of insert_after or \
 replace_blocks (html "copy:1"): it brings the page's own markup, with its links, emphasis, \
-headings and quotes. Write HTML yourself only to fix formatting the page's markup does not \
-give (a heading the page shows as a bold paragraph, say), and then keep the block's links and \
-emphasis as they are.
+headings and quotes. Copy even a single heading, line or code block; never retype the page's \
+text. Write HTML yourself only to fix formatting the page's markup does not give (a heading \
+the page shows as a bold paragraph, say), and then keep the block's links and emphasis as \
+they are.
 - Change only the blocks that are wrong. Never replace a block that is right, or rewrite many \
 blocks to fix one.
 - Most articles are fine. When this one is, call finish with verdict "ok" at once, without \
@@ -524,15 +526,22 @@ class _Article:
         return self._page
 
     def _html(self, html: str) -> tuple[list[lxml.html.HtmlElement], int]:
-        """An edit's blocks, from a copy (copy:N) or from the model's own HTML, and the copy's number (0 for none)."""
-        ref = COPY_REF.fullmatch(html)
-        if ref is None:
-            return self.clean(html), 0
-        n = int(ref.group(1))
-        if not 1 <= n <= len(self.copies):
-            raise ToolError(f"there is no copy:{n}; page_copy has made {len(self.copies)}")
-        fragment = lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div")
-        return _as_blocks(fragment), n
+        """An edit's blocks, from copies (copy:N, alone or among the model's own HTML) or from the
+        model's own HTML, and the first copy's number (0 for none)."""
+        used: list[int] = []
+
+        def paste(ref: re.Match) -> str:
+            n = int(ref.group(2))
+            if not 1 <= n <= len(self.copies):
+                raise ToolError(f"there is no copy:{n}; page_copy has made {len(self.copies)}")
+            used.append(n)
+            return self.copies[n - 1]
+
+        if COPY_REF.fullmatch(html.strip()):  # the copy as it is: already cleaned
+            pasted = COPY_REF.sub(paste, html.strip())
+            return _as_blocks(lxml.html.fragment_fromstring(pasted, create_parent="div")), used[0]
+        pasted = COPY_REF.sub(paste, html)
+        return self.clean(pasted), used[0] if used else 0
 
     def clean(self, html: str, from_page: bool = False) -> list[lxml.html.HtmlElement]:
         """The model's HTML as blocks the article may hold: through the extractor's allowlist,

@@ -616,7 +616,7 @@ Sonnet 5.5).
   the blocks around it with their new numbers.
 - **What it may do.** It is told to edit only to restore what the page has or remove what is
   not the article, and never to rewrite, summarise or add to the author's text; to restore with
-  a copy from `page_copy` (an edit's HTML may be just `copy:N`), so the page's links, emphasis,
+  a copy from `page_copy` (an edit's HTML names it as `copy:N`, alone or among its own), so the page's links, emphasis,
   heading levels and quotes come back as the page has them, writing HTML itself only to fix
   formatting the page's markup does not give; and to change only the blocks that are wrong.
   An edit made from a copy is recorded with its number. Everything it writes goes through the extractor's allowlist (section 4) before it is put in the article;
