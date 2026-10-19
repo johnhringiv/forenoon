@@ -128,6 +128,11 @@ LOAD_FAILURE = re.compile(
 # A request to pick the site as a source on Google ("select us as your Preferred Source").
 PREFERRED_SOURCE = re.compile(r"\b(select|add|choose|set|make|pick) us\b.{0,40}\bpreferred source", re.IGNORECASE)
 NOTICE_MAX_WORDS = 25
+# A code block's box named as page furniture that the patterns above do not name (readability's
+# own "negative" words are too broad here: code editors put theirs in a "cm-scroller").
+CODE_BOX_FURNITURE = re.compile(r"masthead|promo|outbrain|shopping|banner", re.IGNORECASE)
+# What makes an element beside a heading or a code block more than an empty link or button.
+MEDIA_XPATH = ".//img | .//picture | .//video | .//audio | .//iframe | .//object | .//embed"
 # A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
 # quoted in a story about an outage is not.
 NOTICE_CLASS = re.compile(r"(^|[\s_-])(message|notice|fallback|placeholder|error|unavailable)([\s_-]|$)", re.IGNORECASE)
@@ -324,7 +329,11 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
         # classes (the book keeps none).
         length = len(" ".join(heading.text_content().split()))
         for inner in heading.iterdescendants():
-            if not isinstance(inner.tag, str) or not unlikely.search(_names(inner)):
+            if (
+                not isinstance(inner.tag, str)
+                or not unlikely.search(_names(inner))
+                or FURNITURE_CLASS.search(_names(inner))
+            ):
                 continue
             # The heading's text, not a permalink beside it ("#", "¶"), which may well go.
             if len(" ".join(inner.text_content().split())) * 2 > length:
@@ -347,6 +356,7 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
                 isinstance(child.tag, str)
                 and child.tag in ("a", "span", "svg")
                 and not " ".join(child.text_content().split())
+                and not child.xpath(MEDIA_XPATH)
                 and not (child.tail or "").strip()
                 for child in others
             )
@@ -377,12 +387,18 @@ def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
         if box is None or box is root or box.tag != "div" or (box.text or "").strip() or (pre.tail or "").strip():
             continue
         others = [child for child in box if child is not pre]
-        if FURNITURE_CLASS.search(_names(box)):
+        names = _names(box)
+        if (
+            FURNITURE_CLASS.search(names)
+            or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names)
+            or CODE_BOX_FURNITURE.search(names)
+        ):
             continue
         if all(
             isinstance(child.tag, str)
             and child.tag in ("button", "a", "span", "svg")
             and not " ".join(child.text_content().split())
+            and not child.xpath(MEDIA_XPATH)
             and not (child.tail or "").strip()
             for child in others
         ):
