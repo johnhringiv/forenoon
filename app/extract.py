@@ -451,7 +451,7 @@ def _drop_skip_targets(root: lxml.html.HtmlElement) -> None:
     ]
     targets = {a.get("href")[1:] for a in links}
     dropped = set()
-    for el in list(root.iter("p", "span")):  # not a box, which may be a section's heading
+    for el in list(root.iter("p")):  # not a box or a span, which may be a section's heading
         text = " ".join(el.text_content().split())
         if (
             el.get("id") in targets
@@ -1085,11 +1085,12 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
         return
     box, style = found[0].getparent(), found[0].get("class")
     siblings = set(box.itersiblings()) if style else set()
-    near = list(box.iterancestors())[:CONTINUATION_DEPTH]
+    # Not the page's own top boxes, which hold everything on it.
+    near = [a for a in list(box.iterancestors())[:CONTINUATION_DEPTH] if a.tag not in ("html", "body", "main")]
     if _unlikely(box):
         return
     story = next(box.iterancestors("article"), None)
-    shared = {id(a) for a in box.iterancestors()}
+    shared = set(box.iterancestors())  # the elements, not their id(): lxml makes new proxies
     kept = _norm(body.text_content())
     holder = paragraphs[-1].getparent()
     while holder.tag not in ("div", "article", "section", "main", "body") and holder.getparent() is not None:
@@ -1105,7 +1106,7 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
             break  # the next story's title
         if next(el.iterancestors("article"), None) is not story:
             continue
-        own = [el, *(a for a in el.iterancestors() if id(a) not in shared)]
+        own = [el, *(a for a in el.iterancestors() if a not in shared)]
         if any(_unlikely(a) for a in own):
             continue
         children = [c for c in el if isinstance(c.tag, str)]
@@ -1240,6 +1241,7 @@ def _names(el: lxml.html.HtmlElement) -> str:
 
 LIVE_BLOG = re.compile(r"(js-)?live-?blog(-body)?", re.IGNORECASE)
 LIVE_ENTRIES_MIN = 3
+RELATIVE_TIME = re.compile(r"(\d+\s*(s|m|h|d|sec|min|mins|hr|hrs|hour|hours|day|days)|just now)( ago)?", re.IGNORECASE)
 LIVE_ENTRY_MIN_WORDS = 20
 LIVE_ENTRY_LINK_SHARE = 0.5
 LIVE_OVER_PAGE = 1.5  # how many times the words of readability's body the live blog must have
@@ -1249,18 +1251,18 @@ def _live_entry(el: lxml.html.HtmlElement, box: lxml.html.HtmlElement) -> bool:
     """Whether an <article> in a live blog's box is an entry: not inside another, of some
     length, mostly not links (a teaser for the live blog elsewhere), and neither it nor a box
     around it inside the live blog named as comments or furniture."""
-    if next(el.iterancestors("article"), None) is not None:
+    around = []
+    for a in el.iterancestors():
+        if a is box:
+            break
+        around.append(a)
+    if any(a.tag == "article" for a in around):
         return False
     text = " ".join(el.text_content().split())
     links = sum(len(" ".join(a.text_content().split())) for a in el.iter("a"))
     if _words(text) < LIVE_ENTRY_MIN_WORDS or links >= LIVE_ENTRY_LINK_SHARE * len(text):
         return False
-    around = [el]
-    for a in el.iterancestors():
-        if a is box:
-            break
-        around.append(a)
-    return not any(_unlikely(a) for a in around)
+    return not any(_unlikely(a) for a in (el, *around))
 
 
 def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
@@ -1281,20 +1283,24 @@ def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
         if isinstance(el.tag, str)
         and any(LIVE_BLOG.fullmatch(name) for name in [el.get("id") or "", *(el.get("class") or "").split()])
     ]
-    # The box with the most entries, when more than one is named so (a "liveblog" wrapper
-    # around its "liveblog-body" holds the same entries).
+    # The innermost box named so: a "liveblog" wrapper around its "liveblog-body" holds other
+    # cards beside the entries.
+    boxes = [box for box in boxes if not any(other in box.iterdescendants() for other in boxes)]
     found = [[el for el in box.iter("article") if _live_entry(el, box)] for box in boxes]
     entries = max(found, key=len, default=[])
     if len(entries) < LIVE_ENTRIES_MIN:
         return None
     body, seen = lxml.html.Element("div"), set()
     for entry in entries:
-        text = _norm(entry.text_content())
+        entry = copy.deepcopy(entry)
+        entry.tail = None
+        for time in list(entry.iter("time")):
+            if RELATIVE_TIME.fullmatch(" ".join(time.text_content().split())):
+                time.drop_tree()  # "1h ago": stale in a book read later
+        text = _norm(" ".join(t for t in entry.itertext() if t.strip()))
         if text in seen:
             continue  # a pinned entry shown again in the stream
         seen.add(text)
-        entry = copy.deepcopy(entry)
-        entry.tail = None
         entry.tag = "div"
         body.append(entry)
     return body

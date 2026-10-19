@@ -555,12 +555,14 @@ def test_a_listing_or_reading_that_stops_early_says_the_article_does_not(monkeyp
     article = bookcheck._Article(body, URL, page_images=set())
     first = article.first_listing().splitlines()
     assert "shortened" not in first[1]
-    assert first[1].endswith("are not shown here; article_read first=2 last=2 shows more]")
-    assert "[not the end of the article: " in first[1]
-    assert "not the end of the article" in bookcheck.SYSTEM
+    assert first[1].endswith("are not shown; article_read first=2 last=2 shows it]")
+    assert "[not the whole block: block 2 is shown as its text only" in first[1]
+    assert "not the end of the article" in bookcheck.SYSTEM and "not the whole block" in bookcheck.SYSTEM
     monkeypatch.setattr(bookcheck, "READ_BLOCKS_CHARS", 200)
     one = article.read(1, 1)
-    assert one.endswith(" more characters of block 1 are not shown here]") and "article_read first=1" not in one
+    assert one.endswith(
+        " more characters of block 1 are not shown here; no tool shows more of this block: find its later text on the page with page_find]"
+    )
     article = bookcheck._Article(
         lxml.html.fromstring(f"<div><p>{WORDS}</p><p>{WORDS}</p></div>"), URL, page_images=set()
     )
@@ -570,8 +572,16 @@ def test_a_listing_or_reading_that_stops_early_says_the_article_does_not(monkeyp
     )
 
 
-def test_a_short_block_past_the_listing_budget_is_shown_without_a_note(monkeypatch):
+def test_a_block_past_the_listing_budget_says_its_markup_is_not_shown(monkeypatch):
+    # A figure listed as its caption alone looked like a picture gone missing; a short block
+    # never had a negative count of characters left.
     monkeypatch.setattr(bookcheck, "LISTING_CHARS", 100)
-    body = lxml.html.fromstring(f"<div><p>First. {WORDS}</p><h2>Short heading</h2></div>")
+    body = lxml.html.fromstring(
+        f"<div><p>First. {WORDS}</p><h2>Short heading</h2><figure><img src='/smoke.jpg'><figcaption>Smoke</figcaption></figure></div>"
+    )
     listing = bookcheck._Article(body, URL, page_images=set()).first_listing().splitlines()
-    assert listing[1] == "[2] <h2> Short heading"
+    assert listing[1] == (
+        "[2] <h2> Short heading [not the whole block: block 2 is shown as its text only, without its markup or "
+        "pictures; article_read first=2 last=2 shows it]"
+    )
+    assert listing[2].startswith("[3] <figure> Smoke [not the whole block: block 3")

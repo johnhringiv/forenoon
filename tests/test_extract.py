@@ -936,10 +936,10 @@ def test_an_article_split_around_an_advert_is_put_back_together():
 
     def page(second):
         return (
-            "<html><body><main><div class='grid'><div class='col'><div class='post-content'>"
+            "<html><body><main><article><div class='grid'><div class='col'><div class='post-content'>"
             f"{first}</div></div></div><div class='ad ad--mid'></div>"
             f"<div class='grid'><div class='col'><div class='post-content'>{second}</div></div></div>"
-            "</main></body></html>"
+            "</article></main></body></html>"
         )
 
     # What readability kept of the page: the first box only (on Ars Technica, where the boxes are
@@ -1060,10 +1060,10 @@ def test_a_continuation_is_not_the_next_story_a_comment_or_a_second_copy():
         assert "Second paragraph" not in out and "Reader paragraph" not in out
     # The same continuation twice (a copy for phones and one for desktops) is put back once.
     twice = (
-        f"<main><div class='grid'><div class='col'><div class='post-content'>{first}</div></div></div>"
+        f"<main><article><div class='grid'><div class='col'><div class='post-content'>{first}</div></div></div>"
         + f"<div class='grid'><div class='col'><div class='post-content'>{_paragraphs('Later', 8)}</div></div></div>"
         * 2
-        + "</main>"
+        + "</article></main>"
     )
     assert continued(f"<html><body>{twice}</body></html>").count("Later paragraph 7") == 1
 
@@ -1112,3 +1112,62 @@ def test_a_box_a_skip_link_points_at_is_kept():
         f"<p>{'We asked four hundred firms about training. ' * 5}</p></article></body></html>"
     )
     assert "How we did it" in extract("https://news.example/a", page, "", "page").body.text_content()
+
+
+def test_continuations_with_theme_names_on_the_page_and_shallow_pages():
+    first = _paragraphs("First", 12)
+
+    def continued(page):
+        body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+        extract_module._continue_article(body, page)
+        return body.text_content()
+
+    # A theme's class on <body> ("has-sidebar") is not the continuation's own name.
+    ars = (
+        "<html><body class='single has-sidebar header-fixed'><main><article>"
+        f"<div class='grid'><div class='col'><div class='post-content'>{first}</div></div></div>"
+        f"<div class='grid'><div class='col'><div class='post-content'>{_paragraphs('Later', 8)}</div></div></div>"
+        "</article></main></body></html>"
+    )
+    assert "Later paragraph 7" in continued(ars)
+    # On a shallow page every box shares <body> or <main>: the next story, or excerpts, are not
+    # near the article for that.
+    next_story = (
+        f"<main><div class='post'><h1>Council vote</h1><div class='entry-content'>{first}</div></div>"
+        f"<div class='post'><h2><a href='/b'>Other story</a></h2><div class='entry-content'>{_paragraphs('Second', 6)}</div></div></main>"
+    )
+    excerpts = (
+        f"<div class='post'><h1>Council vote</h1><div class='entry-content'>{first}</div></div>"
+        "<div class='more'><h3>More from the desk</h3><div class='excerpts'><div class='teaser'>"
+        f"<div class='entry-content'>{_paragraphs('Second', 6)}</div></div></div></div>"
+    )
+    for page in (next_story, excerpts):
+        assert "Second paragraph" not in continued(f"<html><body>{page}</body></html>")
+
+
+def test_a_skip_target_inside_a_heading_is_kept():
+    words = _paragraphs("Article", 6)
+    page = (
+        f"<html><body><article>{words}<a href='#part-2'>Skip to part two</a>{words}"
+        f"<h2><span id='part-2' aria-label='Part two'>Part two</span></h2>{words}</article></body></html>"
+    )
+    assert "Part two" in extract("https://news.example/a", page, "", "page").body.text_content()
+
+
+def test_a_live_blog_is_its_innermost_box_and_drops_stale_times():
+    def entry(n, time=True):
+        stamp = f"<time>{n}h ago</time>" if time else ""
+        return (
+            f"<article class='block'>{stamp}<p>Entry {n}: police in Paris arrested more people overnight, the "
+            "ministry said, as protests spread to other cities and the damage was counted.</p></article>"
+        )
+
+    cards = "<section class='dcr-9xk2'>" + "".join(
+        f"<article class='dcr-q1w2'><a href='/s{n}'>Other story</a><p>Card {n}: a standfirst for another "
+        "story on the site that has nothing to do with the protests in France today.</p></article>"
+        for n in range(3)
+    )
+    stream = "".join(entry(n) for n in range(1, 6))
+    page = f"<html><body><article class='content'><div id='liveblog'><div id='liveblog-body'>{entry(3, time=False)}{stream}</div>{cards}</section></div></article></body></html>"
+    live = extract_module._live_blog(page).text_content()
+    assert "Card" not in live and live.count("Entry 3:") == 1 and "Entry 5:" in live and "ago" not in live
