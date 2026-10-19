@@ -79,6 +79,7 @@ COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name
 # A copy's name mistyped, standing alone: "Copy:1", "copy: 1", "copy:1000", "[copy:1]".
 MISTYPED = re.compile(r"\s*[\[(]?copy\s*:\s*\d+[\])]?\s*", re.IGNORECASE)
 COPY_NAME = re.compile(r"(?<![\w/=])copy:(\d{1,3})(?![\w/])")
+PUNCTUATION = re.compile(r"[\s,;:.!?\"'&()\[\]—–-]+")  # what the model puts between copies, not words
 LOOSE_NAME = re.compile(r"(?<![\w/=])copy\s*:\s*\d", re.IGNORECASE)  # between blocks: only ever meant as a name
 RUN_ON = re.compile(r"(copy:\d{1,3})(?=copy:\d)")  # two names with no space between: "copy:1copy:2"
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
@@ -555,34 +556,33 @@ class _Article:
         # Each block's words as they run on (text_content) and with its lines apart (itertext,
         # as page_find sees them): a phrase found either way is in the block.
         texts = [
-            (_plain(" ".join(el.text_content().split())), _plain(" ".join(" ".join(el.itertext()).split())))
+            (" ".join(_plain(el.text_content()).split()), " ".join(_plain(" ".join(el.itertext())).split()))
             for el in found
         ]
-        start, end = _plain(" ".join(start.split())), _plain(" ".join(end.split()))
+        start, end = " ".join(_plain(start).split()), " ".join(_plain(end).split())
         if not start or not end:
             raise ToolError("give a phrase from the passage's first block and one from its last")
         at = [n for n, pair in enumerate(texts) if any(start in text for text in pair)]
         if not at:
             raise ToolError("that start phrase is in no block of the page; check it with page_find")
+        # Where the end phrase is next, from each block on: one pass back up the page.
+        next_end: list[int | None] = [None] * (len(texts) + 1)
+        for n in range(len(texts) - 1, -1, -1):
+            next_end[n] = n if any(end in text for text in texts[n]) else next_end[n + 1]
+        at = [n for n in at if next_end[n] is not None]  # a start the end phrase follows
+        if not at:
+            raise ToolError("that end phrase is in no block of the page from the start phrase on")
         chose = ""
         if len(at) > 1:
             # A heading's words are often a table of contents' too: the block that is just the
-            # phrase, and a heading before any other; a block the page repeats word for word, the first.
+            # phrase, and a heading before any other; a block the page repeats (a heading over
+            # each section), the one nearest before the end phrase.
             whole = [n for n in at if start in texts[n]]  # the whole of the block's words, either way
             heads = [n for n in whole if found[n].tag in extract.HEADINGS]
-
-            def same(ns: list[int]) -> bool:  # a block the page repeats, whatever its tag and classes
-                return len({texts[n] for n in ns}) == 1
-
-            def reach(n: int) -> int:  # how many blocks on the end phrase is from this start
-                ends = (m for m in range(n, len(texts)) if any(end in text for text in texts[m]))
-                return next(ends, 2 * len(texts)) - n
-
             count = len(at)
             for pick, what in ((heads, "the heading"), (whole, "the one that is only that phrase"), (at, "")):
-                if len(pick) == 1 or (pick and same(pick)):
-                    near = min(pick, key=reach)  # the nearest before the end phrase
-                    at = [near]
+                if len(pick) == 1 or (pick and len({texts[n] for n in pick}) == 1):
+                    at = [min(pick, key=lambda n: next_end[n] - n)]
                     if len(pick) > 1:
                         chose = f" (the page has this block {len(pick)} times; this is the one nearest before the end phrase)"
                     else:
@@ -590,7 +590,7 @@ class _Article:
                     break
         if len(at) > 1:
             raise ToolError(f"that start phrase is in {len(at)} blocks of the page; give a longer one")
-        to = next((n for n in range(at[0], len(texts)) if any(end in text for text in texts[n])), None)
+        to = next_end[at[0]]
         if to is None:
             raise ToolError("that end phrase is in no block of the page from the start phrase on")
         html = "".join(lxml.html.tostring(el, encoding="unicode", with_tail=False) for el in found[at[0] : to + 1])
@@ -697,15 +697,18 @@ class _Article:
                     out.extend(blocks_of(int(piece)))
                 elif LOOSE_NAME.search(piece):
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
-                else:
-                    real[0] = real[0] or bool(re.search(r"\w", piece))
+                elif piece.strip() and not PUNCTUATION.fullmatch(piece):
+                    real[0] = True
                     pending.append(escape(piece))
+                elif not piece.strip():
+                    pending.append(piece)  # a space, which may sit between two inline elements
+                # and punctuation alone between blocks or copies ("copy:1, copy:2") is left out
 
         loose(root.text or "")
         for child in root:
             tail, child.tail = child.tail, None
             if not real[0]:
-                pending.clear()  # a quote or a comma before a block of the model's own
+                pending.clear()  # spaces before a block of the model's own
             pending.append(lxml.html.tostring(child, encoding="unicode"))
             real[0] = True
             loose(tail or "")

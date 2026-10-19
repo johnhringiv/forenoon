@@ -607,7 +607,8 @@ Sonnet 5.5).
   of up to 10 places), `page_read` (up to 6,000 characters from an offset), `page_view` (a
   screenshot of the live page, section 7d; unavailable while the browser container is not
   running), `page_copy` (the page's own HTML from the block where one phrase is to the block
-  where another is, reduced to the allowlist and kept as `copy:N`), `article_read` (blocks in
+  where another is after it, reduced to the allowlist and kept as `copy:N`; a start the page
+  repeats, such as a heading over each section, is the one nearest before the end), `article_read` (blocks in
   full, up to 16,000 characters, saying where it stops), `replace_blocks`, `delete_blocks`,
   `insert_after`, `insert_from_page` and `replace_from_page` (a copy made and placed in one
   call), and `finish` (a verdict, `ok`, `fixed` or `cannot_fix`, a summary of at most

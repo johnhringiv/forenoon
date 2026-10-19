@@ -821,3 +821,18 @@ def test_a_passage_of_the_page_goes_in_with_one_call(check):
     )
     edits = json.loads(_rows(store)[0]["edits"])
     assert [(e["tool"], e["copies"]) for e in edits] == [("insert_from_page", [1]), ("replace_from_page", [2])]
+
+
+def test_the_start_is_one_the_end_phrase_follows():
+    page = (
+        "<html><body><p>Our pricing is simple.</p><p>It costs five dollars.</p><h2>Pricing</h2><p>Plans vary.</p>"
+        "<p>Hello \u200b world again</p></body></html>"
+    )
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=page)
+    copied = article.copy("pricing", "five dollars")
+    assert "Our pricing is simple." in copied and "<h2>" not in copied
+    assert "Hello" in article.copy("Hello world", "again")
+    # Punctuation alone between the model's block and a copy is left out; a section break is not.
+    article.insert(1, "<p>Mine</p>, copy:1 * * * copy:2")
+    texts = [p.text_content().strip() for p in article.body.iter("p")]
+    assert "," not in texts and "* * *" in texts
