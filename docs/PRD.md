@@ -588,9 +588,8 @@ Sonnet 5.5).
   `cannot_fix` on the Problems page (section 9a) with the summary, each problem, and whether
   the article was edited; and in
   the run report, how many were checked, with each verdict, their tokens and cost.
-- **Cost**, at Sonnet 5.5's prices: about $0.02 for an article that is fine (one call), and
-  about $0.15 for one it fixes (several calls, most of each read from the cache): roughly
-  $0.40 to $0.50 a day for a reader with ten articles. The delivery waits for the checks, up
+- **Cost**, at Sonnet 5.5's prices: the first real run (20 recent articles, 18 October 2026) fixed 6 and found 14 fine in 38 calls and 502,105 tokens, 62% of them read from the
+  cache: $0.60 in all, about 3 cents an article, roughly $0.30 a day for a reader with ten. The delivery waits for the checks, up
   to three minutes an article.
 
 ## 7d. The browser container (optional)
