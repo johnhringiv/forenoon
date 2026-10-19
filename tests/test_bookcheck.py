@@ -836,6 +836,13 @@ def test_the_start_is_one_the_end_phrase_follows():
     article.insert(1, "<p>Mine</p>, copy:1 * * * copy:2")
     texts = [p.text_content().strip() for p in article.body.iter("p")]
     assert "," not in texts and "* * *" in texts
+    # Punctuation that opens or closes a line of the model's own stays; alone between copies,
+    # with an empty element or a picture the article may not have, it goes.
+    article.insert(1, '<p>own</p>"<b>Quoted</b>" he said. copy:1 (<i>see</i> below) more')
+    assert '"Quoted" he said.' in article.body.text_content() and "(see below) more" in article.body.text_content()
+    article.insert(1, '<b>A</b><!-- c -->, <b>B</b> copy:1 <span></span>, copy:1 <img src="nope.png">. copy:1')
+    assert "A, B" in article.body.text_content()
+    assert not [p for p in article.body.iter("p") if p.text_content().strip() in (",", ".")]
     # Punctuation in a line of the model's own stays in it.
     article.insert(1, "<b>Note</b>: <i>see below</i>, <b>Tom</b> &amp; <b>Jerry</b>. copy:1")
     assert "Note: see below, Tom & Jerry." in article.body.text_content()

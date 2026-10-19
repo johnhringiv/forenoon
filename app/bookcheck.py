@@ -636,6 +636,7 @@ class _Article:
             used.append(n)
             return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
+        html = CONTROL.sub("", html)  # refused by lxml where it is set as text
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
         root = _fragment(RUN_ON.sub(r"\1 ", html))
@@ -670,16 +671,26 @@ class _Article:
                 if MISTYPED.fullmatch(text) and not code:
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
         out: list[lxml.html.HtmlElement] = []
-        pending: list[str] = []
-        real = [False]  # whether what is pending has an element or a word, not only punctuation
-        inline = [False]  # whether what is pending ends in a run of the model's own words
+        pending: list[str] = []  # the model's own HTML since the last copy
+        run: list[str] = []  # its loose words and inline elements since the last block
+
+        def end_run() -> None:
+            words = "".join(run)
+            run.clear()
+            if not words:
+                return
+            fragment = _fragment(words)
+            pictures = [img for img in fragment.iter("img") if self._image(extract._image_src(img))]
+            if PUNCTUATION.fullmatch(fragment.text_content() or " ") and not pictures:
+                return  # a comma, a quote or a space between two copies, or a copy and a block
+            pending.append(words)
 
         def flush() -> None:
+            end_run()
             own = "".join(pending)
             pending.clear()
-            if not real[0]:
-                return  # a comma, a quote or a space between two copies
-            real[0] = inline[0] = False
+            if not own:
+                return
             blocks = self.clean(own)
             words = " ".join(
                 text
@@ -698,21 +709,17 @@ class _Article:
                     out.extend(blocks_of(int(piece)))
                 elif LOOSE_NAME.search(piece):
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
-                elif piece.strip() and not PUNCTUATION.fullmatch(piece):
-                    real[0] = inline[0] = True
-                    pending.append(escape(piece))
-                elif not piece.strip() or inline[0]:
-                    pending.append(escape(piece))  # a space, or punctuation in a line of its own ("<b>A</b>, <b>B</b>")
-                # and punctuation alone between blocks or copies ("copy:1, copy:2") is left out
+                else:
+                    run.append(escape(piece))
 
         loose(root.text or "")
         for child in root:
             tail, child.tail = child.tail, None
-            if not real[0]:
-                pending.clear()  # spaces before a block of the model's own
-            pending.append(lxml.html.tostring(child, encoding="unicode"))
-            real[0] = True
-            inline[0] = child.tag in PHRASING or "-" in str(child.tag)
+            if isinstance(child.tag, str) and child.tag not in PHRASING and "-" not in child.tag:
+                end_run()  # a block of the model's own: kept, whatever is in it
+                pending.append(lxml.html.tostring(child, encoding="unicode"))
+            else:
+                run.append(lxml.html.tostring(child, encoding="unicode"))
             loose(tail or "")
         flush()
         return out, used
