@@ -1632,3 +1632,27 @@ def test_a_digest_of_story_cards_named_like_promotions_stays():
             "https://news.com/digest", None, f"{_paragraphs('Lead', 4)}{repeated}", "feed"
         ).body.text_content()
         assert "Item 2" in out
+
+
+def test_a_short_post_opening_with_its_byline_or_held_in_a_named_box_stays():
+    nav = (
+        "<nav><ul>"
+        + "".join(f"<li><a href='/s{n}'>Section number {n} here</a></li>" for n in range(60))
+        + "</ul></nav>"
+    )
+    footer = "<footer>" + "Footer filler words about the site and its many sections. " * 40 + "</footer>"
+    post = (
+        "<div class='post'><p><a rel='author' href='/author/wei-li'>Wei Li</a></p>"
+        "<p>Like many of you I have been testing the new Linux release on a little laptop this week.</p>"
+        "<p>It boots fast, the battery lasts, and the trackpad finally works after years of trouble.</p>"
+        "<p>Sleep and wake are reliable now, and the fan stays quiet under an ordinary load of browsing and mail.</p></div>"
+    )
+    page = f"<html><body>{nav}<article><h1>Testing</h1>{post}</article>{footer}</body></html>"
+    assert "trackpad finally works" in extract("https://blog.example/a", page, "", "page").body.text_content()
+    issue = (
+        "<div class='newsletter'>"
+        + "".join(f"<p>Issue line {n} about this week in the town and what the council did.</p>" for n in range(4))
+        + "<a href='/last'>Read last week</a></div>"
+    )
+    page = f"<html><body>{nav}<article><h1>This week</h1>{issue}</article>{footer}</body></html>"
+    assert "Issue line 3" in extract("https://blog.example/a", page, "", "page").body.text_content()

@@ -327,8 +327,8 @@ All fetched content is treated as untrusted.
   - Boxes that sell, credit or play are dropped by their markup: a sign-up form (one asking
     for an email address) and the box around it when that only pitches it; a short box named
     for a newsletter, a sponsor or the next story, with a call to act in it and not one of a run of such boxes; an
-    advert card whose links all go to one address off the site, marked `nofollow` or `sponsored`; an author box at the end that
-    opens with a link marked as the author's and names them; a player's controls; a table of
+    advert card whose links all go to one address off the site, marked `nofollow` or `sponsored`; a box named as the author's at the end
+    of the post that opens with a link to them and whose bio names them; a player's controls; a table of
     contents a script was to fill; and, at the end, a line that is only a short link to the
     page itself ("Share", "Read more") or to an author's page.
   - The label a "skip past" link jumps to ("after newsletter promotion"), which is there for

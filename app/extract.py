@@ -605,6 +605,8 @@ CARD_MAX_WORDS = 80
 CTA_MAX_WORDS = 4
 BIO_MAX_WORDS = 120
 BIO_MIN_WORDS = 12
+BIO_NAME_WORDS = 4  # a bio names its subject at its start: "David Farquhar is a…"
+OWN_PARAGRAPHS_MAX = 2  # a box with more paragraphs of its own than this is writing, not furniture
 AUTHOR_PATH = re.compile(r"/(author|authors|people|staff|contributors?)/[^/?#]+/?$", re.IGNORECASE)
 AUTHOR_BOX = re.compile(r"author|vcard|byline|\bbio\b|sabox", re.IGNORECASE)
 LONE_LINK_MAX_WORDS = 5
@@ -689,6 +691,8 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
             return False
         if box.get(MARK) or box.xpath(f".//*[@{MARK}]"):
             return False
+        if len(box.xpath(".//p")) > OWN_PARAGRAPHS_MAX:
+            return False
         if _words(box.text_content()) >= BOX_MAX_SHARE * max(page_words, 1):
             return False
         return not any(t in linked_to for t in box.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name"))
@@ -759,10 +763,8 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
             continue
         first = next((a for a in box.iter("a") if _author_link(a) and " ".join(a.text_content().split())), None)
         # Marked as an author's, not only a link to someone's page: a passage may open so.
-        if first is not None and not (
-            "author" in (first.get("rel") or "").split() or AUTHOR_BOX.search(f"{_names(first)} {_names(box)}")
-        ):
-            first = None
+        if first is not None and not AUTHOR_BOX.search(_names(box)):
+            first = None  # the box is named as the author's: a post may open with its byline
         if first is None:
             continue
         # At the end of what it is in: a guest post's introduction comes before the post.
@@ -772,7 +774,12 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
         if not text.startswith(name):
             continue
         surname = name.split()[-1]
-        if not any(_words(p.text_content()) >= BIO_MIN_WORDS and surname in p.text_content() for p in box.iter("p")):
+        named = re.compile(rf"\b{re.escape(surname)}\b")
+        if not any(
+            _words(p.text_content()) >= BIO_MIN_WORDS
+            and named.search(" ".join(p.text_content().split()[:BIO_NAME_WORDS]))
+            for p in box.iter("p")
+        ):
             continue
         box.drop_tree()
     # Rule 3: a player's controls, with nothing to read: a box named as a player, holding buttons
@@ -812,6 +819,8 @@ def _drop_signup_forms(root, page_words: int, linked_to: set) -> None:
         if box is root or box.getparent() is None or box.tag in ("body", "html", "article", "main"):
             return False
         if _words(box.text_content()) >= BOX_MAX_SHARE * max(page_words, 1):
+            return False
+        if len([p for p in box.xpath(".//p") if next(p.iterancestors("form"), None) is None]) > OWN_PARAGRAPHS_MAX:
             return False
         # A box named as a sign-up may be what the site's menu jumps to ("#newsletter"); any
         # other a link points at may hold a note.
@@ -876,7 +885,11 @@ def _drop_lone_links(body, url: str) -> None:
         href = a.get("href").strip()
         if " ".join(a.text_content().split()) != text or "#" in href or a.get("class"):
             continue  # a class here is ours: a note reference, a card
-        if urlsplit(href).query and not SELF_LINK_LABEL.fullmatch(text):
+        try:
+            query = urlsplit(href).query
+        except ValueError:
+            continue
+        if query and not SELF_LINK_LABEL.fullmatch(text):
             continue  # "Continue to page 2": the same page, another part of it
         # A link to the author's page that offers more of them, not a byline that is their name.
         if (page and _host_path(href) == page) or (_author_link(a) and MORE_BY.match(text)):
