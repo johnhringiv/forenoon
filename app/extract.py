@@ -83,6 +83,13 @@ WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page te
 WORDS_PER_MINUTE = 230
 REFILL_MAX_WORDS = 400
 DATA_TABLE_CLASS = "forenoon-data-table"
+DATA_TABLE_LINK_SHARE = (
+    0.5  # of a table's text in links, at most (citations in cells are links): more is a list of links
+)
+# A table named as a site's or a post's header or footer is page furniture, header cells or not.
+LAYOUT_TABLE_NAME = re.compile(
+    r"(^|[\s_-])(site|page|post|global)?[_-]?(header|footer|masthead|nav)(\s|$)", re.IGNORECASE
+)
 TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
 REFILL_FURNITURE = re.compile(
@@ -231,16 +238,32 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
     """Take the furniture-sounding class names off real tables, their rows and cells, and mark the
     table for readability to keep (it drops a small table of numbers as layout): readability
     deletes anything classed with "header" or "foot" in it, and arXiv classes its tables
-    "ltx_guessed_headers", so a paper lost every table it left in the text. A real table has
-    header cells, a caption or a figure around it; a site's layout table keeps its classes."""
+    "ltx_guessed_headers", so a paper lost every table it left in the text.
+
+    A real table has header cells, a caption or a figure around it, and is not itself named as a
+    site's or a post's header or footer; any other table keeps its classes. Only one in a figure
+    that is mostly text, not links, is marked, and its rows go in a <tbody> when they are not,
+    so that the mark only keeps the table: without one, readability weighs the table itself as
+    the article."""
     for table in root.iter("table"):
         real = table.xpath(".//th | .//thead | .//caption") or next(table.iterancestors("figure"), None) is not None
-        if not real:
+        if not real or LAYOUT_TABLE_NAME.search(_names(table)):
             continue
+        text = len(" ".join(table.text_content().split()))
+        linked = sum(len(" ".join(a.text_content().split())) for a in table.iter("a"))
+        # Marked only in a figure, as papers number their tables: elsewhere the mark can make
+        # readability take a long table beside a short article for the article.
+        in_figure = next(table.iterancestors("figure"), None) is not None
+        mark = in_figure and text > 0 and linked <= DATA_TABLE_LINK_SHARE * text
+        rows = [child for child in table if isinstance(child.tag, str) and child.tag == "tr"]
+        if mark and rows:
+            body = lxml.html.Element("tbody")
+            rows[0].addprevious(body)
+            body.extend(rows)
         for el in (table, *table.iter("thead", "tbody", "tfoot", "tr", "th", "td")):
             names = (el.get("class") or "").split()
             kept = [name for name in names if not TABLE_FURNITURE_NAME.search(name)]
-            if el is table:
+            if el is table and mark:
                 kept.append(DATA_TABLE_CLASS)  # and readability is told to keep it: see _readability
             if kept != names:
                 el.set("class", " ".join(kept))

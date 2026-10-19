@@ -562,3 +562,20 @@ def test_a_papers_tables_stay_in_the_text():
     out = lxml.html.tostring(extract("https://arxiv.example/html/1", page, "", "page").body, encoding="unicode")
     assert "TOEFL9" in out and "90.4%" in out and "Table 1: Full-text accuracy." in out
     assert out.index("TOEFL9") < out.index(words[3:40], out.index("compares the results")), "in place, not a note"
+
+
+def test_a_long_table_never_takes_the_place_of_a_short_article():
+    para = (
+        "<p>" + "The council met on Tuesday to discuss the budget, the roads, and the school, and voted. " * 3 + "</p>"
+    )
+    rows = "".join(
+        f"<tr><td>Row {i}</td><td>Some longer description of item {i}, with commas, and words</td></tr>"
+        for i in range(25)
+    )
+    table = f"<table><tr><th>Name</th><th>Note</th></tr>{rows}</table>"
+    for page in (
+        f"<html><body><article><div class='x'>{para * 2}{table}{para}</div></article></body></html>",
+        f"<html><body><div><div class='x'>{para * 2}</div><div><table class='site-header'><tr><th>MySite</th></tr></table></div></div></body></html>",
+    ):
+        text = extract("https://news.example/a", page, "", "auto").body.text_content()
+        assert "council met" in text and "MySite" not in text
