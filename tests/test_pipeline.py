@@ -1787,7 +1787,7 @@ def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, mon
     cfg, _, _ = env
     cfg = dataclasses.replace(cfg, sessions=("paper.example",))
     words = "<p>" + "Plain words about grid storage and the price of power at noon. " * 12 + "</p>"
-    chart = "<figure><canvas></canvas><p>Noon 40 · Night 12</p><figcaption>Prices by hour</figcaption></figure>"
+    chart = "<figure><figcaption>Prices by hour</figcaption><canvas></canvas><p>Noon 40 · Night 12</p></figure>"
     page = f"<html><body><article>{words}{chart}{words}{chart}{words}</article></body></html>"
     picture = io.BytesIO()
     Image.new("RGB", (400, 300), "white").save(picture, "JPEG")
@@ -1819,6 +1819,8 @@ def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, mon
         sources=lambda: [Source("Blog")]), result, None, cfg)  # fmt: skip
     out = etree.tostring(article.body, encoding="unicode")
     assert "<img" not in out and out.count("Noon 40") == 2
+    # Put back where it was: the caption above, the figure's own text after it.
+    assert re.search(r"<figure><p>Interactive.*?</p><figcaption>Prices by hour</figcaption><p>Noon 40", out)
     # Asked with the site's session, or with none; each article once.
     assert asked == [
         ("site-paper.example", "https://www.paper.example/grid", [0, 1], 2),

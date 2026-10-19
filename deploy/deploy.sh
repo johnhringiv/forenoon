@@ -155,7 +155,8 @@ start_browser() {
     # the database. The web pages write the cookies. The forenoon-browser volume holds what
     # its browser keeps of a sign-in, and nothing else mounts it.
     # shellcheck disable=SC2086 # $seccomp is one option and its value, or nothing
-    docker run -d --name forenoon-browser --restart unless-stopped \
+    # --init: Chrome leaves finished processes behind for PID 1 to reap.
+    docker run -d --name forenoon-browser --restart unless-stopped --init \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
         --cap-drop ALL --security-opt no-new-privileges:true $seccomp \

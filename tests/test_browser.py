@@ -201,7 +201,9 @@ def test_pictures_of_interactive_figures_are_asked_for_only_while_the_browser_ru
                 waiting[0].unlink()
                 # Figure 3 could not be shown; 9 was never asked for.
                 taken = {"0": base64.b64encode(b"jpeg 0").decode(), "9": base64.b64encode(b"x").decode()}
-                waiting[0].with_suffix(".shots").write_text(json.dumps(taken))
+                partial = waiting[0].with_name(".answer.tmp")  # whole or not at all, as the container writes
+                partial.write_text(json.dumps(taken))
+                partial.replace(waiting[0].with_suffix(".shots"))
                 return
             time.sleep(0.01)
 
@@ -270,7 +272,8 @@ def test_the_pictures_proxy_reaches_nothing_but_public_https():
     runner = _fetcher()
     proxy = runner._PublicProxy()
     proxy.start()
-    for target in ("127.0.0.1:443", "localhost:443", "10.0.0.5:443", "192.168.1.1:443", "[::1]:443", "example.com:80"):
+    targets = ("127.0.0.1:443", "localhost:443", "10.0.0.5:443", "192.168.1.1:443", "[::1]:443", "example.com:80")
+    for target in (*targets, "[64:ff9b::a00:1]:443"):
         with socket.create_connection(("127.0.0.1", proxy.port)) as client:
             client.sendall(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
             assert client.recv(100).startswith(b"HTTP/1.1 403"), target
@@ -279,13 +282,14 @@ def test_the_pictures_proxy_reaches_nothing_but_public_https():
         assert client.recv(100).startswith(b"HTTP/1.1 403")
 
 
-def test_a_busy_browser_is_not_taken_for_a_stopped_one(tmp_path):
+def test_a_busy_browser_is_not_taken_for_a_stopped_one(tmp_path, monkeypatch):
     from app import sessions
     from app.fetch import FetchError
 
+    monkeypatch.setattr(sessions, "_silent_until", 0.0)
+    monkeypatch.setattr(sessions, "_no_shots_until", 0.0)
     (tmp_path / ".fetch").mkdir()
     (tmp_path / ".fetch" / "alive").touch()  # running, but never picks the request up
-    sessions._silent_until = 0.0
     with pytest.raises(FetchError, match="busy"):
         sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=0.05, poll=0.01)
     assert sessions._silent_until == 0.0, "the next page is still asked for"
@@ -294,4 +298,3 @@ def test_a_busy_browser_is_not_taken_for_a_stopped_one(tmp_path):
         sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=0.05, poll=0.01)
     with pytest.raises(FetchError, match="timed out earlier"):
         sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=5)
-    sessions._no_shots_until = 0.0

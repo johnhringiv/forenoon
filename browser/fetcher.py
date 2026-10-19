@@ -48,6 +48,8 @@ ALIVE = "alive"
 MAX_SHOTS = 20
 MAX_SHOT_BYTES = 2 * 1024 * 1024
 MAX_SHOTS_TOTAL = 24 * 1024 * 1024  # one answer, under the pipeline's limit once in base64
+STOP_SHOOTING = 15.0  # seconds before the deadline: stop and answer with what was taken
+KILL_MARGIN = 5.0  # seconds before the deadline: the child is killed, so the answer is in time
 MAX_SHOT_HEIGHT = 3000  # CSS pixels: taller is a page section, not a figure
 # Roughly the width an article's column has on a desktop, so a figure is laid out as its
 # author drew it; pictures are scaled down for the Kindle later.
@@ -316,8 +318,9 @@ def take_shots(
         "total": total,
         "until": until,
     }
+    job["stop"] = until - STOP_SHOOTING
     try:
-        return _shoot_apart(job, until)
+        return _shoot_apart(job, until - KILL_MARGIN)
     finally:
         _last_visit[site] = time.monotonic()
 
@@ -398,7 +401,7 @@ class _PublicProxy(threading.Thread):
                 client.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 return
             found = socket.getaddrinfo(host.strip("[]"), 443, proto=socket.IPPROTO_TCP)
-            addresses = [entry[4] for entry in found if ipaddress.ip_address(entry[4][0]).is_global]
+            addresses = [entry[4] for entry in found if _global(entry[4][0])]
             if not addresses or len(addresses) != len(found):
                 client.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 return
@@ -411,6 +414,15 @@ class _PublicProxy(threading.Thread):
             client.close()
             if upstream is not None:
                 upstream.close()
+
+
+NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+
+def _global(address: str) -> bool:
+    """A public internet address; not one that NAT64 would turn into a private one."""
+    ip = ipaddress.ip_address(address.split("%")[0])
+    return ip.is_global and not any(ip in network for network in NAT64)
 
 
 def _relay(a: socket.socket, b: socket.socket) -> None:
@@ -430,7 +442,7 @@ def _relay(a: socket.socket, b: socket.socket) -> None:
 
 
 def _shoot(sync_playwright, browser_error, job: dict, proxy_port: int) -> dict[int, bytes]:
-    url, figures, total, until = job["url"], job["figures"], job["total"], job["until"]
+    url, figures, total, until = job["url"], job["figures"], job["total"], job["stop"]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=False,

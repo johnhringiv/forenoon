@@ -101,6 +101,7 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     read_only: true
+    init: true  # Chrome leaves finished processes behind for PID 1 to reap
     cap_drop: [ALL]
     # Docker's default seccomp profile plus what Chrome's own sandbox needs (see the file).
     security_opt: ["no-new-privileges:true", "seccomp=../browser/seccomp.json"]

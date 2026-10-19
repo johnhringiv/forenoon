@@ -283,9 +283,13 @@ def _figure_shots(item: Item, result: Extracted, cfg: Config) -> list[tuple[lxml
         if number not in shots or figure is None or figure.tag != "figure":
             continue
         # What the figure held is set aside, to be put back should the picture not be kept.
-        held = [(child, child.tail) for child in figure if child is not holder and child.tag != "figcaption"]
+        held = [
+            (index, child, child.tail)
+            for index, child in enumerate(figure)
+            if child is not holder and child.tag != "figcaption"
+        ]
         held_tail = holder.tail
-        for child, _ in held:
+        for _, child, _ in held:
             figure.remove(child)
         holder.tail = None
         picture = lxml.html.Element("img", src="data:image/jpeg;base64," + base64.b64encode(shots[number]).decode())
@@ -302,11 +306,10 @@ def _restore_figures(placed: list[tuple[lxml.html.HtmlElement, list]]) -> None:
         if picture.getparent() is not None:
             continue
         holder.tail = held_tail
-        anchor = holder
-        for child, tail in held:
+        figure = holder.getparent()
+        for index, child, tail in held:  # in order, each back at its own place
             child.tail = tail
-            anchor.addnext(child)
-            anchor = child
+            figure.insert(index, child)
 
 
 def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> tuple[Article | None, int]:

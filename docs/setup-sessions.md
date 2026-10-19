@@ -26,7 +26,8 @@ which needs the seccomp profile `browser/seccomp.json` (Docker's default plus wh
 sandbox uses): `deploy.sh` and `docker-compose.yml` apply it, and a container run any other
 way needs `--security-opt seccomp=<that file>`. The kernel must allow user namespaces
 (`/proc/sys/user/max_user_namespaces` above 0); where it does not, no pictures are taken
-and everything else works as before.
+and everything else works as before. On Ubuntu 23.10 and later, the host setting
+`kernel.apparmor_restrict_unprivileged_userns=1` can block it the same way.
 
 ## Set it up
 
