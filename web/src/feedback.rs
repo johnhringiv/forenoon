@@ -27,23 +27,18 @@ pub(crate) const TAPS_PER_CLIENT: usize = 30;
 const SOURCE: &str = "kindle-footer";
 const PROBLEM: &str = "problem";
 
-const SKIP_REST: &str = "skip-rest";
-
 /// What a link asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Tap {
     Rate(Signal),
     /// "This article came out broken or incomplete": a report about the delivery, not a rating.
     Problem,
-    /// "Mark unrated as skipped": the claim's article is the book's articles, comma-separated.
-    SkipRest,
 }
 
 impl Tap {
     fn parse(text: &str) -> Option<Tap> {
         match text {
             PROBLEM => Some(Tap::Problem),
-            SKIP_REST => Some(Tap::SkipRest),
             _ => text.parse().ok().map(Tap::Rate),
         }
     }
@@ -197,16 +192,6 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
         return plain(StatusCode::NOT_FOUND, "Link not valid.", "");
     }
     let signal = match &claim.tap {
-        Tap::SkipRest => {
-            let articles: Vec<&str> = claim.article.split(',').filter(|id| !id.is_empty()).collect();
-            let skipped = db::skip_rest(pool, &claim.user, &articles, SOURCE).await?;
-            let message = match skipped {
-                0 => "Nothing left to mark: you rated every article.".to_owned(),
-                1 => "Marked 1 article skipped.".to_owned(),
-                n => format!("Marked {n} articles skipped."),
-            };
-            return plain(StatusCode::OK, &message, "Rate any of them in the book or on the web pages to change it.");
-        }
         Tap::Problem => {
             let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
             // Once per article, as on the web pages: the Kindle's browser may ask again on
@@ -276,8 +261,6 @@ mod tests {
         assert_eq!(why.tap, Tap::Rate(Signal::Why("depth".into())));
         let problem = verify(SECRET, "MXxqb2hufGExfHByb2JsZW18MjAwMDAwMDAwMA.21UPHi4dtcYgvhV0QRpvjA", 0).unwrap();
         assert_eq!(problem.tap, Tap::Problem);
-        let done = verify(SECRET, "MXxqb2hufGExLGEyfHNraXAtcmVzdHwyMDAwMDAwMDAw.kMn5VzfdrB7rvXbL6_rIqg", 0).unwrap();
-        assert_eq!((done.article.as_str(), done.tap), ("a1,a2", Tap::SkipRest));
         assert_eq!(
             make(SECRET, "john", "a1", "end-worth-it", 2_000_000_000),
             "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ"

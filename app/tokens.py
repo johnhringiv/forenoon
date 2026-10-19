@@ -22,13 +22,11 @@ PROGRESS = {"finished": "finished", "partway": "stopped partway", "skipped": "sk
 #   end-<verdict>     the links at an article's end: the verdict, and finished
 #   finished, partway progress only
 #   skip              skipped: drops the verdict
-#   skip-rest         "Mark unrated as skipped": skip every article of the book given nothing
 #   why-<reason>      the reason, one optional tap after a verdict
 # The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
 # not in SIGNALS; anything replaying feedback_events must handle it.
 END_SIGNALS = tuple(f"end-{verdict}" for verdict in VERDICTS)
 SKIP = "skip"
-SKIP_REST = "skip-rest"
 # The links in a book, one set per article: the verdicts at its end, "Stopped partway" for a
 # reader who did not get there, and "Skip this one" at its start.
 LINK_SIGNALS = (*END_SIGNALS, "partway", SKIP)
@@ -59,7 +57,7 @@ REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
 # "This article came out broken or incomplete": a report to whoever runs the install, about the
 # delivery. It is not a rating and not a reason for one.
 PROBLEM = "problem"
-SIGNALS = (*VERDICTS, *END_SIGNALS, "finished", "partway", SKIP, SKIP_REST, *REASON_SIGNALS, PROBLEM)
+SIGNALS = (*VERDICTS, *END_SIGNALS, "finished", "partway", SKIP, *REASON_SIGNALS, PROBLEM)
 
 
 def chosen(reason: str) -> list[str]:
@@ -141,8 +139,6 @@ def make_token(secret: bytes, user_id: str, article_id: str, signal: str, expire
         raise TokenError(f"unknown signal: {signal}")
     if "|" in user_id or "|" in article_id:
         raise TokenError("ids must not contain '|'")
-    if "," in article_id and signal != SKIP_REST:
-        raise TokenError("only skip-rest names several articles")
     payload = "|".join((_VERSION, user_id, article_id, signal, str(expires))).encode()
     return f"{_b64(payload)}.{_b64(_sign(secret, payload))}"
 

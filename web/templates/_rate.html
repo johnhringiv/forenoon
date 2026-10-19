@@ -1,15 +1,15 @@
-{#- Two pick-one groups, each drawn as one joined control: the verdict, and how far the reader got.
-    The reasons under them are optional tags. On a demo host the same controls do nothing. -#}
+{#- The verdicts as one joined pick-one control; under it, how far the reader got as a quiet line of
+    text choices, and Clear. The reasons that fit a verdict follow as optional tags. On a demo host
+    the same controls do nothing. -#}
 {% if demo %}<div class="rate" title="In your own install these record your rating, and the ratings shape the next day's choices">
 {% else %}<form class="rate" method="post" action="/rate">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
-{% endif %}<div class="rate-head"><span>How was it?</span>{% if !demo && !card.unrated %}<button class="link" name="clear" value="1" title="Forget this rating">Clear</button>{% endif %}</div>
-<div class="seg verdicts" role="group" aria-label="How was it?">
+{% endif %}<div class="seg" role="group" aria-label="How was it?">
 {%- for choice in card.verdicts %}<button {% if demo %}type="button" class="inert"{% else %}name="verdict" value="{{ choice.key }}"{% endif %} aria-pressed="{{ choice.on }}">{{ choice.short }}</button>{% endfor -%}
 </div>
-<div class="rate-head"><span>How far did you get?</span></div>
-<div class="seg progress" role="group" aria-label="How far did you get?">
+<div class="progress" role="group" aria-label="How far did you get?">
 {%- for choice in card.progress %}<button {% if demo %}type="button" class="inert"{% else %}name="progress" value="{{ choice.key }}"{% endif %} aria-pressed="{{ choice.on }}" title="{{ choice.label }}">{{ choice.short }}</button>{% endfor -%}
+{% if !demo && !card.unrated %}<button class="clear" name="clear" value="1" title="Forget this rating">Clear</button>{% endif %}
 </div>
 {% if !card.reasons.is_empty() %}<div class="why-row" role="group" aria-label="{{ card.question }}"><span class="why-q">{{ card.question }} <span>Optional{% if card.several %}, pick any{% endif %}</span></span>
 {%- for reason in card.reasons %}<button {% if demo %}type="button" class="inert"{% else %}name="reason" value="{{ reason.key }}"{% endif %} aria-pressed="{{ reason.selected }}" title="{{ reason.label }}">{{ reason.short }}</button>{% endfor -%}

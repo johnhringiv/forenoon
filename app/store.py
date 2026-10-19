@@ -15,7 +15,7 @@ from pathlib import Path
 from . import models
 from .config import Source, User
 from .llm import LlmError, Unreachable
-from .tokens import KEEP, PROBLEM, REASON_SIGNALS, SKIP, SKIP_REST, meaning, with_reason
+from .tokens import KEEP, PROBLEM, REASON_SIGNALS, meaning, with_reason
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -813,32 +813,6 @@ class Store:
             " progress = excluded.progress, updated_at = excluded.updated_at, reason = excluded.reason",
             (user_id, article_id, verdict, progress, when, reason),
         )
-
-    def skip_rest(self, user_id: str, article_ids: list[str], source: str) -> int:
-        """ "Mark unrated as skipped": skip each of these articles the reader has given nothing for,
-        among those delivered to them. Returns how many were skipped."""
-        skipped, when = 0, now_iso()
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
-            for article_id in article_ids:
-                open_ = self.db.execute(
-                    "SELECT 1 FROM deliveries d WHERE d.user_id = ?1 AND d.article_id = ?2 AND NOT EXISTS"
-                    " (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = ?2)",
-                    (user_id, article_id),
-                ).fetchone()
-                if open_:
-                    self.db.execute(
-                        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at)"
-                        " VALUES (?, ?, ?, ?, ?)",
-                        (user_id, article_id, SKIP_REST, source, when),  # logged as the sweep it was
-                    )
-                    self._apply(user_id, article_id, SKIP, when)
-                    skipped += 1
-            self.db.commit()
-        except BaseException:
-            self.db.rollback()
-            raise
-        return skipped
 
     def get_rating(self, user_id: str, article_id: str) -> Rating | None:
         row = self.db.execute(

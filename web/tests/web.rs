@@ -2541,52 +2541,6 @@ async fn with_secure_cookies_another_address_is_sent_to_the_https_one() {
 }
 
 #[tokio::test]
-async fn done_with_this_issue_skips_only_what_was_given_nothing() {
-    use forenoon_web::feedback::make;
-    let site = site(true).await;
-    let pool = &site.pool;
-    let sent = "2026-10-10T10:00:00+00:00";
-    for id in ["a1", "a2", "a3"] {
-        article(pool, id, &format!("https://blog.example/{id}"), "Blog", &format!("Post {id}"), "john", sent).await;
-    }
-    article(pool, "m1", "https://blog.example/m1", "Blog", "Mary's", "mary", sent).await;
-    let mut kindle = Browser::default();
-    kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "end-worth-it", 4_000_000_000))).await;
-    // A reason with nothing to answer to keeps no rating, so the article is still open.
-    kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a2", "why-thin", 4_000_000_000))).await;
-    assert!(db::get_rating(pool, "john", "a2").await.unwrap().is_none());
-    // From the book: the articles it names, and only the reader's own.
-    let done = format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1,a2,m1", "skip-rest", 4_000_000_000));
-    let page = kindle.get(&site, &done).await;
-    assert!(page.status == StatusCode::OK && page.text.contains("Marked 1 article skipped."), "{}", page.text);
-    assert!(kindle.get(&site, &done).await.text.contains("Nothing left to mark"));
-    let progress = |id: &'static str| async move {
-        db::get_rating(pool, "john", id).await.unwrap().and_then(|rating| rating.progress)
-    };
-    assert_eq!(progress("a1").await.as_deref(), Some("finished"));
-    assert_eq!(progress("a2").await.as_deref(), Some("skipped"));
-    assert_eq!(progress("a3").await, None);
-    assert!(db::get_rating(pool, "john", "m1").await.unwrap().is_none());
-    assert!(db::get_rating(pool, "mary", "m1").await.unwrap().is_none());
-    let logged: Vec<String> =
-        sqlx::query_scalar("SELECT signal FROM feedback_events WHERE article_id = 'a2'").fetch_all(pool).await.unwrap();
-    assert_eq!(logged, ["why-thin", "skip-rest"], "every tap logged; the sweep as itself");
-
-    // From the newsstand: the rest of the issue.
-    let mut browser = Browser::default();
-    browser.sign_in(&site, "john").await;
-    let page = browser.get(&site, "/").await;
-    assert!(page.text.contains("Mark unrated as skipped (1)"), "{}", page.text);
-    let form = [("csrf", page.csrf()), ("issue", sent.to_owned()), ("back", "/".to_owned())];
-    let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
-    assert_eq!(browser.post(&site, "/skip-rest", &form).await.location, "/");
-    assert_eq!(progress("a3").await.as_deref(), Some("skipped"));
-    assert!(!browser.get(&site, "/").await.text.contains("Mark unrated as skipped"));
-    let wrong = [("csrf", "wrong"), ("issue", sent)];
-    assert_eq!(browser.post(&site, "/skip-rest", &wrong).await.status, StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
 async fn a_rating_link_before_the_pipeline_has_run_is_not_an_error() {
     let site = site(false).await;
     let link = format!("/f/{}", forenoon_web::feedback::make(FEEDBACK_SECRET, "john", "a1", "end-more", 4_000_000_000));

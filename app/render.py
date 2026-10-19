@@ -484,22 +484,6 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
 """
 
 
-def _done_page(link: str) -> str:
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en">
-<head><meta charset="utf-8"/><title>Mark unrated as skipped</title>
-<link rel="stylesheet" type="text/css" href="style.css"/></head>
-<body>
-<p class="meta"><a href="contents.xhtml">Contents</a></p>
-<div class="feedback"><p>That is the whole issue.</p>
-<p class="rate"><a href={quoteattr(link)}>Mark unrated as skipped</a></p>
-<p class="hint">Rate any of them later to change it.</p></div>
-</body>
-</html>
-"""
-
-
 ISSUE_CSS = """\
 .toc-title { font-weight: bold; margin: 1.1em 0 0; text-indent: 0; }
 .toc-detail { font-size: 0.85em; margin: 0.1em 0 0; text-indent: 0; }
@@ -515,13 +499,12 @@ def render_issue(
     title: str | None = None,
     cover: bytes | None = None,
     grayscale: bool = True,
-    done_link: str = "",
 ) -> bytes:
     """One book: a contents page, then a chapter per article with its own rating links.
 
     Deterministic for the same entries, day and part. `title` and `cover` replace the daily
     issue's own, for a book that is one story sent on request. `grayscale` is the images setting;
-    the daily cover follows it. `done_link`, "Mark unrated as skipped", is on a last page of its own.
+    the daily cover follows it.
     """
     title = title or issue_title(day, part)
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, "forenoon:" + ",".join(e.article.id for e in entries)).urn
@@ -530,8 +513,6 @@ def render_issue(
         page, chapter_assets = _chapter(entry, index)
         chapters.append((f"a{index:02d}", entry.article.title, page))
         assets += chapter_assets
-    if done_link:
-        chapters.append(("done", "Mark unrated as skipped", _done_page(done_link)))
     chapters = [(name, label, wrap_emoji(page)) for name, label, page in chapters]
     contents = wrap_emoji(_issue_contents(entries, title, day))
     pages = [page for _, _, page in chapters] + [contents]

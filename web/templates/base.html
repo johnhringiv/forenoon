@@ -164,19 +164,24 @@ button.primary:hover, button.kindle:hover { filter:brightness(1.1) }
 section.learned { max-width:44rem; margin:2rem 0 }
 section.learned > p.notes { margin:.8rem 0; padding:.1rem 0 .1rem .9rem; border-left:3px solid var(--line) }
 section.learned form.sheet { margin:.6rem 0 0; font-size:.9rem; color:var(--ink) }
-/* A rating: two pick-one groups, each drawn as one joined control so it reads as one choice, and the
-   optional reasons under them as rounded tags. */
-.rate { max-width:30rem; margin:.15rem 0 0; display:flex; flex-direction:column; gap:.3rem; font-size:.78rem; container-type:inline-size }
-.rate-head { display:flex; justify-content:space-between; align-items:baseline; color:var(--soft); font-size:.72rem;
-  margin-top:.15rem }
-.seg { display:grid; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden }
-.seg.verdicts { grid-template-columns:1fr 1fr }
-.seg.progress { grid-template-columns:repeat(3,1fr) }
-@container (min-width:26rem) { .seg.verdicts { grid-template-columns:repeat(4,1fr) } }
+/* A rating: the verdicts as one joined control, so they read as one choice; how far the reader got
+   as a quiet line of text under it; the optional reasons as rounded tags. */
+.rate { max-width:30rem; margin:.15rem 0 0; display:flex; flex-direction:column; gap:.35rem; font-size:.78rem;
+  container-type:inline-size }
+.seg { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); border:1px solid var(--line);
+  border-radius:4px; overflow:hidden }
+@container (min-width:26rem) { .seg { grid-template-columns:repeat(4,1fr) } }
 .seg button { border:0; border-radius:0; background:var(--card); padding:.35rem .2rem; text-align:center }
 .seg button:not(.inert):hover { background:var(--bg) }
-.rate button[aria-pressed=true] { background:var(--ink); color:var(--card); border-color:var(--ink); font-weight:600 }
-.why-row { display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; margin-top:.2rem }
+.seg button[aria-pressed=true], .why-row button[aria-pressed=true] { background:var(--ink); color:var(--card);
+  border-color:var(--ink); font-weight:600 }
+.progress { display:flex; flex-wrap:wrap; gap:.2rem .9rem; align-items:baseline; font-size:.74rem }
+.progress button { border:0; background:none; padding:0; color:var(--soft) }
+.progress button:not(.inert):hover { color:var(--ink); text-decoration:underline }
+.progress button[aria-pressed=true] { color:var(--ink); font-weight:600 }
+.progress button[aria-pressed=true]::before { content:"\2713\00a0" }
+.progress .clear { margin-left:auto; color:var(--accent); text-decoration:underline }
+.why-row { display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; margin-top:.1rem }
 .why-q { flex-basis:100%; color:var(--soft); font-size:.72rem }
 .why-q span { font-style:italic }
 .why-row button { border-radius:999px; padding:.1rem .6rem }
@@ -187,7 +192,6 @@ button.inert { cursor:default }
 .extra form { margin:0 }
 form.send { margin:0; display:flex; flex-wrap:wrap; gap:.3rem .6rem; align-items:center; font-size:.78rem; color:var(--soft) }
 button.link { border:0; background:none; padding:0; color:var(--accent); text-decoration:underline }
-.skip-rest { margin:-.3rem 0 .9rem; font-size:.85rem }
 form.sheet { max-width:24rem; margin:2rem 0; display:flex; flex-direction:column; gap:.8rem }
 form.sheet label { display:flex; flex-direction:column; gap:.25rem; font-size:.9rem }
 form.sheet input, form.sheet textarea { padding:.45rem .55rem }

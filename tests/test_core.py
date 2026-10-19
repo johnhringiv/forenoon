@@ -2,7 +2,6 @@ import dataclasses
 import io
 import time
 import zipfile
-from datetime import UTC, datetime
 
 import pytest
 from lxml import etree
@@ -45,10 +44,6 @@ def test_token_round_trip_and_rejections():
     for signal in ("up", "down", "done", "f4", "r2", "clear"):  # not something a link carries
         with pytest.raises(TokenError):
             make_token(SECRET, "john", "abc", signal, expires)
-    # Only "Mark unrated as skipped" names several articles.
-    assert verify_token(SECRET, make_token(SECRET, "john", "a,b", "skip-rest", expires)).article_id == "a,b"
-    with pytest.raises(TokenError):
-        make_token(SECRET, "john", "a,b", "skip", expires)
 
 
 def test_tokens_are_the_ones_the_web_app_checks():
@@ -57,10 +52,6 @@ def test_tokens_are_the_ones_the_web_app_checks():
     assert (
         make_token(secret, "john", "a1", "end-worth-it", 2_000_000_000)
         == "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ"
-    )
-    assert (
-        make_token(secret, "john", "a1,a2", "skip-rest", 2_000_000_000)
-        == "MXxqb2hufGExLGEyfHNraXAtcmVzdHwyMDAwMDAwMDAw.kMn5VzfdrB7rvXbL6_rIqg"
     )
     assert (
         make_token(secret, "john", "a1", "why-depth", 2_000_000_000)
@@ -308,7 +299,7 @@ def test_skips_do_not_push_the_verdicts_out_of_what_the_model_sees():
     for n in range(3):
         store.upsert_article(f"v{n}", f"https://x.example/v{n}", "Blog", f"Judged {n}", "", None)
         store.record_feedback("john", f"v{n}", "end-worth-it", "kindle-footer", f"2026-10-01T0{n}:00:00+00:00")
-    for n in range(60):  # weeks of "Mark unrated as skipped", all newer
+    for n in range(60):  # weeks of skips, all newer
         store.upsert_article(f"s{n}", f"https://x.example/s{n}", "Blog", f"Skipped {n}", "", None)
         store.record_feedback("john", f"s{n}", "skip", "kindle-footer", f"2026-10-10T00:{n:02d}:00+00:00")
     store.upsert_article("p", "https://x.example/p", "Blog", "Progress only", "", None)
@@ -317,21 +308,6 @@ def test_skips_do_not_push_the_verdicts_out_of_what_the_model_sees():
     assert [e["title"] for e in entries if "verdict" in e] == ["Judged 0", "Judged 1", "Judged 2"]
     assert sum(e.get("progress") == "skipped" for e in entries) == 15
     assert "Progress only" not in [e["title"] for e in entries]
-
-
-def test_done_with_this_issue_skips_only_what_was_delivered_and_given_nothing():
-    from app.store import Rating, Store
-
-    store = Store(":memory:")
-    store.mark_delivered("john", ["a1", "a2", "a3"], datetime(2026, 10, 18, tzinfo=UTC))
-    store.record_feedback("john", "a1", "end-worth-it", "kindle-footer")
-    assert store.skip_rest("john", ["a1", "a2", "a3", "never-sent"], "kindle-footer") == 2
-    assert store.get_rating("john", "a1") == Rating("worth-it", "finished")
-    assert store.get_rating("john", "a2") == Rating(None, "skipped")
-    assert store.get_rating("john", "never-sent") is None
-    assert store.skip_rest("john", ["a2", "a3"], "kindle-footer") == 0
-    # Logged as the sweep it was, apart from "Skip this one".
-    assert [row["signal"] for row in store.feedback_rows()] == ["end-worth-it", "skip-rest", "skip-rest"]
 
 
 def test_ratings_from_one_to_five_are_brought_forward(tmp_path):

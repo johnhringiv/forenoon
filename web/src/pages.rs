@@ -819,8 +819,6 @@ struct Issue {
     short: String,
     count: String,
     stories: Vec<Story>,
-    /// Articles sent in it that the reader has given nothing for: "Mark unrated as skipped".
-    open: usize,
 }
 
 /// What one card on the page holds: an article, or a story's articles with its lead first.
@@ -1014,7 +1012,6 @@ pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(quer
                 short: String::new(),
                 count: String::new(),
                 stories: Vec::new(),
-                open: 0,
             });
         }
         let Some(issue) = page.issues.last_mut() else { continue };
@@ -1068,7 +1065,6 @@ pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(quer
         for story in &mut issue.stories {
             story.more = format!("One story · {} articles, delivered together", story.cards.len());
         }
-        issue.open = issue.stories.iter().flat_map(|story| &story.cards).filter(|c| c.unrated && !c.link_only).count();
         match local(&issue.stamp, zone) {
             Some(when) => {
                 issue.heading = when.format("%A %-d %B %Y").to_string();
@@ -1093,14 +1089,6 @@ pub struct RateForm {
     progress: Option<String>,
     clear: Option<String>,
     reason: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct SkipRestForm {
-    csrf: String,
-    /// The issue, by its delivery time as stored.
-    issue: String,
-    back: Option<String>,
 }
 
 /// An article's thumbnail, for a reader it was delivered to.
@@ -1293,27 +1281,6 @@ pub async fn rate(
         None => db::clear_rating(pool, &user.id, &form.article).await?,
     }
     back_to(&form.back, &form.article)
-}
-
-/// "Mark unrated as skipped": every article of one issue the reader has given nothing for.
-pub async fn skip_rest(
-    State(state): State<AppState>,
-    auth: AuthSession,
-    session: Session,
-    headers: HeaderMap,
-    Form(form): Form<SkipRestForm>,
-) -> Page {
-    let user = reader(&auth)?;
-    if !allowed(&headers, &session, &form.csrf).await? {
-        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
-    }
-    let pool = &state.pool;
-    if db::pipeline_ready(pool).await? {
-        let articles = db::issue_articles(pool, &user.id, &form.issue).await?;
-        let articles: Vec<&str> = articles.iter().map(String::as_str).collect();
-        db::skip_rest(pool, &user.id, &articles, "web").await?;
-    }
-    Ok(Redirect::to(safe_back(form.back.as_deref())).into_response())
 }
 
 pub(crate) fn back_to(back: &Option<String>, article: &str) -> Page {

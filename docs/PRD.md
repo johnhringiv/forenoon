@@ -349,7 +349,6 @@ are dropped and counted in the report.
   - one chapter per article: title, author, source, date, reading time, a link to the
     original, a "Skip this one" link, the body, then the rating links (section 7); a
     "Contents" link at the top and bottom;
-  - a last page with "Mark unrated as skipped" (section 7);
   - a navigation table so the e-reader's own "go to" menu lists every article.
 - **Format `articles`.** One EPUB per article, titled `FN YYYY-MM-DD · Source · Title`.
 - Output is EPUB 3 with an NCX for older converters, and is byte-for-byte reproducible for
@@ -390,11 +389,10 @@ it was worth to them (**verdict**). Either can be given without the other.
   this one". After the body, "How was it?" and the four verdicts; one of these taps records
   the verdict and that the article was finished, since the reader is at its end. Under them,
   "Did not finish it? Stopped partway" records only that; the page it opens offers the
-  verdicts. The last
-  page of each daily issue has "Mark unrated as skipped", which skips every article in
-  that book the reader has given nothing for (a book sent on request has no such page).
+  verdicts. There is no way to skip a whole issue at once: a skip is one deliberate tap, and
+  an article given nothing says nothing.
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
-  article (for "Mark unrated as skipped", the book's articles), signal and expiry (default 60
+  article, signal and expiry (default 60
   days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
   small page stating what is now stored ("Worth it, finished."), then the reasons that fit,
@@ -424,15 +422,14 @@ it was worth to them (**verdict**). Either can be given without the other.
   the install, not a rating or a reason: it is logged, written to the extraction log, and
   listed for admins on the web pages' Problems page. The rating is left as it was.
 - **Latest tap wins** for verdict, progress and reason. Every tap is also kept in an event
-  log; "Mark unrated as skipped", in the book or on the web pages, is logged as `skip-rest` against
-  each article it skipped, so a sweep can be told from "Skip this one".
+  log.
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
 not use them). The model is given the 40 most recent with a verdict, and with them the 15
-most recent skips, so that "Mark unrated as skipped" cannot push the verdicts out; progress with
+most recent skips, so that a run of skips cannot push the verdicts out; progress with
 no verdict is left out. Each comes with its verdict and progress, the article's length, why
 it was picked and the reader's reason when there is one. The model is told what each means: a
 verdict is strong, "not for me" about the subject (or the reader's level, when the reason
@@ -829,9 +826,7 @@ database with the pipeline.
 - **Ratings can be changed there**: choose or change the verdict; say finished, stopped
   partway or skipped; choose the reason with one click; or clear the rating. A verdict given
   there leaves progress as it was, since the web pages cannot tell how far the reader got;
-  pressing the choice already made records nothing.
-  Each issue with articles given nothing has "Mark unrated as skipped", as the book's last
-  page does. Changes are logged like taps, with `web` as their source.
+  pressing the choice already made records nothing. Changes are logged like taps, with `web` as their source.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything
   delivered to them, and everything the model weighed for them and passed over (section 7g).
   A row shows the source, the title linked to the original, the summary when there is one,
@@ -860,11 +855,10 @@ database with the pipeline.
   issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
   Kindle" is outlined in it and set apart from the rating. The small plain buttons are
-  choices. A rating is two pick-one groups, each drawn as one joined control with the choice
-  made filled in: "How was it?" (the four verdicts, two by two on a narrow card) and "How far
-  did you get?" (finished, partway, skipped). The reasons that fit follow as rounded tags, a
-  chosen one ticked, and a small "Clear" link sits by the first group once anything is
-  recorded. The pages work without scripts, so the Archive's filters apply when "Apply
+  choices. A rating is the four verdicts as one joined control, two by two on a narrow card,
+  the one chosen filled in; under it a quiet line of text choices for how far the reader got
+  (finished, partway, skipped), the one chosen ticked, and "Clear" once anything is recorded.
+  The reasons that fit a verdict follow as rounded tags, a chosen one ticked. The pages work without scripts, so the Archive's filters apply when "Apply
   filters" is pressed.
 - **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
   of the masthead switches; the choice is kept in that browser, and choosing what the system

@@ -1191,7 +1191,7 @@ pub async fn record_feedback(
     source: &str,
 ) -> Result<Rating, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let rating = record_in(&mut tx, user, article, signal, &signal.to_string(), source).await?;
+    let rating = record_in(&mut tx, user, article, signal, source).await?;
     tx.commit().await?;
     Ok(rating)
 }
@@ -1201,11 +1201,10 @@ async fn record_in(
     user: &str,
     article: &str,
     signal: &Signal,
-    logged: &str,
     source: &str,
 ) -> Result<Rating, sqlx::Error> {
     let now = now_iso();
-    let text = logged;
+    let text = signal.to_string();
     sqlx::query!(
         "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
         user,
@@ -1244,41 +1243,6 @@ async fn record_in(
     .execute(&mut **tx)
     .await?;
     Ok(rating)
-}
-
-/// "Mark unrated as skipped": skip each of these articles delivered to the reader that they have
-/// given nothing for. Returns how many were skipped.
-pub async fn skip_rest(pool: &SqlitePool, user: &str, articles: &[&str], source: &str) -> Result<usize, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    let mut skipped = 0;
-    for article in articles {
-        let open = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "n!: i64" FROM deliveries d WHERE d.user_id = ?1 AND d.article_id = ?2
-               AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.user_id = ?1 AND r.article_id = ?2)"#,
-            user,
-            article
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        if open > 0 {
-            // Logged as the sweep it was, so it can be told from "Skip this one" later.
-            record_in(&mut tx, user, article, &Signal::Skip, "skip-rest", source).await?;
-            skipped += 1;
-        }
-    }
-    tx.commit().await?;
-    Ok(skipped)
-}
-
-/// The articles of one issue (one delivery time) that were sent, not shown only as links.
-pub async fn issue_articles(pool: &SqlitePool, user: &str, delivered_at: &str) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar!(
-        "SELECT article_id FROM deliveries WHERE user_id = ? AND delivered_at = ? AND link_only = 0",
-        user,
-        delivered_at
-    )
-    .fetch_all(pool)
-    .await
 }
 
 /// Forget an article's verdict, progress and reason; the event log keeps the history.
