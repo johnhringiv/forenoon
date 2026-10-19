@@ -311,3 +311,19 @@ def test_references_classed_like_a_footer_survive_readability():
     out = lxml.html.tostring(extract("https://blog.example/post/", page, "").body, encoding="unicode")
     assert out.count('class="noteref"') == 2 and out.count("<aside") == 2
     assert '<a href="#fnref-1">1</a> The first note.' in out and '<a href="#fnref-2">[2]</a> The second note.' in out
+
+
+def test_a_link_to_a_numbered_figure_or_equation_is_not_a_footnote():
+    """arXiv's shape: "Figure <a>15</a>" links to the figure, which stays where it is."""
+    filler = "<p>" + "Plain words about byte tokenizers and drafts. " * 30 + "</p>"
+    page = f"""<html><body><article><p>As Figure&nbsp;<a href="#F15">15</a> shows, and Equation
+    (<a href="#E1">1</a>) says.<sup><a href="#fn1">2</a></sup></p>{filler}
+    <figure id="F15"><img src="/f15.png"><figcaption>Figure 15: Small drafts.</figcaption></figure>
+    <table id="E1"><tr><td>L = E + A</td><td>(1)</td></tr></table>
+    <p>The paragraph after the figure.</p>{filler}
+    <ol><li id="fn1">The real note.</li></ol></article></body></html>"""
+    out = lxml.html.tostring(extract("https://arxiv.example/html/1", page, "").body, encoding="unicode")
+    assert out.count('class="noteref"') == 1 and out.count("<aside") == 1
+    notes = out.index("<h3>Notes</h3>")
+    assert out.index("Figure 15: Small drafts.") < out.index("The paragraph after the figure.") < notes
+    assert "L = E + A" not in out[notes:] and "The real note." in out[notes:]

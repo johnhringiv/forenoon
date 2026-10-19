@@ -46,6 +46,9 @@ LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 NOTE_LABEL = re.compile(r"^[\[(]?(\d{1,3}|[*†‡§¶]{1,3}|[a-z])[\])]?$")
 NOTE_MAX_CHARS = 4000
+# "Figure 3", "Equation (2)", "Section 4": a capitalised word, a space, then the number as a
+# link. That is a cross-reference to something numbered in the text, not a footnote.
+CROSS_REFERENCE = re.compile(r"\b[A-Z][a-z]+\.?\s+\(?$")
 NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
 SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note"}
@@ -140,8 +143,23 @@ def _classes(el: lxml.html.HtmlElement) -> set[str]:
     return set((el.get("class") or "").lower().split())
 
 
+def _cross_reference(ref: lxml.html.HtmlElement, label: str) -> bool:
+    """Whether a numbered link reads as "Figure 3" rather than as a footnote's marker."""
+    el = ref
+    while el.getparent() is not None and " ".join(el.getparent().text_content().split()) == label:
+        el = el.getparent()  # wrappers holding only the link, such as a <sup>
+    if not label.isdigit() or any(e.tag == "sup" for e in (el, *el.iterdescendants())):
+        return False
+    before = el.getprevious()
+    text = (before.tail if before is not None else el.getparent().text if el.getparent() is not None else "") or ""
+    return bool(CROSS_REFERENCE.search(text))
+
+
 def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: lxml.html.HtmlElement):
-    """The element holding the note a link points at, or None when the target is not a note."""
+    """The element holding the note a link points at, or None when the target is not a note:
+    a figure, or anything the link names as numbered in the text ("see Figure 3")."""
+    if target.tag == "figure" or _cross_reference(ref, " ".join(ref.text_content().split())):
+        return None
     el = target
     # The id is often on a marker inside the note; the note is the block around it.
     while el.tag in INLINE_WRAPPERS and el.getparent() is not None and el.getparent() is not root:
