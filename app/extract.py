@@ -590,7 +590,7 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
 # One of a box's class names or its id, whole: "newsletter", "ars-newsletter-shortcode",
 # "next-post"; not "sponsored-content" or "subscribe-model", which may be an article's.
 SELLS_NAME = re.compile(
-    r"(\w+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|promo|next-(post|article|story))"
+    r"([a-z0-9]+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|promo|next-(post|article|story))"
     r"([_-]+(box|block|wrap|wrapper|container|shortcode|widget|form|cta|module|section|signup|inline))?",
     re.IGNORECASE,
 )
@@ -608,6 +608,7 @@ BIO_MIN_WORDS = 12
 AUTHOR_PATH = re.compile(r"/(author|authors|people|staff|contributors?)/[^/?#]+/?$", re.IGNORECASE)
 AUTHOR_BOX = re.compile(r"author|vcard|byline|\bbio\b|sabox", re.IGNORECASE)
 LONE_LINK_MAX_WORDS = 5
+MORE_BY = re.compile(r"(more|all|other|read more) (from|by|of|stories|articles|posts|pieces|work)\b", re.IGNORECASE)
 SELF_LINK_LABEL = re.compile(r"share( this( post| article)?)?|read more\W*", re.IGNORECASE)
 CONTROL_TEXT_MAX_WORDS = 12
 PLAYER_NAME = re.compile(r"(^|[\s_-])(player|audio-player|tts-player)([\s_-]|$)", re.IGNORECASE)
@@ -617,17 +618,29 @@ CONTENT_XPATH = ".//table | .//pre | .//blockquote | .//video | .//audio | .//if
 
 
 def _host_path(href: str) -> str:
-    parts = urlsplit(href)
-    return (parts.hostname or "").removeprefix("www.") + parts.path.rstrip("/")
+    """A link's host and path, or "" for one that does not parse ("http://[link]")."""
+    try:
+        parts = urlsplit(href)
+        return (parts.hostname or "").removeprefix("www.") + parts.path.rstrip("/")
+    except ValueError:
+        return ""
 
 
 def _off_site(href: str, base_url: str) -> bool:
-    a, b = (urlsplit(x).hostname or "" for x in (href, base_url))
+    try:
+        a, b = (urlsplit(x).hostname or "" for x in (href, base_url))
+    except ValueError:
+        return False
     return bool(a) and a.removeprefix("www.") != b.removeprefix("www.")
 
 
 def _author_link(a) -> bool:
-    return "author" in (a.get("rel") or "").split() or bool(AUTHOR_PATH.search(urlsplit(a.get("href") or "").path))
+    if "author" in (a.get("rel") or "").split():
+        return True
+    try:
+        return bool(AUTHOR_PATH.search(urlsplit(a.get("href") or "").path))
+    except ValueError:
+        return False
 
 
 def _sells_name(el) -> bool:
@@ -834,7 +847,8 @@ def _drop_lone_links(body, url: str) -> None:
             continue  # a class here is ours: a note reference, a card
         if urlsplit(href).query and not SELF_LINK_LABEL.fullmatch(text):
             continue  # "Continue to page 2": the same page, another part of it
-        if _host_path(href) == page or _author_link(a):
+        # A link to the author's page that offers more of them, not a byline that is their name.
+        if (page and _host_path(href) == page) or (_author_link(a) and MORE_BY.match(text)):
             el.drop_tree()
 
 

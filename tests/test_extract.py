@@ -1565,3 +1565,17 @@ def test_comments_beside_an_author_box_do_not_stop_the_notes():
         "</article></body></html>"
     )
     assert "The note itself" in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_malformed_address_or_a_bare_byline_costs_nothing():
+    words = _paragraphs("Article", 8)
+    page = (
+        f"<html><body><article><h1>Story</h1>{words}<p>A claim.<sup><a href='#fn1' id='r1'>1</a></sup></p>"
+        "<div class='tags'><a href='http://[bad/x'>bad link</a></div>"
+        "<ol class='footnotes'><li id='fn1'>The note itself, with its source. <a href='#r1'>↩</a></li></ol></article></body></html>"
+    )
+    assert "The note itself" in extract("https://blog.example/a", page, "", "page").body.text_content()
+    byline = f"<html><body><article><h1>Story</h1><div><a href='https://news.example/author/jeremy-white/'>Jeremy White</a></div>{words}</article></body></html>"
+    assert "Jeremy White" in extract("https://news.example/story/", byline, "", "page").body.text_content()
+    more = f"<html><body><article><h1>Story</h1>{words}<p><a href='https://news.example/author/jeremy-white/'>More from Jeremy White</a></p></article></body></html>"
+    assert "More from" not in extract("https://news.example/story/", more, "", "page").body.text_content()
