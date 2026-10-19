@@ -1656,3 +1656,26 @@ def test_a_short_post_opening_with_its_byline_or_held_in_a_named_box_stays():
     )
     page = f"<html><body>{nav}<article><h1>This week</h1>{issue}</article>{footer}</body></html>"
     assert "Issue line 3" in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_picture_by_a_form_a_series_list_and_a_written_outline_stay():
+    words = _paragraphs("Article", 8)
+
+    def out(block, url="https://news.example/2026/vote/"):
+        page = f"<html><body><article><h1>Vote</h1>{words}{block}{words}</article></body></html>"
+        return extract(url, page, "", "page").body.text_content()
+
+    assert "The mayor at the vote" in out(
+        "<div><figure><img src='/m.jpg'><figcaption>The mayor at the vote.</figcaption></figure>"
+        "<form><input type='email'><button>Alerts</button></form></div>"
+    )
+    series = (
+        "<p>This story is part of a series on the vote:</p><ul><li><a href='https://news.example/2026/count/'>Part 1: The count</a></li>"
+        "<li><a href='https://news.example/2026/vote/'>Part 2: The vote</a></li><li><a href='https://news.example/2026/after/'>Part 3: After</a></li></ul>"
+    )
+    body = lxml.html.fromstring(f"<div>{series}</div>")
+    extract_module._drop_lone_links(body, "https://news.example/2026/vote/")
+    assert "Part 2: The vote" in body.text_content()
+    assert "Background of the dispute" in out(
+        "<h4>Contents</h4><ul class='toc'><li>Background of the dispute</li><li>What the council decided</li></ul>"
+    )

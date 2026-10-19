@@ -614,6 +614,7 @@ MORE_BY = re.compile(r"(more|all|other|read more) (from|by|of|stories|articles|p
 SELF_LINK_LABEL = re.compile(r"share( this( post| article)?)?|read more\W*", re.IGNORECASE)
 CONTROL_TEXT_MAX_WORDS = 12
 PLAYER_NAME = re.compile(r"(^|[\s_-])(player|audio-player|tts-player)([\s_-]|$)", re.IGNORECASE)
+TOC_ITEM_WORDS = 2
 TOC_NAME = re.compile(r"(^|[\s_-])(toc|table-of-contents)([\s_-]|$)", re.IGNORECASE)
 TOC_HEADING = re.compile(r"(table of )?contents\W*", re.IGNORECASE)
 CONTENT_XPATH = ".//table | .//pre | .//blockquote | .//video | .//audio | .//iframe | .//h1"
@@ -800,6 +801,8 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
     for lst in list(root.iter("ul", "ol")):
         if lst.getparent() is None or not TOC_NAME.search(_names(lst)) or lst.xpath(".//a[@href]") or not ok(lst):
             continue
+        if any(_words(li.text_content()) > TOC_ITEM_WORDS for li in lst.iter("li")):
+            continue  # an outline written out, not a placeholder
         before = lst.getprevious()
         if (
             before is not None
@@ -853,7 +856,7 @@ def _drop_signup_forms(root, page_words: int, linked_to: set) -> None:
                 if next(el.iterancestors("form"), None) is None and el is not anc
             ]
             limit = SELLS_MAX_WORDS if named else SIGNUP_CLIMB_WORDS
-            if outside > limit or prose or anc.xpath(CONTENT_XPATH):
+            if outside > limit or prose or anc.xpath(CONTENT_XPATH) or anc.xpath(".//figure | .//img | .//picture"):
                 break
             if blocks and not named:
                 continue  # not this box on its name's say-so; a sign-up box around it may be
@@ -877,6 +880,10 @@ def _drop_lone_links(body, url: str) -> None:
             continue
         if el.xpath(".//h1|.//h2|.//h3|.//h4|.//h5|.//h6"):
             continue
+        if el.tag == "li" and any(
+            isinstance(sib.tag, str) for sib in (*el.itersiblings(), *el.itersiblings(preceding=True))
+        ):
+            continue  # one item of a list, such as a series' parts: this part, linked like the rest
         text = " ".join(el.text_content().split())
         links = [a for a in el.iter("a") if a.get("href")]
         if not text or len(links) != 1 or _words(text) > LONE_LINK_MAX_WORDS:
