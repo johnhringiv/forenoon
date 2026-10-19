@@ -406,3 +406,15 @@ def test_section_headings_classed_like_a_header_survive():
     </div></article></body></html>"""
     out = extract("https://writer.example/p/post", page, "").body
     assert [h.text_content() for h in out.iter("h2", "h5")] == ["The methodology"]
+
+
+def test_a_side_note_inside_a_footnote_stays_in_it():
+    """It used to be numbered on its own with a reference the page cannot parse, and the
+    whole structure pass fell back: no notes at all."""
+    filler = "<p>" + "Plain words about lattice models of magnets. " * 30 + "</p>"
+    page = f"""<html><body><article><p>A claim.<a href="#fn1">1</a></p>{filler}
+    <ol><li id="fn1">The note.<span class="ltx_note ltx_role_footnote">An aside in it.</span></li></ol>
+    </article></body></html>"""
+    out = lxml.html.tostring(extract("https://arxiv.example/html/1", page, "").body, encoding="unicode")
+    assert out.count('class="noteref"') == 1 and out.count("<aside") == 1
+    assert '<a href="#fnref-1">1</a> The note.An aside in it.' in out

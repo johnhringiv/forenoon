@@ -305,12 +305,15 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
             anchor.set(MARK, "jump")
             anchor.set(MARK_N, number)
     for el in list(root.iter("span", "aside", "small", "div", "blockquote")):
-        if _classes(el) & SIDENOTE_CLASSES and id(el) not in numbers and el is not root and el.getparent() is not None:
-            notes.append((str(len(notes) + 1), el))
-            numbers[id(el)] = len(notes)
-            ref = etree.Element("a", {MARK: "ref", MARK_N: str(len(notes)), MARK_FIRST: "1"})
-            ref.text = str(len(notes))
-            el.addprevious(ref)
+        if not _classes(el) & SIDENOTE_CLASSES or id(el) in numbers or el is root or el.getparent() is None:
+            continue
+        if any(id(ancestor) in numbers for ancestor in el.iterancestors()):
+            continue  # a side note inside a note stays where it is, as part of that note
+        notes.append((str(len(notes) + 1), el))
+        numbers[id(el)] = len(notes)
+        ref = lxml.html.Element("a", {MARK: "ref", MARK_N: str(len(notes)), MARK_FIRST: "1"})
+        ref.text = str(len(notes))
+        el.addprevious(ref)
     # Readability deletes a heading whose class merely sounds like page furniture, as
     # Substack's "header-anchor-post" does (it has "header" in it), and an article loses its
     # section titles. Such a class goes, unless it or the class of the box the heading is
@@ -327,15 +330,21 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     etree.SubElement(holder, "h3").text = "Notes"
     emptied = []
     for number, (label, body) in enumerate(notes, 1):
-        emptied.append(body.getparent())
-        body.drop_tree()  # keeps the text that followed it in place
+        if body.getparent() is not None:  # not already taken out with a link inside a note
+            emptied.append(body.getparent())
+            body.drop_tree()  # keeps the text that followed it in place
         body.tail = None
         for link in list(body.iter("a")):  # "back to the text" links; ours replaces them
             if link.get(MARK) is None and (in_page(link) in targets):
                 text = " ".join(link.text_content().split())
                 link.drop_tree() if len(text) <= 2 or text.lower() in BACK_LABELS else link.drop_tag()
         for child in body.iter(etree.Element):  # the note's own printed number, which ours repeats
-            if child is not body and " ".join(child.text_content().split()) == label and not len(child):
+            if (
+                child is not body
+                and id(child) not in numbers
+                and _norm(child.text_content()) == _norm(label)
+                and not len(child)
+            ):
                 child.drop_tree()
                 break
         body.tag = "div"
