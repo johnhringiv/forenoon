@@ -47,9 +47,14 @@ LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 NOTE_LABEL = re.compile(r"^[\[(]?(\d{1,3}|[*†‡§¶]{1,3}|[a-z])[\])]?$")
 NOTE_MAX_CHARS = 4000
-# "Figure 3", "Equation (2)", "Section 4": a capitalised word, a space, then the number as a
-# link. That is a cross-reference to something numbered in the text, not a footnote.
-CROSS_REFERENCE = re.compile(r"\b[A-Z][a-z]+\.?\s+\(?$")
+# "Figure 3", "Equation (2)", "Sec. 4": the name of something numbered in the text, then its
+# number as a link. That is a cross-reference to it, not a footnote. "Boston 1" and "see
+# Note 3" are footnotes.
+CROSS_REFERENCE = re.compile(
+    r"\b(fig(ure)?s?|tab(le)?s?|eq(uation)?s?|eqn|sec(tion)?s?|app(endix)?|chap(ter)?|alg(orithm)?|"
+    r"listing|theorem|thm|lemma|corollary|proposition|prop|definition|def)\.?\s*\(?$|§\s*$",
+    re.IGNORECASE,
+)
 NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
 # LaTeXML (arXiv's HTML) writes each footnote in the text the same way, with its number twice.

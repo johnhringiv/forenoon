@@ -429,3 +429,14 @@ def test_a_link_that_cannot_be_read_as_an_address_goes_nowhere():
     <ol><li id="fn1">The note.</li></ol></article></body></html>"""
     out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
     assert "A broken link here." in out and '<a href="#fnref-1">1</a> The note.' in out
+
+
+def test_a_number_after_a_word_that_names_nothing_numbered_is_a_footnote():
+    filler = "<p>" + "Plain words about harbour tides and dredging. " * 30 + "</p>"
+    page = f"""<html><body><article><p>First seen in Boston <a href="#n1">1</a>, as Smith
+    <a href="#n2">2</a> says (see Note <a href="#n3">3</a>), unlike Sec. <a href="#s4">4</a>.</p>{filler}
+    <h2 id="s4">Method</h2>{filler}
+    <ol><li id="n1">One.</li><li id="n2">Two.</li><li id="n3">Three.</li></ol></article></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
+    assert out.count('class="noteref"') == 3 and out.count("<aside") == 3
+    assert 'Sec. <a href="#sec-1">4</a>' in out
