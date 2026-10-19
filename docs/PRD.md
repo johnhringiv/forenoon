@@ -324,6 +324,13 @@ All fetched content is treated as untrusted.
     their text, or with scroll margins are kept, and so is a real table (with header cells
     or a caption) in a scrolling box or under any heading. A heading an article ends on
     ("Related", "Comments", "Back to top") is not freed.
+  - Boxes that sell, credit or play are dropped by their markup: a sign-up form (one asking
+    for an email address) and the box around it when that only pitches it; a short box named
+    for a newsletter, a sponsor, a promotion or the next story, with a call to act in it; an
+    advert card whose links all go to one address off the site; an author box at the end that
+    opens with a link marked as the author's and names them; a player's controls; a table of
+    contents a script was to fill; and, at the end, a line that is only a short link to the
+    page itself ("Share", "Read more") or to an author's page.
   - The label a "skip past" link jumps to ("after newsletter promotion"), which is there for
     screen readers, is dropped with the link.
   - Asides that are not the article are dropped: a teaser (a short label and then only
