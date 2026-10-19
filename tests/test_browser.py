@@ -298,3 +298,95 @@ def test_a_busy_browser_is_not_taken_for_a_stopped_one(tmp_path, monkeypatch):
         sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=0.05, poll=0.01)
     with pytest.raises(FetchError, match="timed out earlier"):
         sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=5)
+
+
+def test_a_view_of_the_live_page_is_asked_for_only_while_the_browser_runs(tmp_path):
+    import os
+    import threading
+
+    from app import sessions
+    from app.fetch import FetchError
+
+    started = time.monotonic()
+    with pytest.raises(FetchError, match="not running"):
+        sessions.page_view(tmp_path, "", "https://blog.example/a", "the chart", wait=30)
+    assert time.monotonic() - started < 1
+    (tmp_path / ".fetch").mkdir()
+    (tmp_path / ".fetch" / "alive").touch()
+
+    def answer(reply: str, content: bytes):
+        for _ in range(200):
+            waiting = list((tmp_path / ".fetch").glob("*.json"))
+            if waiting:
+                wanted = json.loads(waiting[0].read_text())
+                assert wanted.pop("until") > time.time()
+                assert wanted == {"session": "site-paper.example", "url": "https://paper.example/a", "view": "Figure 2"}
+                waiting[0].unlink()
+                partial = waiting[0].with_name(".answer.tmp")  # whole or not at all, as the container writes
+                partial.write_bytes(content)
+                os.replace(partial, waiting[0].with_suffix(reply))
+                return
+            time.sleep(0.01)
+
+    for reply, content in ((".view", b"jpeg"), (".err", b"that text is not on the live page")):
+        worker = threading.Thread(target=answer, args=(reply, content))
+        worker.start()
+        asked = (tmp_path, "site-paper.example", "https://paper.example/a", "Figure 2")
+        if reply == ".view":
+            assert sessions.page_view(*asked, wait=5, poll=0.01) == b"jpeg"
+        else:
+            with pytest.raises(FetchError, match="not on the live page"):
+                sessions.page_view(*asked, wait=5, poll=0.01)
+        worker.join()
+    assert [p.name for p in (tmp_path / ".fetch").iterdir()] == ["alive"], "nothing else is left behind"
+    with pytest.raises(FetchError, match="longer than"):
+        sessions.page_view(tmp_path, "", "https://blog.example/a", "", wait=0.05, poll=0.01)
+
+
+def test_the_browser_takes_a_view_with_the_sites_session_or_with_none(tmp_path):
+    import os
+
+    runner = _fetcher()
+    out, logins = tmp_path / "sessions", tmp_path / "logins"
+    (out / ".fetch").mkdir(parents=True)
+    logins.mkdir()
+    (logins / "site-paper.example.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example"}')
+    seen = []
+
+    def viewer(url, session, name, text, until):
+        seen.append((url, session.get("cookie"), text))
+        return b"jpeg"
+
+    later = time.time() + 60
+    requests = [
+        {"session": "", "url": "https://blog.example/a", "view": "", "until": later},
+        {"session": "site-paper.example", "url": "https://paper.example/b", "view": "Table 1", "until": later},
+        {"session": "site-other.example", "url": "https://paper.example/c", "view": "", "until": later},
+        {"session": "", "url": "https://blog.example/d", "view": 3, "until": later},
+        {"session": "", "url": "https://blog.example/e", "view": "", "until": time.time() - 1},
+    ]
+    ids = [c * 32 for c in "abcde"]
+    for n, (name, wanted) in enumerate(zip(ids, requests, strict=True)):
+        path = out / ".fetch" / f"{name}.json"
+        path.write_text(json.dumps(wanted))
+        os.utime(path, (time.time() - 100 + n, time.time() - 100 + n))
+    assert runner.answer_fetches(out, logins, viewer=viewer) == 5
+    assert (out / ".fetch" / f"{ids[0]}.view").read_bytes() == b"jpeg"
+    assert (out / ".fetch" / f"{ids[1]}.view").read_bytes() == b"jpeg"
+    # A session with no saved cookie is read without one, as figure pictures are.
+    assert (out / ".fetch" / f"{ids[2]}.view").read_bytes() == b"jpeg" and seen[2][1] is None
+    assert (out / ".fetch" / f"{ids[3]}.err").read_text() == "not a phrase to look for"
+    assert (out / ".fetch" / f"{ids[4]}.err").read_text() == "nobody is waiting for this view any more"
+    assert seen[:2] == [("https://blog.example/a", None, ""), ("https://paper.example/b", "session=s3cret", "Table 1")]
+    assert not (out / "status.json").exists(), "a view says nothing about the session"
+
+
+def test_a_view_is_refused_for_a_page_off_the_sessions_site_or_off_the_internet():
+    runner = _fetcher()
+    later = time.time() + 60
+    session = {"cookie": "session=s3cret", "domain": "paper.example"}
+    with pytest.raises(ValueError, match="not a page on paper.example"):
+        runner.take_view("https://elsewhere.example/a", session, "site-paper.example", "", later)
+    for url in ("http://blog.example/a", "https://127.0.0.1/a", "https://localhost/a"):
+        with pytest.raises(ValueError, match="not a public https address"):
+            runner.take_view(url, {}, "", "", later)
