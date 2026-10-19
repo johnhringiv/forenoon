@@ -1053,9 +1053,11 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back the rest of an article that the page splits into boxes around an advert.
 
     Ars Technica ends one box of the article's paragraphs at an advert and starts a second box,
-    of the same kind and class, after it; readability keeps the first box and the article
+    of the same kind and class, after it; Yahoo puts the second half in a box of its own after
+    the first, behind a "read more" button. Readability keeps the first box and the article
     stops halfway. A later box is taken as more of the article only when it has the class of
-    the box holding the article's last paragraph, sits near it on the page, and is itself
+    the box holding the article's last paragraph and sits near it on the page, or follows
+    that box beside it and its paragraphs have the class of the article's; and it is itself
     paragraphs of text: it opens with a paragraph or heading, holds at least three paragraphs
     of some length, and is mostly not links. A run of comments, a reporter's note or a list
     of related stories in a box of the same class is none of these together. Only the box's
@@ -1070,9 +1072,10 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
         return
     last = _norm(paragraphs[-1].text_content())
     found = [p for p in page.iter("p") if _norm(p.text_content()) == last]
-    if len(found) != 1 or not found[0].getparent().get("class"):
+    if len(found) != 1:
         return
-    box = found[0].getparent()
+    box, style = found[0].getparent(), found[0].get("class")
+    siblings = set(box.itersiblings()) if style else set()
     near = list(box.iterancestors())[:CONTINUATION_DEPTH]
     if FURNITURE_CLASS.search(_names(box)) or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(_names(box)):
         return
@@ -1085,12 +1088,14 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
         if el is box:
             after = True
             continue
-        if not after or el.get("class") != box.get("class") or box in el.iterancestors():
-            continue
-        if not any(a in near for a in el.iterancestors()):
+        if not after or box in el.iterancestors():
             continue
         children = [c for c in el if isinstance(c.tag, str)]
         long = [c for c in children if c.tag == "p" and _words(c.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+        same_box = box.get("class") and el.get("class") == box.get("class")
+        same_paragraphs = el in siblings and long and all(c.get("class") == style for c in long)
+        if not (same_box and any(a in near for a in el.iterancestors())) and not same_paragraphs:
+            continue
         text = " ".join(el.text_content().split())
         links = sum(len(" ".join(a.text_content().split())) for a in el.iter("a"))
         if (

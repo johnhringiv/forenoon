@@ -962,3 +962,33 @@ def test_an_article_split_around_an_advert_is_put_back_together():
         _continue_article(body, page(second))
         out = body.text_content()
         assert "Paragraph 11" in out and "Another story" not in out and "Later paragraph" not in out
+
+
+def test_the_half_of_an_article_behind_a_read_more_button_is_put_back():
+    first = "".join(
+        f"<p class='text paragraph'>Paragraph {n} about the deficit and what the government spent in the year to October.</p>"
+        for n in range(12)
+    )
+    rest = "".join(
+        f"<p class='text paragraph'>Later paragraph {n} on tariffs, refunds and the revenue that fell this year.</p>"
+        for n in range(8)
+    )
+    other = "".join(
+        f"<p class='promo'>Later paragraph {n}: more from the markets desk, read it in the app today.</p>"
+        for n in range(8)
+    )
+
+    def page(second):
+        return (
+            f"<html><body><article><div class='body'><div class='bodyItems-wrapper'>{first}</div>"
+            f"<div class='read-more-wrapper'><h2 class='text heading'>Revenue downturn</h2>{second}</div>"
+            "</div></article></body></html>"
+        )
+
+    body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+    _continue_article(body, page(rest))
+    out = body.text_content()
+    assert out.index("Paragraph 11") < out.index("Revenue downturn") < out.index("Later paragraph 7")
+    body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+    _continue_article(body, page(other))
+    assert "Later paragraph" not in body.text_content()
