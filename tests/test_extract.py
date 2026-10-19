@@ -821,3 +821,22 @@ def test_headings_in_their_own_boxes_or_with_unlucky_names_and_page_notices():
     out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
     assert "<h2>Debugging</h2>" in out and "<h3>FreshRSS</h3>" in out
     assert "could not load" not in out and "Preferred Source" not in out
+
+
+def test_reports_of_failures_and_furniture_headings_stay_as_they_were():
+    words = "<p>" + "Plain words about the outage and how the county's systems coped with demand. " * 10 + "</p>"
+    keep = {
+        "Video failed to load for hours": "<p>Video failed to load for hours on Monday as the platform's servers buckled.</p>",
+        "Users saw the message": "<p>Users saw the message <span>video failed to load</span> and then nothing else.</p>",
+        "a feature Google launched": "<p>Readers can now pick outlets at <a href='https://www.google.com/preferences/source'>"
+        "Google's settings</a>, a feature Google launched in August.</p>",
+    }
+    for needle, block in keep.items():
+        page = f"<html><body><article>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle
+    for heading, block in {
+        "Share this story": "<div class='share-header'><h4>Share this story</h4><a href='/s'><svg></svg></a></div>",
+        "Subscribe via RSS": "<h3 class='rssfeed'>Subscribe via RSS</h3>",
+    }.items():
+        page = f"<html><body><article>{words}{words}{block}</article></body></html>"
+        assert heading not in extract("https://news.example/b", page, "", "page").body.text_content(), heading

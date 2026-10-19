@@ -119,12 +119,17 @@ LAYOUT_TABLE_NAME = re.compile(
 )
 # What a page shows where a script's content did not appear, as the whole of a short block.
 LOAD_FAILURE = re.compile(
-    r"^(some |this )?(content|chart|graphic|graphics|interactive|embed|map|video)( content)? (could not|couldn.t|"
-    r"failed to|did not|didn.t) (be )?(load|display|shown?)|^(please )?(enable|turn on|activate) javascript to "
-    r"(see|view|read|load)",
+    r"(some |this )?(content|chart|graphic|graphics|interactive|embed|map|video)( content)? (could not|couldn.t|"
+    r"failed to|did not|didn.t) (be )?(load|display|shown?)\.?( (please )?(check your (internet )?connection"
+    r"( or browser settings)?|refresh the page|try again( later)?)\.?)?|(please )?(enable|turn on|activate) "
+    r"javascript to (see|view|read|load) (this|the) (content|chart|graphic|map|video|page)\.?",
     re.IGNORECASE,
 )
-NOTICE_MAX_WORDS = 40
+# A request to pick the site as a source on Google ("select us as your Preferred Source").
+PREFERRED_SOURCE = re.compile(r"\b(select|add|choose|set|make|pick) us\b.{0,40}\bpreferred source", re.IGNORECASE)
+SECTION_TEXT_WORDS = 8  # a section's first paragraph, at least: what makes a heading the article's
+NOTICE_MAX_WORDS = 25
+PROMPT_MAX_WORDS = 45  # a "select us as your Preferred Source" request, which says why at some length
 TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
 REFILL_FURNITURE = re.compile(
@@ -316,13 +321,22 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
         # part of a name ("site-header-title", "comments").
         parts = re.split(r"[\s_-]+", names.lower())
         whole = any(unlikely.fullmatch(part) for part in parts if part)
-        if unlikely.search(names) and not whole and not maybe.search(names) and not FURNITURE_CLASS.search(names):
+        if (
+            unlikely.search(names)
+            and not whole
+            and not maybe.search(names)
+            and not FURNITURE_CLASS.search(names)
+            and _section_text_follows(heading)
+        ):
             heading.attrib.pop("class", None)
             heading.attrib.pop("id", None)
         box = heading.getparent()
         if box is None or box is root or box.tag not in ("div", "section") or (box.text or "").strip():
             continue
         others = [child for child in box if child is not heading]
+        box_names = _names(box)
+        if not others or unlikely.search(box_names) or FURNITURE_CLASS.search(box_names):
+            continue  # a box's own name may be all that keeps furniture out ("share-header")
         if (
             all(
                 isinstance(child.tag, str)
@@ -338,18 +352,33 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
             box.drop_tag()
 
 
+def _section_text_follows(heading: lxml.html.HtmlElement) -> bool:
+    """Whether a heading is followed by a paragraph of the article's own words, not by links."""
+    following = heading.getnext()
+    if following is None or following.tag not in ("p", "div", "ul", "ol", "blockquote", "pre", "table"):
+        return False
+    text = " ".join(following.text_content().split())
+    linked = sum(len(" ".join(a.text_content().split())) for a in following.iter("a"))
+    return _words(text) >= SECTION_TEXT_WORDS and linked < 0.5 * len(text)
+
+
 def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
     """Remove what a page shows in place of a script that did not run ("Some content could not
-    load"), and a request to pick the site as a preferred source on Google: neither is the
-    article, and neither is ever more than a line."""
-    for el in list(root.iter("p", "div", "span")):
-        if el.getparent() is None or next(el.iterdescendants("p", "div", *HEADINGS), None) is not None:
+    load. Check your internet connection…"), and a request to pick the site as a preferred
+    source on Google: neither is the article. Only a short paragraph or box that is the notice
+    and nothing else, with no picture or list in it; a sentence that reports such a failure
+    ("Video failed to load for hours on Monday…") is the article's."""
+    media = ".//p | .//div | .//img | .//picture | .//video | .//figure | .//ul | .//ol | .//table"
+    for el in list(root.iter("p", "div")):
+        if el.getparent() is None or el.xpath(media):
             continue
         text = " ".join(el.text_content().split())
-        if not text or _words(text) > NOTICE_MAX_WORDS:
+        if not text:
             continue
         preferred = any("google.com/preferences/source" in (a.get("href") or "") for a in el.iter("a"))
-        if LOAD_FAILURE.match(text) or preferred:
+        notice = _words(text) <= NOTICE_MAX_WORDS and LOAD_FAILURE.fullmatch(text)
+        asks = preferred and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
+        if notice or asks:
             el.drop_tree()
 
 
