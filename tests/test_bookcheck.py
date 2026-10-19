@@ -631,7 +631,7 @@ def test_page_copy_brings_the_pages_own_markup_into_an_edit(check):
     assert answers[4][0]["content"].startswith("copy:3")  # across blocks the article has too
     assert answers[4][1]["is_error"] and "in no block of the page" in answers[4][1]["content"]
     edits = json.loads(_rows(store)[0]["edits"])
-    assert [(e["tool"], e.get("copy")) for e in edits] == [("insert_after", 1), ("replace_blocks", 2)]
+    assert [(e["tool"], e.get("copies")) for e in edits] == [("insert_after", [1]), ("replace_blocks", [2])]
 
 
 def test_a_copy_named_inside_the_models_own_html_is_pasted_not_printed():
@@ -641,7 +641,7 @@ def test_a_copy_named_inside_the_models_own_html_is_pasted_not_printed():
     article.insert(1, "<h2>Sponsors</h2> <p>copy:1</p>")
     html = lxml.html.tostring(article.body, encoding="unicode")
     assert '<h2>Sponsors</h2><p>Our sponsors are <a href="https://s.example">Acme</a>.</p>' in html
-    assert "copy:1" not in html and article.edits[-1]["copy"] == 1
+    assert "copy:1" not in html and article.edits[-1]["copies"] == [1]
     with pytest.raises(bookcheck.ToolError, match="there is no copy:4"):
         article.insert(1, "<h2>More</h2>copy:4")
     article.insert(1, "<p>The file is at http://x.example/copy:1 today.</p>")  # not the name of a copy
@@ -683,14 +683,47 @@ def test_page_copy_reaches_every_word_the_page_shows():
 
 
 def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
-    words = "<p>Same words here.</p>" * 2 + "<p>Unique start.</p>" + "<p>end of it</p>"
+    words = "<p>Same words, one.</p><p>Same words, two.</p><p>Unique start.</p><p>end of it</p><pre>x = 1</pre>" * 1
+    words += "<pre>x = 1</pre>"
     article = bookcheck._Article(
         lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=f"<html><body>{words}</body></html>"
     )
     with pytest.raises(bookcheck.ToolError, match="in 2 blocks of the page"):
         article.copy("Same words", "end of it")
+    # A block the page repeats word for word: the first, said so.
+    assert "the page has this passage's first block 2 times; this is the first" in article.copy("x = 1", "x = 1")
     with pytest.raises(bookcheck.ToolError, match="from the start phrase on"):
         article.copy("end of it", "Unique start")
     monkeypatch.setattr(bookcheck, "COPY_CHARS", 20)
     with pytest.raises(bookcheck.ToolError, match="copy it in parts"):
         article.copy("Unique start", "end of it")
+
+
+def test_page_copy_keeps_spaces_parts_and_the_models_own_code():
+    page = (
+        "<html><body><div><b>Alpha</b> <i>Beta</i><p>para here</p></div>"
+        "<ul><div><li>wrapped item</li></div></ul>"
+        "<figure><img src='/i.png'><div><figcaption>A caption here</figcaption></div></figure>"
+        "<table><thead><th>Filename</th><th>Size</th></thead><tr><td>a</td><td>1</td></tr></table>"
+        f"<p>See <a href='{URL}#n1'>the note</a> and <a href='/other#x'>another page</a>.</p></body></html>"
+    )
+    article = bookcheck._Article(
+        lxml.html.fragment_fromstring("<div><p>x</p></div>"),
+        URL,
+        page_images={"https://blog.example/i.png"},
+        page_html=page,
+    )
+    assert "<p><b>Alpha</b> <i>Beta</i></p>" in article.copy("Alpha", "Beta")
+    assert "<li>wrapped item</li>" in article.copy("wrapped item", "wrapped item")
+    assert "<figcaption>A caption here</figcaption>" in article.copy("A caption here", "A caption here")
+    assert "<th>Filename</th>" in article.copy("Filename", "Filename")
+    note = article.copy("See the note", "another page")  # copy:5
+    assert "the note and" in note and "#n1" not in note and 'href="https://blog.example/other#x"' in note
+    # The model's own code keeps its words; a ">" in an attribute is not the end of the tag; a
+    # copy named as a paragraph of its own is not put inside one.
+    article.insert(1, '<pre>build:\n  copy: 2\n  x = "copy:1"\n</pre>')
+    assert 'x = "copy:1"' in article.body.text_content() and "copy: 2" in article.body.text_content()
+    article.insert(1, '<p title="a > copy:4 b">kept</p>')
+    assert "kept" in article.body.text_content() and "wrapped item" not in article.body.text_content()
+    article.insert(1, "<h2>Sizes</h2><p>copy:4</p>")
+    assert "<h2>Sizes</h2><table>" in lxml.html.tostring(article.body, encoding="unicode")

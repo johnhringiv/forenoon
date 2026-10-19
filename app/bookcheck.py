@@ -24,7 +24,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import lxml.html
 from lxml import etree
@@ -73,7 +73,8 @@ COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
 COPY_LIKE = re.compile(r"(?<![\w/])copy\s*:\s*\d", re.IGNORECASE)  # a copy's name mistyped
-TAG = re.compile(r"(<[^>]*>)")
+TAG = re.compile(r"""(<(?:[^>"']|"[^"]*"|'[^']*')*>)""")  # a tag, with any ">" in its quoted attributes
+COPY_ALONE = re.compile(r"<p>\s*(copy:\d{1,3})\s*</p>")  # a copy's name as a paragraph of its own
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
 VERDICTS = ("ok", "fixed", "cannot_fix")
 KINDS = ("cut_short", "missing_content", "page_furniture", "broken_media", "formatting", "wrong_article", "other")
@@ -147,7 +148,8 @@ headings and quotes. Copy even a single heading, line or code block, and name a 
 your own HTML where you need to (html "<h2>Sponsors</h2>copy:2"). Write HTML yourself only to \
 fix formatting the page's markup does not give (a heading the page shows as a bold paragraph, \
 say), keeping the block's links and emphasis as they are, or when page_copy cannot take a \
-passage page_find shows, copying its text exactly.
+passage page_find shows, copying its text exactly. To leave out furniture in the middle of a \
+passage, copy it in parts and name each copy.
 - Change only the blocks that are wrong. Never replace a block that is right, or rewrite many \
 blocks to fix one.
 - Most articles are fine. When this one is, call finish with verdict "ok" at once, without \
@@ -467,7 +469,7 @@ class _Article:
                 anchor = el
         return self._done("insert_after", after + 1, after, "", new, copied)
 
-    def _done(self, tool: str, first: int, last: int, before: str, new: list, copied: int = 0) -> str:
+    def _done(self, tool: str, first: int, last: int, before: str, new: list, copied: list | None = None) -> str:
         """Record the edit and tidy the article; the new blocks around it, renumbered."""
         after = "\n".join(self.shown(el) for el in new)
         edit = {
@@ -478,7 +480,7 @@ class _Article:
             "after": after[:RECORD_CHARS],
         }
         if copied:
-            edit["copy"] = copied  # the page's own HTML, not the model's
+            edit["copies"] = copied  # the page's own HTML, not the model's
         self.edits.append(edit)
         extract._prune_empty(self.body)
         _tidy_links(self.body)
@@ -503,12 +505,21 @@ class _Article:
         at = [n for n, pair in enumerate(texts) if any(start in text for text in pair)]
         if not at:
             raise ToolError("that start phrase is in no block of the page; check it with page_find")
+        chose = ""
         if len(at) > 1:
             # A heading's words are often a table of contents' too: the block that is just the
-            # phrase, and a heading before any other.
+            # phrase, and a heading before any other; a block the page repeats word for word, the first.
             whole = [n for n in at if start in texts[n]]  # the whole of the block's words, either way
             heads = [n for n in whole if found[n].tag in extract.HEADINGS]
-            at = heads if len(heads) == 1 else whole if len(whole) == 1 else at
+            same = {lxml.html.tostring(found[n], encoding="unicode", with_tail=False) for n in at}
+            picked = heads if len(heads) == 1 else whole if len(whole) == 1 else at[:1] if len(same) == 1 else at
+            if len(picked) == 1:
+                chose = (
+                    f" (the start phrase is in {len(at)} blocks of the page; this is the one that is only that phrase)"
+                )
+                if len(same) == 1:
+                    chose = f" (the page has this passage's first block {len(at)} times; this is the first)"
+            at = picked
         if len(at) > 1:
             raise ToolError(f"that start phrase is in {len(at)} blocks of the page; give a longer one")
         to = next((n for n in range(at[0], len(texts)) if any(end in text for text in texts[n])), None)
@@ -531,7 +542,7 @@ class _Article:
         if len(shown) > COPY_SHOWN_CHARS:
             more = len(shown) - COPY_SHOWN_CHARS
             shown = f"{shown[:COPY_SHOWN_CHARS]} [not the end of the copy: {more} more characters are not shown]"
-        return f"{name}, {to - at[0] + 1} blocks of the page, {len(new)} once cleaned:\n{shown}"
+        return f"{name}, {to - at[0] + 1} blocks of the page, {len(new)} once cleaned{chose}:\n{shown}"
 
     def _page_blocks(self) -> list[lxml.html.HtmlElement]:
         if self._page is None:
@@ -545,9 +556,9 @@ class _Article:
             self._page = _page_blocks(root.find("body")) if root is not None and root.find("body") is not None else []
         return self._page
 
-    def _html(self, html: str) -> tuple[list[lxml.html.HtmlElement], int]:
+    def _html(self, html: str) -> tuple[list[lxml.html.HtmlElement], list[int]]:
         """An edit's blocks, from copies (copy:N, alone or among the model's own HTML) or from the
-        model's own HTML, and the first copy's number (0 for none)."""
+        model's own HTML, and the numbers of the copies it used."""
         used: list[int] = []
 
         def paste(ref: re.Match) -> str:
@@ -559,15 +570,21 @@ class _Article:
 
         if COPY_REF.fullmatch(html.strip()):  # the copy as it is: already cleaned
             pasted = COPY_REF.sub(paste, html.strip())
-            return _as_blocks(lxml.html.fragment_fromstring(pasted, create_parent="div")), used[0]
-        # Named between tags only, never inside one (an attribute), and none mistyped.
-        parts = TAG.split(html)
+            return _as_blocks(lxml.html.fragment_fromstring(pasted, create_parent="div")), used
+        # Named between tags only, never inside one (an attribute) or in the model's own code,
+        # and none mistyped.
+        parts = TAG.split(COPY_ALONE.sub(r"\1", html))
+        code = 0
         for n, part in enumerate(parts):
-            if n % 2 == 0:
+            if n % 2:
+                tag = re.match(r"<(/?)\s*(pre|code)\b", part, re.IGNORECASE)
+                code += (-1 if tag.group(1) else 1) if tag else 0
+                code = max(code, 0)
+            elif not code:
                 if COPY_LIKE.search(COPY_REF.sub("", part)):
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
                 parts[n] = COPY_REF.sub(paste, part)
-        return self.clean("".join(parts)), used[0] if used else 0
+        return self.clean("".join(parts)), used
 
     def clean(self, html: str, from_page: bool = False) -> list[lxml.html.HtmlElement]:
         """The model's HTML as blocks the article may hold: through the extractor's allowlist,
@@ -591,9 +608,9 @@ class _Article:
                 el.attrib.pop("id", None)  # the page's own ids are not the article's
                 if el.tag == "h1":
                     el.tag = "h2"
-                elif el.tag in PART_OF and (el.getparent() is None or el.getparent().tag not in PART_OF[el.tag]):
+                elif el.tag in PART_OF and not any(a.tag in PART_OF[el.tag] for a in el.iterancestors()):
                     el.tag = "div"  # a part outside its whole (a footnote's <dt> in an <aside>)
-                elif el.tag == "a" and (el.get("href") or "").strip().startswith("#"):
+                elif el.tag == "a" and _within(self.url, el.get("href") or ""):
                     within.append(el)  # a link within the web page, which the article's are not
             else:
                 _mark_internal(el)
@@ -617,6 +634,19 @@ class _Article:
         return {img.get("src", "") for img in self.body.iter("img")}
 
 
+def _within(url: str, href: str) -> bool:
+    """Whether a link goes to a place on the page itself ("#note-1", or the page's address with one)."""
+    href = href.strip()
+    if href.startswith("#"):
+        return True
+    try:
+        there = urlsplit(urljoin(url, href))
+        here = urlsplit(url)
+    except ValueError:
+        return False
+    return bool(there.fragment) and (there.netloc, there.path, there.query) == (here.netloc, here.path, here.query)
+
+
 def _plain(text: str) -> str:
     """Text as compared when finding a phrase: curly quotes and non-breaking spaces made plain, case ignored."""
     return text.translate(QUOTES).casefold()
@@ -626,10 +656,10 @@ PAGE_BLOCKS = {*BLOCK_TAGS, "h1", "summary"}
 # Where each part of a list, table, definition list or figure belongs.
 PART_OF = {
     "li": ("ul", "ol", "menu"),
-    "dt": ("dl", "div"),
-    "dd": ("dl", "div"),
-    "td": ("tr",),
-    "th": ("tr",),
+    "dt": ("dl",),
+    "dd": ("dl",),
+    "td": ("tr", "thead", "tbody", "tfoot"),
+    "th": ("tr", "thead", "tbody", "tfoot"),
     "tr": ("table", "thead", "tbody", "tfoot"),
     "thead": ("table",),
     "tbody": ("table",),
@@ -705,7 +735,7 @@ def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
             out.append(child)
         else:
             add(child)
-        if tail and tail.strip():
+        if tail and (tail.strip() or run is not None):  # a space between two inline elements too
             add(tail)
     for el in out:
         if blocky(el) or el.text_content().strip() or el.xpath(".//img"):

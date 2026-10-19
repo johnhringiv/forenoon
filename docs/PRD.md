@@ -619,7 +619,7 @@ Sonnet 5.5).
   a copy from `page_copy` (an edit's HTML names it as `copy:N`, alone or among its own), so the page's links, emphasis,
   heading levels and quotes come back as the page has them, writing HTML itself only to fix
   formatting the page's markup does not give; and to change only the blocks that are wrong.
-  An edit made from a copy is recorded with its number. Everything it writes goes through the extractor's allowlist (section 4) before it is put in the article;
+  An edit made from copies is recorded with their numbers. Everything it writes goes through the extractor's allowlist (section 4) before it is put in the article;
   links to the article's own notes and headings stay links in the book, and a link left
   pointing at nothing is unwrapped. An image must be one the article has or one whose address
   is on the saved page; it is fetched and converted with the rest (section 5).
