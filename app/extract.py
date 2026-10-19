@@ -601,6 +601,16 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
         anchor.tail, heading.tail = heading.tail, None
 
 
+def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
+    """Remove headings that end the article with nothing under them: what is left of a
+    "Related posts" or "Leave a reply" box, or of a "Notes" section whose notes are
+    gathered at the end by other means."""
+    for heading in reversed(list(body.iter(*HEADINGS))):
+        if heading.xpath("following::text()[normalize-space()] | following::img"):
+            break
+        heading.drop_tree()
+
+
 def _plain_blocks(el: lxml.html.HtmlElement) -> bool:
     """Whether an element is paragraphs, lists, tables and the like, or a wrapper of only
     those: what a section of an article is made of, unlike a box of buttons and links."""
@@ -826,6 +836,7 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    _drop_trailing_headings(body)
     if page_html:
         pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
     if page_html and description:

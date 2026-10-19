@@ -359,3 +359,15 @@ def test_a_list_of_links_under_a_kept_heading_is_put_back():
     assert out.count("the linked source number") == 4 and "Item 3:" in out
     assert out.index("Technical references") < out.index("the linked source number 0")
     assert "Another post" not in out and "Shop" not in out
+
+
+def test_headings_with_nothing_under_them_do_not_end_the_article():
+    filler = "<p>" + "Plain words about token ring networks and their cables. " * 30 + "</p>"
+    page = f"""<html><body><article>{filler}<h2>Notes and references</h2>
+    <h3 class="related-headline">Related stories</h3></article></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
+    assert "Notes and references" not in out and "Related stories" not in out
+    # A heading over a picture is the picture's.
+    pictured = page.replace("</h2>", '</h2><p><img src="/diagram.png"></p>')
+    out = lxml.html.tostring(extract("https://blog.example/post", pictured, "").body, encoding="unicode")
+    assert "Notes and references" in out and "Related stories" not in out
