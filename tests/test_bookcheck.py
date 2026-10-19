@@ -585,3 +585,64 @@ def test_a_block_past_the_listing_budget_says_its_markup_is_not_shown(monkeypatc
         "pictures; article_read first=2 last=2 shows it]"
     )
     assert listing[2].startswith("[3] <figure> Smoke [not the whole block: block 3")
+
+
+def test_page_copy_brings_the_pages_own_markup_into_an_edit(check):
+    make, item, store = check
+    page = (
+        "<html><body><nav>Home</nav><article><h1>Robots</h1>"
+        f"<p>First. {WORDS}</p><p>Second. {WORDS}</p>"
+        "<h3 id='why'>Why it’s hard</h3>"
+        "<p>Ken Goldberg <a href='https://video.example/talk'>argues</a> that <em>Digger</em> is "
+        "<strong>not</strong> enough <span onclick='x()'>today</span>.</p>"
+        "<div class='lazy'><img src='data:image/gif;base64,R0lGOD' data-src='/robot.jpg' alt='A robot'></div>"
+        "<blockquote><p>A quote from the page.</p></blockquote><section>Loose words and a "
+        "<a href='https://code.example/r'>link</a></section></article></body></html>"
+    )
+    checker, client, result = make(
+        _reply(("page_copy", {"start": "Why it's hard", "end": "A quote from"})),
+        _reply(
+            ("insert_after", {"block": 2, "html": " copy:1 "}), ("page_copy", {"start": "Loose words", "end": "Loose"})
+        ),
+        _reply(("replace_blocks", {"first": 7, "last": 7, "html": "copy:2"})),
+        _reply(("insert_after", {"block": 1, "html": "copy:7"})),
+        _reply(
+            ("page_copy", {"start": "Second.", "end": "Ken"}), ("page_copy", {"start": "nowhere at all", "end": "x"})
+        ),
+        _reply(_finish("fixed", "Restored the last section.", [{"kind": "cut_short", "what": "x", "why": "y"}])),
+    )
+    archive.save(checker.cfg.pages_dir, item, page)
+    outcome = checker.check(item, result)
+    assert outcome.verdict == "fixed"
+    html = _html(result)
+    # The page's links, emphasis, heading level and quote, as the page has them; its lazy
+    # image by its real address; no handler, id or class.
+    assert "<h3>Why it’s hard</h3>" in html
+    assert '<a href="https://video.example/talk">argues</a>' in html and "<em>Digger</em>" in html
+    assert "<strong>not</strong>" in html and "<blockquote><p>A quote from the page.</p></blockquote>" in html
+    assert 'src="https://blog.example/robot.jpg"' in html
+    for unsafe in ("onclick", "id=", "class="):
+        assert unsafe not in html, unsafe
+    # A box of loose words is a block of its own, replacing the newsletter prompt.
+    assert '<a href="https://code.example/r">link</a>' in html and "Subscribe to our newsletter" not in html
+    answers = [m["content"] for m in client.asked[-1]["messages"] if m["role"] == "user"][1:]
+    assert answers[0][0]["content"].startswith("copy:1, 4 blocks of the page")
+    assert answers[3][0]["is_error"] and "there is no copy:7; page_copy has made 2" in answers[3][0]["content"]
+    assert answers[4][0]["content"].startswith("copy:3")  # across blocks the article has too
+    assert answers[4][1]["is_error"] and "in no block of the page" in answers[4][1]["content"]
+    edits = json.loads(_rows(store)[0]["edits"])
+    assert [(e["tool"], e.get("copy")) for e in edits] == [("insert_after", 1), ("replace_blocks", 2)]
+
+
+def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
+    words = "<p>Same words here.</p>" * 2 + "<p>Unique start.</p>" + "<p>end of it</p>"
+    article = bookcheck._Article(
+        lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=f"<html><body>{words}</body></html>"
+    )
+    with pytest.raises(bookcheck.ToolError, match="in 2 blocks of the page"):
+        article.copy("Same words", "end of it")
+    with pytest.raises(bookcheck.ToolError, match="from the start phrase on"):
+        article.copy("end of it", "Unique start")
+    monkeypatch.setattr(bookcheck, "COPY_CHARS", 20)
+    with pytest.raises(bookcheck.ToolError, match="copy it in parts"):
+        article.copy("Unique start", "end of it")
