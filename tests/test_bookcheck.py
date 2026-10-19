@@ -856,6 +856,8 @@ def test_the_start_is_one_the_end_phrase_follows():
         "copy:1 <div>Steps to copy:<pre>x</pre>1 more</div>",
     ):
         article.insert(1, own)
+    with pytest.raises(bookcheck.ToolError, match="hidden"):
+        article.insert(1, "copy:1 <p>copy:<code></code>1</p>")
     article.insert(1, "copy:1 \ud800 <p>after it</p>")
     assert "after it" in article.body.text_content()
     # Punctuation in a line of the model's own stays in it.

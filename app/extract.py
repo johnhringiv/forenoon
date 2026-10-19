@@ -40,7 +40,6 @@ TRANSPARENT = {"a", "del", "ins"}
 PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", "a", "pre")
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
-SRCSET_URL = re.compile(r"(?:^|,)\s*(\S+)")  # each candidate's address: up to its first space
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 
 # Structure that pages express only through class names and in-page links. It is rebuilt
@@ -243,6 +242,30 @@ def _join(base: str, address: str) -> str:
         return ""
 
 
+def srcset_urls(srcset: str) -> list[str]:
+    """The addresses in a srcset, as a browser reads it: an address runs to a space (so a data:
+    address keeps its commas), a comma it ends with closes its candidate, and otherwise the
+    candidate's descriptors run to the next comma outside brackets."""
+    urls, n = [], 0
+    while n < len(srcset):
+        while n < len(srcset) and (srcset[n].isspace() or srcset[n] == ","):
+            n += 1
+        start = n
+        while n < len(srcset) and not srcset[n].isspace():
+            n += 1
+        url = srcset[start:n]
+        if url.endswith(","):
+            url = url.rstrip(",")
+        else:
+            depth = 0
+            while n < len(srcset) and (srcset[n] != "," or depth):
+                depth += {"(": 1, ")": -1}.get(srcset[n], 0)
+                n += 1
+        if url:
+            urls.append(url)
+    return urls
+
+
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
@@ -250,8 +273,8 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
     if not src and el.get("srcset"):
         # The last candidate's address ("a.jpg 1x, b.jpg 2x"), not a data: placeholder's (whose
         # own commas are part of it); none in a blank or "," srcset.
-        found = [part.rstrip(",") for part in SRCSET_URL.findall(el.get("srcset"))]
-        src = next((part for part in reversed(found) if part and not part.startswith("data:")), "")
+        found = srcset_urls(el.get("srcset"))
+        src = next((part for part in reversed(found) if not part.lower().startswith("data:")), "")
     return src
 
 

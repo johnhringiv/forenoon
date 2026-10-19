@@ -785,7 +785,8 @@ def _lines(el: lxml.html.HtmlElement) -> str:
         return ""
     for code in list(el.iter("pre", "code")):
         if code.getparent() is not None:
-            code.tail = "\n" + (code.tail or "")  # what is either side of it is not one line
+            if code.text_content():
+                code.tail = "\n" + (code.tail or "")  # what is either side of it is not one line
             code.drop_tree()
     for part in el.iter():
         if isinstance(part.tag, str) and part.tag in LINE_BREAKS:
@@ -1075,9 +1076,8 @@ def _page_images(page_html: str, url: str) -> set[str]:
             if el.get(name):
                 found.add(urljoin(url, el.get(name).strip()))
         for name in ("srcset", "data-srcset"):
-            for part in (el.get(name) or "").split(","):
-                if part.split():
-                    found.add(urljoin(url, part.split()[0]))
+            for address in extract.srcset_urls(el.get(name) or ""):
+                found.add(urljoin(url, address))
     for meta in root.xpath('//meta[@property="og:image" or @name="twitter:image"]'):
         if meta.get("content"):
             found.add(urljoin(url, meta.get("content").strip()))

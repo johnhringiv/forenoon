@@ -1826,6 +1826,17 @@ def test_an_image_with_an_empty_srcset_is_left_out_not_a_crash():
     mixed = '<img srcset="data:image/gif;base64,R0lGOD 1w, https://x.com/a.jpg 800w">'
     assert extract_module._image_src(lxml.html.fromstring(mixed)) == "https://x.com/a.jpg"
     assert extract_module._image_src(lxml.html.fromstring('<img srcset="a.jpg 1x,b.jpg 2x">')) == "b.jpg"
+    for srcset, urls in (
+        ("a.jpg, b.jpg", ["a.jpg", "b.jpg"]),
+        ("a.jpg 1x, , b.jpg 2x", ["a.jpg", "b.jpg"]),
+        (",a.jpg 2x", ["a.jpg"]),
+        ("i.jpg?a=1,b=2 800w, j.jpg 1600w", ["i.jpg?a=1,b=2", "j.jpg"]),
+        (
+            "data:image/gif;base64,R0lG 1w, k.jpg (max-width: 1px, 2px) 2x, l.jpg",
+            ["data:image/gif;base64,R0lG", "k.jpg", "l.jpg"],
+        ),
+    ):
+        assert extract_module.srcset_urls(srcset) == urls, srcset
     for srcset in (",", "  ", "a.jpg 1x, "):
         img = lxml.html.fromstring(f'<img srcset="{srcset}">')
         assert extract_module._image_src(img) == ("a.jpg" if "a.jpg" in srcset else "")
