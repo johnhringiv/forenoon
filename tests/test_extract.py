@@ -418,3 +418,14 @@ def test_a_side_note_inside_a_footnote_stays_in_it():
     out = lxml.html.tostring(extract("https://arxiv.example/html/1", page, "").body, encoding="unicode")
     assert out.count('class="noteref"') == 1 and out.count("<aside") == 1
     assert '<a href="#fnref-1">1</a> The note.An aside in it.' in out
+
+
+def test_a_link_that_cannot_be_read_as_an_address_goes_nowhere():
+    """ "http://[::1#top" makes urljoin raise: in the article it stopped the extraction, and
+    anywhere on the page it undid the notes."""
+    filler = "<p>" + "Plain words about routing tables and their prefixes. " * 30 + "</p>"
+    page = f"""<html><body><nav><a href="http://[::1#top">Top</a></nav><article>
+    <p>A claim.<a href="#fn1">1</a> A broken link <a href="http://[bad#x">here</a>.</p>{filler}
+    <ol><li id="fn1">The note.</li></ol></article></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
+    assert "A broken link here." in out and '<a href="#fnref-1">1</a> The note.' in out

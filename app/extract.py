@@ -150,6 +150,15 @@ def _parse_fragment(html: str) -> lxml.html.HtmlElement | None:
         return None
 
 
+def _join(base: str, address: str) -> str:
+    """An address made absolute against the page's, or "" when it cannot be read as one
+    ("http://[::1#top", an unclosed IPv6 host): such a link goes nowhere, so it is dropped."""
+    try:
+        return urljoin(base, address)
+    except ValueError:
+        return ""
+
+
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
@@ -247,7 +256,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     def in_page(anchor: lxml.html.HtmlElement) -> str:
         href = (anchor.get("href") or "").strip()
         if not href.startswith("#"):  # also "/post/#fn-1": the page's own address, written out
-            resolved = urljoin(page, href) if "#" in href else ""
+            resolved = _join(page, href) if "#" in href else ""
             href = resolved[len(page) :] if resolved.startswith(page + "#") else ""
         return unquote(href[1:]) if href.startswith("#") else ""
 
@@ -449,7 +458,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
         elif tag == "a" and mark in ("back", "jump"):
             keep["href"] = f"#fnref-{number}" if mark == "back" else f"#sec-{number}"
         elif tag == "a":
-            href = urljoin(base_url, (el.get("href") or "").strip())
+            href = _join(base_url, (el.get("href") or "").strip())
             if href.startswith(("http://", "https://", "mailto:")):
                 keep["href"] = href
         elif tag == "img":
@@ -457,7 +466,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
             if src.startswith("data:image/"):
                 keep["src"] = src
             elif src:
-                src = urljoin(base_url, src)
+                src = _join(base_url, src)
                 if src.startswith(("http://", "https://")):
                     keep["src"] = src
             keep["alt"] = (el.get("alt") or "")[:300]
@@ -767,7 +776,7 @@ def _page_pictures(page_html: str, url: str, body: lxml.html.HtmlElement, most: 
             if _norm(el.text_content()).startswith(opening[:60]):
                 return found[:most]
             continue
-        src = urljoin(url, (el.get("src") or "").strip())
+        src = _join(url, (el.get("src") or "").strip())
         if NOT_A_PICTURE.search(" ".join(el.get(name) or "" for name in ("class", "id", "src", "alt"))):
             continue
         if src.startswith(("http://", "https://")) and len(src) <= MAX_PREVIEW_URL and src not in found:
@@ -825,7 +834,7 @@ def _opening(body: lxml.html.HtmlElement) -> str:
 
 def _preview(body: lxml.html.HtmlElement, url: str, image: str, description: str) -> tuple[str, str]:
     """Lead image and summary for listing an article; falls back to the body's own."""
-    image = urljoin(url, image.strip()) if image.strip() else ""
+    image = _join(url, image.strip()) if image.strip() else ""
     if not image:
         image = next((img.get("src", "") for img in body.iter("img")), "")
     if not image.startswith(("http://", "https://")) or len(image) > MAX_PREVIEW_URL:
