@@ -641,7 +641,7 @@ class _Article:
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
         root = _fragment(RUN_ON.sub(r"\1 ", html))
-        if not COPY_HINT.search(root.text_content()):
+        if not COPY_HINT.search(root.text_content()):  # broad: only which way the edit is read
             return self.clean(html), used
         for p in [p for p in root if p.tag == "p" and not len(p) and COPY_NAME.fullmatch((p.text or "").strip())]:
             # <p>copy:2</p> between blocks: the copy itself, apart from the words around it.
@@ -693,12 +693,7 @@ class _Article:
             if not own:
                 return
             blocks = self.clean(own)
-            words = "".join(  # as it reads: a name split by a tag ("copy:<b>1</b>") is one
-                text
-                for el in blocks
-                if el.tag not in ("pre", "code")
-                for text in el.xpath(".//text()[not(ancestor::pre) and not(ancestor::code)]")
-            )
+            words = "\n".join(_lines(el) for el in blocks)
             if TOOL_NAME.search(words):
                 raise ToolError("a copy's name is hidden in that HTML; name each copy on its own between blocks")
             out.extend(el for el in blocks if el.text_content().strip() or el.xpath(".//img") or el.tag == "hr")
@@ -776,6 +771,22 @@ def _fragment(html: str) -> lxml.html.HtmlElement:
         return lxml.html.fragment_fromstring(html, create_parent="div")
     except (etree.ParserError, ValueError, AssertionError) as exc:
         raise ToolError(f"that HTML cannot be read: {exc}") from exc
+
+
+def _lines(el: lxml.html.HtmlElement) -> str:
+    """An element's words as they read, a line per block or <br>, without its code: a name split
+    by a tag ("copy:<b>1</b>") is on one line, the end of one paragraph and the start of the
+    next are not."""
+    el = copy.deepcopy(el)
+    for code in list(el.iter("pre", "code")):
+        code.drop_tree() if code is not el and code.getparent() is not None else None
+    if el.tag in ("pre", "code"):
+        return ""
+    for part in el.iter():
+        if isinstance(part.tag, str) and part.tag in TEXT_BREAKS:
+            part.tail = "\n" + (part.tail or "")
+            part.text = "\n" + (part.text or "")
+    return el.text_content()
 
 
 def _within(url: str, href: str) -> bool:

@@ -847,6 +847,13 @@ def test_the_start_is_one_the_end_phrase_follows():
     article.insert(1, 'copy:1 <img srcset=","> copy:1')
     with pytest.raises(bookcheck.ToolError, match="hidden"):
         article.insert(1, "copy:<b>1</b> and copy:1")
+    # The end of one line and the start of the next are not a name.
+    for own in (
+        "<p>Steps to copy:</p><p>1. Open the file.</p>",
+        "<p>Paste copy:<br>3 times</p>",
+        "<p>a=</p><p>b</p> copy:1",
+    ):
+        article.insert(1, own)
     article.insert(1, "copy:1 \ud800 <p>after it</p>")
     assert "after it" in article.body.text_content()
     # Punctuation in a line of the model's own stays in it.

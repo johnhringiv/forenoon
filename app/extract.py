@@ -246,7 +246,7 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
-    if not src and el.get("srcset"):
+    if not src and el.get("srcset") and "data:" not in el.get("srcset"):  # a data: address has commas of its own
         # The last candidate with an address ("a.jpg 1x, b.jpg 2x"); none in a blank or "," srcset.
         src = next((part.split()[0] for part in reversed(el.get("srcset").split(",")) if part.split()), "")
     return src
