@@ -568,3 +568,10 @@ def test_a_listing_or_reading_that_stops_early_says_the_article_does_not(monkeyp
     assert both.startswith("[1] <p>") and both.endswith(
         "article_read stops before block 2; read from block 2 for the rest]"
     )
+
+
+def test_a_short_block_past_the_listing_budget_is_shown_without_a_note(monkeypatch):
+    monkeypatch.setattr(bookcheck, "LISTING_CHARS", 100)
+    body = lxml.html.fromstring(f"<div><p>First. {WORDS}</p><h2>Short heading</h2></div>")
+    listing = bookcheck._Article(body, URL, page_images=set()).first_listing().splitlines()
+    assert listing[1] == "[2] <h2> Short heading"

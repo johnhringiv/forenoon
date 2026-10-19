@@ -1021,3 +1021,94 @@ def test_a_live_blog_keeps_every_entry_and_not_its_carousel_or_adverts():
     assert "45m ago" not in out and "Advertisement" not in out and "About us" not in out
     # Two entries are not a live blog to put together.
     assert extract_module._live_blog(page(2)) is None
+
+
+def _paragraphs(label, count):
+    return "".join(
+        f"<p>{label} paragraph {n} about the council vote, the budget and what the town will build next year.</p>"
+        for n in range(count)
+    )
+
+
+def test_a_continuation_is_not_the_next_story_a_comment_or_a_second_copy():
+    first = _paragraphs("First", 12)
+
+    def continued(page):
+        body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+        extract_module._continue_article(body, page)
+        return body.text_content()
+
+    # The next story on a page that loads one after another: in another <article>, or after
+    # its own title.
+    stacked = (
+        f"<main><article class='story'><h1>Council vote</h1><div class='article-body'>{first}</div></article>"
+        f"<article class='story'><h1>Other story</h1><div class='article-body'>{_paragraphs('Second', 10)}</div></article></main>"
+    )
+    wrapped = (
+        f"<main><div class='story-wrap'><h1>Council vote</h1><div class='article-body'>{first}</div></div>"
+        f"<div class='up-next'>Up next</div><div class='story-wrap'><h1>Other story</h1>"
+        f"<div class='article-body'>{_paragraphs('Second', 10)}</div></div></main>"
+    )
+    # A reader's comment whose box has the article box's class.
+    comment = (
+        f"<div id='page'><main><article><div class='entry-content'>{first}</div></article>"
+        "<section id='respond'><ol class='commentlist'><li><div class='entry-content'>"
+        f"{_paragraphs('Reader', 3)}</div></li></ol></section></main></div>"
+    )
+    for page in (stacked, wrapped, comment):
+        out = continued(f"<html><body>{page}</body></html>")
+        assert "Second paragraph" not in out and "Reader paragraph" not in out
+    # The same continuation twice (a copy for phones and one for desktops) is put back once.
+    twice = (
+        f"<main><div class='grid'><div class='col'><div class='post-content'>{first}</div></div></div>"
+        + f"<div class='grid'><div class='col'><div class='post-content'>{_paragraphs('Later', 8)}</div></div></div>"
+        * 2
+        + "</main>"
+    )
+    assert continued(f"<html><body>{twice}</body></html>").count("Later paragraph 7") == 1
+
+
+def test_a_live_blog_is_not_a_teaser_box_or_its_comments():
+    article = (
+        f"<article class='story'><h1>School board</h1><div class='body'>{_paragraphs('Article', 14)}</div></article>"
+    )
+    teaser = "<aside class='liveblog'><h4>Live: election night</h4>" + "".join(
+        f"<article class='teaser'><a href='/live#p{n}'>Latest {n}: the count continues in the county with "
+        "turnout up on last time and three wards still to declare tonight.</a></article>"
+        for n in range(12)
+    )
+    out = extract(
+        "https://news.example/a",
+        f"<html><body><div class='wrap'>{article}{teaser}</aside></div></body></html>",
+        "",
+        "page",
+    )
+    assert out.method != "page-live" and "Article paragraph 13" in out.body.text_content()
+    entries = "".join(
+        f"<article class='post'><p>Entry {n}: the river rose again overnight and the council opened two "
+        "more shelters in the town centre for families.</p></article>"
+        for n in range(5)
+    )
+    comments = "<section class='comments'>" + "".join(
+        f"<article class='comment'><p>Reader {n}: I live near the river and the water reached our street "
+        "at about four in the morning, much faster than last year.</p></article>"
+        for n in range(8)
+    )
+    live = extract_module._live_blog(
+        f"<html><body><div id='liveblog'><div class='liveblog-body'>{entries}</div>{comments}</section></div></body></html>"
+    )
+    assert "Entry 4" in live.text_content() and "Reader" not in live.text_content()
+    # A pinned entry the stream shows again is kept once.
+    pinned = entries.split("</article>")[0] + "</article>"
+    live = extract_module._live_blog(f"<html><body><div class='liveblog-body'>{pinned}{entries}</div></body></html>")
+    assert live.text_content().count("Entry 0:") == 1
+
+
+def test_a_box_a_skip_link_points_at_is_kept():
+    words = _paragraphs("Article", 10)
+    page = (
+        f"<html><body><article>{words}<a href='#methodology'>Skip to methodology</a>{words}"
+        "<div id='methodology' aria-label='How we did it'>How we did it</div>"
+        f"<p>{'We asked four hundred firms about training. ' * 5}</p></article></body></html>"
+    )
+    assert "How we did it" in extract("https://news.example/a", page, "", "page").body.text_content()

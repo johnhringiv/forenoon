@@ -355,8 +355,10 @@ class _Article:
             html = self.shown(el)
             if spent + len(html) > LISTING_CHARS:
                 text = " ".join(el.text_content().split())
-                note = LISTING_NOTE.format(n=n, more=len(text) - SHORT_BLOCK_CHARS, hint=READ_HINT.format(n=n))
-                html = f"<{el.tag}> {text[:SHORT_BLOCK_CHARS]} {note}"
+                html = f"<{el.tag}> {text[:SHORT_BLOCK_CHARS]}"
+                if len(text) > SHORT_BLOCK_CHARS:
+                    more = len(text) - SHORT_BLOCK_CHARS
+                    html += f" {LISTING_NOTE.format(n=n, more=more, hint=READ_HINT.format(n=n))}"
             spent += len(html)
             lines.append(f"[{n}] {html}")
         return "\n".join(lines)

@@ -451,7 +451,7 @@ def _drop_skip_targets(root: lxml.html.HtmlElement) -> None:
     ]
     targets = {a.get("href")[1:] for a in links}
     dropped = set()
-    for el in list(root.iter("p", "span", "div")):
+    for el in list(root.iter("p", "span")):  # not a box, which may be a section's heading
         text = " ".join(el.text_content().split())
         if (
             el.get("id") in targets
@@ -1049,6 +1049,12 @@ CONTINUATION_PARAGRAPH_WORDS = 12
 CONTINUATION_TAGS = ("p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "blockquote", "pre", "figure", "table")
 
 
+def _unlikely(el: lxml.html.HtmlElement) -> bool:
+    """Whether an element's class or id names it as page furniture or comments."""
+    names = _names(el)
+    return bool(FURNITURE_CLASS.search(names) or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names))
+
+
 def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back the rest of an article that the page splits into boxes around an advert.
 
@@ -1060,9 +1066,12 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     that box beside it and its paragraphs have the class of the article's; and it is itself
     paragraphs of text: it opens with a paragraph or heading, holds at least three paragraphs
     of some length, and is mostly not links. A run of comments, a reporter's note or a list
-    of related stories in a box of the same class is none of these together. Only the box's
-    own paragraphs, headings, lists, quotes, code, figures and tables are put back, after
-    the article, in the page's order."""
+    of related stories in a box of the same class is none of these together. Nor is a box in
+    another <article> than the article's, or after a page title (<h1>) that comes after the
+    article's box: that is the next story on a page that loads one after another. Nor is a
+    box named, or inside a box named, as furniture or comments. Only the box's own
+    paragraphs, headings, lists, quotes, code, figures and tables are put back, after the
+    article, in the page's order, and a box's text only once."""
     paragraphs = [p for p in body.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
     if not paragraphs:
         return
@@ -1077,18 +1086,27 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     box, style = found[0].getparent(), found[0].get("class")
     siblings = set(box.itersiblings()) if style else set()
     near = list(box.iterancestors())[:CONTINUATION_DEPTH]
-    if FURNITURE_CLASS.search(_names(box)) or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(_names(box)):
+    if _unlikely(box):
         return
+    story = next(box.iterancestors("article"), None)
+    shared = {id(a) for a in box.iterancestors()}
     kept = _norm(body.text_content())
     holder = paragraphs[-1].getparent()
     while holder.tag not in ("div", "article", "section", "main", "body") and holder.getparent() is not None:
         holder = holder.getparent()
     after = False
-    for el in page.iter(box.tag):
+    for el in page.iter(box.tag, "h1"):
         if el is box:
             after = True
             continue
         if not after or box in el.iterancestors():
+            continue
+        if el.tag == "h1":
+            break  # the next story's title
+        if next(el.iterancestors("article"), None) is not story:
+            continue
+        own = [el, *(a for a in el.iterancestors() if id(a) not in shared)]
+        if any(_unlikely(a) for a in own):
             continue
         children = [c for c in el if isinstance(c.tag, str)]
         long = [c for c in children if c.tag == "p" and _words(c.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
@@ -1112,6 +1130,7 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
                 piece = copy.deepcopy(child)
                 piece.tail = None
                 holder.append(piece)
+        kept = _norm(body.text_content())
 
 
 def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
@@ -1222,6 +1241,26 @@ def _names(el: lxml.html.HtmlElement) -> str:
 LIVE_BLOG = re.compile(r"(js-)?live-?blog(-body)?", re.IGNORECASE)
 LIVE_ENTRIES_MIN = 3
 LIVE_ENTRY_MIN_WORDS = 20
+LIVE_ENTRY_LINK_SHARE = 0.5
+LIVE_OVER_PAGE = 1.5  # how many times the words of readability's body the live blog must have
+
+
+def _live_entry(el: lxml.html.HtmlElement, box: lxml.html.HtmlElement) -> bool:
+    """Whether an <article> in a live blog's box is an entry: not inside another, of some
+    length, mostly not links (a teaser for the live blog elsewhere), and neither it nor a box
+    around it inside the live blog named as comments or furniture."""
+    if next(el.iterancestors("article"), None) is not None:
+        return False
+    text = " ".join(el.text_content().split())
+    links = sum(len(" ".join(a.text_content().split())) for a in el.iter("a"))
+    if _words(text) < LIVE_ENTRY_MIN_WORDS or links >= LIVE_ENTRY_LINK_SHARE * len(text):
+        return False
+    around = [el]
+    for a in el.iterancestors():
+        if a is box:
+            break
+        around.append(a)
+    return not any(_unlikely(a) for a in around)
 
 
 def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
@@ -1244,19 +1283,16 @@ def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
     ]
     # The box with the most entries, when more than one is named so (a "liveblog" wrapper
     # around its "liveblog-body" holds the same entries).
-    found = [
-        [
-            el
-            for el in box.iter("article")
-            if next(el.iterancestors("article"), None) is None and _words(el.text_content()) >= LIVE_ENTRY_MIN_WORDS
-        ]
-        for box in boxes
-    ]
+    found = [[el for el in box.iter("article") if _live_entry(el, box)] for box in boxes]
     entries = max(found, key=len, default=[])
     if len(entries) < LIVE_ENTRIES_MIN:
         return None
-    body = lxml.html.Element("div")
+    body, seen = lxml.html.Element("div"), set()
     for entry in entries:
+        text = _norm(entry.text_content())
+        if text in seen:
+            continue  # a pinned entry shown again in the stream
+        seen.add(text)
         entry = copy.deepcopy(entry)
         entry.tail = None
         entry.tag = "div"
@@ -1462,8 +1498,10 @@ def extract(
             if wide is not None and kept < _words(wide.text_content()) <= WIDEN_MAX_RATIO * reference:
                 candidates["page-wide"] = wide
         live = _live_blog(page_html)
-        if live is not None:
-            candidates["page-live"] = sanitize(live, url, marked=True)
+        live = sanitize(live, url, marked=True) if live is not None else None
+        # Only when it has far more than readability kept: one entry of the day's reporting.
+        if live is not None and _words(live.text_content()) >= LIVE_OVER_PAGE * kept:
+            candidates["page-live"] = live
             notes["page-live"] = notes["page"]
     if mode != "page" or not candidates:
         feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False)
