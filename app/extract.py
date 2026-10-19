@@ -374,6 +374,74 @@ def _names_word(pattern: re.Pattern, part: str) -> bool:
     return found is not None and len(part) - found.end() <= 3
 
 
+TAILWIND_SCROLL = re.compile(r"(?:[\w-]+:)*scroll-[mp][trblxyse]?-\S+")  # "scroll-mt-24": a margin
+
+
+def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
+    """Keep section headings and tables that readability drops for how they are marked up.
+
+    - A heading whose text is a link to itself, or to the section it heads (a permalink,
+      "<h2><a href='#setup'>Setup</a></h2>"), is all link to readability, which drops a heading
+      more than a third links: the link's tag goes and its text stays, when the link holds
+      most of the heading and no picture.
+    - An id that only spells the heading's text ("part-2-metascience", "a-final-remark") is
+      judged by that text, not by a word in it that readability takes for furniture ("meta",
+      "remark", "tool", "header"): it goes, unless it names furniture to us too or the
+      heading is one an article ends on ("Related", "Comments") or opens with the furniture
+      word ("Tweet this").
+    - A Tailwind scroll margin ("scroll-mt-24") is not a scrolling widget: it goes.
+    - The box a real table scrolls in ("table-scroll"), holding the table alone, loses the
+      name readability holds against it."""
+    page = base_url.split("#")[0]
+    negative, unlikely = READABILITY_PATTERNS["negativeRe"], READABILITY_PATTERNS["unlikelyCandidatesRe"]
+    for heading in list(root.iter(*HEADINGS)):
+        text = " ".join(heading.text_content().split())
+        own = {el.get("id") for el in (heading, *heading.iterancestors()) if el.get("id")}
+        own |= {
+            el.get("id") or el.get("name")
+            for el in heading.iterdescendants()
+            if isinstance(el.tag, str) and (el.get("id") or (el.tag == "a" and el.get("name")))
+        }
+        own.discard(None)
+        for a in list(heading.iter("a")):
+            href = (a.get("href") or "").strip()
+            if not href.startswith("#"):
+                resolved = _join(page, href) if "#" in href else ""
+                href = resolved[len(page) :] if resolved.startswith(page + "#") else ""
+            inner = len(" ".join(a.text_content().split()))
+            if href.startswith("#") and unquote(href[1:]) in own and not a.xpath(MEDIA_XPATH) and inner * 2 > len(text):
+                a.drop_tag()
+        anchor = heading.get("id") or ""
+        if (
+            anchor
+            and (negative.search(anchor) or unlikely.search(anchor))
+            and _slug(anchor) == _slug(text)
+            and not FURNITURE_CLASS.search(anchor)
+            and not TRAILING_FURNITURE.match(_norm(text))
+            and not any(p.fullmatch(text.split()[0]) for p in (negative, unlikely))
+        ):
+            heading.attrib.pop("id", None)
+        names = (heading.get("class") or "").split()
+        if any(TAILWIND_SCROLL.fullmatch(name) for name in names):
+            heading.set("class", " ".join(name for name in names if not TAILWIND_SCROLL.fullmatch(name)))
+    for table in root.iter("table"):
+        box = table.getparent()
+        if (
+            not table.xpath(".//th | .//thead | .//caption")
+            or box is None
+            or box is root
+            or box.tag != "div"
+            or (box.text or "").strip()
+            or (table.tail or "").strip()
+            or [c for c in box if isinstance(c.tag, str)] != [table]
+            or FURNITURE_CLASS.search(_names(box))
+        ):
+            continue
+        if negative.search(_names(box)) or unlikely.search(_names(box)):
+            box.attrib.pop("class", None)
+            box.attrib.pop("id", None)
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
@@ -661,6 +729,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
         names = _names(heading) + " " + (_names(parent) if parent is not None else "")
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
+    _free_section_headings(root, base_url)
     _free_headings(root)
     _free_code_blocks(root)
     _drop_page_notices(root)
@@ -1233,10 +1302,12 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     kept = _norm(body.text_content())
     for heading in empty:
         found = by_text.get(_norm(heading.text_content()), [])
-        # Not on the page as it is, or not only once; or not a heading of references or reading:
-        # under any other, what readability left out was its own judgement (often rightly).
-        if len(found) != 1 or not REFILL_HEADING.match(_norm(heading.text_content())):
+        # Not on the page as it is, or not only once; or neither a heading of references or
+        # reading nor one over tables alone: under any other, what readability left out was its
+        # own judgement (often rightly). A table of figures with links in it it drops as links.
+        if len(found) != 1:
             continue
+        named = REFILL_HEADING.match(_norm(heading.text_content()))
         source = found[0]
         if FURNITURE_CLASS.search(_names(source)):
             continue
@@ -1258,6 +1329,11 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
             if not _plain_blocks(el) or el.xpath(".//form | .//nav") or FURNITURE_CLASS.search(_names(el)):
                 break
             section.append(el)
+        tables = bool(section) and all(
+            el.tag == "table" and el.xpath(".//th | .//thead | .//caption") for el in section
+        )
+        if not named and not tables:
+            continue
         words = sum(_words(el.text_content()) for el in section)
         already = any(text and text in kept for text in (_norm(el.text_content()) for el in section))
         if not words or words > REFILL_MAX_WORDS or already or _short_links(section):

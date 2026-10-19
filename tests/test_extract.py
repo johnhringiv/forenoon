@@ -1251,3 +1251,32 @@ def test_lists_that_are_part_of_the_text_are_kept_though_they_are_links():
     ):
         out = kept(furniture)
         assert "Facebook" not in out and "Section 4 of" not in out and "newsletter" not in out and "(2022)" not in out
+
+
+def test_section_headings_marked_up_as_links_ids_or_scroll_margins_are_kept():
+    words = _paragraphs("Article", 4)
+    page = (
+        f"<html><body><article>{words}"
+        "<h2 id='setup'><a href='#setup'>Setup</a></h2>"
+        f"{words}<section id='abstract'><h2><a class='toc-backref' href='#abstract'>Abstract</a></h2>{words}</section>"
+        f"<h2 id='part-2-why-metascience'>Part 2 – Why metascience</h2>{words}"
+        f"<h2 class='scroll-mt-24 text-xl'>The early days</h2>{words}"
+        f"<h2 id='registration'>Registration<a class='anchor' href='#registration'>#</a></h2>{words}"
+        f"<h2 id='related'>Related</h2><p><a href='/x'>Another post</a></p></article></body></html>"
+    )
+    out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
+    for heading in ("Setup", "Abstract", "Part 2 – Why metascience", "The early days"):
+        assert f">{heading}</h2>" in out
+    # A permalink sign is not made text; a heading an article ends on is not freed.
+    assert "Registration#" not in out and "Related" not in out
+
+
+def test_a_comparison_table_in_a_scrolling_box_or_of_download_links_is_kept():
+    words = _paragraphs("Article", 6)
+    rows = "".join(f"<tr><td>Question {n}</td><td>Answer one {n}</td><td>Answer two {n}</td></tr>" for n in range(6))
+    scrolling = f"<h2>The Comparison</h2><div class='table-scroll'><table><thead><tr><th>Question</th><th>v1</th><th>v2</th></tr></thead>{rows}</table></div>"
+    links = "".join(f"<tr><td>R{n}</td><td><a href='/configs/r{n}.txt'>Click here</a></td></tr>" for n in range(5))
+    downloads = f"<h2>Router Configs</h2><table><thead><tr><th>Router</th><th>Link</th></tr></thead>{links}</table>"
+    for table, needle in ((scrolling, "Answer two 5"), (downloads, "R4")):
+        page = f"<html><body><article><h1>Two engines</h1>{words}{table}<h2>Results</h2>{words}</article></body></html>"
+        assert needle in extract("https://blog.example/a", page, "", "page").body.text_content()
