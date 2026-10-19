@@ -840,3 +840,15 @@ def test_reports_of_failures_and_furniture_headings_stay_as_they_were():
     }.items():
         page = f"<html><body><article>{words}{words}{block}</article></body></html>"
         assert heading not in extract("https://news.example/b", page, "", "page").body.text_content(), heading
+
+
+def test_quoted_notices_and_prompts_are_the_articles_own():
+    words = "<p>" + "Plain words about the outage and how the county's systems coped with demand. " * 10 + "</p>"
+    for needle, block in {
+        "Please try again later": "<p>Readers saw one line:</p><blockquote><p>Video failed to load. Please try again later.</p></blockquote>",
+        "Embed failed to load": "<p>The log line to grep for is:</p><p><code>Embed failed to load</code></p>",
+        "Add us as a preferred source": "<p>Publishers now end stories with “Add us as a preferred source on Google”, linking to "
+        "<a href='https://www.google.com/preferences/source'>the setting</a>.</p>",
+    }.items():
+        page = f"<html><body><article>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle

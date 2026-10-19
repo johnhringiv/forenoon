@@ -127,8 +127,12 @@ LOAD_FAILURE = re.compile(
 )
 # A request to pick the site as a source on Google ("select us as your Preferred Source").
 PREFERRED_SOURCE = re.compile(r"\b(select|add|choose|set|make|pick) us\b.{0,40}\bpreferred source", re.IGNORECASE)
-SECTION_TEXT_WORDS = 8  # a section's first paragraph, at least: what makes a heading the article's
 NOTICE_MAX_WORDS = 25
+# A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
+# quoted in a story about an outage is not.
+NOTICE_CLASS = re.compile(r"message|notice|fallback|placeholder|error|unavailable", re.IGNORECASE)
+NOTICE_DEPTH = 4  # how far up the notice's own boxes are looked at
+QUOTE_MARKS = re.compile(r"[“”\"«»]")
 PROMPT_MAX_WORDS = 45  # a "select us as your Preferred Source" request, which says why at some length
 TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
@@ -305,31 +309,18 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
 def _free_headings(root: lxml.html.HtmlElement) -> None:
     """Keep readability from deleting a section's heading for how it is marked up.
 
-    - A heading's own class or id can sound like page furniture by accident: readability takes
-      "rss" in id="freshrss" for a feed box. Such names go, after in-page links to the heading
-      are recorded (sanitize gives it an id of our own); not when a whole part of the name is
-      the furniture word ("site-header-title"), nor when it names furniture to us too.
+    - A heading's id can sound like page furniture by accident: readability takes "rss" in
+      id="freshrss" (on "FreshRSS") for a feed box. An id that is just the heading's own text
+      goes, after in-page links to the heading are recorded (sanitize gives it an id of our
+      own); any other name ("rssfeed" on "Subscribe via RSS") was given on purpose and stays.
     - GitHub puts each README heading in a box of its own with an empty anchor link beside it,
       and readability deletes any box with under 25 letters: "Debugging" and "License" went.
       A box holding only a heading and such links is unwrapped.
     """
     unlikely = READABILITY_PATTERNS["unlikelyCandidatesRe"]
-    maybe = READABILITY_PATTERNS["okMaybeItsACandidateRe"]
     for heading in list(root.iter(*HEADINGS)):
-        names = _names(heading)
-        # Only by accident: the furniture word inside a longer word ("freshrss"), never a whole
-        # part of a name ("site-header-title", "comments").
-        parts = re.split(r"[\s_-]+", names.lower())
-        whole = any(unlikely.fullmatch(part) for part in parts if part)
-        if (
-            unlikely.search(names)
-            and not whole
-            and not maybe.search(names)
-            and not FURNITURE_CLASS.search(names)
-            and _section_text_follows(heading)
-        ):
-            heading.attrib.pop("class", None)
-            heading.attrib.pop("id", None)
+        if unlikely.search(heading.get("id") or "") and _slug(heading.get("id") or "") == _slug(heading.text_content()):
+            heading.attrib.pop("id", None)  # the heading's own text as its anchor: named by accident
         box = heading.getparent()
         if box is None or box is root or box.tag not in ("div", "section") or (box.text or "").strip():
             continue
@@ -352,14 +343,8 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
             box.drop_tag()
 
 
-def _section_text_follows(heading: lxml.html.HtmlElement) -> bool:
-    """Whether a heading is followed by a paragraph of the article's own words, not by links."""
-    following = heading.getnext()
-    if following is None or following.tag not in ("p", "div", "ul", "ol", "blockquote", "pre", "table"):
-        return False
-    text = " ".join(following.text_content().split())
-    linked = sum(len(" ".join(a.text_content().split())) for a in following.iter("a"))
-    return _words(text) >= SECTION_TEXT_WORDS and linked < 0.5 * len(text)
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
@@ -376,8 +361,13 @@ def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
         if not text:
             continue
         preferred = any("google.com/preferences/source" in (a.get("href") or "") for a in el.iter("a"))
-        notice = _words(text) <= NOTICE_MAX_WORDS and LOAD_FAILURE.fullmatch(text)
-        asks = preferred and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
+        quoted = next(el.iterancestors("blockquote", "q"), None) is not None or QUOTE_MARKS.search(text)
+        notice = (
+            _words(text) <= NOTICE_MAX_WORDS
+            and LOAD_FAILURE.fullmatch(text)
+            and any(NOTICE_CLASS.search(_names(box)) for box in (el, *list(el.iterancestors())[:NOTICE_DEPTH]))
+        )
+        asks = preferred and not quoted and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
         if notice or asks:
             el.drop_tree()
 
