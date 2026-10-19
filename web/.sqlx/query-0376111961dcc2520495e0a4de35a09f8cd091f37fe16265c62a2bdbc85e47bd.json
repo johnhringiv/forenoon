@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT verdict AS \"verdict?\", progress AS \"progress?\", reason\n           FROM ratings WHERE user_id = ? AND article_id = ?",
+  "query": "SELECT verdict AS \"verdict?\", progress AS \"progress?\", note\n           FROM ratings WHERE user_id = ? AND article_id = ?",
   "describe": {
     "columns": [
       {
@@ -14,7 +14,7 @@
         "type_info": "Text"
       },
       {
-        "name": "reason",
+        "name": "note",
         "ordinal": 2,
         "type_info": "Text"
       }
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "b2325e0bb9d0dbeca33fa9167828d11e0a0a11756fdcb778a7f952741ef0dbd7"
+  "hash": "0376111961dcc2520495e0a4de35a09f8cd091f37fe16265c62a2bdbc85e47bd"
 }

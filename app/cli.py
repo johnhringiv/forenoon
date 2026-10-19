@@ -281,6 +281,7 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
         print(
             f"{row['created_at']}  {row['user_id']:<10} {row['signal']:<14}"
             f" {row['article_source']} · {row['title'] or row['article_id']}"
+            + (f'\n    "{row["detail"]}"' if row["detail"] else "")
         )
     print("\nCurrent ratings:")
     for row in store.rating_rows():
@@ -289,6 +290,7 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
         print(
             f"{row['updated_at']}  {row['user_id']:<10} {verdict:<14} {progress:<15}"
             f" {row['article_source']} · {row['title'] or row['article_id']}"
+            + (f'\n    "{row["note"]}"' if row["note"] else "")
         )
     return 0
 

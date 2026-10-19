@@ -1,25 +1,22 @@
 {
-  "_": "Taps in order and the rating they leave: [verdict, progress, reason], or null for no rating. Both programs apply the same rules; tests/test_core.py and web/src/db.rs check these.",
+  "_": "Taps in order and the rating they leave: [verdict, progress, note], or null for no rating. A tap \"note:<text>\" is a note sent with that text. Both programs apply the same rules; tests/test_core.py and web/src/db.rs check these.",
   "cases": [
     {"taps": ["end-not-good"], "then": ["not-good", "finished", ""]},
-    {"taps": ["end-not-good", "why-thin", "why-padded"], "then": ["not-good", "finished", "padded"]},
-    {"taps": ["end-not-good", "why-padded", "why-padded"], "then": ["not-good", "finished", ""]},
-    {"taps": ["end-not-good", "why-depth"], "then": ["not-good", "finished", ""]},
-    {"taps": ["end-not-good", "why-thin", "more"], "then": ["more", "finished", ""]},
-    {"taps": ["more", "why-depth", "why-more-topic"], "then": ["more", null, "more-topic,depth"]},
-    {"taps": ["more", "why-depth", "why-more-topic", "why-depth"], "then": ["more", null, "more-topic"]},
-    {"taps": ["end-more", "why-depth", "partway"], "then": ["more", "partway", "depth"]},
+    {"taps": ["end-not-good", "note:Padded to twice its length"], "then": ["not-good", "finished", "Padded to twice its length"]},
+    {"taps": ["end-not-good", "note:  one   line,\n trimmed  "], "then": ["not-good", "finished", "one line, trimmed"]},
+    {"taps": ["end-not-good", "note:Too thin", "note:"], "then": ["not-good", "finished", ""]},
+    {"taps": ["end-not-good", "note:Too thin", "more"], "then": ["more", "finished", "Too thin"]},
+    {"taps": ["more", "note:The diagrams made it"], "then": ["more", null, "The diagrams made it"]},
+    {"taps": ["end-more", "note:Loved it", "partway"], "then": ["more", "partway", "Loved it"]},
     {"taps": ["end-worth-it", "skip"], "then": [null, "skipped", ""]},
-    {"taps": ["skip", "why-basic"], "then": [null, "skipped", ""]},
-    {"taps": ["skip", "not-for-me", "why-basic"], "then": ["not-for-me", null, "basic"]},
+    {"taps": ["end-worth-it", "note:Kept", "skip"], "then": [null, "skipped", "Kept"]},
+    {"taps": ["skip", "not-for-me"], "then": ["not-for-me", null, ""]},
     {"taps": ["skip", "finished"], "then": [null, "finished", ""]},
-    {"taps": ["not-for-me", "why-basic", "why-specialist"], "then": ["not-for-me", null, "specialist"]},
-    {"taps": ["end-not-good", "why-known"], "then": ["not-good", "finished", "known"]},
-    {"taps": ["why-thin"], "then": null},
-    {"taps": ["why-basic", "why-depth"], "then": null},
+    {"taps": ["note:Nothing to keep it on"], "then": null},
+    {"taps": ["note:Nothing to keep it on", "worth-it"], "then": ["worth-it", null, ""]},
     {"taps": ["partway", "worth-it"], "then": ["worth-it", "partway", ""]},
     {"taps": ["skip", "partway"], "then": [null, "partway", ""]},
-    {"taps": ["end-more", "why-depth", "skip", "finished"], "then": [null, "finished", ""]},
-    {"taps": ["partway", "not-good", "why-padded"], "then": ["not-good", "partway", "padded"]}
+    {"taps": ["end-more", "skip", "finished"], "then": [null, "finished", ""]},
+    {"taps": ["partway", "not-good", "note:Lost me halfway"], "then": ["not-good", "partway", "Lost me halfway"]}
   ]
 }

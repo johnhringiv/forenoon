@@ -366,11 +366,11 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     let none_yet = browser.get(&site, "/?show=rated").await.text;
     assert!(none_yet.contains("No articles match this filter.") && !none_yet.contains("Older issues"));
     let rating = |article: &'static str| db::get_rating(pool, "john", article);
-    let stored = |verdict: Option<&str>, progress: Option<&str>, reason: &str| {
+    let stored = |verdict: Option<&str>, progress: Option<&str>, note: &str| {
         Some(db::Rating {
             verdict: verdict.map(str::to_owned),
             progress: progress.map(str::to_owned),
-            reason: reason.to_owned(),
+            note: note.to_owned(),
         })
     };
 
@@ -381,18 +381,20 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     assert!(done.status == StatusCode::SEE_OTHER && done.location == "/?show=rated#a-a1", "{}", done.location);
     assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), None, ""));
     browser.post(&site, "/rate", &with(&[("progress", "finished")])).await;
-    browser.post(&site, "/rate", &with(&[("reason", "thin")])).await;
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), Some("finished"), "thin"));
-    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await; // not for "not good"
+    browser.post(&site, "/rate", &with(&[("note", "  Thin: one idea,\n stretched  ")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), Some("finished"), "Thin: one idea, stretched"));
+    browser.post(&site, "/rate", &with(&[("note", "Thin: one idea, stretched")])).await; // unchanged: not logged
     browser.post(&site, "/rate", &with(&[("verdict", "great")])).await; // not a verdict
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), Some("finished"), "thin"));
-    let log: Vec<(String, String)> =
-        sqlx::query_as("SELECT signal, source FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
-    let signals: Vec<&str> = log.iter().map(|(signal, _)| signal.as_str()).collect();
-    assert_eq!(signals, ["not-good", "finished", "why-thin"]);
-    assert!(log.iter().all(|(_, source)| source == "web"));
+    assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), Some("finished"), "Thin: one idea, stretched"));
+    let log: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT signal, source, detail FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
+    let signals: Vec<&str> = log.iter().map(|(signal, _, _)| signal.as_str()).collect();
+    assert_eq!(signals, ["not-good", "finished", "note"]);
+    assert_eq!(log[2].2, "Thin: one idea, stretched", "the log keeps the note's words");
+    assert!(log.iter().all(|(_, source, _)| source == "web"));
 
-    // The filter shows one or the other; the rated card shows its reason and a selected option.
+    // The filter shows one or the other; the rated card shows its choices and its note, in a
+    // form of its own so that Enter in the box presses no verdict.
     let (rated, unrated) =
         (browser.get(&site, "/?show=rated").await.text, browser.get(&site, "/?show=unrated").await.text);
     assert!(
@@ -401,40 +403,24 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
             && unrated.contains("Post 2")
             && !unrated.contains("Post 1")
     );
-    assert!(rated.contains("Too thin") && rated.contains("What was wrong?"));
-    assert!(
-        rated.contains(r#"<button name="reason" value="thin" aria-pressed="true" title="Too thin">Too thin</button>"#)
-    );
     assert!(
         rated.contains(r#"<button name="verdict" value="not-good" aria-pressed="true">Not good</button>"#),
         "{rated}"
     );
     assert!(rated.contains(r#"<button name="verdict" value="worth-it" aria-pressed="false">Worth it</button>"#));
     assert!(rated.contains(r#"<button name="progress" value="finished" aria-pressed="true" title="Finished">"#));
+    let note_form = rated.split(r#"<form class="note""#).nth(1).expect("a note form").split("</form>").next().unwrap();
+    assert!(note_form.contains(r#"value="Thin: one idea, stretched""#) && !note_form.contains("verdict"));
+    assert!(!unrated.contains(r#"<form class="note""#), "no box before there is a verdict");
 
-    // What was wrong is one thing: another choice replaces it; pressing it again takes it back.
-    browser.post(&site, "/rate", &with(&[("reason", "padded")])).await;
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), Some("finished"), "padded"));
-    browser.post(&site, "/rate", &with(&[("reason", "padded")])).await;
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("not-good"), Some("finished"), ""));
-    browser.post(&site, "/rate", &with(&[("reason", "thin")])).await;
-
-    // A new verdict drops the reason that no longer fits. What was liked can be several things.
+    // The note stays through a new verdict and new progress; an empty one removes it.
     browser.post(&site, "/rate", &with(&[("verdict", "more")])).await;
+    assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("finished"), "Thin: one idea, stretched"));
+    browser.post(&site, "/rate", &with(&[("note", "")])).await;
     assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("finished"), ""));
-    browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
-    browser.post(&site, "/rate", &with(&[("reason", "more-topic")])).await;
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("finished"), "more-topic,depth"));
-    let page = browser.get(&site, "/?show=rated").await.text;
-    assert!(
-        page.contains("What did you like?")
-            && page.matches(r#"aria-pressed="true" title="More on this topic">"#).count() == 1
-            && page.contains(r#"aria-pressed="true" title="Liked the depth or format">"#)
-    );
-    browser.post(&site, "/rate", &with(&[("reason", "depth")])).await;
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("finished"), "more-topic"));
+    browser.post(&site, "/rate", &with(&[("note", "The diagrams made it")])).await;
     browser.post(&site, "/rate", &with(&[("progress", "partway")])).await;
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("partway"), "more-topic"));
+    assert_eq!(rating("a1").await.unwrap(), stored(Some("more"), Some("partway"), "The diagrams made it"));
 
     // Refused: a wrong token, another site's form, an article never delivered to this reader
     // (including one delivered to someone else), and a redirect off the site.
@@ -453,14 +439,13 @@ async fn ratings_change_only_for_the_signed_in_reader_from_their_own_page() {
     assert!(db::get_rating(pool, "mary", "m1").await.unwrap().is_none());
     let away = [("csrf", csrf.as_str()), ("article", "a1"), ("back", "//evil.example/x"), ("verdict", "worth-it")];
     assert_eq!(browser.post(&site, "/rate", &away).await.location, "/#a-a1");
-    assert_eq!(rating("a1").await.unwrap(), stored(Some("worth-it"), Some("partway"), ""));
+    assert_eq!(rating("a1").await.unwrap(), stored(Some("worth-it"), Some("partway"), "The diagrams made it"));
 
-    // Skipped drops the verdict and asks for no reason; a verdict after it means read after all,
+    // Skipped drops the verdict; a verdict after it means read after all,
     // how far not known. Clear leaves nothing.
     let second =
         |extra: &'static str, value: &'static str| [("csrf", csrf.as_str()), ("article", "a2"), (extra, value)];
     browser.post(&site, "/rate", &second("progress", "skipped")).await;
-    browser.post(&site, "/rate", &second("reason", "basic")).await;
     assert_eq!(rating("a2").await.unwrap(), stored(None, Some("skipped"), ""));
     browser.post(&site, "/rate", &second("verdict", "not-for-me")).await;
     assert_eq!(rating("a2").await.unwrap(), stored(Some("not-for-me"), None, ""));
@@ -2002,7 +1987,7 @@ async fn a_broken_article_is_reported_to_the_admin_apart_from_its_rating() {
     // The rating is untouched, and the extraction log has the report.
     assert_eq!(
         db::get_rating(pool, "mary", "m1").await.unwrap().unwrap(),
-        db::Rating { verdict: Some("not-good".into()), progress: None, reason: String::new() }
+        db::Rating { verdict: Some("not-good".into()), progress: None, note: String::new() }
     );
     let log: Vec<(String, String)> =
         sqlx::query_as("SELECT verdict, problem FROM extraction_reviews").fetch_all(pool).await.unwrap();
@@ -2402,7 +2387,7 @@ async fn an_article_in_the_archive_can_be_fetched_again() {
 
 #[tokio::test]
 async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
-    use forenoon_web::feedback::{make, verify};
+    use forenoon_web::feedback::{Tap, make, verify};
     let site = site(true).await;
     let pool = &site.pool;
     article(pool, "a1", "https://blog.example/1", "Blog", "A post", "john", "2026-10-10T10:00:00+00:00").await;
@@ -2414,9 +2399,11 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert!(page.status == StatusCode::OK && page.text.contains("Not good, finished."), "{}", page.text);
     assert!(page.text.contains("<p class=\"small\">A post</p>"));
     assert!(kindle.cookie.is_none() && page.set_cookie.is_empty(), "no session for a tap");
-    // The reasons for "not good" are offered; the rating counts without one.
-    assert!(page.text.contains("What was wrong? (optional)") && page.text.contains("The headline oversold it"));
-    assert!(!page.text.contains("More on this topic") && !page.text.contains("Tap all that apply"));
+    // A box for a note is offered; the rating counts without one. It posts to a link of its own.
+    assert!(page.text.contains("Anything the picker should know? (optional)"));
+    let note_to = page.text.split(r#"<form class="group" method="post" action=""#).nth(1).unwrap().split('"').next();
+    let note_to = note_to.unwrap().to_owned();
+    assert_eq!(verify(FEEDBACK_SECRET, note_to.trim_start_matches("/f/"), 0).unwrap().tap, Tap::Note);
     // Every other choice is signed for the same reader, article and expiry.
     let other = page.text.split("href=\"/f/").nth(1).unwrap().split('"').next().unwrap();
     let claim = verify(FEEDBACK_SECRET, other, 0).unwrap();
@@ -2425,22 +2412,22 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     // The choices made are shown filled in, among the rest, and are not links.
     assert!(page.text.contains(r#"<b class="on">Not good</b>"#) && page.text.contains(r#"<b class="on">Finished</b>"#));
     assert!(page.text.contains(">Not for me<"));
-    assert_eq!(page.text.matches("href=\"/f/").count(), 5 + 3 + 2 + 1, "reasons, verdicts, progress, the report");
+    assert_eq!(page.text.matches("href=\"/f/").count(), 3 + 2 + 1, "verdicts, progress, the report");
 
-    let why = kindle.get(&site, &link("why-padded")).await.text;
-    assert!(why.contains("Not good, finished. Longer than it needed to be."), "{why}");
+    // The note: kept, shown back in the box, and opening its link only shows the page.
+    let noted = kindle.post(&site, &note_to, &[("note", "Padded to twice its length")]).await;
+    assert!(noted.status == StatusCode::OK && noted.text.contains(r#"value="Padded to twice its length""#));
+    let opened = kindle.get(&site, &note_to).await;
+    assert!(opened.status == StatusCode::OK && opened.text.contains("Not good, finished."));
+    // Only the note link takes a note.
+    assert_eq!(kindle.post(&site, &link("skip"), &[("note", "x")]).await.status, StatusCode::BAD_REQUEST);
     let high = kindle.get(&site, &link("more")).await.text;
-    assert!(high.contains("More like this, finished.") && high.contains("Tap all that apply."), "{high}");
-    assert!(high.contains("More from this source") && !high.contains("Too thin"));
-    kindle.get(&site, &link("why-depth")).await;
-    let liked = kindle.get(&site, &link("why-more-topic")).await.text;
-    assert!(liked.contains("More on this topic. Liked the depth or format."), "{liked}");
+    assert!(high.contains("More like this, finished.") && high.contains("Padded to twice its length"), "{high}");
     kindle.get(&site, &link("partway")).await;
     let skipped = kindle.get(&site, &link("skip")).await.text;
-    assert!(!skipped.contains("(optional)") && skipped.contains(">Finished<") && skipped.contains(">Stopped partway<"));
+    assert!(skipped.contains(">Finished<") && skipped.contains(">Stopped partway<"));
     kindle.get(&site, &link("end-more")).await;
-    kindle.get(&site, &link("why-depth")).await;
-    kindle.get(&site, &link("why-more-topic")).await;
+    kindle.post(&site, &note_to, &[("note", "The diagrams made it")]).await;
     kindle.get(&site, &link("partway")).await;
     // A fault in the delivery is reported apart from the rating, which it leaves as it was.
     let reported = kindle.get(&site, &link("problem")).await.text;
@@ -2449,13 +2436,13 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert!(kindle.get(&site, &link("problem")).await.text.contains("Reported. Thank you."));
 
     let rating = db::get_rating(pool, "john", "a1").await.unwrap().unwrap();
-    let got = (rating.verdict.as_deref(), rating.progress.as_deref(), rating.reason.as_str());
-    assert_eq!(got, (Some("more"), Some("partway"), "more-topic,depth"));
+    let got = (rating.verdict.as_deref(), rating.progress.as_deref(), rating.note.as_str());
+    assert_eq!(got, (Some("more"), Some("partway"), "The diagrams made it"));
     let events: Vec<(String, String)> =
         sqlx::query_as("SELECT signal, source FROM feedback_events ORDER BY id").fetch_all(pool).await.unwrap();
     let signals: Vec<&str> = events.iter().map(|(signal, _)| signal.as_str()).collect();
-    let want = ["end-not-good", "why-padded", "more", "why-depth", "why-more-topic", "partway", "skip", "end-more"];
-    assert_eq!(signals, [&want[..], &["why-depth", "why-more-topic", "partway", "problem"]].concat());
+    let want = ["end-not-good", "note", "more", "partway", "skip", "end-more", "note", "partway", "problem"];
+    assert_eq!(signals, want);
     assert!(events.iter().all(|(_, source)| source == "kindle-footer"));
     let review: String = sqlx::query_scalar("SELECT problem FROM extraction_reviews").fetch_one(pool).await.unwrap();
     assert_eq!(review, "reader: broken or incomplete");

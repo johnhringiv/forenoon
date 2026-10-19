@@ -15,7 +15,7 @@ from pathlib import Path
 from . import models
 from .config import Source, User
 from .llm import LlmError, Unreachable
-from .tokens import KEEP, PROBLEM, REASON_SIGNALS, meaning, with_reason
+from .tokens import KEEP, NOTE, PROBLEM, clean_note, meaning
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     article_id TEXT NOT NULL,
     signal TEXT NOT NULL,
     source TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS ratings (
     user_id TEXT NOT NULL,
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS ratings (
     verdict TEXT CHECK (verdict IN ('not-for-me', 'not-good', 'worth-it', 'more')),
     progress TEXT CHECK (progress IN ('finished', 'partway', 'skipped')),
     updated_at TEXT NOT NULL,
-    reason TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS llm_calls (
@@ -151,7 +152,20 @@ class ArticleRow:
 class Rating:
     verdict: str | None  # a key of tokens.VERDICTS; None when none was given
     progress: str | None  # finished, partway or skipped; None when not known
-    reason: str = ""  # keys of tokens.REASONS, comma-separated, when the reader said why
+    note: str = ""  # the reader's own words about it, when they gave any
+
+
+# The reasons once chosen from a list, in the words a note keeps them in. "Not interested in the
+# topic" is left out: the verdict "not for me" says it.
+OLD_REASONS = {
+    "thin": "Too thin, nothing in it",
+    "known": "Already knew this",
+    "long": "Too long",
+    "wrong": "Wrong or misleading",
+    "more-topic": "More on this topic",
+    "more-source": "More from this source",
+    "depth": "Liked the depth",
+}
 
 
 class Store:
@@ -168,11 +182,15 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         have = {row["name"] for row in self.db.execute("PRAGMA table_info(articles)")}
-        if "reason" not in {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}:
-            with self.db:
-                self.db.execute("ALTER TABLE ratings ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
-        if "rating" in {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}:
+        rated = {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}
+        if "rating" in rated:
+            if "reason" not in rated:
+                with self.db:
+                    self.db.execute("ALTER TABLE ratings ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
             self._ratings_to_verdicts()
+        if "detail" not in {row["name"] for row in self.db.execute("PRAGMA table_info(feedback_events)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE feedback_events ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
         delivered = {row["name"] for row in self.db.execute("PRAGMA table_info(deliveries)")}
         if "story" not in delivered:
             with self.db:
@@ -198,7 +216,7 @@ class Store:
         with no reason has no verdict: 3 was used as a mild negative, so it is not made a
         positive. 1 to 3 with a reason say which: the topic is "not for me", the rest
         "not good"; a 1 or 2 with no reason is "not good", which says less about the subject.
-        "Too long" becomes "longer than it needed to be".
+        A reason, chosen from a list then, becomes a note in its own words ("Too long").
 
         Only the book's "didn't finish" row said that the reader stopped partway: the web pages
         recorded a rating as not finished without asking, so a rating from there is "not
@@ -212,7 +230,7 @@ class Store:
             self.db.execute("ALTER TABLE ratings RENAME TO ratings_1to5")
             self.db.execute(create)
             self.db.execute(
-                "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)"
+                "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, note)"
                 " SELECT * FROM (SELECT user_id, article_id,"
                 " CASE WHEN rating IS NULL THEN NULL"
                 "  WHEN rating = 5 OR (rating = 4 AND reason != '') THEN 'more'"
@@ -221,12 +239,14 @@ class Store:
                 " CASE WHEN finished THEN 'finished' WHEN EXISTS (SELECT 1 FROM feedback_events e"
                 "  WHERE e.user_id = o.user_id AND e.article_id = o.article_id AND e.source = 'kindle-footer'"
                 "  AND e.signal IN ('r1', 'r2', 'r3', 'r4', 'r5')) THEN 'partway' END AS progress,"
-                " updated_at,"
-                " CASE WHEN rating IS NULL OR (rating = 3 AND reason = '') THEN ''"
-                "  WHEN rating >= 4 THEN reason WHEN reason = 'long' THEN 'padded'"
-                "  WHEN reason IN ('known', 'thin', 'wrong') THEN reason ELSE '' END AS reason"
-                " FROM ratings_1to5 o) WHERE verdict IS NOT NULL OR progress IS NOT NULL"
+                " updated_at, reason FROM ratings_1to5 o) WHERE verdict IS NOT NULL OR progress IS NOT NULL"
             )
+            for row in self.db.execute("SELECT user_id, article_id, note FROM ratings WHERE note != ''").fetchall():
+                words = [OLD_REASONS[key] for key in row["note"].split(",") if key in OLD_REASONS]
+                self.db.execute(
+                    "UPDATE ratings SET note = ? WHERE user_id = ? AND article_id = ?",
+                    ("; ".join(words), row["user_id"], row["article_id"]),
+                )
             self.db.execute("DROP TABLE ratings_1to5")
             self.db.commit()
         except BaseException:
@@ -767,8 +787,7 @@ class Store:
     ) -> Rating | None:
         """Log the tap and apply it: the latest tap decides the stored verdict and progress.
 
-        A reason tap sets only the reason. Any other tap drops a stored reason that no longer
-        fits (a "too thin" on an article now "more like this"). A verdict on a skipped article
+        A note stays until it is changed or the rating cleared. A verdict on a skipped article
         makes its progress not known. A problem report is logged, and noted in the extraction
         log for whoever runs the install; it leaves the rating as it was.
         """
@@ -801,30 +820,50 @@ class Store:
             verdict = before.verdict
         if progress is KEEP:
             progress = None if verdict and before.progress == "skipped" else before.progress
-        pressed = signal.removeprefix("why-") if signal in REASON_SIGNALS else ""
-        # An empty key leaves the choice alone and only drops what no longer fits.
-        reason = with_reason(with_reason(before.reason, "", verdict), pressed, verdict)
-        if was is None and not (verdict or progress or reason):
-            return  # a reason for nothing: no rating to keep it on
+        if was is None and not (verdict or progress):
+            return
         self.db.execute(
-            "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)"
+            "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, note)"
             " VALUES (?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(user_id, article_id) DO UPDATE SET verdict = excluded.verdict,"
-            " progress = excluded.progress, updated_at = excluded.updated_at, reason = excluded.reason",
-            (user_id, article_id, verdict, progress, when, reason),
+            " progress = excluded.progress, updated_at = excluded.updated_at",
+            (user_id, article_id, verdict, progress, when, before.note),
         )
+
+    def record_note(
+        self, user_id: str, article_id: str, text: str, source: str, when: str | None = None
+    ) -> Rating | None:
+        """Log the reader's note and keep it on the rating; an empty one removes it. A note on
+        an article with nothing else recorded is logged and kept nowhere else."""
+        when, note = when or now_iso(), clean_note(text)
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(
+                "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at, detail)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, article_id, NOTE, source, when, note),
+            )
+            self.db.execute(
+                "UPDATE ratings SET note = ?, updated_at = ? WHERE user_id = ? AND article_id = ?",
+                (note, when, user_id, article_id),
+            )
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        return self.get_rating(user_id, article_id)
 
     def get_rating(self, user_id: str, article_id: str) -> Rating | None:
         row = self.db.execute(
-            "SELECT verdict, progress, reason FROM ratings WHERE user_id = ? AND article_id = ?",
+            "SELECT verdict, progress, note FROM ratings WHERE user_id = ? AND article_id = ?",
             (user_id, article_id),
         ).fetchone()
-        return Rating(row["verdict"], row["progress"], row["reason"]) if row else None
+        return Rating(row["verdict"], row["progress"], row["note"]) if row else None
 
     def feedback_rows(self) -> list[sqlite3.Row]:
         """Every tap, oldest first."""
         return self.db.execute(
-            "SELECT f.created_at, f.user_id, f.signal, f.source, f.article_id,"
+            "SELECT f.created_at, f.user_id, f.signal, f.detail, f.source, f.article_id,"
             " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source"
             " FROM feedback_events f LEFT JOIN articles a ON a.id = f.article_id ORDER BY f.id"
         ).fetchall()
@@ -832,7 +871,7 @@ class Store:
     def rating_rows(self, user_id: str | None = None, latest: int | None = None) -> list[sqlite3.Row]:
         """The current rating per user and article, oldest first; optionally one user's latest."""
         rows = self.db.execute(
-            "SELECT r.updated_at, r.user_id, r.verdict, r.progress, r.reason, r.article_id,"
+            "SELECT r.updated_at, r.user_id, r.verdict, r.progress, r.note, r.article_id,"
             " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source,"
             " COALESCE(a.word_count, 0) AS word_count, COALESCE(s.reason, '') AS picked_because"
             " FROM ratings r LEFT JOIN articles a ON a.id = r.article_id"

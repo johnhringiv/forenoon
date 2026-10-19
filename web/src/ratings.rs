@@ -1,4 +1,4 @@
-//! Rating signals and the reasons a reader can give, matching `app/tokens.py`.
+//! Rating signals and the reader's note, matching `app/tokens.py`.
 //!
 //! A rating is two facts: what the article was worth to the reader (the verdict) and how far
 //! they got (the progress). Either can be given without the other.
@@ -12,20 +12,8 @@ pub const VERDICTS: [(&str, &str); 4] =
 pub const PROGRESS: [(&str, &str); 3] =
     [("finished", "Finished"), ("partway", "Stopped partway"), ("skipped", "Skipped")];
 
-/// "Not for me" is about the subject, so its reasons are about the reader's level.
-const NOT_FOR_ME: [(&str, &str); 2] = [("basic", "Too basic for me"), ("specialist", "Too specialised for me")];
-const NOT_GOOD: [(&str, &str); 5] = [
-    ("thin", "Too thin"),
-    ("known", "Nothing new in it"),
-    ("padded", "Longer than it needed to be"),
-    ("oversold", "The headline oversold it"),
-    ("wrong", "Wrong or misleading"),
-];
-const MORE: [(&str, &str); 3] = [
-    ("more-topic", "More on this topic"),
-    ("more-source", "More from this source"),
-    ("depth", "Liked the depth or format"),
-];
+/// The longest note kept, in characters.
+pub const MAX_NOTE: usize = 200;
 
 pub fn verdict_label(key: &str) -> Option<&'static str> {
     VERDICTS.iter().find(|(k, _)| *k == key).map(|(_, label)| *label)
@@ -35,79 +23,10 @@ pub fn progress_label(key: &str) -> Option<&'static str> {
     PROGRESS.iter().find(|(k, _)| *k == key).map(|(_, label)| *label)
 }
 
-/// The reasons that fit a verdict; none for "worth it", and none without a verdict: a skip is
-/// a deliberate act and says enough, and an article already seen elsewhere can be rated.
-pub fn reasons_for(verdict: Option<&str>) -> &'static [(&'static str, &'static str)] {
-    match verdict {
-        Some("not-for-me") => &NOT_FOR_ME,
-        Some("not-good") => &NOT_GOOD,
-        Some("more") => &MORE,
-        _ => &[],
-    }
-}
-
-/// What was liked can be several things at once; anything else is one.
-pub fn several(verdict: Option<&str>) -> bool {
-    verdict == Some("more")
-}
-
-/// The reason keys stored for a rating: what was liked can be several things at once.
-pub fn chosen(reason: &str) -> impl Iterator<Item = &str> {
-    reason.split(',').filter(|key| !key.is_empty())
-}
-
-/// The stored reasons after one more press of `key`, by the same rules as `app/tokens.py`.
-///
-/// Pressing a chosen reason again takes it back. What was liked adds up (the topic and the
-/// depth); anything else is one thing, so a new choice replaces the old. Reasons that do not
-/// fit the rating are dropped; an empty `key` only does that.
-pub fn with_reason(reason: &str, key: &str, verdict: Option<&str>) -> String {
-    let fitting = reasons_for(verdict);
-    let fits = |k: &str| fitting.iter().any(|(f, _)| *f == k);
-    let mut now: Vec<&str> = chosen(reason).filter(|k| fits(k)).collect();
-    if now.contains(&key) {
-        now.retain(|k| *k != key);
-    } else if fits(key) {
-        if !several(verdict) {
-            now.clear();
-        }
-        now.push(key);
-    }
-    fitting.iter().map(|(k, _)| *k).filter(|k| now.contains(k)).collect::<Vec<_>>().join(",")
-}
-
-pub fn fits(reason: &str, verdict: Option<&str>) -> bool {
-    reasons_for(verdict).iter().any(|(key, _)| *key == reason)
-}
-
-/// What the reason buttons are asked under: they read as answers to it.
-pub fn question(verdict: Option<&str>) -> &'static str {
-    match verdict {
-        Some("not-for-me") => "Why not for you?",
-        Some("more") => "What did you like?",
-        _ => "What was wrong?",
-    }
-}
-
-/// A reason as a short answer to `question`, for a button.
-pub fn short(reason: &str) -> &'static str {
-    match reason {
-        "basic" => "Too basic",
-        "specialist" => "Too specialised",
-        "known" => "Nothing new",
-        "thin" => "Too thin",
-        "padded" => "Padded",
-        "oversold" => "Oversold",
-        "wrong" => "Inaccurate",
-        "more-topic" => "The topic",
-        "more-source" => "This source",
-        "depth" => "The depth",
-        _ => "",
-    }
-}
-
-pub fn label(reason: &str) -> Option<&'static str> {
-    NOT_FOR_ME.iter().chain(&NOT_GOOD).chain(&MORE).find(|(key, _)| *key == reason).map(|(_, l)| *l)
+/// A note as kept, by the same rule as `app/tokens.py`: one line, at most `MAX_NOTE` characters.
+pub fn clean_note(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    line.chars().take(MAX_NOTE).collect::<String>().trim().to_owned()
 }
 
 /// What gets written to the event log, in the same words the Kindle links use.
@@ -123,8 +42,6 @@ pub enum Signal {
     Partway,
     /// Not read: drops the verdict: `skip`.
     Skip,
-    /// Why: `why-thin`.
-    Why(String),
 }
 
 /// What a signal does to one fact: leave it as it was, or set it (`None` clears it).
@@ -144,7 +61,6 @@ impl Signal {
             Signal::Finished => (Change::Keep, Change::Set(Some("finished"))),
             Signal::Partway => (Change::Keep, Change::Set(Some("partway"))),
             Signal::Skip => (Change::Set(None), Change::Set(Some("skipped"))),
-            Signal::Why(_) => (Change::Keep, Change::Keep),
         }
     }
 }
@@ -157,7 +73,6 @@ impl fmt::Display for Signal {
             Signal::Finished => f.write_str("finished"),
             Signal::Partway => f.write_str("partway"),
             Signal::Skip => f.write_str("skip"),
-            Signal::Why(reason) => write!(f, "why-{reason}"),
         }
     }
 }
@@ -166,15 +81,12 @@ pub fn verdict_key(text: &str) -> Option<&'static str> {
     VERDICTS.iter().find(|(k, _)| *k == text).map(|(k, _)| *k)
 }
 
-/// The signals a rating link carries, in the words `Display` writes, and nothing more: a
-/// reason nobody can give is not one, nor a verdict that does not exist.
+/// The signals a rating link carries, in the words `Display` writes, and nothing more: a verdict
+/// that does not exist is not one.
 impl FromStr for Signal {
     type Err = ();
 
     fn from_str(text: &str) -> Result<Signal, ()> {
-        if let Some(reason) = text.strip_prefix("why-") {
-            return label(reason).map(|_| Signal::Why(reason.to_owned())).ok_or(());
-        }
         if let Some(verdict) = text.strip_prefix("end-") {
             return verdict_key(verdict).map(Signal::End).ok_or(());
         }
@@ -193,42 +105,24 @@ mod tests {
 
     #[test]
     fn a_signal_reads_back_as_it_was_written() {
-        let all = VERDICTS
-            .iter()
-            .flat_map(|(v, _)| [Signal::Verdict(v), Signal::End(v)])
-            .chain([Signal::Finished, Signal::Partway, Signal::Skip, Signal::Why("thin".into())])
-            .chain([Signal::Why("depth".into()), Signal::Why("specialist".into())]);
+        let all = VERDICTS.iter().flat_map(|(v, _)| [Signal::Verdict(v), Signal::End(v)]).chain([
+            Signal::Finished,
+            Signal::Partway,
+            Signal::Skip,
+        ]);
         for signal in all {
             assert_eq!(signal.to_string().parse::<Signal>(), Ok(signal.clone()), "{signal}");
         }
         assert_eq!("end-more".parse::<Signal>(), Ok(Signal::End("more")));
-        for text in [
-            "",
-            "f4",
-            "r2",
-            "end-",
-            "end-great",
-            "great",
-            "done",
-            "why-",
-            "why-broken",
-            "why-topic",
-            "why-no-time",
-            "why-seen",
-            "problem",
-        ] {
+        for text in ["", "f4", "r2", "end-", "end-great", "great", "done", "why-thin", "note", "problem", "skip-rest"] {
             assert_eq!(text.parse::<Signal>(), Err(()), "{text}");
         }
     }
 
     #[test]
-    fn reasons_follow_the_verdict() {
-        assert!(reasons_for(Some("worth-it")).is_empty() && reasons_for(None).is_empty());
-        assert!(fits("basic", Some("not-for-me")) && !fits("basic", Some("not-good")));
-        // One reason, except for what was liked.
-        assert_eq!(with_reason("thin", "padded", Some("not-good")), "padded");
-        assert_eq!(with_reason("depth", "more-topic", Some("more")), "more-topic,depth");
-        assert_eq!(with_reason("depth", "depth", Some("more")), "");
-        assert_eq!(with_reason("thin,depth", "", Some("more")), "depth");
+    fn a_note_is_one_short_line() {
+        assert_eq!(clean_note("  one \n  line\t "), "one line");
+        assert_eq!(clean_note(&"é".repeat(300)).chars().count(), MAX_NOTE);
+        assert_eq!(clean_note("   "), "");
     }
 }

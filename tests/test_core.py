@@ -39,8 +39,8 @@ def test_token_round_trip_and_rejections():
         verify_token(SECRET, "garbage")
     with pytest.raises(TokenError):
         make_token(SECRET, "john", "abc", "delete-everything", expires)
-    with pytest.raises(TokenError):  # no longer a reason
-        make_token(SECRET, "john", "abc", "why-broken", expires)
+    with pytest.raises(TokenError):  # reasons are a note now
+        make_token(SECRET, "john", "abc", "why-thin", expires)
     for signal in ("up", "down", "done", "f4", "r2", "clear"):  # not something a link carries
         with pytest.raises(TokenError):
             make_token(SECRET, "john", "abc", signal, expires)
@@ -54,8 +54,8 @@ def test_tokens_are_the_ones_the_web_app_checks():
         == "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ"
     )
     assert (
-        make_token(secret, "john", "a1", "why-depth", 2_000_000_000)
-        == "MXxqb2hufGExfHdoeS1kZXB0aHwyMDAwMDAwMDAw.wm1E7cJSqcEcRvNc0OMZ6w"
+        make_token(secret, "john", "a1", "note", 2_000_000_000)
+        == "MXxqb2hufGExfG5vdGV8MjAwMDAwMDAwMA.se5olUsJ9d_opk-0gCeA_g"
     )
     assert (
         make_token(secret, "john", "a1", "problem", 2_000_000_000)
@@ -260,17 +260,6 @@ def test_each_readers_own_settings_start_from_the_installs_and_apply_to_their_ru
     assert not mine.llm.show_reasons and mine.llm.learn
 
 
-def test_web_app_offers_the_same_reasons():
-    from pathlib import Path
-
-    from app.tokens import REASONS
-
-    rust = (Path(__file__).parent.parent / "web" / "src" / "ratings.rs").read_text()
-    for key, label in REASONS.items():
-        assert f'("{key}", "{label}")' in rust, f"web/src/ratings.rs is missing the reason {key!r}"
-    assert rust.count('", "') >= len(REASONS)
-
-
 def test_a_rating_is_a_verdict_and_progress_and_the_latest_tap_wins():
     import json
     from pathlib import Path
@@ -282,7 +271,10 @@ def test_a_rating_is_a_verdict_and_progress_and_the_latest_tap_wins():
     for case in cases:
         store = Store(":memory:")
         for signal in case["taps"]:
-            store.record_feedback("john", "a1", signal, "kindle-footer")
+            if signal.startswith("note:"):
+                store.record_note("john", "a1", signal.removeprefix("note:"), "kindle-footer")
+            else:
+                store.record_feedback("john", "a1", signal, "kindle-footer")
         want = case["then"] and Rating(case["then"][0], case["then"][1], case["then"][2])
         assert store.get_rating("john", "a1") == want, case["taps"]
         assert len(store.feedback_rows()) == len(case["taps"]), "every tap is logged"
@@ -352,12 +344,12 @@ def test_ratings_from_one_to_five_are_brought_forward(tmp_path):
     assert got == {
         "five": Rating("more", "finished"),
         "four": Rating("worth-it", "finished"),
-        "four-liked": Rating("more", None, "depth"),
+        "four-liked": Rating("more", None, "Liked the depth"),
         "three": Rating(None, "finished"),
         "three-web": None,
-        "three-long": Rating("not-good", None, "padded"),
+        "three-long": Rating("not-good", None, "Too long"),
         "two-topic": Rating("not-for-me", "finished"),
-        "two-known": Rating("not-good", "finished", "known"),
+        "two-known": Rating("not-good", "finished", "Already knew this"),
         "one-kindle": Rating("not-good", "partway"),
         "only-finished": Rating(None, "finished"),
     }

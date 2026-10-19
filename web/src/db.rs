@@ -622,7 +622,8 @@ pub struct Delivered {
     pub explore: Option<bool>,
     pub verdict: Option<String>,
     pub progress: Option<String>,
-    pub why: String,
+    /// The reader's note on it.
+    pub note: String,
     /// Picked, but its page could not be had: shown as a link and not sent.
     pub link_only: bool,
 }
@@ -642,7 +643,7 @@ pub async fn delivered(
            a.image_url, a.description, s.policy AS "policy?", s.score AS "score?: f64",
            s.reason AS "picked?", s.rank AS "rank?: i64", s.explore AS "explore?: bool",
            r.verdict AS "verdict?", r.progress AS "progress?",
-           COALESCE(r.reason, '') AS "why!: String", d.link_only AS "link_only: bool"
+           COALESCE(r.note, '') AS "note!: String", d.link_only AS "link_only: bool"
            FROM deliveries d JOIN articles a ON a.id = d.article_id
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
@@ -779,7 +780,8 @@ pub struct Shelved {
     pub policy: Option<String>,
     pub verdict: Option<String>,
     pub progress: Option<String>,
-    pub why: String,
+    /// The reader's note on it.
+    pub note: String,
     /// One "route:via" per line.
     pub routes: String,
 }
@@ -845,7 +847,7 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
            COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
            COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
            s.policy AS "policy?", r.verdict AS "verdict?", r.progress AS "progress?",
-           COALESCE(r.reason, '') AS "why!: String",
+           COALESCE(r.note, '') AS "note!: String",
            COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t
                      WHERE t.article_id = a.id), '') AS "routes!: String""#,
         r#"
@@ -1145,14 +1147,14 @@ pub struct Rating {
     pub verdict: Option<String>,
     /// finished, partway or skipped; `None` when not known.
     pub progress: Option<String>,
-    /// Keys of the reasons the reader gave, comma-separated; "" when none.
-    pub reason: String,
+    /// The reader's own words about it; "" when none.
+    pub note: String,
 }
 
 pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<Option<Rating>, sqlx::Error> {
     sqlx::query_as!(
         Rating,
-        r#"SELECT verdict AS "verdict?", progress AS "progress?", reason
+        r#"SELECT verdict AS "verdict?", progress AS "progress?", note
            FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
         article
@@ -1162,8 +1164,8 @@ pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<
 }
 
 /// The rating after `signal`, by the same rules as `app/store.py`: the latest tap decides
-/// verdict and progress, a verdict on a skipped article makes its progress not known, and
-/// any tap drops a reason that no longer fits.
+/// verdict and progress, a verdict on a skipped article makes its progress not known, and the
+/// note stays as it was.
 pub fn after(was: &Rating, signal: &Signal) -> Rating {
     let (verdict, progress) = signal.meaning();
     let verdict = match verdict {
@@ -1175,10 +1177,7 @@ pub fn after(was: &Rating, signal: &Signal) -> Rating {
         Change::Keep if verdict.is_some() && was.progress.as_deref() == Some("skipped") => None,
         Change::Keep => was.progress.clone(),
     };
-    let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
-    let v = verdict.as_deref();
-    let reason = ratings::with_reason(&ratings::with_reason(&was.reason, "", v), pressed, v);
-    Rating { verdict, progress, reason }
+    Rating { verdict, progress, note: was.note.clone() }
 }
 
 /// Log the signal and apply it (see `after`). Returns the rating as it now stands.
@@ -1217,7 +1216,7 @@ async fn record_in(
     .await?;
     let was = sqlx::query_as!(
         Rating,
-        r#"SELECT verdict AS "verdict?", progress AS "progress?", reason
+        r#"SELECT verdict AS "verdict?", progress AS "progress?", note
            FROM ratings WHERE user_id = ? AND article_id = ?"#,
         user,
         article
@@ -1226,26 +1225,62 @@ async fn record_in(
     .await?;
     let rating = after(was.as_ref().unwrap_or(&Rating::default()), signal);
     if was.is_none() && rating == Rating::default() {
-        return Ok(rating); // a reason for nothing: no rating to keep it on
+        return Ok(rating); // nothing to keep
     }
     sqlx::query!(
-        r#"INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, reason)
+        r#"INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, note)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
            ON CONFLICT(user_id, article_id) DO UPDATE SET verdict = excluded.verdict,
-           progress = excluded.progress, updated_at = excluded.updated_at, reason = excluded.reason"#,
+           progress = excluded.progress, updated_at = excluded.updated_at"#,
         user,
         article,
         rating.verdict,
         rating.progress,
         now,
-        rating.reason
+        rating.note
     )
     .execute(&mut **tx)
     .await?;
     Ok(rating)
 }
 
-/// Forget an article's verdict, progress and reason; the event log keeps the history.
+/// Log the reader's note and keep it on the rating, as `app/store.py` does; an empty one removes
+/// it. A note on an article with nothing else recorded is logged and kept nowhere else. Returns
+/// the rating as it now stands.
+pub async fn record_note(
+    pool: &SqlitePool,
+    user: &str,
+    article: &str,
+    text: &str,
+    source: &str,
+) -> Result<Option<Rating>, sqlx::Error> {
+    let (now, note) = (now_iso(), ratings::clean_note(text));
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at, detail)
+         VALUES (?, ?, 'note', ?, ?, ?)",
+        user,
+        article,
+        source,
+        now,
+        note
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "UPDATE ratings SET note = ?, updated_at = ? WHERE user_id = ? AND article_id = ?",
+        note,
+        now,
+        user,
+        article
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    get_rating(pool, user, article).await
+}
+
+/// Forget an article's verdict, progress and note; the event log keeps the history.
 pub async fn clear_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
@@ -1273,7 +1308,14 @@ mod tests {
         for case in file["cases"].as_array().expect("cases") {
             let mut rating: Option<Rating> = None;
             for tap in case["taps"].as_array().expect("taps") {
-                let signal: Signal = tap.as_str().expect("a signal").parse().expect("a known signal");
+                let tap = tap.as_str().expect("a tap");
+                if let Some(text) = tap.strip_prefix("note:") {
+                    if let Some(rating) = rating.as_mut() {
+                        rating.note = ratings::clean_note(text);
+                    }
+                    continue;
+                }
+                let signal: Signal = tap.parse().expect("a known signal");
                 let next = after(rating.as_ref().unwrap_or(&Rating::default()), &signal);
                 if rating.is_some() || next != Rating::default() {
                     rating = Some(next);
@@ -1283,7 +1325,7 @@ mod tests {
             let want = case["then"].as_array().map(|then| Rating {
                 verdict: text(&then[0]),
                 progress: text(&then[1]),
-                reason: then[2].as_str().unwrap_or_default().to_owned(),
+                note: then[2].as_str().unwrap_or_default().to_owned(),
             });
             assert_eq!(rating, want, "{}", case["taps"]);
         }

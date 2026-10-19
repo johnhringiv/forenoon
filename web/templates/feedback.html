@@ -5,17 +5,19 @@
 {#- Opened from a link in a book, in the Kindle's browser: one plain page, black on white. Each
     pick-one group is listed whole, the reader's own choice filled in black. -#}
 <style>body{font-family:serif;font-size:1.6em;margin:2em 1em;text-align:center;color:#000;
-background:#fff}p.small{font-size:.7em}div.group{margin-top:1.8em;font-size:.8em}
-div.group h2{font-size:1em;font-weight:normal;margin:0 0 .3em}
+background:#fff}p.small{font-size:.7em}.group{margin-top:1.8em;font-size:.8em}
+.group h2{font-size:1em;font-weight:normal;margin:0 0 .3em}
 div.pick a,div.pick b{display:block;border:1px solid #000;padding:.3em .5em;margin:.4em auto;max-width:16em;
 color:#000;text-decoration:none;font-weight:normal}
 div.pick .on{background:#000;color:#fff;font-weight:bold}
-p.report{margin-top:2.5em}</style></head>
+p.report{margin-top:2.5em}
+form input{display:block;box-sizing:border-box;width:100%;max-width:16em;margin:.4em auto;padding:.3em;
+font:inherit;border:1px solid #000}form button{font:inherit;border:1px solid #000;background:#fff;
+padding:.2em .8em}</style></head>
 <body><p>{{ message }}</p><p class="small">{{ detail }}</p>
-{%- if !reasons.is_empty() %}
-<div class="group"><h2>{{ question }} (optional){% if several %} Tap all that apply.{% endif %}</h2><div class="pick">
-{%- for pick in reasons %}<a href="/f/{{ pick.token }}"{% if pick.on %} class="on"{% endif %}>{{ pick.label }}</a>{% endfor -%}
-</div></div>
+{%- if !note_to.is_empty() %}
+<form class="group" method="post" action="/f/{{ note_to }}"><h2><label for="note">Anything the picker should know? (optional)</label></h2>
+<input type="text" id="note" name="note" maxlength="200" value="{{ note }}"><button>Save note</button></form>
 {%- endif %}
 {%- if !verdicts.is_empty() %}
 <div class="group"><h2>How was it?</h2><div class="pick">

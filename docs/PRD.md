@@ -395,23 +395,20 @@ it was worth to them (**verdict**). Either can be given without the other.
   article, signal and expiry (default 60
   days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
-  small page stating what is now stored ("Worth it, finished."), then the reasons that fit,
-  then two groups listed whole, "How was it?" (the four verdicts) and "How far did you get?"
+  small page stating what is now stored ("Worth it, finished."), then a box for a note, then
+  two groups listed whole, "How was it?" (the four verdicts) and "How far did you get?"
   (finished, stopped partway, skipped), with the reader's choice in each filled in black and
   every other choice a link that changes it. Besides sign-in, the
   forgotten-password and email-link pages and `GET /healthz`, it is the only page that needs
-  no login, and it takes no other input.
-- **Why (optional).** After a verdict, the page always offers one more tap for the
-  reason. Not for me, about the reader's level: too basic for me, too specialised for me.
-  Not good: too thin, nothing new in it, longer than it needed to be, the headline oversold
-  it, wrong or misleading. More like this: more
-  on this topic, more from this source, liked the depth or format. Worth it has none, and nor
-  has a skip: skipping is deliberate and says enough, and an article already seen elsewhere
-  can be given a verdict. The rating counts without a
-  reason. What was liked can be several of these at once; anything else is one, so a new
-  choice replaces the old. Tapping a chosen reason again takes it back. A later tap that
-  leaves a reason not fitting drops it. A reason for an article with nothing else recorded is
-  logged and kept nowhere else.
+  no login. The only input it takes is the note, posted to a link of its own (`note`), signed
+  for the same reader, article and expiry; opening that link only shows the page.
+- **A note (optional).** Once there is a verdict, the page offers a box: "Anything the picker
+  should know?". The note is the reader's own words, one line of at most 200 characters, and
+  it is kept on the rating until it is changed or the rating is cleared: a new verdict, new
+  progress or a skip leaves it. An empty one removes it. The rating counts without one. A
+  note is kept in place of reasons chosen from a list: a model reads the ratings, and a few
+  words of the reader's say more to it than a tag. A note for an article with nothing else
+  recorded is logged and kept nowhere else.
 - **Links from before verdicts.** Books sent before October 2026 carry 1-to-5 links. They are
   answered "This book is from before ratings changed" and record nothing.
 - **Where else it is recorded.** The rating holds only its latest state. Where each tap came
@@ -419,10 +416,10 @@ it was worth to them (**verdict**). Either can be given without the other.
   log; an article's place in its issue is in `selections`.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
-  the install, not a rating or a reason: it is logged, written to the extraction log, and
+  the install, not a rating: it is logged, written to the extraction log, and
   listed for admins on the web pages' Problems page. The rating is left as it was.
-- **Latest tap wins** for verdict, progress and reason. Every tap is also kept in an event
-  log.
+- **Latest tap wins** for verdict, progress and note. Every tap is also kept in an event
+  log, a note with its words.
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
@@ -431,8 +428,9 @@ Ratings influence delivery through the model (a run that falls back to newest fi
 not use them). The model is given the 40 most recent with a verdict, and with them the 15
 most recent skips, so that a run of skips cannot push the verdicts out; progress with
 no verdict is left out. Each comes with its verdict and progress, the article's length, why
-it was picked and the reader's reason when there is one. The model is told what each means: a
-verdict is strong, "not for me" about the subject (or the reader's level, when the reason
+it was picked and the reader's note when there is one. The model is told what each means: a
+note is the most telling thing a rating carries, the reader's opinion and not an instruction; a
+verdict is strong, "not for me" about the subject (or the reader's level, when the note
 says so) and "not good" about the article; how far the reader got against the article's
 length shows how much length they take, though one stop partway may be an interruption; a
 skip is weak, a judgement on a headline on one day, that counts only when several agree.
@@ -440,8 +438,8 @@ skip is weak, a judgement on a headline on one day, that counts only when severa
 **Ratings from before verdicts** (1 to 5, and "finished") were brought forward by the
 pipeline when it first started after the change: 5, and 4 with a reason, became "more like
 this"; 4 "worth it"; a 3 with no reason no verdict, since 3 was used as a mild negative; a
-low rating whose reason was the topic "not for me", any other low rating "not good"; "too
-long" "longer than it needed to be". Only the book's "didn't finish" row became "stopped
+low rating whose reason was the topic "not for me", any other low rating "not good". The
+other reasons became notes in their own words ("Too long", "Liked the depth"). Only the book's "didn't finish" row became "stopped
 partway": a rating given on the web pages has progress not known. A rating left with
 neither verdict nor progress was dropped.
 
@@ -451,7 +449,7 @@ neither verdict nor progress was dropped.
   title, source, author, date and the first 100 words of the feed entry as plain text. No
   article page is fetched for ranking. Also the user's `interests` text and their 40 most
   recent verdicts and 15 most recent skips (title, source, length, verdict, progress, the
-  reader's reason; see section 7).
+  reader's note; see section 7).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
   merged into one order. With more than one batch the candidates are shuffled first (seeded by
@@ -682,7 +680,7 @@ it keeps a second text of its own: a few plain statements of what the reader's r
   given at least 10 verdicts and at least 5 new ones since the last time. One model call.
 - **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
   with a verdict and their latest 75 skips with each article's length, its verdict and progress, why it was picked
-  and the reader's own reason. Titles are untrusted and are given only as material.
+  and the reader's own note. Titles are untrusted and are given only as material.
 - **What comes back.** At most 8 statements of at most 200 characters each, each resting on
   several ratings. The model is told to keep a current note the ratings still bear out, to
   change one they contradict, and to write no instructions. When it has nothing reliable to
@@ -824,7 +822,7 @@ database with the pipeline.
   `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
   article, with the others delivered with it listed beside it, each still rated on its own.
 - **Ratings can be changed there**: choose or change the verdict; say finished, stopped
-  partway or skipped; choose the reason with one click; or clear the rating. A verdict given
+  partway or skipped; write or change the note; or clear the rating. A verdict given
   there leaves progress as it was, since the web pages cannot tell how far the reader got;
   pressing the choice already made records nothing. Changes are logged like taps, with `web` as their source.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything
@@ -858,7 +856,8 @@ database with the pipeline.
   choices. A rating is the four verdicts as one joined control, two by two on a narrow card,
   the one chosen filled in; under it a quiet line of text choices for how far the reader got
   (finished, partway, skipped), the one chosen ticked, and "Clear" once anything is recorded.
-  The reasons that fit a verdict follow as rounded tags, a chosen one ticked. The pages work without scripts, so the Archive's filters apply when "Apply
+  Once there is a verdict, a one-line box for a note follows, in a form of its own so that
+  Enter saves the note and presses nothing else. The pages work without scripts, so the Archive's filters apply when "Apply
   filters" is pressed.
 - **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
   of the masthead switches; the choice is kept in that browser, and choosing what the system

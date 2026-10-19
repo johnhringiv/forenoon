@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     article_id TEXT NOT NULL,
     signal TEXT NOT NULL,
     source TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS ratings (
     user_id TEXT NOT NULL,
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS ratings (
     verdict TEXT CHECK (verdict IN ('not-for-me', 'not-good', 'worth-it', 'more')),
     progress TEXT CHECK (progress IN ('finished', 'partway', 'skipped')),
     updated_at TEXT NOT NULL,
-    reason TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS llm_calls (

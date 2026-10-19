@@ -723,13 +723,6 @@ pub(crate) struct RateChoice {
     pub(crate) on: bool,
 }
 
-pub(crate) struct ReasonOption {
-    pub(crate) key: &'static str,
-    pub(crate) short: &'static str,
-    pub(crate) label: &'static str,
-    pub(crate) selected: bool,
-}
-
 pub(crate) fn verdict_choices(verdict: Option<&str>) -> Vec<RateChoice> {
     ratings::VERDICTS
         .iter()
@@ -745,19 +738,6 @@ pub(crate) fn progress_choices(progress: Option<&str>) -> Vec<RateChoice> {
             label,
             short: if *key == "partway" { "Partway" } else { label },
             on: progress == Some(*key),
-        })
-        .collect()
-}
-
-/// The reasons a reader can give for this rating, with the ones they chose marked.
-pub(crate) fn reason_options(verdict: Option<&str>, why: &str) -> Vec<ReasonOption> {
-    ratings::reasons_for(verdict)
-        .iter()
-        .map(|(key, label)| ReasonOption {
-            key,
-            short: ratings::short(key),
-            label,
-            selected: ratings::chosen(why).any(|chosen| chosen == *key),
         })
         .collect()
 }
@@ -797,11 +777,10 @@ struct Card {
     unrated: bool,
     verdicts: Vec<RateChoice>,
     progress: Vec<RateChoice>,
-    reasons: Vec<ReasonOption>,
-    /// The question the reason buttons answer.
-    question: &'static str,
-    /// Whether the reasons add up (what was liked) or replace each other.
-    several: bool,
+    /// The reader's note, and whether the box for one is shown: once there is a verdict to go
+    /// with it, or a note already.
+    note: String,
+    noting: bool,
     /// Whether a "Send to Kindle" button is offered, and what became of the last request.
     sendable: bool,
     sent: Option<String>,
@@ -918,7 +897,6 @@ fn card(row: Delivered) -> Card {
     }
     facts.extend(length(row.word_count));
     let (verdict, progress) = (row.verdict.as_deref(), row.progress.as_deref());
-    let reasons = reason_options(verdict, &row.why);
     Card {
         link: web_url(&row.url),
         image: web_url(&row.image_url),
@@ -931,9 +909,8 @@ fn card(row: Delivered) -> Card {
         unrated: verdict.is_none() && progress.is_none(),
         verdicts: verdict_choices(verdict),
         progress: progress_choices(progress),
-        reasons,
-        question: ratings::question(verdict),
-        several: ratings::several(verdict),
+        noting: verdict.is_some() || !row.note.is_empty(),
+        note: row.note,
         sendable: false,
         sent: None,
         source: row.source.split(" via ").next().unwrap_or_default().to_owned(),
@@ -1088,7 +1065,7 @@ pub struct RateForm {
     verdict: Option<String>,
     progress: Option<String>,
     clear: Option<String>,
-    reason: Option<String>,
+    note: Option<String>,
 }
 
 /// An article's thumbnail, for a reader it was delivered to.
@@ -1251,6 +1228,12 @@ pub async fn rate(
     let now = db::get_rating(pool, &user.id, &form.article).await?.unwrap_or_default();
     // A verdict given here leaves progress as it was: these pages cannot tell how far the
     // reader got.
+    if let Some(note) = form.note.as_deref() {
+        if ratings::clean_note(note) != now.note {
+            db::record_note(pool, &user.id, &form.article, note, "web").await?;
+        }
+        return back_to(&form.back, &form.article);
+    }
     let signal = if form.clear.is_some() {
         None
     } else if let Some(verdict) = form.verdict.as_deref().and_then(ratings::verdict_key) {
@@ -1269,10 +1252,7 @@ pub async fn rate(
             _ => return back_to(&form.back, &form.article),
         }
     } else {
-        match form.reason {
-            Some(reason) if ratings::fits(&reason, now.verdict.as_deref()) => Some(Signal::Why(reason)),
-            _ => return back_to(&form.back, &form.article), // not a reason for this rating: ignored
-        }
+        return back_to(&form.back, &form.article);
     };
     match signal {
         Some(signal) => {

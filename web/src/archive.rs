@@ -24,9 +24,8 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, RateChoice, ReasonOption, Viewer, allowed, back_to,
-        html, length, local, progress_choices, reader, reason_options, refused, send_outcome, shorten, verdict_choices,
-        web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, RateChoice, Viewer, allowed, back_to, html, length,
+        local, progress_choices, reader, refused, send_outcome, shorten, verdict_choices, web_url,
     },
     ratings,
 };
@@ -110,10 +109,9 @@ struct Row {
     unrated: bool,
     verdicts: Vec<RateChoice>,
     progress: Vec<RateChoice>,
-    reasons: Vec<ReasonOption>,
-    question: &'static str,
-    /// Whether the reasons add up (what was liked) or replace each other.
-    several: bool,
+    /// The reader's note, and whether the box for one is shown.
+    note: String,
+    noting: bool,
     sendable: bool,
     sent: Option<String>,
     /// How the last "Fetch again" went, within the day; and whether it is still waiting.
@@ -260,9 +258,8 @@ fn row(found: Shelved, zone: Tz) -> Row {
         unrated,
         verdicts: verdict_choices(verdict),
         progress: progress_choices(progress),
-        reasons: reason_options(verdict, &found.why),
-        question: ratings::question(verdict),
-        several: ratings::several(verdict),
+        noting: verdict.is_some() || !found.note.is_empty(),
+        note: found.note,
         sendable: false,
         sent: None,
         refreshed: None,

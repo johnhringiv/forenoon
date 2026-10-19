@@ -3,15 +3,18 @@
 //! These are the only pages without a sign-in. A link carries a signed, expiring claim made
 //! by the pipeline (`app/tokens.py`): this reader rated this article so. Opening it records
 //! the tap, and the page it answers with offers the other choices, signed the same way, so a
-//! mis-tap is fixed without going back to the book.
+//! mis-tap is fixed without going back to the book, and a box for a short note, which posts back
+//! to a link of its own.
 
 use askama::Template;
 use axum::{
+    Form,
     extract::{Path, State},
     http::StatusCode,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
+use serde::Deserialize;
 use sha2::Sha256;
 
 use crate::{
@@ -26,6 +29,7 @@ const SIGNATURE_BYTES: usize = 16;
 pub(crate) const TAPS_PER_CLIENT: usize = 30;
 const SOURCE: &str = "kindle-footer";
 const PROBLEM: &str = "problem";
+const NOTE: &str = "note";
 
 /// What a link asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,12 +37,15 @@ pub enum Tap {
     Rate(Signal),
     /// "This article came out broken or incomplete": a report about the delivery, not a rating.
     Problem,
+    /// Where the tap page's note box posts. Opened, it only shows the rating.
+    Note,
 }
 
 impl Tap {
     fn parse(text: &str) -> Option<Tap> {
         match text {
             PROBLEM => Some(Tap::Problem),
+            NOTE => Some(Tap::Note),
             _ => text.parse().ok().map(Tap::Rate),
         }
     }
@@ -118,19 +125,18 @@ fn from_before_verdicts(secret: &[u8], token: &str) -> bool {
 struct FeedbackPage {
     message: String,
     detail: String,
-    /// What the reason links answer, and (token, label) for each reason that fits; none when
-    /// nothing fits.
-    question: &'static str,
-    reasons: Vec<Pick>,
-    several: bool,
+    /// Where the note box posts, and the note as it stands; no box when empty (an error page,
+    /// or nothing yet for a note to go with).
+    note_to: String,
+    note: String,
     /// Every verdict and every progress, the reader's own marked; empty on an error page.
     verdicts: Vec<Pick>,
     progress: Vec<Pick>,
     report: String,
 }
 
-/// One link on the tap page. A chosen verdict or progress is shown without a link (tapping it
-/// again would change nothing); a chosen reason keeps its link, to take it back.
+/// One link on the tap page. The choice made is shown without a link: tapping it again would
+/// change nothing.
 struct Pick {
     token: String,
     label: &'static str,
@@ -141,9 +147,8 @@ fn plain(status: StatusCode, message: &str, detail: &str) -> Page {
     let page = FeedbackPage {
         message: message.to_owned(),
         detail: detail.to_owned(),
-        question: "",
-        reasons: Vec::new(),
-        several: false,
+        note_to: String::new(),
+        note: String::new(),
         verdicts: Vec::new(),
         progress: Vec::new(),
         report: String::new(),
@@ -154,21 +159,36 @@ fn plain(status: StatusCode, message: &str, detail: &str) -> Page {
 /// "Worth it, finished." "Skipped."
 fn stated(rating: &Rating) -> String {
     let (verdict, progress) = (rating.verdict.as_deref(), rating.progress.as_deref());
-    let mut message = match (verdict.and_then(ratings::verdict_label), progress) {
+    match (verdict.and_then(ratings::verdict_label), progress) {
         (Some(verdict), Some("skipped")) | (Some(verdict), None) => format!("{verdict}."),
         (Some(verdict), Some(progress)) => {
             format!("{verdict}, {}.", ratings::progress_label(progress).unwrap_or_default().to_lowercase())
         }
         (None, Some(progress)) => format!("{}.", ratings::progress_label(progress).unwrap_or_default()),
         (None, None) => "Nothing recorded.".to_owned(),
-    };
-    for label in ratings::chosen(&rating.reason).filter_map(ratings::label) {
-        message += &format!(" {label}.");
     }
-    message
 }
 
-pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(token): Path<String>) -> Page {
+#[derive(Deserialize)]
+pub struct NoteForm {
+    note: String,
+}
+
+/// The note box on the tap page: keeps the note, and answers with the same page.
+pub async fn note(
+    State(state): State<AppState>,
+    client: Client,
+    Path(token): Path<String>,
+    Form(form): Form<NoteForm>,
+) -> Page {
+    answer(state, client, token, Some(form.note)).await
+}
+
+pub async fn tap(State(state): State<AppState>, client: Client, Path(token): Path<String>) -> Page {
+    answer(state, client, token, None).await
+}
+
+async fn answer(state: AppState, Client(client): Client, token: String, note: Option<String>) -> Page {
     if !state.taps.allow(&client, TAPS_PER_CLIENT) {
         return plain(StatusCode::TOO_MANY_REQUESTS, "Too many requests.", "Try again in a minute.");
     }
@@ -191,9 +211,14 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     if !db::pipeline_ready(pool).await? {
         return plain(StatusCode::NOT_FOUND, "Link not valid.", "");
     }
-    let signal = match &claim.tap {
-        Tap::Problem => {
-            let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
+    let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
+    let rating = match (&claim.tap, note) {
+        (Tap::Note, Some(note)) => {
+            db::record_note(pool, &claim.user, &claim.article, &note, SOURCE).await?.unwrap_or_default()
+        }
+        (Tap::Note, None) => db::get_rating(pool, &claim.user, &claim.article).await?.unwrap_or_default(),
+        (_, Some(_)) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", ""),
+        (Tap::Problem, None) => {
             // Once per article, as on the web pages: the Kindle's browser may ask again on
             // its own, and a second tap on a slow screen is the same report.
             if !db::reported(pool, &claim.user).await?.contains(&claim.article) {
@@ -201,22 +226,11 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
             }
             return plain(StatusCode::OK, "Reported. Thank you.", &title);
         }
-        Tap::Rate(signal) => signal,
+        (Tap::Rate(signal), None) => db::record_feedback(pool, &claim.user, &claim.article, signal, SOURCE).await?,
     };
-    let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
-    let rating = db::record_feedback(pool, &claim.user, &claim.article, signal, SOURCE).await?;
     let (verdict, progress) = (rating.verdict.as_deref(), rating.progress.as_deref());
     // Same reader, article and expiry as the link that was tapped.
     let sign = |signal: &str| make(secret, &claim.user, &claim.article, signal, claim.expires);
-    // One more tap says why. Always offered, never required: the rating already counts.
-    let reasons = ratings::reasons_for(verdict)
-        .iter()
-        .map(|(key, label)| Pick {
-            token: sign(&format!("why-{key}")),
-            label,
-            on: ratings::chosen(&rating.reason).any(|chosen| chosen == *key),
-        })
-        .collect();
     // Both pick-one groups in full, so the reader sees what they chose among what they could
     // have. A verdict from here keeps progress as it is.
     let verdicts = ratings::VERDICTS
@@ -234,9 +248,9 @@ pub async fn tap(State(state): State<AppState>, Client(client): Client, Path(tok
     let page = FeedbackPage {
         message: stated(&rating),
         detail: title,
-        question: ratings::question(verdict),
-        reasons,
-        several: ratings::several(verdict),
+        // A few words say why. Always offered, never required: the rating already counts.
+        note_to: if verdict.is_some() || !rating.note.is_empty() { sign(NOTE) } else { String::new() },
+        note: rating.note.clone(),
         verdicts,
         progress: progress_picks,
         // A delivery fault goes to whoever runs the install; it is not part of the rating.
@@ -257,8 +271,8 @@ mod tests {
         let claim = verify(SECRET, "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ", 0).unwrap();
         let rated = Tap::Rate(Signal::End("worth-it"));
         assert_eq!(claim, Claim { user: "john".into(), article: "a1".into(), tap: rated, expires: 2_000_000_000 });
-        let why = verify(SECRET, "MXxqb2hufGExfHdoeS1kZXB0aHwyMDAwMDAwMDAw.wm1E7cJSqcEcRvNc0OMZ6w", 0).unwrap();
-        assert_eq!(why.tap, Tap::Rate(Signal::Why("depth".into())));
+        let note = verify(SECRET, "MXxqb2hufGExfG5vdGV8MjAwMDAwMDAwMA.se5olUsJ9d_opk-0gCeA_g", 0).unwrap();
+        assert_eq!(note.tap, Tap::Note);
         let problem = verify(SECRET, "MXxqb2hufGExfHByb2JsZW18MjAwMDAwMDAwMA.21UPHi4dtcYgvhV0QRpvjA", 0).unwrap();
         assert_eq!(problem.tap, Tap::Problem);
         assert_eq!(

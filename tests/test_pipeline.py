@@ -347,6 +347,7 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     user = cfg.users[0]
     store.upsert_article("old", "https://x.example/old", "Blog", "An old favourite", "", None)
     store.record_feedback(user.id, "old", "end-more", "kindle-footer")
+    store.record_note(user.id, "old", "The diagrams made it", "web")
     store.upsert_article("passed", "https://x.example/passed", "Blog", "Passed over", "", None)
     store.record_feedback(user.id, "passed", "skip", "kindle-footer")
     store.upsert_article("half", "https://x.example/half", "Blog", "Half read", "", None)
@@ -368,6 +369,7 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     system, prompt = backend.prompts[0]
     assert "untrusted" in system and "Compilers. Not watches." in prompt
     assert '"title": "An old favourite"' in prompt and '"verdict": "more like this", "progress": "finished"' in prompt
+    assert '"reader_said": "The diagrams made it"' in prompt  # the reader's own words
     # A skip counts, lightly; progress with no verdict says too little and is left out.
     assert '"title": "Passed over"' in prompt and '"progress": "skipped"' in prompt
     assert '"title": "Half read"' not in prompt
