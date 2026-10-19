@@ -1466,7 +1466,9 @@ def test_boxes_that_sell_credit_or_play_are_dropped():
     words = _paragraphs("Article", 8)
 
     def out(block, url="https://news.example/2026/10/story/"):
-        page = f"<html><body><article><h1>Story</h1>{words}{block}{words}</article></body></html>"
+        # An author box ends the post; the rest sit in the middle of it.
+        after = "" if "sabox" in block else words
+        page = f"<html><body><article><h1>Story</h1>{words}{words}{block}{after}</article></body></html>"
         return extract(url, page, "", "page").body.text_content()
 
     furniture = {
@@ -1509,3 +1511,57 @@ def test_boxes_that_tell_stay_though_they_look_like_furniture():
         "<div class='profile'><a href='https://news.example/people/ada'>Ada Lovelace</a> was, in Babbage's words, "
         "<p>the first engineer of the engine Lovelace described, whose notes ran longer than the paper.</p></div>"
     )
+
+
+def test_short_articles_and_sections_beside_a_form_or_named_like_furniture_stay():
+    form = "<form><input type='email' name='email'><button>Remind me</button></form>"
+    nav = "<nav>" + "".join(f"<a href='/s{n}'>Section {n}</a>" for n in range(60)) + "</nav>"
+    footer = "<footer>" + _paragraphs("Footer", 15) + "</footer>"
+    brief = "".join(f"<p>Short news line {n} about the council vote today.</p>" for n in range(5))
+    page = (
+        f"<html><body>{nav}<div class='post'><h1>Council votes</h1><div class='entry-content'>{brief}"
+        f"<div class='nl'>{form}</div></div></div>{footer}</body></html>"
+    )
+    assert "Short news line 4" in extract("https://news.example/a", page, "", "page").body.text_content()
+    words = _paragraphs("Article", 10)
+
+    def out(block):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}{words}</article></body></html>"
+        return extract("https://news.example/a", page, "", "page").body.text_content()
+
+    assert "40,000 voters" in out(
+        "<div class='wp-block-group'><p>Registration closes Friday. Here is how to check.</p>"
+        f"<p>Officials say 40,000 voters were purged.</p>{form}</div>"
+    )
+    assert "Sen. Smith" in out(
+        "<div class='sponsored-content'><p>The sponsor of the bill, Sen. Smith, said it would pass.</p><a href='/bill'>The bill</a></div>"
+    )
+    assert "Readers pay" in out(
+        "<div class='subscribe-model'><h3>How it pays</h3><p>Readers pay $5 a month.</p><a href='/x'>Details</a></div>"
+    )
+    gallery = (
+        "<figure class='gallery'><a href='https://nasa.gov/img'><img src='/m1.jpg'></a><a href='https://nasa.gov/img'><img src='/m2.jpg'></a>"
+        "<h3><a href='https://nasa.gov/img'>Images of Mars</a></h3><figcaption>Photos from the rover show dust storms. "
+        "<a href='https://nasa.gov/img'>NASA</a></figcaption></figure>"
+    )
+    assert "dust storms" in out(gallery)
+    assert "this essay recounts" in out(
+        "<div class='bio'><a href='/author/sam-lee/'>Sam Lee</a><p>Sam Lee is a nurse in Ohio, and this essay recounts "
+        "the night Lee lost three patients.</p></div>"
+    )
+    page = f"<html><body><article><h1>Story</h1>{words}<p><a href='https://news.example/a?page=2'>Continue to page 2</a></p></article></body></html>"
+    assert "Continue to page 2" in extract("https://news.example/a", page, "", "page").body.text_content()
+
+
+def test_comments_beside_an_author_box_do_not_stop_the_notes():
+    # A comment node among the box's siblings made the author-box rule raise, and the page went
+    # through without its notes, silently.
+    words = _paragraphs("Article", 8)
+    page = (
+        f"<html><body><article><h1>Story</h1>{words}<p>A claim.<sup><a href='#fn-1' id='fnref-1'>1</a></sup></p>"
+        "<div class='author-box'><a rel='author' href='/author/ada/'>Ada Byron</a><p>Ada Byron writes about engines and "
+        "the notes she keeps on them for the society.</p></div><!-- end author box -->"
+        "<ol class='wp-block-footnotes'><li id='fn-1'>The note itself, with its source. <a href='#fnref-1'>↩</a></li></ol>"
+        "</article></body></html>"
+    )
+    assert "The note itself" in extract("https://blog.example/a", page, "", "page").body.text_content()

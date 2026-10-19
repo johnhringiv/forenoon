@@ -587,11 +587,17 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
 
 
 # A box named for what it sells, as a whole word of its class or id.
+# One of a box's class names or its id, whole: "newsletter", "ars-newsletter-shortcode",
+# "next-post"; not "sponsored-content" or "subscribe-model", which may be an article's.
 SELLS_NAME = re.compile(
-    r"(^|[\s_-])(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|promo|"
-    r"next-(post|article|story))([\s_-]|$)",
+    r"(\w+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|promo|next-(post|article|story))"
+    r"([_-]+(box|block|wrap|wrapper|container|shortcode|widget|form|cta|module|section|signup|inline))?",
     re.IGNORECASE,
 )
+CALL_TO_ACTION = re.compile(
+    r"(sign|subscribe|join|get|read|next|learn|download|try|register|start|claim|follow|listen)\b", re.IGNORECASE
+)
+SIGNUP_CLIMB_WORDS = 15  # of text outside the form, in a box that is not named as a sign-up
 SELLS_MAX_WORDS = 60
 SELLS_CLIMB = 4
 SIGNUP_PROSE_WORDS = 25  # a paragraph this long outside the form is the article's, not the pitch
@@ -602,6 +608,7 @@ BIO_MIN_WORDS = 12
 AUTHOR_PATH = re.compile(r"/(author|authors|people|staff|contributors?)/[^/?#]+/?$", re.IGNORECASE)
 AUTHOR_BOX = re.compile(r"author|vcard|byline|\bbio\b|sabox", re.IGNORECASE)
 LONE_LINK_MAX_WORDS = 5
+SELF_LINK_LABEL = re.compile(r"share( this( post| article)?)?|read more\W*", re.IGNORECASE)
 CONTROL_TEXT_MAX_WORDS = 12
 PLAYER_NAME = re.compile(r"(^|[\s_-])(player|audio-player|tts-player)([\s_-]|$)", re.IGNORECASE)
 TOC_NAME = re.compile(r"(^|[\s_-])(toc|table-of-contents)([\s_-]|$)", re.IGNORECASE)
@@ -621,6 +628,10 @@ def _off_site(href: str, base_url: str) -> bool:
 
 def _author_link(a) -> bool:
     return "author" in (a.get("rel") or "").split() or bool(AUTHOR_PATH.search(urlsplit(a.get("href") or "").path))
+
+
+def _sells_name(el) -> bool:
+    return any(SELLS_NAME.fullmatch(name) for name in [el.get("id") or "", *(el.get("class") or "").split()])
 
 
 def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> None:
@@ -650,18 +661,27 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
     for box in list(root.iter("div", "section", "aside")):
         if box.getparent() is None or not ok(box):
             continue
-        if not SELLS_NAME.search(_names(box)):
+        if not _sells_name(box):
             continue
         if _words(box.text_content()) > SELLS_MAX_WORDS or box.xpath(CONTENT_XPATH):
             continue
-        if not box.xpath(".//a[@href] | .//button"):
+        # A call to act on, as a button or a short link, or a heading naming the next story.
+        calls = [
+            " ".join(el.text_content().split()) for el in box.xpath(".//a[@href] | .//button | .//h2 | .//h3 | .//h4")
+        ]
+        if not any(text and _words(text) <= CTA_MAX_WORDS and CALL_TO_ACTION.match(text) for text in calls):
             continue
         box.drop_tree()
     # Rule 1c: an ad card: every link in it goes to one off-site address, a heading is that link,
     # and it ends in a short link of its own (the button).
-    for box in list(root.iter("div", "section", "aside", "figure")):
-        if box.getparent() is None or not ok(box):
-            continue
+    for box in list(root.iter("div", "section", "aside")):
+        if (
+            box.getparent() is None
+            or not ok(box)
+            or box.xpath(".//figure | .//figcaption")
+            or len(box.xpath(".//img")) > 1
+        ):
+            continue  # not a gallery: pictures credited to one source
         links = box.xpath(".//a[@href]")
         hrefs = {a.get("href").strip() for a in links}
         if len(links) < 3 or len(hrefs) != 1 or not _off_site(next(iter(hrefs)), base_url):
@@ -699,6 +719,11 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
             first = None
         if first is None:
             continue
+        # At the end of what it is in: a guest post's introduction comes before the post.
+        if any(
+            isinstance(after.tag, str) and _words(after.text_content()) >= BIO_MIN_WORDS for after in box.itersiblings()
+        ):
+            continue
         name = " ".join(first.text_content().split())
         if not text.startswith(name):
             continue
@@ -722,7 +747,7 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
             continue
         box.drop_tree()
     for lst in list(root.iter("ul", "ol")):
-        if lst.getparent() is None or not TOC_NAME.search(_names(lst)) or lst.xpath(".//a[@href]"):
+        if lst.getparent() is None or not TOC_NAME.search(_names(lst)) or lst.xpath(".//a[@href]") or not ok(lst):
             continue
         before = lst.getprevious()
         if (
@@ -744,7 +769,12 @@ def _drop_signup_forms(root, page_words: int, linked_to: set) -> None:
             return False
         if _words(box.text_content()) >= BOX_MAX_SHARE * max(page_words, 1):
             return False
-        return not any(t in linked_to for t in box.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name"))
+        # A box named as a sign-up may be what the site's menu jumps to ("#newsletter"); any
+        # other a link points at may hold a note.
+        targets = box.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name")
+        if _sells_name(box):
+            targets = [t for t in targets if t != box.get("id")]
+        return not any(t in linked_to for t in targets)
 
     # Rule 1a: a sign-up form (an email field) and the box around it that only sells it.
     for form in list(root.iter("form")):
@@ -761,10 +791,22 @@ def _drop_signup_forms(root, page_words: int, linked_to: set) -> None:
                 _words(p.text_content()) >= SIGNUP_PROSE_WORDS and next(p.iterancestors("form"), None) is None
                 for p in anc.iter("p")
             )
-            if outside > SELLS_MAX_WORDS or prose or anc.xpath(CONTENT_XPATH):
+            # Past the form, only a box that sells it: one named as a sign-up, or one with a line
+            # or two of its own and no paragraph, item or heading outside the form.
+            named = anc is form or _sells_name(anc)
+            blocks = [
+                el
+                for el in anc.iter("p", "li", *HEADINGS)
+                if next(el.iterancestors("form"), None) is None and el is not anc
+            ]
+            limit = SELLS_MAX_WORDS if named else SIGNUP_CLIMB_WORDS
+            if outside > limit or prose or anc.xpath(CONTENT_XPATH):
                 break
+            if blocks and not named:
+                continue  # not this box on its name's say-so; a sign-up box around it may be
             box = anc
-        if box is not None and box.getparent() is not None:
+        # The form alone is left to the rules that drop an aside holding one, which look for it.
+        if box is not None and box is not form and box.getparent() is not None:
             box.drop_tree()
 
 
@@ -790,6 +832,8 @@ def _drop_lone_links(body, url: str) -> None:
         href = a.get("href").strip()
         if " ".join(a.text_content().split()) != text or "#" in href or a.get("class"):
             continue  # a class here is ours: a note reference, a card
+        if urlsplit(href).query and not SELF_LINK_LABEL.fullmatch(text):
+            continue  # "Continue to page 2": the same page, another part of it
         if _host_path(href) == page or _author_link(a):
             el.drop_tree()
 
