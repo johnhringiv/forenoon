@@ -310,6 +310,16 @@ All fetched content is treated as untrusted.
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
+  - Lists that are part of the text are kept though they are mostly links (the main-content
+    step drops such lists as menus): one a paragraph introduces ("…please at least:",
+    "References") or whose items say something beside their links. Not one named or worded
+    as the site's (related posts, tags, sharing, a newsletter, "Most read"), a table of
+    contents, a run of one-word links, or a list of the site's stories with their times and
+    bylines.
+  - Section headings marked up as links to themselves (permalinks), with ids that spell
+    their text, or with scroll margins are kept, and so is a real table (with header cells
+    or a caption) in a scrolling box or under any heading. A heading an article ends on
+    ("Related", "Comments", "Back to top") is not freed.
   - The label a "skip past" link jumps to ("after newsletter promotion"), which is there for
     screen readers, is dropped with the link.
   - Asides that are not the article are dropped: a teaser (a short label and then only
