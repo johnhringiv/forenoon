@@ -30,7 +30,7 @@ from .images import embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
 from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
-from .read import Reading, Verdict
+from .read import ENDING_WORDS, Reading, Verdict
 from .read import read as read_candidates
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
@@ -800,6 +800,7 @@ def run(
                     len(words),
                     " ".join(words[: cfg.llm.read_words]),
                     [{"site": k.item.site, "text": k.text, "context": k.context} for k in links_of[item.id]],
+                    " ".join(words[-ENDING_WORDS:]) if len(words) > cfg.llm.read_words else "",
                 )
             )
         verdicts = read_candidates(cfg.llm, backend, store, user, readings, today)
