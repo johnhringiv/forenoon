@@ -1863,8 +1863,7 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
 
 
 DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of the site's links
-# A closing pitch that breaks off where its list began: "If you liked this article, please",
-# "Enjoyed this post? Follow me on".
+# A closing pitch that breaks off where its list began: "If you liked this article, please".
 # It names the piece, unlike "If you like, you can…" or "If you found a bug…".
 CLOSING_PITCH = re.compile(
     r"^(if you (liked|enjoyed|like|enjoy|appreciated|found value in) (this|my)\b|"
@@ -1898,8 +1897,8 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     newsletter" and "connect on Twitter"), and the heading over the two when nothing else was
     under it. Without its list the sentence reads as an article cut off mid-sentence."""
     texts = body.xpath("(.//text()[normalize-space()])[last()]")
-    if not texts:
-        return
+    if not texts or texts[0].is_tail:
+        return  # the article ends in words loose after an element, not in a paragraph's own
     last = texts[0].getparent()
     while last is not None and last.tag != "p" and last is not body:
         last = last.getparent()
@@ -1961,7 +1960,10 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     rest = [
         el
         for el in after.itersiblings()
-        if isinstance(el.tag, str) and (el.text_content().strip() or el.tag in MEDIA_TAGS or el.xpath(MEDIA_XPATH))
+        if isinstance(el.tag, str)
+        and (
+            el.text_content().strip() or el.tag in MEDIA_TAGS or el.tag == "svg" or el.xpath(f"{MEDIA_XPATH} | .//svg")
+        )
     ]
     last.drop_tree()
     if (

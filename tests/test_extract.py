@@ -1795,6 +1795,11 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
         "If you liked this post, thanks for reading. Until next time,", pitches
     )
 
+    # Words loose after the line end the article: nothing is cut.
+    body = lxml.html.fromstring(f"<div>{article}<p>If you liked this article, please</p>share it with a friend.</div>")
+    page = f"<html><body>{article}<p>If you liked this article, please</p>share it with a friend.<ul>{pitches}</ul></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "If you liked this article, please" in body.text_content()
     # A video under the heading: the heading stays, saying it was there.
     body = lxml.html.fromstring(
         f"<div>{article}<h2>Watch the talk</h2><p>If you liked this article, please</p><video src='/t.mp4'></video></div>"
