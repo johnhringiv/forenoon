@@ -1216,10 +1216,10 @@ pub async fn problems(State(state): State<AppState>, auth: AuthSession) -> Page 
         source: found.source,
         detail: extracted(found.words, &found.extraction),
         check: Some(CheckFound {
-            outcome: if found.verdict == "fixed" {
-                "Fixed before it was sent."
-            } else {
-                "Could not be fixed; sent as it was."
+            outcome: match (found.verdict.as_str(), found.edited) {
+                ("fixed", _) => "Fixed before it went in the book.",
+                (_, true) => "Could not be fixed in full; partly edited before it went in the book.",
+                _ => "Could not be fixed; it went in the book as it was.",
             },
             summary: found.summary,
             fixes: fix_lines(&found.fixes),

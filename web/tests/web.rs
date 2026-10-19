@@ -2006,21 +2006,24 @@ async fn what_the_book_check_found_is_listed_with_the_reports() {
     db::report_problem(pool, "mary", "a2", "web").await.unwrap();
     let fixes = r#"[{"kind": "page_furniture", "what": "A newsletter <b>prompt</b>", "why": "The page's footer"},
                     {"kind": "cut_short", "what": "The last paragraph was missing", "why": ""}]"#;
-    for (article, verdict, summary, fixes, at) in [
-        ("a1", "fixed", "Removed a footer.", fixes, "2026-10-11T10:00:00+00:00"),
-        ("a2", "cannot_fix", "Only the teaser.", "[]", "2026-10-11T11:00:00+00:00"),
-        ("a2", "ok", "", "[]", "2026-10-11T12:00:00+00:00"),
-        ("a2", "incomplete", "", "[]", "2026-10-11T12:00:00+00:00"),
+    let edit = r#"[{"tool": "delete_blocks", "first": 3, "last": 3, "before": "<p>x</p>", "after": ""}]"#;
+    for (article, verdict, summary, fixes, edits, at) in [
+        ("a1", "fixed", "Removed a footer.", fixes, edit, "2026-10-11T10:00:00+00:00"),
+        ("a2", "cannot_fix", "Only the teaser.", "[]", "[]", "2026-10-11T11:00:00+00:00"),
+        ("a1", "cannot_fix", "A chart is missing.", "[]", edit, "2026-10-11T09:00:00+00:00"),
+        ("a2", "ok", "", "[]", "[]", "2026-10-11T12:00:00+00:00"),
+        ("a2", "incomplete", "", "[]", "[]", "2026-10-11T12:00:00+00:00"),
     ] {
         sqlx::query(
-            "INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict, summary, fixes)
-             VALUES (?, 'john', ?, 'anthropic/claude-sonnet-5-5', ?, ?, ?)",
+            "INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict, summary, fixes, edits)
+             VALUES (?, 'john', ?, 'anthropic/claude-sonnet-5-5', ?, ?, ?, ?)",
         )
         .bind(article)
         .bind(at)
         .bind(verdict)
         .bind(summary)
         .bind(fixes)
+        .bind(edits)
         .execute(pool)
         .await
         .unwrap();
@@ -2028,16 +2031,18 @@ async fn what_the_book_check_found_is_listed_with_the_reports() {
     let mut admin = Browser::default();
     admin.sign_in(&site, "john").await;
     // A fine article, or a check that did not finish, is not a problem.
-    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/problems">Problems (3)</a>"#));
+    assert!(admin.get(&site, "/").await.text.contains(r#"<a href="/problems">Problems (4)</a>"#));
     let text = admin.get(&site, "/problems").await.text;
     assert!(
-        text.contains("by the book check, for john") && text.contains("Fixed before it was sent. Removed a footer.")
+        text.contains("by the book check, for john")
+            && text.contains("Fixed before it went in the book. Removed a footer.")
     );
     assert!(
         text.contains("<li>page furniture: A newsletter &#60;b&#62;prompt&#60;/b&#62; (The page&#39;s footer)</li>")
     );
     assert!(text.contains("<li>cut short: The last paragraph was missing</li>"));
-    assert!(text.contains("Could not be fixed; sent as it was. Only the teaser."));
+    assert!(text.contains("Could not be fixed; it went in the book as it was. Only the teaser."));
+    assert!(text.contains("Could not be fixed in full; partly edited before it went in the book. A chart is missing."));
     // Newest first, among the reports: Mary's was made just now.
     let order = ["by mary, on the web pages", "Could not be fixed", "Fixed before"].map(|t| text.find(t).unwrap());
     assert!(order[0] < order[1] && order[1] < order[2]);

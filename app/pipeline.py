@@ -321,7 +321,7 @@ def _assemble(
     result: Extracted,
     fetcher: Fetcher,
     cfg: Config,
-    check: Callable[[Item, Extracted], object] | None = None,
+    check: Callable[[Item, Extracted, list], object] | None = None,
 ) -> tuple[Article | None, int]:
     """The article as it goes in a book, with its images fetched; None when nothing was extracted.
 
@@ -332,7 +332,16 @@ def _assemble(
         return None, 0
     placed = _figure_shots(item, result, cfg)
     if check is not None:
-        check(item, result)
+        # The pictures and their placeholders are followed into the edited article, so a
+        # picture that is not kept still gives its figure its text back.
+        held = [el for picture, (holder, _, _) in placed for el in (picture, holder)]
+        moved = getattr(check(item, result, held), "moved", None)
+        if moved:
+            placed = [
+                (moved[2 * n], [moved[2 * n + 1], held_tail, kept])
+                for n, (_, (_, held_tail, kept)) in enumerate(placed)
+                if moved[2 * n] is not None and moved[2 * n + 1] is not None
+            ]
     assets, dropped = embed_images(result.body, fetcher, cfg.images)
     _restore_figures(placed)
     article = Article(

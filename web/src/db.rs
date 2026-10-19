@@ -1158,6 +1158,8 @@ pub struct BookCheck {
     pub summary: String,
     /// JSON, as the pipeline stored it: [{"kind", "what", "why"}].
     pub fixes: String,
+    /// Whether the check's edits were kept in the article.
+    pub edited: bool,
     pub title: String,
     pub url: String,
     pub source: String,
@@ -1173,7 +1175,7 @@ pub async fn book_problems(pool: &SqlitePool, limit: i64) -> Result<Vec<BookChec
     }
     sqlx::query_as!(
         BookCheck,
-        r#"SELECT b.checked_at, b.user_id, b.verdict, b.summary, b.fixes,
+        r#"SELECT b.checked_at, b.user_id, b.verdict, b.summary, b.fixes, b.edits != '[]' AS "edited!: bool",
            COALESCE(a.title, b.article_id) AS "title!: String", COALESCE(a.url, '') AS "url!: String",
            COALESCE(a.source, '') AS "source!: String", COALESCE(a.word_count, 0) AS "words!: i64",
            COALESCE(a.status || CASE WHEN a.reason = '' THEN '' ELSE ': ' || a.reason END, '') AS "extraction!: String"

@@ -427,3 +427,67 @@ def test_the_problems_page_query_reads_what_the_check_stores(tmp_path):
     assert (row["cache_read_tokens"], row["cache_write_tokens"]) == (3, 4)
     assert json.loads(row["fixes"])[0]["kind"] == "wrong_article"
     assert Path(__file__).parent.parent.joinpath("web", "pipeline-schema.sql").read_text().count("book_checks") == 1
+
+
+def test_every_word_of_the_article_is_in_a_block_the_model_is_shown(check):
+    make, item, _store = check
+    body = (
+        "<div>Loose at the top<p>One.</p>Between blocks"
+        "<div>Lines<br>with breaks <em>and emphasis</em><p>Inside.</p></div>"
+        '<pre>&lt;img src="data:image/png;base64,AAAA"&gt;</pre><figure><img src="data:image/jpeg;base64,BBBB" alt="Chart"></figure></div>'
+    )
+    checker, client, result = make(_reply(_finish()))
+    result.body = lxml.html.fragment_fromstring(body)
+    checker.check(item, result)
+    listing = client.asked[0]["messages"][0]["content"].split("<article_blocks>\n")[1].split("\n</article_blocks>")[0]
+    for words in ("Loose at the top", "Between blocks", "Lines", "with breaks", "Inside."):
+        assert words in listing, words
+    # A div with words of its own is one block, whole.
+    assert "<div>Lines<br>with breaks <em>and emphasis</em><p>Inside.</p></div>" in listing
+    # An embedded picture is shown by number; text that only looks like one is left alone.
+    assert 'src="data:image/png;base64,AAAA"' in listing and 'src="picture:1"' in listing and "BBBB" not in listing
+
+
+def test_what_the_model_writes_keeps_its_spaces_and_its_structure(check):
+    make, item, _store = check
+    checker, client, result = make(
+        _reply(("insert_after", {"block": 3, "html": 'Words <a href="https://a.example/">A</a> <em>B</em> end'})),
+        _reply(("insert_after", {"block": 0, "html": "<li>An item on its own</li>"})),
+        _reply(("insert_after", {"block": 0, "html": "<p>Kept</p>"}), _finish("fixed", "Two edits.")),
+        _reply(_finish("fixed", "Two edits.")),
+    )
+    checker.check(item, result)
+    html = _html(result)
+    assert '<p>Words <a href="https://a.example/">A</a> <em>B</em> end</p>' in html
+    answers = [m["content"] for m in client.asked[-1]["messages"] if m["role"] == "user"][1:]
+    assert answers[1][0]["is_error"] and "inside its list" in answers[1][0]["content"]
+    assert "<li>" not in html
+    # Finish with an edit in the same turn is refused until the model has seen how the edit went.
+    edit, finish = answers[2]
+    assert not edit.get("is_error") and finish["is_error"] and "on its own" in finish["content"]
+    assert html.startswith("<div><p>Kept</p>") and len(client.asked) == 4
+
+
+def test_a_figures_text_comes_back_when_its_picture_is_not_kept_after_an_edit(check, monkeypatch):
+    import types
+
+    import app.pipeline
+    from app.extract import extract
+
+    make, item, _store = check
+    words = "<p>" + "Plain words about grid storage and the price of power at noon. " * 12 + "</p>"
+    chart = "<figure><figcaption>Prices by hour</figcaption><canvas></canvas><p>Noon 40 · Night 12</p></figure>"
+    page = f"<html><body><article>{words}{chart}{words}</article></body></html>"
+    monkeypatch.setattr(sessions, "figure_shots", lambda *a, **k: {0: b"not a jpeg"})  # will not convert
+    checker, client, _ = make(
+        _reply(("insert_after", {"block": 0, "html": "<p>Restored standfirst.</p>"})), _reply(_finish("fixed", "x"))
+    )
+    result = extract(URL, page, "", "page")
+    seen = types.SimpleNamespace(url=URL, id=item.id, title="Grid", site="", author="", published=None,
+        discussion_url="", also=(), source=Source("Blog"), sources=lambda: [Source("Blog")])  # fmt: skip
+    archive.save(checker.cfg.pages_dir, item, page)
+    article, _ = app.pipeline._assemble(seen, result, None, checker.cfg, checker.check)
+    out = lxml.html.tostring(article.body, encoding="unicode")
+    assert 'src="picture:1"' in client.asked[0]["messages"][0]["content"], "the model saw the figure's picture"
+    assert "Restored standfirst." in out
+    assert "<img" not in out and "Noon 40" in out, "the figure has its own text back"

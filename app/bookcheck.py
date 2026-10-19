@@ -21,6 +21,7 @@ import copy
 import json
 import logging
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urljoin
@@ -79,10 +80,22 @@ BLOCK_TAGS = {
     "hr",
 }
 # Left out of the page's text: what a reader never sees as the page's words.
-HIDDEN_TAGS = ("script", "style", "noscript", "template", "svg", "nav", "head", "iframe", "object", "button", "form")
+HIDDEN_TAGS = (
+    "script",
+    "style",
+    "noscript",
+    "template",
+    "svg",
+    "nav",
+    "head",
+    "iframe",
+    "object",
+    "button",
+    "select",
+    "textarea",
+)
 TEXT_BREAKS = {*BLOCK_TAGS, "div", "section", "article", "main", "header", "footer", "li", "tr", "br", "h1", "dt", "dd"}
 INTERNAL = re.compile(r"(fn|fnref|sec)-(\d{1,4})")
-PICTURE = re.compile(r'src="(data:image/[^"]*)"')
 XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*>")  # lxml refuses a string that carries one
 
 SYSTEM = """\
@@ -264,13 +277,22 @@ def blocks(body: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
         for child in parent:
             if not isinstance(child.tag, str):
                 continue
-            if child.tag == "div" and child.get("class") != "card" and any(_is_block(c) for c in child):
+            if child.tag == "div" and child.get("class") != "card" and _holds_only_blocks(child):
                 walk(child)
             else:
                 found.append(child)
 
     walk(body)
     return found
+
+
+def _holds_only_blocks(div) -> bool:
+    """A div whose words are all in blocks of its own: looked into, not listed whole. One with
+    text of its own (lines with <br>s, say) is listed whole, so none of its words go unseen."""
+    if (div.text or "").strip():
+        return False
+    children = [c for c in div if isinstance(c.tag, str)]
+    return bool(children) and all(_is_block(c) and not (c.tail or "").strip() for c in children)
 
 
 def _is_block(el) -> bool:
@@ -289,8 +311,13 @@ class _Article:
 
     def shown(self, el: lxml.html.HtmlElement) -> str:
         """A block's HTML as the model sees it: an embedded picture as picture:N, not its data."""
-        html = lxml.html.tostring(el, encoding="unicode", with_tail=False)
-        return PICTURE.sub(lambda m: f'src="picture:{self._picture(m.group(1))}"', html)
+        if any(img.get("src", "").startswith("data:") for img in el.iter("img")):
+            el = copy.deepcopy(el)
+            el.tail = None
+            for img in el.iter("img"):
+                if img.get("src", "").startswith("data:"):
+                    img.set("src", f"picture:{self._picture(img.get('src'))}")
+        return lxml.html.tostring(el, encoding="unicode", with_tail=False)
 
     def _picture(self, data: str) -> int:
         if data not in self.pictures:
@@ -449,35 +476,66 @@ def _mark_internal(el) -> None:
             el.set(extract.MARK_FIRST, "1")
 
 
+# Parts of a list, table, definition list or figure: only ever inside one.
+PARTS = {"li", "td", "th", "tr", "thead", "tbody", "tfoot", "caption", "dt", "dd", "figcaption"}
+
+
 def _as_blocks(root: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
-    """The children of a cleaned fragment, with loose text and inline elements put in paragraphs."""
+    """The children of a cleaned fragment as blocks: loose text and inline elements, with the
+    spaces between them, put in paragraphs. A list item or table cell on its own is refused."""
     out: list[lxml.html.HtmlElement] = []
     loose: lxml.html.HtmlElement | None = None
 
-    def paragraph() -> lxml.html.HtmlElement:
+    def add_text(text: str) -> None:
         nonlocal loose
         if loose is None:
+            if not text.strip():
+                return  # between blocks
             loose = lxml.html.Element("p")
             out.append(loose)
-        return loose
+        if len(loose):
+            loose[-1].tail = (loose[-1].tail or "") + text
+        else:
+            loose.text = (loose.text or "") + text
 
-    if (root.text or "").strip():
-        paragraph().text = root.text
+    pending = root.text or ""  # whitespace waits for what follows: kept before inline, dropped before a block
     for child in list(root):
-        tail = child.tail
+        tail = child.tail or ""
         child.tail = None
+        if child.tag in PARTS:
+            raise ToolError(f"a <{child.tag}> must be inside its list, table or figure: send the whole of it")
         if _is_block(child) or child.tag == "aside":
+            if pending.strip():
+                add_text(pending)
             loose = None
             out.append(child)
         else:
-            paragraph().append(child)
-        if (tail or "").strip():
-            last = paragraph()
-            if len(last):
-                last[-1].tail = (last[-1].tail or "") + tail
-            else:
-                last.text = (last.text or "") + tail
+            if loose is None:
+                loose = lxml.html.Element("p")
+                out.append(loose)
+                pending = pending.lstrip()
+            add_text(pending)
+            loose.append(child)
+        pending = tail
+    if pending.strip():
+        add_text(pending.rstrip() if loose is None else pending)
     return out
+
+
+def _wrap_loose(body: lxml.html.HtmlElement) -> None:
+    """Words directly in the article's top element, between its blocks, put in paragraphs, so
+    every word is in a block the model is shown."""
+    if not (body.text or "").strip() and not any((child.tail or "").strip() for child in body):
+        return
+    try:
+        parts = _as_blocks(body)
+    except ToolError:
+        return
+    body.text = None
+    for child in list(body):
+        body.remove(child)
+    for part in parts:
+        body.append(part)
 
 
 def _tidy_links(body: lxml.html.HtmlElement) -> None:
@@ -526,6 +584,8 @@ class Outcome:
     edits: list[dict] = field(default_factory=list)
     tokens: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # input, output, cache read, cache write
     cost: float = 0.0
+    # With the edits kept: the copies, now in the article, of the elements the caller asked to keep.
+    moved: list | None = None
 
 
 def client_for(backend: Backend | None, model: str) -> tuple[object | None, str]:
@@ -576,9 +636,12 @@ class Checker:
             line += "; not checked: " + ", ".join(f"{n} {why}" for why, n in sorted(self.skipped.items()))
         return f"{line}; {self.tokens:,} tokens, about ${self.cost:.2f}"
 
-    def check(self, item: Item, result: Extracted) -> Outcome | None:
+    def check(self, item: Item, result: Extracted, keep: list | tuple = ()) -> Outcome | None:
         """Check one article, editing `result.body` when the model fixed it; None when it was
-        not checked. Never raises: a failure leaves the article as it was."""
+        not checked. Never raises: a failure leaves the article as it was.
+
+        `keep` are elements of the body the caller holds on to (the pictures of figures): when
+        the edits are kept, the body holds copies of them, given in the same order as `moved`."""
         if self.client is None or result.body is None:
             return None
         saved = archive.load(self.cfg.pages_dir, item.id)
@@ -586,7 +649,7 @@ class Checker:
             self._skip("with no saved page")
             return None
         try:
-            outcome = self._run(item, result, saved["page_html"])
+            outcome = self._run(item, result, saved["page_html"], list(keep))
         except Exception as exc:  # hostile pages and a model's HTML: whatever happens, the delivery goes on
             log.exception("book check of %s failed", item.url)
             outcome = Outcome("error", f"the check failed: {type(exc).__name__}: {exc}"[:MAX_SUMMARY])
@@ -595,10 +658,13 @@ class Checker:
         self.outcomes[outcome.verdict] = self.outcomes.get(outcome.verdict, 0) + 1
         self.tokens += sum(outcome.tokens)
         self.cost += outcome.cost
-        self.store.record_book_check(
-            item.id, self.user.id, self.cfg.llm.check_model, outcome.verdict, outcome.summary,
-            outcome.fixes, outcome.edits, tuple(outcome.tokens),
-        )  # fmt: skip
+        try:
+            self.store.record_book_check(
+                item.id, self.user.id, self.cfg.llm.check_model, outcome.verdict, outcome.summary,
+                outcome.fixes, outcome.edits, tuple(outcome.tokens),
+            )  # fmt: skip
+        except sqlite3.Error as exc:
+            log.warning("book check of %s not recorded: %s", item.url, exc)
         return outcome
 
     def _skip(self, why: str) -> None:
@@ -607,9 +673,12 @@ class Checker:
     def _over_cap(self, estimate: int) -> bool:
         return self.store.llm_tokens_since(self.today_start) + estimate > self.cfg.llm.daily_token_cap
 
-    def _run(self, item: Item, result: Extracted, page_html: str) -> Outcome:
+    def _run(self, item: Item, result: Extracted, page_html: str, keep: list) -> Outcome:
         text = page_text(page_html)
+        paths = [_path(result.body, el) for el in keep]
         article = _Article(copy.deepcopy(result.body), item.url, page_images=_page_images(page_html, item.url))
+        keep = [_at(article.body, path) for path in paths]  # the same elements, in the copy
+        _wrap_loose(article.body)
         first = self._first_message(item, result, article, text)
         messages: list[dict] = [{"role": "user", "content": first}]
         outcome = Outcome("incomplete")
@@ -659,11 +728,17 @@ class Checker:
                 reminded = True
                 messages.append({"role": "user", "content": "Call finish to end the check."})
                 continue
+            finish = next((call for call in calls if call.name == "finish"), None)
+            if finish is not None and len(calls) == 1:
+                return self._finish(finish.input, article, result, outcome, keep)
             answers = []
             for call in calls:
                 if call.name == "finish":
-                    return self._finish(call.input, article, result, outcome)
-                answers.append(self._answer(call, item, article, text, started))
+                    # The verdict is given knowing how the edits went: on its own, after them.
+                    why = "call finish on its own, once you have seen how the other calls in this turn went"
+                    answers.append({"type": "tool_result", "tool_use_id": call.id, "content": why, "is_error": True})
+                else:
+                    answers.append(self._answer(call, item, article, text, started))
             messages.append({"role": "user", "content": answers})
         outcome.summary = f"stopped after {MAX_TURNS} turns; the article went out as it was"
         return outcome
@@ -690,7 +765,7 @@ class Checker:
         import anthropic
 
         try:
-            response = self.client.with_options(timeout=max(5.0, left)).messages.create(
+            response = self.client.with_options(timeout=max(5.0, left), max_retries=0).messages.create(
                 model=model,
                 max_tokens=MAX_OUTPUT_TOKENS,
                 system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
@@ -772,7 +847,7 @@ class Checker:
             {"type": "text", "text": f"The live page, {where}."},
         ]
 
-    def _finish(self, args: dict, article: _Article, result: Extracted, outcome: Outcome) -> Outcome:
+    def _finish(self, args: dict, article: _Article, result: Extracted, outcome: Outcome, keep: list) -> Outcome:
         """Keep the edits and what the model found."""
         verdict = args.get("verdict") if args.get("verdict") in VERDICTS else "cannot_fix"
         if verdict == "ok" and article.edits:
@@ -793,7 +868,28 @@ class Checker:
         if article.edits:
             _swap(result.body, article.body)
             result.word_count = len(result.body.text_content().split())
+            outcome.moved = keep
         return outcome
+
+
+def _path(root, el) -> list[int] | None:
+    """Where `el` is under `root`, as child positions; None when it is not under it."""
+    path = []
+    while el is not None and el is not root:
+        parent = el.getparent()
+        if parent is None:
+            return None
+        path.append(parent.index(el))
+        el = parent
+    return path[::-1] if el is root else None
+
+
+def _at(root, path: list[int] | None):
+    if path is None:
+        return None
+    for n in path:
+        root = root[n]
+    return root
 
 
 def _swap(body: lxml.html.HtmlElement, edited: lxml.html.HtmlElement) -> None:

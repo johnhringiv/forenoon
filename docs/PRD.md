@@ -574,15 +574,19 @@ Sonnet 5.5).
   is on the saved page; it is fetched and converted with the rest (section 5).
 - **Limits.** At most 12 calls for an article, 200,000 tokens (input, cached input and
   output), three minutes, and the day's token cap (`llm.daily_token_cap`), checked before
-  each call. Its edits are kept only when it finishes: at a limit the check is recorded as
-  `incomplete` and the article goes out as it was. A failed call, a refusal or anything else
+  each call. The cap counts cached input, so a check that fixes an article can use 100,000 to
+  200,000 of it: with the check on, raise the cap to match, or the day's later runs go
+  without the model. `finish` is taken only as a turn's one call, so the verdict is given
+  knowing how the edits went. Its edits are kept only when it finishes: at a limit the check
+  is recorded as `incomplete` and the article goes out as it was. A failed call, a refusal or anything else
   that goes wrong is logged and leaves the article as it was; a delivery is never stopped by
   it. Each call uses adaptive thinking at medium effort, with the system prompt, the tools and
   the conversation so far marked for the prompt cache.
 - **Where it is logged.** Every call in the model log (`book-check`, with its cached tokens,
   priced like any other); every check in the `book_checks` table (verdict, summary, the
   problems, each edit with the HTML before and after, and its tokens); `fixed` and
-  `cannot_fix` on the Problems page (section 9a) with the summary and each problem; and in
+  `cannot_fix` on the Problems page (section 9a) with the summary, each problem, and whether
+  the article was edited; and in
   the run report, how many were checked, with each verdict, their tokens and cost.
 - **Cost**, at Sonnet 5.5's prices: about $0.02 for an article that is fine (one call), and
   about $0.15 for one it fixes (several calls, most of each read from the cache): roughly
