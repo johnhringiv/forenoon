@@ -930,7 +930,7 @@ def test_an_article_split_around_an_advert_is_put_back_together():
         f"<p>Paragraph {n} of the drone story, about ships struck off the coast at night.</p>" for n in range(12)
     )
     rest = "".join(
-        f"<p>Later paragraph {n} on hybrid warfare across Europe and the ports it hit.</p>" for n in range(5)
+        f"<p>Later paragraph {n} on hybrid warfare across Europe and the ports it hit.</p>" for n in range(8)
     )
 
     def page(second):
@@ -941,8 +941,12 @@ def test_an_article_split_around_an_advert_is_put_back_together():
             "</main></body></html>"
         )
 
-    out = extract("https://news.example/a", page(f"<h2>Hybrid warfare</h2>{rest}"), "", "page").body.text_content()
-    assert "Paragraph 11" in out and "Later paragraph 4" in out and "Hybrid warfare" in out
+    # What readability kept of the page: the first box only (on Ars Technica, where the boxes are
+    # further apart than here and the advert between them is filled).
+    body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+    _continue_article(body, page(f"<h2>Hybrid warfare</h2>{rest}"))
+    out = body.text_content()
+    assert out.index("Paragraph 11") < out.index("Hybrid warfare") < out.index("Later paragraph 4")
     # A box of the same class that is not more of the article stays out: links to other
     # stories, or a reporter's note and a line of comments.
     related = "".join(
