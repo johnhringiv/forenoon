@@ -1120,10 +1120,13 @@ LEAD_FURNITURE = re.compile(
     r"\b(related|popular|similar|categor(y|ies)|filed|tags?|tagged|share|follow (us|me)|subscribe|"
     r"newsletter|contents|on this page|in this (post|article)|sponsor\w*|advert\w*|most (read|viewed|popular)|"
     r"keep reading|latest|trending|top stories|editor'?s picks|recommended|read (more|next)|up next|"
-    r"more (from|on|in|stories|posts|articles|like this))\b|^like this\W*$",
+    r"more (from|on|in|news|stories|posts|articles|like this)|in your inbox|(you )?(may have )?missed|"
+    r"don.?t miss|around the web|most shared|editor.?s.? (picks|choice)|also read|previously|watch|explore)\b"
+    r"|^like this\W*$",
     re.IGNORECASE,
 )
 LEAD_FURNITURE_WORDS = 6
+LEAD_PITCH = re.compile(r"in your inbox|newsletter|subscribe|sign up for", re.IGNORECASE)  # at any length
 
 
 def _heading_over(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
@@ -1146,7 +1149,13 @@ def _furniture_lead(lead: lxml.html.HtmlElement) -> bool:
     paywall's wording at any length."""
     text = " ".join(lead.text_content().split())
     label = _words(text) <= LEAD_FURNITURE_WORDS and LEAD_FURNITURE.search(text)
-    return bool(label or TRAILING_FURNITURE.match(_norm(text)) or REFILL_FURNITURE.search(text) or PAYWALL.search(text))
+    return bool(
+        label
+        or LEAD_PITCH.search(text)
+        or TRAILING_FURNITURE.match(_norm(text))
+        or REFILL_FURNITURE.search(text)
+        or PAYWALL.search(text)
+    )
 
 
 def _led_in(ul: lxml.html.HtmlElement) -> bool:
@@ -1156,10 +1165,14 @@ def _led_in(ul: lxml.html.HtmlElement) -> bool:
     if before is None:
         return False
     text = " ".join(before.text_content().split())
-    return text.endswith(":") or (len(text) <= LEAD_HEADING_CHARS and bool(REFILL_HEADING.match(_norm(text))))
+    # A sentence that ends in a colon, not a label that does ("More:", "Also read:").
+    sentence = text.endswith(":") and _words(text) > LEAD_MIN_WORDS
+    return sentence or (len(text) <= LEAD_HEADING_CHARS and bool(REFILL_HEADING.match(_norm(text))))
 
 
 LEAD_HEADING_CHARS = 40
+LEAD_MIN_WORDS = 3
+SITE_LINK_SHARE = 0.5  # of a list's links to other pages of the site, past which it is the site's
 
 
 class _Document(Document):
@@ -1172,6 +1185,41 @@ class _Document(Document):
     or a table of contents, and either a paragraph introduces it or its items say something
     of their own beside their links. The links of a list kept so do not count against the
     boxes around it either: else the box holding it, the article itself, goes in its place."""
+
+    def __init__(self, *args, url: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._page_url = url
+
+    @staticmethod
+    def _cards(ul) -> bool:
+        """Whether most of a list's items are story cards: a link beside a teaser of its own."""
+        items = ul.findall("li")
+        cards = sum(
+            1
+            for li in items
+            if any(c.tag == "a" for c in li if isinstance(c.tag, str))
+            and any(c.tag in ("p", "div") and " ".join(c.text_content().split()) for c in li if isinstance(c.tag, str))
+        )
+        return bool(items) and cards * 2 >= len(items)
+
+    def _site_list(self, ul) -> bool:
+        """Whether a list no sentence introduces is the site's own: its items are story cards,
+        or most of its links go to other pages of the site (its stories, sections, archives).
+        An author's list of references, talks or libraries points elsewhere."""
+        if self._cards(ul):
+            return True
+        if not self._page_url:
+            return False
+        here = urlsplit(self._page_url)
+        site, page = (here.hostname or "").removeprefix("www."), here.path.rstrip("/")
+        links = [urlsplit(urljoin(self._page_url, (a.get("href") or "").strip())) for a in ul.iter("a")]
+        links = [link for link in links if link.scheme in ("http", "https")]
+        own = [
+            link
+            for link in links
+            if (link.hostname or "").removeprefix("www.") == site and link.path.rstrip("/") != page
+        ]
+        return bool(links) and len(own) > SITE_LINK_SHARE * len(links)
 
     def get_preserved_elements(self, node):
         allowed = super().get_preserved_elements(node)
@@ -1211,12 +1259,14 @@ class _Document(Document):
         heading = _heading_over(ul)
         if heading is not None and _furniture_lead(heading):
             return False
-        return _led_in(ul) or _own_chars(ul) >= LIST_OWN_CHARS
+        if _led_in(ul):
+            return not self._cards(ul)  # the author's sentence says what the list is
+        return _own_chars(ul) >= LIST_OWN_CHARS and not self._site_list(ul)
 
 
-def _readability(page_html: str) -> lxml.html.HtmlElement | None:
+def _readability(page_html: str, url: str = "") -> lxml.html.HtmlElement | None:
     try:
-        document = _Document(page_html, positive_keywords=[DATA_TABLE_CLASS])
+        document = _Document(page_html, positive_keywords=[DATA_TABLE_CLASS], url=url)
         return _parse_fragment(document.summary(html_partial=True))
     except Exception:  # noqa: BLE001 - third-party parsers on hostile input
         return None
@@ -1728,7 +1778,7 @@ def extract(
         page_html = XML_DECLARATION.sub("", page_html, count=1)
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
         notes["page-wide"] = notes["page"]
-        page = _readability(page_html)
+        page = _readability(page_html, url)
         if page is not None:
             _refill_sections(page, page_html)
             _continue_article(page, page_html)

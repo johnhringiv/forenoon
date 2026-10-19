@@ -1225,7 +1225,7 @@ def test_lists_that_are_part_of_the_text_are_kept_though_they_are_links():
         for n in range(4)
     )
     talks = "".join(
-        f"<li><a href='/talk{n}'>Minimalism versus types</a> ({2019 + n}), a talk at a conference about the language</li>"
+        f"<li><a href='https://www.youtube.com/watch?v=t{n}'>Minimalism versus types</a> ({2019 + n}), a talk at a conference about the language</li>"
         for n in range(4)
     )
     # Introduced by a paragraph ending in a colon, or saying something beside its links.
@@ -1347,3 +1347,39 @@ def test_a_sites_lists_of_its_stories_stay_out_and_author_lead_ins_count():
     assert "left the cloud" not in kept(keep_reading + "</ul></div>")
     steps = "".join(f"<li><a href='/docs/{n}'>Run the setup command for step {n}</a></li>" for n in range(4))
     assert "setup command for step 3" in kept(f"<p>To install it, do the following:</p><ul>{steps}</ul>")
+
+
+def test_a_news_sites_story_packages_stay_out_however_they_are_labelled():
+    words = _paragraphs("Article", 12)
+
+    def leaked(block):
+        page = (
+            f"<html><body><article><h1>Title</h1><div class='article-body'>{words}{block}</div></article></body></html>"
+        )
+        return "Headline" in extract("https://news.example/2026/10/story", page, "", "page").body.text_content()
+
+    teased = "".join(
+        f"<li><a href='/2026/10/s{n}'>Headline number {n} of the day</a> A teaser line saying what story {n} is about.</li>"
+        for n in range(5)
+    )
+    cards = "".join(
+        f"<li><a href='https://other.example/s{n}'>Headline {n}</a><p>A teaser for story {n} in its own block.</p></li>"
+        for n in range(5)
+    )
+    bare = "".join(f"<li><a href='/2026/10/s{n}'>Headline number {n} of the day</a></li>" for n in range(4))
+    bylined = "".join(
+        f"<li><a href='/2026/10/s{n}'>Headline number {n} about the council and the budget</a> <span>By Jane Doe and John Roe</span> <span>Updated 3:15 PM ET</span></li>"
+        for n in range(5)
+    )
+    for block in (
+        f"<h2>More news</h2><ul>{teased}</ul>",
+        f"<h2>Editors’ Picks</h2><ul>{teased}</ul>",
+        f"<div><h4>Around the web</h4></div><ul>{teased}</ul>",
+        f"<div class='river'><ul>{teased}</ul></div>",
+        f"<h2>Our coverage</h2><ul>{cards}</ul>",
+        f"<h2>Our coverage</h2><ul>{bylined}</ul>",
+        f"<p>More:</p><ul>{bare}</ul>",
+        f"<p>Also read:</p><ul>{bare}</ul>",
+        f"<p>Get the best stories in your inbox each morning:</p><ul>{bare}</ul>",
+    ):
+        assert not leaked(block), block[:40]

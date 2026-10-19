@@ -311,11 +311,12 @@ All fetched content is treated as untrusted.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
   - Lists that are part of the text are kept though they are mostly links (the main-content
-    step drops such lists as menus): one a paragraph introduces ("…please at least:",
-    "References") or whose items say something beside their links. Not one named or worded
-    as the site's (related posts, tags, sharing, a newsletter, "Most read"), a table of
-    contents, a run of one-word links, or a list of the site's stories with their times and
-    bylines.
+    step drops such lists as menus): one a sentence introduces ("…please at least:"), or a
+    short "References", or whose items say something beside their links (times, bylines and
+    counts aside). Not one under a label or heading of the site's (related posts, tags,
+    sharing, a newsletter, "Most read", "More news"), a table of contents, a run of one-word
+    links, story cards (a link beside a teaser block), or, with no sentence introducing it,
+    one whose links go mostly to the site's other pages.
   - Section headings marked up as links to themselves (permalinks), with ids that spell
     their text, or with scroll margins are kept, and so is a real table (with header cells
     or a caption) in a scrolling box or under any heading. A heading an article ends on
