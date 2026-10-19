@@ -2858,6 +2858,55 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
 }
 
 #[tokio::test]
+async fn the_landing_page_and_the_demo_hosts_pages_are_meant_to_be_found() {
+    let site =
+        site_full(true, false, "john.forenoon.test=john,nobody.forenoon.test=nobody", Some("forenoon.test")).await;
+    let thumbs = site.folder.path().join("thumbs");
+    std::fs::create_dir_all(&thumbs).unwrap();
+    article(&site.pool, "a1", "https://blog.example/1", "Blog", "Johns article", "john", "2026-10-10T10:00:00+00:00")
+        .await;
+    std::fs::write(thumbs.join("a1.jpg"), b"\xff\xd8\xff jpeg bytes").unwrap();
+    let get = async |host: &str, path: &str| {
+        let request = Request::get(path).header(header::HOST, host).body(Body::empty()).unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        let text = |name: &str| {
+            response.headers().get(name).map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default()
+        };
+        let headers = (text("content-type"), text("x-robots-tag"));
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, headers, String::from_utf8_lossy(&body).into_owned())
+    };
+
+    // The sitemap, on the landing host only, lists the page and the demo hosts' pages.
+    let (status, (kind, robots), sitemap) = get("forenoon.test", "/sitemap.xml").await;
+    assert!(status == StatusCode::OK && kind == "application/xml" && robots.is_empty(), "{sitemap}");
+    for page in ["https://forenoon.test/", "https://john.forenoon.test/", "https://john.forenoon.test/sources"] {
+        assert!(sitemap.contains(&format!("<loc>{page}</loc>")), "{page}");
+    }
+    assert_eq!(get("john.forenoon.test", "/sitemap.xml").await.0, StatusCode::NOT_FOUND);
+    // Every one of those hosts names it from its robots.txt; the install's own host has none.
+    for host in ["forenoon.test", "John.Forenoon.test:443"] {
+        let (status, (kind, _), text) = get(host, "/robots.txt").await;
+        assert!(status == StatusCode::OK && kind.starts_with("text/plain"), "{host}");
+        assert!(text.contains("Sitemap: https://forenoon.test/sitemap.xml") && text.contains("Disallow: /thumb/"));
+    }
+    assert_eq!(get("nas:8787", "/robots.txt").await.0, StatusCode::NOT_FOUND);
+
+    // A persona's pages may be indexed; its thumbnails, a page that is not there, and the
+    // install's own pages may not.
+    for path in ["/", "/archive", "/sources"] {
+        let (status, (_, robots), _) = get("john.forenoon.test", path).await;
+        assert!(status == StatusCode::OK && robots.is_empty(), "{path}");
+    }
+    let (status, (_, robots), _) = get("john.forenoon.test", "/thumb/a1").await;
+    assert!(status == StatusCode::OK && robots == "noindex");
+    assert_eq!(get("nobody.forenoon.test", "/").await.1.1, "noindex");
+    assert_eq!(get("john.forenoon.test", "/login").await.1.1, "noindex");
+    assert_eq!(get("nas:8787", "/login").await.1.1, "noindex");
+}
+
+#[tokio::test]
 async fn the_newsstand_shows_an_issue_in_the_order_it_was_built() {
     let site = site(true).await;
     let pool = &site.pool;
