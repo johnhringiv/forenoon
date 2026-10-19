@@ -428,6 +428,7 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
             and not FURNITURE_CLASS.search(anchor)
             and not TRAILING_FURNITURE.match(_norm(text))
             and not any(p.fullmatch(text.split()[0]) for p in (negative, unlikely))
+            and not _furniture_lead(heading)
         ):
             heading.attrib.pop("id", None)
         names = (heading.get("class") or "").split()
@@ -1121,7 +1122,8 @@ LEAD_FURNITURE = re.compile(
     r"newsletter|contents|on this page|in this (post|article)|sponsor\w*|advert\w*|most (read|viewed|popular)|"
     r"keep reading|latest|trending|top stories|editor'?s picks|recommended|read (more|next)|up next|"
     r"more (from|on|in|news|stories|posts|articles|like this)|in your inbox|(you )?(may have )?missed|"
-    r"don.?t miss|around the web|most shared|editor.?s.? (picks|choice)|also read|previously|watch|explore)\b"
+    r"don.?t miss|around the web|most shared|editor.?s.? (picks|choice)|also read|previously|watch|explore|"
+    r"partners?|promoted|paid (content|posts?)|our network|deals?|join (us|our))\b"
     r"|^like this\W*$",
     re.IGNORECASE,
 )
@@ -1267,7 +1269,7 @@ class _Document(Document):
 
     def get_preserved_elements(self, node):
         allowed = super().get_preserved_elements(node)
-        self._kept_lists = set()
+        self._kept_lists, self._kept_root = set(), node.getroottree().getroot()
         for ul in self.tags(node, "ul"):
             if ul not in allowed and self._text_list(ul):
                 allowed[ul] = True
@@ -1276,7 +1278,8 @@ class _Document(Document):
 
     def get_link_density(self, elem):
         kept = getattr(self, "_kept_lists", None)
-        if not kept:
+        # Readability's second try parses the page again: lists kept on the first are not here.
+        if not kept or elem.getroottree().getroot() is not self._kept_root:
             return super().get_link_density(elem)
         links = sum(
             len(" ".join(a.text_content().split()))
@@ -1298,7 +1301,7 @@ class _Document(Document):
         if REFILL_FURNITURE.search(" ".join(ul.itertext())):
             return False
         # A table of contents: every link to a place on this page, however it is written.
-        root = ul.getroottree()
+        root = ul.getroottree().getroot()  # the element: a tree object is made afresh each call
         if getattr(self, "_ids_of", None) is not root:
             self._ids_of = root
             self._ids = {el.get("id") for el in root.iter() if isinstance(el.tag, str) and el.get("id")}

@@ -1435,3 +1435,28 @@ def test_lists_in_a_sites_boxes_or_of_its_social_links_stay_out():
         "Headline number",
     )
     assert leaked("", "Article paragraph 11")
+
+
+def test_a_furniture_heading_with_a_slug_id_or_promoted_lists_stay_out():
+    words = _paragraphs("Article", 8)
+    for block, needle in (
+        (
+            "<h2 id='follow-us-on-twitter'>Follow us on Twitter</h2><ul><li><a href='https://twitter.com/ex'>@ex</a></li></ul>",
+            "Follow us",
+        ),
+        (
+            "<h2 id='join-our-community'>Join our community</h2><ul><li><a href='https://forum.example/'>Forum</a></li></ul>",
+            "Join our",
+        ),
+        (
+            "<h2>From our partners</h2><ul>"
+            + "".join(
+                f"<li><a href='https://p{n}.example/'>Partner story {n}</a> about a thing you may want to buy soon</li>"
+                for n in range(5)
+            )
+            + "</ul>",
+            "Partner story",
+        ),
+    ):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}</article></body></html>"
+        assert needle not in extract("https://blog.example/a", page, "", "page").body.text_content(), needle
