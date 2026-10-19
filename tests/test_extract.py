@@ -1683,7 +1683,7 @@ def test_a_picture_by_a_form_a_series_list_and_a_written_outline_stay():
 
 def test_a_closing_pitch_without_its_list_goes_with_its_heading():
     article = "<p>The API is three functions, and the simplest additions are often the most useful ones.</p>"
-    pitch = (
+    pitch = (  # minified, as many pages are: no space between the items
         "<h2>Connect deeper</h2><p>If you liked this article, please</p>"
         "<ul><li>hit on the like button,</li><li><a href='https://x.example/n'>subscribe to my newsletter</a></li>"
         "<li>and let's connect on <a href='https://twitter.com/me'>Twitter</a>!</li></ul>"
@@ -1741,6 +1741,27 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
     )
     appeal = "<li><a href='https://redcross.example'>Donate to the Red Cross</a></li>"
     assert "If you liked this report, please" in left("If you liked this report, please", appeal)
+    # A sign-off before the author's links.
+    author = (
+        "<li><a href='/about'>Jane Doe</a></li><li><a href='https://twitter.com/jane'>Follow me on Twitter</a></li>"
+    )
+    assert "Thanks for reading," in left("Thanks for reading,", author)
+    # Other blogs on the same platform are not the site's own.
+    article_html = f"<div>{article}<p>If you enjoyed this, read these,</p></div>"
+    picks = "<ul><li><a href='https://money.substack.com/'>Money Stuff newsletter</a></li></ul>"
+    body = lxml.html.fromstring(article_html)
+    extract_module._drop_dangling_pitch(
+        body,
+        f"<html><body>{article}<p>If you enjoyed this, read these,</p>{picks}</body></html>",
+        "https://me.substack.com/p/x",
+    )
+    assert "read these" in body.text_content()
+    # A picture in the line goes nowhere with it: the line stays.
+    pitch = "<p><img src='https://blog.example/chart.png'><br>If you liked this article, please</p>"
+    body = lxml.html.fromstring(f"<div>{article}{pitch}</div>")
+    page = f"<html><body>{article}{pitch}<ul><li><a href='/newsletter'>Subscribe to my newsletter</a></li></ul></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert body.xpath("//img") and "If you liked" in body.text_content()
     # More of the section after the list on the page: the heading stays.
     body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>If you liked this, please</p></div>")
     page = f"<html><body>{article}<h2>Next</h2><p>If you liked this, please</p><ul>{items}</ul><p>A last real word.</p></body></html>"

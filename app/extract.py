@@ -1866,11 +1866,18 @@ DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of
 # "Enjoyed this post? Follow me on".
 CLOSING_PITCH = re.compile(
     r"^(if you (liked|enjoyed|found|like|enjoy|appreciated)\b|enjoy(ed)? (this|reading)\b|"
-    r"(want|like) (more|to read more)\b|support (me|us|my work|this (blog|site|newsletter))\b|"
-    r"thanks for reading\b)",
+    r"(want|like) (more|to read more)\b|support (me|us|my work|this (blog|site|newsletter))\b)",
     re.IGNORECASE,
 )
 BROKEN_OFF = re.compile(r"(,|\b(please|and|or|via))\s*$", re.IGNORECASE)
+
+
+def _host(base: str, href: str = "") -> str:
+    """A link's whole host, resolved against the page, or "" for one that does not parse."""
+    try:
+        return (urlsplit(urljoin(base, href.strip())).hostname or "").removeprefix("www.")
+    except ValueError:
+        return ""
 
 
 def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) -> None:
@@ -1885,7 +1892,7 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     last = texts[0].getparent()
     while last is not None and last.tag != "p" and last is not body:
         last = last.getparent()
-    if last is None or last.tag != "p" or last.xpath("following::img"):
+    if last is None or last.tag != "p" or last.xpath(f"{MEDIA_XPATH} | following::img"):
         return
     text = " ".join(last.text_content().split())
     if _words(text) > DANGLING_MAX_WORDS or not CLOSING_PITCH.search(text) or not BROKEN_OFF.search(text):
@@ -1901,18 +1908,16 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     after = next((el for el in lead.itersiblings() if isinstance(el.tag, str)), None)
     if after is None or after.tag not in ("ul", "ol"):
         return
-    listed = " ".join(after.text_content().split())
+    listed = " ".join(" ".join(after.itertext()).split())
     if not listed or _norm(listed) in _norm(body.text_content()):
         return  # the list is in the article: the sentence leads into it
     if not (LEAD_PITCH.search(listed) or REFILL_FURNITURE.search(listed)):
         return  # what the sentence led to is not a pitch
-    site = _place(url)
-    places = [_place(url, a.get("href") or "") for a in after.iter("a")]
+    # The site by its whole host: one blog on a platform's domain ("me.substack.com") is not another.
+    site = _host(url)
+    hosts = [_host(url, a.get("href") or "") for a in after.iter("a")]
     shares = [a for a in after.iter("a") if SHARE_LINK.search(a.get("href") or "")]
-    if not shares and not any(
-        place is not None and (SOCIAL_HOST.fullmatch(place[0]) or (site is not None and place[0] == site[0]))
-        for place in places
-    ):
+    if not shares and not any(host and (host == site or SOCIAL_HOST.fullmatch(host)) for host in hosts):
         return  # its links go only to other sites: an appeal or a reading list of the author's
     heading = next((el for el in last.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
     over = next((el for el in lead.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
