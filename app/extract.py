@@ -90,6 +90,18 @@ FURNITURE_CLASS = re.compile(
     r"\bad\b|widget|menu|breadcrumb|pagination|pager|popup|modal|signup|sign-up|recommend",
     re.IGNORECASE,
 )
+# Page furniture by its heading, as the text of the heading reads in lower case.
+FURNITURE_HEADING = re.compile(
+    r"^(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
+    r"replies|discussion|recommended|popular|trending|read next|up next|follow us|elsewhere|"
+    r"advertisement|sponsored|support us)\W*$|"
+    r"\b(newsletter|subscribe|sign up|leave a (reply|comment)|post a comment|join the (discussion|"
+    r"conversation)|about the authors?|more from|more (stories|posts|articles) (from|by|like)|you (may|"
+    r"might) (also )?like|related (posts|stories|articles|reading|content|links|coverage)|share (this|"
+    r"on)|\d+ (comments|responses|replies))\b"
+)
+LINK_LIST_SHARE = 0.9  # of a section's letters in links, as in a list of tags or share buttons
+LINK_LIST_WORDS = 1.25  # the most words such a list's links have on average: one, mostly
 
 PAYWALL = re.compile(
     r"subscribe to (continue|read|unlock|keep reading)|already a subscriber|sign in to (read|"
@@ -590,8 +602,9 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     the list of references under "References" goes, its heading stays, and the article
     seems to end at a heading. When a kept heading has nothing under it, what follows the
     same heading on the page is put back, up to the next heading; not when it looks like
-    page furniture (a form, navigation, a class such as "related" or "comments"), and not
-    a long run of text, which readability had a better reason to leave out.
+    page furniture (a form, navigation, a class such as "related" or "comments", a heading
+    such as "Share this" or "More from Example", nothing but short links), and not a long
+    run of text, which readability had a better reason to leave out.
     """
     empty = [h for h in body.iter(*HEADINGS) if _empty_section(h)]
     if not empty:
@@ -608,7 +621,8 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     kept = _norm(body.text_content())
     for heading in empty:
         found = by_text.get(_norm(heading.text_content()), [])
-        if len(found) != 1:  # not on the page as it is, or not only once
+        # Not on the page as it is, or not only once; or a heading of page furniture.
+        if len(found) != 1 or FURNITURE_HEADING.search(_norm(heading.text_content())):
             continue
         source = found[0]
         if FURNITURE_CLASS.search(_names(source)):
@@ -633,7 +647,7 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
             section.append(el)
         words = sum(_words(el.text_content()) for el in section)
         already = any(text and text in kept for text in (_norm(el.text_content()) for el in section))
-        if not words or words > REFILL_MAX_WORDS or already:
+        if not words or words > REFILL_MAX_WORDS or already or _short_links(section):
             continue
         anchor = heading
         for el in section:
@@ -642,6 +656,16 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
             anchor.addnext(copied)
             anchor = copied
         anchor.tail, heading.tail = heading.tail, None
+
+
+def _short_links(section: list[lxml.html.HtmlElement]) -> bool:
+    """Whether a run of blocks is nearly all links of a word each: tags, share buttons. A
+    list of references or further reading names what it links to."""
+    links = [" ".join(a.text_content().split()) for el in section for a in el.iter("a")]
+    linked = sum(c.isalnum() for text in links for c in text)
+    letters = sum(c.isalnum() for el in section for c in el.text_content())
+    words = sum(map(_words, links))
+    return bool(links) and linked >= LINK_LIST_SHARE * letters and words <= LINK_LIST_WORDS * len(links)
 
 
 def _drop_trailing_promotions(body: lxml.html.HtmlElement) -> None:

@@ -440,3 +440,25 @@ def test_a_number_after_a_word_that_names_nothing_numbered_is_a_footnote():
     out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
     assert out.count('class="noteref"') == 3 and out.count("<aside") == 3
     assert 'Sec. <a href="#sec-1">4</a>' in out
+
+
+def test_furniture_under_a_bare_heading_is_not_put_back():
+    """Readability keeps these headings and drops what is under them, rightly: no class says
+    they are furniture, but the heading does, or the links of a word each do."""
+    filler = "<p>" + "Plain words about optics and the speed of light. " * 30 + "</p>"
+    titles = '<ul><li><a href="/x">Why the sky is blue</a></li><li><a href="/y">How bees navigate</a></li></ul>'
+    furniture = {
+        "Related": titles,
+        "Share this:": '<ul><li><a href="https://social.example/s">Mastodon</a></li></ul>',
+        "More from Example": titles,
+        "Get the newsletter": '<p><a href="/signup">Sign up</a></p>',
+        "About the author": '<div><p><a href="/jane">Jane Doe</a> writes about <a href="/t">light</a>.</p></div>',
+        "Explore": '<ul><li><a href="/t/a">physics</a></li><li><a href="/t/b">optics</a></li></ul>',
+    }
+    for heading, under in furniture.items():
+        page = f"<html><body><article>{filler}{filler}<h3>{heading}</h3>{under}</article></body></html>"
+        out = extract("https://blog.example/post", page, "").body.text_content()
+        assert "Plain words" in out and "bees" not in out and "Mastodon" not in out and "Sign up" not in out
+        assert "Jane" not in out and "physics" not in out
+    page = f"<html><body><article>{filler}{filler}<h3>See also</h3>{titles}</article></body></html>"
+    assert "How bees navigate" in extract("https://blog.example/post", page, "").body.text_content()
