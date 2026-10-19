@@ -535,3 +535,12 @@ def test_loose_words_inside_a_wrapper_do_not_make_the_article_one_block():
     bookcheck._wrap_loose(body)
     found = bookcheck.blocks(body)
     assert len(found) == 4 and found[1].text_content() == "Show me the graphs!"
+
+
+def test_every_request_asks_for_the_refusal_fallback(check):
+    make, item, _store = check
+    checker, client, result = make(_reply(_finish()))
+    checker.check(item, result)
+    asked = client.asked[0]
+    assert asked["extra_body"] == {"fallbacks": "default"}
+    assert asked["extra_headers"] == {"anthropic-beta": "server-side-fallback-2026-07-01"}
