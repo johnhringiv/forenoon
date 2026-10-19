@@ -286,3 +286,12 @@ def test_a_notes_link_back_is_not_taken_for_a_reference():
     assert "A claim in the text." in text and "It goes on for a while" in text and "The note itself." not in text
     assert text.count('class="noteref"') == 1 and notes.count("<aside") == 1
     assert '<a href="#fnref-1">1</a> The note itself.' in notes
+
+
+def test_a_comment_inside_a_note_does_not_undo_the_notes():
+    filler = "<p>" + "Plain words about switched capacitor filters. " * 30 + "</p>"
+    page = f"""<html><body><article><p>A claim.<a href="#fn:1">1</a></p>{filler}
+    <ol><li id="fn:1"><!-- generated --><p>The note itself. <a href="#fnref:1">↩</a></p></li></ol>
+    </article></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
+    assert out.count('class="noteref"') == 1 and '<a href="#fnref-1">1</a> The note itself.' in out

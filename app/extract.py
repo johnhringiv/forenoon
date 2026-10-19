@@ -277,7 +277,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
             if link.get(MARK) is None and (in_page(link) in targets):
                 text = " ".join(link.text_content().split())
                 link.drop_tree() if len(text) <= 2 or text.lower() in BACK_LABELS else link.drop_tag()
-        for child in body.iter():  # the note's own printed number, which ours repeats
+        for child in body.iter(etree.Element):  # the note's own printed number, which ours repeats
             if child is not body and " ".join(child.text_content().split()) == label and not len(child):
                 child.drop_tree()
                 break
