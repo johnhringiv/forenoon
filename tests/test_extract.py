@@ -1280,3 +1280,49 @@ def test_a_comparison_table_in_a_scrolling_box_or_of_download_links_is_kept():
     for table, needle in ((scrolling, "Answer two 5"), (downloads, "R4")):
         page = f"<html><body><article><h1>Two engines</h1>{words}{table}<h2>Results</h2>{words}</article></body></html>"
         assert needle in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_kept_list_of_links_does_not_cost_the_article_its_paragraphs():
+    # Readability judges each box around the list by its links too: once the list stayed, the
+    # article it was in went instead.
+    prose = "".join(
+        f"<p>Paragraph {n} of the round-up. It says a little about the week and what was worth reading.</p>"
+        for n in range(3)
+    )
+    links = "".join(
+        f"<li><a href='https://example.org/{n}'>A rather long descriptive title of an interesting article number {n}</a></li>"
+        for n in range(12)
+    )
+    for box in ("<main><div>", "<main><div class='entry-content'>"):
+        page = (
+            f"<html><body>{box}<h1>Links for the week</h1>{prose}<p>This week I read:</p><ul>{links}</ul>"
+            "<p>That is all for now, and thanks for reading this far.</p></div></main></body></html>"
+        )
+        result = extract("https://blog.example/a", page, "", "page")
+        out = result.body.text_content()
+        assert "Paragraph 2 of" in out and "number 11" in out and "thanks for reading" in out
+
+
+def test_lists_a_site_introduces_or_that_point_at_the_page_stay_out():
+    words = _paragraphs("Article", 8)
+
+    def kept(block):
+        page = f"<html><body><article><div class='entry-content'>{words}{block}</div></article></body></html>"
+        return extract("https://blog.example/2026/10/post/", page, "", "page").body.text_content()
+
+    titles = "".join(f"<li><a href='/p{n}'>How we built thing number {n} at work</a></li>" for n in range(5))
+    for lead in ("Related posts:", "Filed under:", "Share this:", "Get the newsletter and you will receive:"):
+        assert "thing number 4" not in kept(f"<p>{lead}</p><ul>{titles}</ul>")
+    sections = "".join(
+        f"<li><a href='https://blog.example/2026/10/post/#s{n}'>Section number {n} of this post</a></li>"
+        for n in range(4)
+    )
+    targets = "".join(f"<h2 id='s{n}'>Part {n}</h2>{_paragraphs(f'Part {n}', 2)}" for n in range(4))
+    page = f"<html><body><article>{words}<p>Contents:</p><ul>{sections}</ul>{targets}</article></body></html>"
+    assert "Section number 3" not in extract("https://blog.example/2026/10/post/", page, "", "page").body.text_content()
+
+
+def test_a_back_to_top_link_in_a_heading_is_not_freed():
+    words = _paragraphs("Article", 6)
+    page = f"<html><body id='top'><div id='page'><article>{words}<h3><a href='#top'>Back to top</a></h3></article></div></body></html>"
+    assert "Back to top" not in extract("https://blog.example/a", page, "", "page").body.text_content()

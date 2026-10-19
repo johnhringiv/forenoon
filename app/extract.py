@@ -158,7 +158,8 @@ TRAILING_FURNITURE = re.compile(
     r"(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
     r"replies|discussion|recommended( reading| for you)?|popular|trending|read next|up next|follow us|"
     r"elsewhere|advertisement|sponsored|support us|leave a (reply|comment)( cancel reply)?|post a comment|"
-    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like)\W*$"
+    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like|"
+    r"you may have missed|more from (the |this |our )?(blog|site|author|archive|newsletter)|popular (tags|posts|stories|articles)|back to top( of page)?)\W*$"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
 NOTES_HEADING = re.compile(
@@ -396,7 +397,15 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
     negative, unlikely = READABILITY_PATTERNS["negativeRe"], READABILITY_PATTERNS["unlikelyCandidatesRe"]
     for heading in list(root.iter(*HEADINGS)):
         text = " ".join(heading.text_content().split())
-        own = {el.get("id") for el in (heading, *heading.iterancestors()) if el.get("id")}
+        # The heading's own id, those inside it, and those of the boxes it opens (a <section>
+        # whose first element it is): not a page's "#top", which a "Back to top" link names.
+        opened = [heading]
+        while (box := opened[-1].getparent()) is not None and box is not root:
+            first = next((c for c in box if isinstance(c.tag, str)), None)
+            if first is not opened[-1] or (box.text or "").strip():
+                break
+            opened.append(box)
+        own = {el.get("id") for el in opened if el.get("id")}
         own |= {
             el.get("id") or el.get("name")
             for el in heading.iterdescendants()
@@ -1088,13 +1097,37 @@ def _own_chars(ul: lxml.html.HtmlElement) -> float:
     return sum(own) / len(own) if own else 0.0
 
 
-def _led_in(ul: lxml.html.HtmlElement) -> bool:
-    """Whether a paragraph introduces the list: it ends in a colon ("…please at least:"), or it
-    is the whole of a short reference heading set as a paragraph ("References")."""
+def _lead(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The paragraph just before a list, if that is what comes before it."""
     before = ul.getprevious()
     while before is not None and not isinstance(before.tag, str):
         before = before.getprevious()
-    if before is None or before.tag != "p":
+    return before if before is not None and before.tag == "p" else None
+
+
+# What a site puts before its own lists: "Related posts:", "Filed under:", "Share this:".
+LEAD_FURNITURE = re.compile(
+    r"(related|more|popular|recent|similar|categor|filed|tag|share|like this|follow|subscribe|"
+    r"newsletter|contents|on this page|in this (post|article)|table of contents|sponsor|advert)",
+    re.IGNORECASE,
+)
+LEAD_FURNITURE_WORDS = 6
+
+
+def _furniture_lead(lead: lxml.html.HtmlElement) -> bool:
+    """Whether the paragraph before a list introduces the site's lists, not the author's: a
+    short label naming related posts, tags, sharing or a table of contents, or a newsletter or
+    paywall's wording at any length."""
+    text = " ".join(lead.text_content().split())
+    label = _words(text) <= LEAD_FURNITURE_WORDS and LEAD_FURNITURE.search(text)
+    return bool(label or TRAILING_FURNITURE.match(_norm(text)) or REFILL_FURNITURE.search(text) or PAYWALL.search(text))
+
+
+def _led_in(ul: lxml.html.HtmlElement) -> bool:
+    """Whether a paragraph introduces the list: it ends in a colon ("…please at least:"), or it
+    is the whole of a short reference heading set as a paragraph ("References")."""
+    before = _lead(ul)
+    if before is None:
         return False
     text = " ".join(before.text_content().split())
     return text.endswith(":") or (len(text) <= LEAD_HEADING_CHARS and bool(REFILL_HEADING.match(_norm(text))))
@@ -1111,14 +1144,28 @@ class _Document(Document):
     issues, talks, libraries or references. A list is kept here whatever its links when it is
     not named or worded as furniture, holds no form or button, is not a run of one-word links
     or a table of contents, and either a paragraph introduces it or its items say something
-    of their own beside their links."""
+    of their own beside their links. The links of a list kept so do not count against the
+    boxes around it either: else the box holding it, the article itself, goes in its place."""
 
     def get_preserved_elements(self, node):
         allowed = super().get_preserved_elements(node)
+        self._kept_lists = set()
         for ul in self.tags(node, "ul"):
             if ul not in allowed and self._text_list(ul):
                 allowed[ul] = True
+                self._kept_lists.add(ul)
         return allowed
+
+    def get_link_density(self, elem):
+        kept = getattr(self, "_kept_lists", None)
+        if not kept:
+            return super().get_link_density(elem)
+        links = sum(
+            len(" ".join(a.text_content().split()))
+            for a in elem.iter("a")
+            if not any(ul in kept for ul in a.iterancestors("ul"))
+        )
+        return links / max(len(" ".join(elem.text_content().split())), 1)
 
     def _text_list(self, ul) -> bool:
         if not ul.findall("li") or self.class_weight(ul) < 0 or FURNITURE_CLASS.search(_names(ul)):
@@ -1127,9 +1174,14 @@ class _Document(Document):
             return False
         if REFILL_FURNITURE.search(" ".join(ul.itertext())):
             return False
-        hrefs = [(a.get("href") or "").strip() for a in ul.iter("a")]
-        if hrefs and all(h.startswith("#") for h in hrefs):
-            return False  # a table of contents
+        # A table of contents: every link to a place on this page, however it is written.
+        ids = {el.get("id") for el in ul.getroottree().iter() if isinstance(el.tag, str) and el.get("id")}
+        fragments = [(a.get("href") or "").partition("#") for a in ul.iter("a")]
+        if fragments and all(sep and (not page or unquote(target) in ids) for page, sep, target in fragments):
+            return False
+        lead = _lead(ul)
+        if lead is not None and _furniture_lead(lead):
+            return False
         return _led_in(ul) or _own_chars(ul) >= LIST_OWN_CHARS
 
 
