@@ -440,6 +440,7 @@ def test_every_word_of_the_article_is_in_a_block_the_model_is_shown(check):
     result.body = lxml.html.fragment_fromstring(body)
     checker.check(item, result)
     listing = client.asked[0]["messages"][0]["content"].split("<article_blocks>\n")[1].split("\n</article_blocks>")[0]
+    assert "[1] <p>Loose at the top</p>" in listing and "[3] <p>Between blocks</p>" in listing
     for words in ("Loose at the top", "Between blocks", "Lines", "with breaks", "Inside."):
         assert words in listing, words
     # A div with words of its own is one block, whole.
@@ -491,3 +492,11 @@ def test_a_figures_text_comes_back_when_its_picture_is_not_kept_after_an_edit(ch
     assert 'src="picture:1"' in client.asked[0]["messages"][0]["content"], "the model saw the figure's picture"
     assert "Restored standfirst." in out
     assert "<img" not in out and "Noon 40" in out, "the figure has its own text back"
+
+
+def test_loose_words_beside_a_stray_list_item_are_kept():
+    body = lxml.html.fragment_fromstring("<div>loose <b>x</b> more<p>para</p><li>item</li> after <p>end</p></div>")
+    bookcheck._wrap_loose(body)
+    assert lxml.html.tostring(body, encoding="unicode") == (
+        "<div><p>loose <b>x</b> more</p><p>para</p><li>item</li><p>after</p><p>end</p></div>"
+    )

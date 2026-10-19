@@ -480,9 +480,12 @@ def _mark_internal(el) -> None:
 PARTS = {"li", "td", "th", "tr", "thead", "tbody", "tfoot", "caption", "dt", "dd", "figcaption"}
 
 
-def _as_blocks(root: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
+def _as_blocks(root: lxml.html.HtmlElement, parts_refused: bool = True) -> list[lxml.html.HtmlElement]:
     """The children of a cleaned fragment as blocks: loose text and inline elements, with the
-    spaces between them, put in paragraphs. A list item or table cell on its own is refused."""
+    spaces between them, put in paragraphs. A list item or table cell on its own is refused
+    (before anything is moved), or with `parts_refused` False taken as a block."""
+    if parts_refused and (part := next((c for c in root if c.tag in PARTS), None)) is not None:
+        raise ToolError(f"a <{part.tag}> must be inside its list, table or figure: send the whole of it")
     out: list[lxml.html.HtmlElement] = []
     loose: lxml.html.HtmlElement | None = None
 
@@ -502,11 +505,9 @@ def _as_blocks(root: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
     for child in list(root):
         tail = child.tail or ""
         child.tail = None
-        if child.tag in PARTS:
-            raise ToolError(f"a <{child.tag}> must be inside its list, table or figure: send the whole of it")
-        if _is_block(child) or child.tag == "aside":
+        if _is_block(child) or child.tag in ("aside", *PARTS):
             if pending.strip():
-                add_text(pending)
+                add_text(pending.strip() if loose is None else pending.rstrip())
             loose = None
             out.append(child)
         else:
@@ -518,7 +519,7 @@ def _as_blocks(root: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
             loose.append(child)
         pending = tail
     if pending.strip():
-        add_text(pending.rstrip() if loose is None else pending)
+        add_text(pending.strip() if loose is None else pending)
     return out
 
 
@@ -527,10 +528,7 @@ def _wrap_loose(body: lxml.html.HtmlElement) -> None:
     every word is in a block the model is shown."""
     if not (body.text or "").strip() and not any((child.tail or "").strip() for child in body):
         return
-    try:
-        parts = _as_blocks(body)
-    except ToolError:
-        return
+    parts = _as_blocks(body, parts_refused=False)
     body.text = None
     for child in list(body):
         body.remove(child)
