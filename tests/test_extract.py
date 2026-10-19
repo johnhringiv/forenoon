@@ -371,6 +371,10 @@ def test_headings_with_nothing_under_them_do_not_end_the_article():
     pictured = page.replace("</h2>", '</h2><p><img src="/diagram.png"></p>')
     out = lxml.html.tostring(extract("https://blog.example/post", pictured, "").body, encoding="unicode")
     assert "Notes and references" in out and "Related stories" not in out
+    # A heading over what the book cannot show stays: it says something was there.
+    video = page.replace("</h2>", '</h2><video src="/demo.mp4"></video>').replace("Notes and references", "Demo")
+    out = lxml.html.tostring(extract("https://blog.example/post", video, "").body, encoding="unicode")
+    assert "<h2>Demo</h2>" in out and "Related stories" not in out
 
 
 def test_a_closing_call_to_subscribe_is_left_out():

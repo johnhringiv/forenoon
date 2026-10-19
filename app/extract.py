@@ -100,6 +100,8 @@ FURNITURE_HEADING = re.compile(
     r"might) (also )?like|related (posts|stories|articles|reading|content|links|coverage)|share (this|"
     r"on)|\d+ (comments|responses|replies))\b"
 )
+# The heading of a section of notes or references, which may be gathered at the end by other means.
+NOTES_HEADING = re.compile(r"^(foot|end|side ?)?notes?\b|^(references?|sources|bibliography|citations|works cited)\b")
 LINK_LIST_SHARE = 0.9  # of a section's letters in links, as in a list of tags or share buttons
 LINK_LIST_WORDS = 1.25  # the most words such a list's links have on average: one, mostly
 
@@ -711,9 +713,13 @@ def _promotion(text: str) -> bool:
 def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
     """Remove headings that end the article with nothing under them: what is left of a
     "Related posts" or "Leave a reply" box, or of a "Notes" section whose notes are
-    gathered at the end by other means."""
+    gathered at the end by other means. Any other heading stays: what was under it may be
+    a video or a drawing the book cannot show, and the heading says it was there."""
     for heading in reversed(list(body.iter(*HEADINGS))):
         if heading.xpath("following::text()[normalize-space()] | following::img"):
+            break
+        text = _norm(heading.text_content())
+        if not FURNITURE_HEADING.search(text) and not NOTES_HEADING.search(text):
             break
         heading.drop_tree()
 
