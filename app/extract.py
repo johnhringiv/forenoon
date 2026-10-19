@@ -98,7 +98,7 @@ FURNITURE_HEADING = re.compile(
     r"\b(newsletter|subscribe|sign up|leave a (reply|comment)|post a comment|join the (discussion|"
     r"conversation)|about the authors?|more from|more (stories|posts|articles) (from|by|like)|you (may|"
     r"might) (also )?like|related (posts|stories|articles|reading|content|links|coverage)|share (this|"
-    r"on)|\d+ (comments|responses|replies))\b"
+    r"on)|\d+ (comments|responses|replies)|recommended (reading|for you|posts|stories|articles))\b"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
 NOTES_HEADING = re.compile(r"^(foot|end|side ?)?notes?\b|^(references?|sources|bibliography|citations|works cited)\b")
