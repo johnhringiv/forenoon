@@ -338,3 +338,141 @@ def test_tweet_furniture_stays_out_and_empty_quotes_are_fast():
     started = time.monotonic()
     extract("https://news.example/b", f"<html><body>{words}{empty}</body></html>", "", "page")
     assert time.monotonic() - started < 10
+
+
+def test_teasers_and_sign_ups_are_dropped_but_notes_and_quotes_stay():
+    words = "Plain words about grid storage and the cost of transmission lines. " * 12
+    page = f"""<html><body><article>
+    <p>{words}</p>
+    <aside class="recommended"><p>Recommended</p><div><span>Interview</span>
+      <a href="/content/other">War in Ukraine</a> <a href="/content/other">Another story's headline here</a></div></aside>
+    <aside aria-label="newsletter promotion"><p>Sign up to The Long Read</p><p>Lose yourself in a great story</p>
+      <form><label>Enter your email</label><input type="email"><button>Sign up</button></form></aside>
+    <p>{words} The grid was never built for this much solar at noon.</p>
+    <aside class="post__aside"><div class="pullquote">The grid was never built for this much solar at noon.</div>
+      <p>Jane Doe, Grid Operator</p></aside>
+    <div class="callout">Update: this post has <a href="/follow-up">a follow-up</a> with the corrected figures.</div>
+    <blockquote><p>The grid was never built for this much solar at noon.</p></blockquote>
+    <p>{words}</p>
+    </article></body></html>"""
+    out = lxml.html.tostring(extract("https://news.example/grid", page, "").body, encoding="unicode")
+
+    # Boxes that point elsewhere or ask for an address are not the article.
+    assert "Recommended" not in out and "Another story" not in out
+    assert "Sign up" not in out and "Long Read" not in out
+    # A pull quote is part of the article as its editors set it: it stays, its speaker with it.
+    assert "Jane Doe, Grid Operator" in out
+    # A note with a link in it is still a callout; a quote the author wrote stays, repeated or not.
+    assert "<blockquote>Update: this post has" in out and "corrected figures" in out
+    assert out.count("never built for this much solar") == 3  # the paragraph and both quotes
+
+
+def test_boxes_of_real_text_are_never_dropped_as_teasers_or_repeats():
+    words = "<p>" + "Plain words about grid storage and the cost of transmission lines. " * 12 + "</p>"
+    note = "Editor's note: this story was updated on Friday to include a response from the ministry."
+    caption = "Residents wade through the flooded high street in Tewkesbury on Sunday morning"
+    cases = {
+        # Every copy is in a box, so none is the article's own: one of them stays.
+        "response from the ministry": f"<aside><p>{note}</p></aside>{words}<div class='notice'><p>{note}</p></div>",
+        "Polls close": "<aside class='callout'><p>Polls close at 8pm on Thursday in every district.</p>"
+        "<p>Polls close at 8pm on Thursday in every district.</p></aside>",
+        # A note whose sentence is one link, and a footnote that is all citation.
+        "follow-up post": "<div class='notice'><b>Update:</b> <a href='/f'>I wrote a follow-up post with new numbers</a>.</div>",
+        "Department of Energy": "<p>Claim<a href='#fn1' id='r1'>1</a>.</p><aside id='fn1'><a href='#r1'>1</a> "
+        "<a href='https://example.com/r.pdf'>Department of Energy annual report</a></aside>",
+        # Repeated only in a hidden lightbox: the picture's caption is not a pull quote.
+        "Tewkesbury": f"<aside><figure><img src='https://e.com/a.jpg'><figcaption>{caption}</figcaption></figure></aside>"
+        f"<div class='lightbox' hidden><p>{caption}</p></div>",
+    }
+    for needle, box in cases.items():
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
+    # A short article in a callout-classed wrapper with a comment form under it is the article.
+    page = f"<html><body><div class='notice'><article>{words * 3}</article><form><textarea></textarea></form></div></body></html>"
+    assert extract("https://news.example/b", page, "", "page").status == "clean"
+
+
+def test_notes_roundups_credits_and_footnotes_in_boxes_are_kept():
+    words = "<p>" + "Plain words about memory allocators and the servers they run on. " * 12 + "</p>"
+    url = "https://blog.example/post"
+    dek = "We benchmarked seven allocators on real servers and jemalloc won"
+    cases = {
+        # Notes with links of their own words around them, or starting as a note does.
+        "a correction to section two": "<aside class='notice'><p>Update, March 2025: <a href='/f'>I wrote a "
+        "follow-up</a> and <a href='/x'>a correction to section two</a>.</p></aside>",
+        "and part three": "<aside class='notice'><p>Update: <a href='/a'>Part two is out</a>, "
+        "<a href='/b'>and part three</a>.</p></aside>",
+        "Coroutines and tasks": "<div class='admonition seealso'><p>See also</p><p><a href='/a'>The event loop"
+        "</a> and <a href='/b'>Coroutines and tasks</a></p></div>",
+        # A picture whose credit is all links.
+        "fig1.jpg": "<aside><a href='/full.jpg'><img src='https://e.com/fig1.jpg'></a><p><a href='https://f.com/x'>"
+        "Photo by Jane Doe</a> <a href='/license'>CC BY</a></p></aside>",
+        # Notes pointed at by a full address, a percent-encoded id, or a name.
+        "Memory Safety in Practice": f"<p>Claim<a href='{url}#fn1'>1</a> and<a href='#fn%3A2'>2</a> and"
+        "<a href='#n3'>3</a>.</p><aside class='footnotes'><ol><li id='fn1'><a href='https://doi.org/1'>Memory "
+        "Safety in Practice, 2020</a> <a href='#r1'>back</a></li><li id='fn:2'><a href='https://doi.org/2'>Two"
+        "</a></li><li><a name='n3'></a><a href='https://doi.org/3'>Three</a></li></ol></aside>",
+        # A box that repeats a sentence and then says more is not a pull quote.
+        "Pick it unless": f"<div class='callout'><p><b>TL;DR</b></p><p>{dek}.</p><p>Pick it unless you have "
+        "a measured reason not to.</p></div>",
+    }
+    for needle, box in cases.items():
+        page = f"<html><body><header><p>{dek}.</p></header><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract(url, page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
+    # A post that is all links, in an aside: it is the article, not a teaser beside it.
+    links = "".join(
+        f"<p><a href='/l{n}'>Interesting article about systems number {n}</a> — short take.</p>" for n in range(25)
+    )
+    page = f"<html><body><nav>x</nav><aside><h1>Weekly links</h1>{links}</aside></body></html>"
+    assert extract(url, page, "", "page").status == "clean"
+    assert extract(url, None, f"<aside><h2>Links this week</h2>{links}</aside>", "feed").status == "clean"
+
+
+def test_link_boxes_with_odd_characters_or_author_labels_are_handled():
+    words = "<p>" + "Plain words about levees and the town that paid for one. " * 12 + "</p>"
+    note = "<p>Ref<sup><a href='#fn1' id='r1'>1</a></sup>.</p><ol><li id='fn1'>The note itself here. <a href='#r1'>back</a></li></ol>"
+    # A control character beside a teaser's links must not stop the structure pass: the
+    # footnote is still gathered at the end.
+    page = f"<html><body><article>{words}<aside>Read more \x0c<a href='/a'>One</a> <a href='/b'>Two</a></aside>{note}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert "<h3>Notes</h3>" in out
+    for box in (
+        "<aside>Updates: <a href='/p2'>Part two of this story is out</a> <a href='/p3'>The council replied</a></aside>",
+        "<aside>Authors: <a href='/a'>Alice Smith</a>, <a href='/b'>Bob Jones</a></aside>",
+    ):
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/b", page, "", "page").body, encoding="unicode")
+        assert ("Bob Jones" in out) or ("council replied" in out), box
+
+
+def test_callout_boxes_and_anchors_are_never_teasers():
+    words = "<p>" + "Plain words about levees and the town that paid for one. " * 12 + "</p>"
+    for needle, box in {
+        "eleven years": "<aside class='callout'><b>Key point</b> <a name='k1'>The bridge took eleven years to build</a> "
+        "<a name='k2'>and it is the longest in the county</a></aside>",
+        "migration guide": "<div class='warning'>Deprecated, see <a href='/new'>the new API and its migration guide</a> "
+        "<a href='/faq'>FAQ</a></div>",
+        "misnamed the engineer": "<aside>Clarification: <a href='/c'>An earlier version misnamed the engineer</a> "
+        "<a href='/o'>see the original</a></aside>",
+        "John Smith": "<aside><img src='https://e.com/a.jpg'> Photo <a href='/js'>John Smith</a> <a href='/cc'>CC BY</a></aside>",
+        "type a number": "<div class='notice'><p>Try it yourself: type a number and see the tax owed.</p>"
+        "<form><input><button>Go</button></form></div>",
+    }.items():
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
+
+
+def test_author_asides_with_buttons_or_reference_lists_stay():
+    words = "<p>" + "Plain words about the bridge vote and what the council decided. " * 12 + "</p>"
+    for needle, box in {
+        "seven votes to two": "<aside><h3>Key takeaways</h3><ul><li>The budget passed by seven votes to two.</li></ul>"
+        "<form method='post' action='/save'><button type='submit'>Save article</button></form></aside>",
+        "Rivers and towns": "<aside><h4>References</h4><ol><li><a href='/r1'>Smith 2019, Bridges of the North</a></li>"
+        "<li><a href='/r2'>Jones 2021, Rivers and towns</a></li></ol></aside>",
+    }.items():
+        page = f"<html><body><article>{words}{box}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert needle in out, needle

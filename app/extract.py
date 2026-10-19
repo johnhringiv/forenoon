@@ -53,6 +53,22 @@ SIDENOTE_CHROME = {"margin-toggle", "sidenote-number"}
 INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", "mono"}
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
+# A box beside the text that is mostly links is a teaser for other pages ("Recommended",
+# "You may like", a topic tag), not part of the article. Real notes and callouts carry a few
+# links in their sentences: in the saved pages none was over 40% link text.
+TEASER_LINK_SHARE = 0.6
+TEASER_LABEL_MAX_WORDS = 4  # "Recommended", "You may like", "More on this story"
+# How an author starts a note that may be only links ("Update: part two is out"): never a teaser.
+NOTE_LABEL_START = re.compile(
+    r"\W*(updates?|updated|corrections?|corrected|notes?|editor.s note|edit|addendum|erratum"
+    r"|by|authors?|written by|reporting by|photos?|images?|credits?|sources?|via|clarifications?"
+    r"|see also|deprecated|part \d|references?|bibliography|further reading|resources|reading list)\b",
+    re.IGNORECASE,
+)
+BOX_MAX_SHARE = 0.5  # of the page's words: a box holding more is the article
+# A sign-up box is a form and a line or two selling it; a box with more text than this beside
+# its form (an article with a comment form under it) is not one.
+FORM_BOX_MAX_WORDS = 60
 # Syntax highlighting, in the class names of highlight.js, Prism and Pygments. On a
 # greyscale screen the two worth keeping are comments (italic) and keywords (bold).
 CODE_COMMENT_CLASSES = {"comment", "hljs-comment", "c", "c1", "cm", "cs"}
@@ -172,13 +188,29 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     _unmark(root)
     # The page's own quotes only: before asides and callouts are made quotes below.
     _unclass_quotes(root)
+    # Boxes are judged against the page as it was, before any is dropped.
+    page_words = _words(_visible_text(root))
+    linked_to = _in_page_targets(root, base_url)
     for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
             el.drop_tree()
             continue
         in_code = any(ancestor.tag == "pre" for ancestor in el.iterancestors())
-        if classes & SIDENOTE_CHROME:
+        boxed = _boxed(el, classes)
+        droppable = (
+            boxed
+            and el is not root
+            and not classes & SIDENOTE_CLASSES
+            and _words(el.text_content()) <= CALLOUT_MAX_WORDS
+            # Not the article itself, in a box: a links roundup, a short post in an aside.
+            and _words(el.text_content()) < BOX_MAX_SHARE * page_words
+            and not any(
+                target in linked_to for target in el.xpath("descendant-or-self::*/@id | descendant-or-self::a/@name")
+            )
+        )
+        # Promos are asides; a box classed as a callout (a warning, a tip, "see also") is the author's.
+        if classes & SIDENOTE_CHROME or (droppable and el.tag == "aside" and _promo(el)):
             el.drop_tree()
         elif el.tag in ("span", "tt", "font") and in_code:
             if classes & CODE_COMMENT_CLASSES:
@@ -188,8 +220,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         elif el.tag == "tt" or (el.tag in ("span", "font") and classes & INLINE_CODE_CLASSES):
             el.tag = "code"
         elif (
-            el.tag in ("div", "aside", "section", "p")
-            and (classes & CALLOUT_CLASSES or el.tag == "aside")
+            boxed
             and not classes & SIDENOTE_CLASSES
             and el is not root
             and 0 < _words(el.text_content()) <= CALLOUT_MAX_WORDS
@@ -349,6 +380,84 @@ def _holds_only(wrapper: lxml.html.HtmlElement, child: lxml.html.HtmlElement) ->
         if not loader and ((other.text or "").strip() or len(other)):
             return False
     return True
+
+
+def _boxed(el: lxml.html.HtmlElement, classes: set[str]) -> bool:
+    """A box beside the text: an aside, or a block classed as a callout."""
+    return el.tag in ("div", "aside", "section", "p") and (bool(classes & CALLOUT_CLASSES) or el.tag == "aside")
+
+
+def _promo(box: lxml.html.HtmlElement) -> bool:
+    """Whether a box beside the text sells something else: a sign-up form, or links to other pages."""
+    if NOTE_LABEL_START.match(" ".join(box.text_content().split())):
+        return False
+    # A sign-up asks for an address: a form with a text or email field, not a "Save" button.
+    forms = [f for f in box.findall(".//form") if f.xpath(".//input[not(@type) or @type='email' or @type='text']")]
+    if forms and _words(box.text_content()) - sum(_words(f.text_content()) for f in forms) <= FORM_BOX_MAX_WORDS:
+        return True
+    # A teaser is a short label and then only links: a section and a headline, or several
+    # stories. A note has words of its own among its links ("Update: I wrote X and Y."), and
+    # a picture's linked credit has no label.
+    links = box.xpath(".//a[@href][not(ancestor::a[@href])]")
+    words = _words(box.text_content())
+    linked = sum(_words(a.text_content()) for a in links)
+    if len(links) < 2 or not words or linked < TEASER_LINK_SHARE * words:
+        return False
+    label, rest = _around_first_link(box)
+    if NOTE_LABEL_START.match(label) or WORD.search(rest):
+        return False
+    return 1 <= len(WORD.findall(label)) <= TEASER_LABEL_MAX_WORDS
+
+
+WORD = re.compile(r"\w+")
+
+
+def _around_first_link(box: lxml.html.HtmlElement) -> tuple[str, str]:
+    """The box's text before its first link, and its text after that outside any link. Read
+    only: the tree is not touched, so no character in the page can make this fail."""
+    before: list[str] = []
+    after: list[str] = []
+    seen_link = False
+
+    def walk(el: lxml.html.HtmlElement, in_link: bool) -> None:
+        nonlocal seen_link
+        link = el.tag == "a" and el.get("href") is not None
+        linked = in_link or link
+        if link and not in_link:
+            seen_link = True
+        if el.text and not linked:
+            (after if seen_link else before).append(el.text)
+        for child in el:
+            if isinstance(child.tag, str):
+                walk(child, linked)
+            if child.tail and not linked:
+                (after if seen_link else before).append(child.tail)
+
+    walk(box, False)
+    return " ".join(before), " ".join(after)
+
+
+def _in_page_targets(root: lxml.html.HtmlElement, base_url: str) -> set[str]:
+    """The ids and names that links on the page point at, written as the notes code reads them."""
+    page = base_url.split("#")[0]
+    targets = set()
+    for href in root.xpath("//a/@href"):
+        href = href.strip()
+        if href.startswith(page + "#"):
+            href = href[len(page) :]
+        if href.startswith("#") and len(href) > 1:
+            targets.add(unquote(href[1:]))
+    return targets
+
+
+def _visible_text(root: lxml.html.HtmlElement) -> str:
+    """The page's text as a reader sees it, normalised: not the head, hidden elements or the
+    scripts, which often hold the article a second time as data."""
+    shown = copy.deepcopy(root)
+    hidden = ".//head | .//script | .//style | .//template | .//noscript | .//*[@hidden] | .//*[@aria-hidden='true']"
+    for el in shown.xpath(hidden):
+        el.drop_tree()
+    return _norm(shown.text_content())
 
 
 def _unmark(root: lxml.html.HtmlElement) -> None:
