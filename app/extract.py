@@ -1041,6 +1041,74 @@ def _pictures_already(el: lxml.html.HtmlElement, body: lxml.html.HtmlElement) ->
     return bool(names) and names <= have
 
 
+CONTINUATION_DEPTH = 3  # how far up the article's box and a continuation of it meet
+CONTINUATION_MIN_PARAGRAPHS = 3
+CONTINUATION_MIN_WORDS = 80
+CONTINUATION_LINK_SHARE = 0.25
+CONTINUATION_PARAGRAPH_WORDS = 12
+CONTINUATION_TAGS = ("p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "blockquote", "pre", "figure", "table")
+
+
+def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
+    """Put back the rest of an article that the page splits into boxes around an advert.
+
+    Ars Technica ends one box of the article's paragraphs at an advert and starts a second box,
+    of the same kind and class, after it; readability keeps the first box and the article
+    stops halfway. A later box is taken as more of the article only when it has the class of
+    the box holding the article's last paragraph, sits near it on the page, and is itself
+    paragraphs of text: it opens with a paragraph or heading, holds at least three paragraphs
+    of some length, and is mostly not links. A run of comments, a reporter's note or a list
+    of related stories in a box of the same class is none of these together. Only the box's
+    own paragraphs, headings, lists, quotes, code, figures and tables are put back, after
+    the article, in the page's order."""
+    paragraphs = [p for p in body.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+    if not paragraphs:
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    last = _norm(paragraphs[-1].text_content())
+    found = [p for p in page.iter("p") if _norm(p.text_content()) == last]
+    if len(found) != 1 or not found[0].getparent().get("class"):
+        return
+    box = found[0].getparent()
+    near = list(box.iterancestors())[:CONTINUATION_DEPTH]
+    if FURNITURE_CLASS.search(_names(box)) or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(_names(box)):
+        return
+    kept = _norm(body.text_content())
+    holder = paragraphs[-1].getparent()
+    while holder.tag not in ("div", "article", "section", "main", "body") and holder.getparent() is not None:
+        holder = holder.getparent()
+    after = False
+    for el in page.iter(box.tag):
+        if el is box:
+            after = True
+            continue
+        if not after or el.get("class") != box.get("class") or box in el.iterancestors():
+            continue
+        if not any(a in near for a in el.iterancestors()):
+            continue
+        children = [c for c in el if isinstance(c.tag, str)]
+        long = [c for c in children if c.tag == "p" and _words(c.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+        text = " ".join(el.text_content().split())
+        links = sum(len(" ".join(a.text_content().split())) for a in el.iter("a"))
+        if (
+            not children
+            or children[0].tag not in ("p", *HEADINGS)
+            or len(long) < CONTINUATION_MIN_PARAGRAPHS
+            or _words(text) < CONTINUATION_MIN_WORDS
+            or links >= CONTINUATION_LINK_SHARE * len(text)
+            or _norm(long[0].text_content()) in kept
+        ):
+            continue
+        for child in children:
+            if child.tag in CONTINUATION_TAGS:
+                piece = copy.deepcopy(child)
+                piece.tail = None
+                holder.append(piece)
+
+
 def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back what readability removed from under a heading it kept.
 
@@ -1331,6 +1399,7 @@ def extract(
         page = _readability(page_html)
         if page is not None:
             _refill_sections(page, page_html)
+            _continue_article(page, page_html)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)

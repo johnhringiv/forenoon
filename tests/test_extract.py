@@ -1,7 +1,7 @@
 import lxml.html
 from lxml import etree
 
-from app.extract import extract, sanitize
+from app.extract import _continue_article, extract, sanitize
 
 
 def clean(html: str, base: str = "https://example.com/post/") -> str:
@@ -923,3 +923,38 @@ def test_the_label_a_skip_link_jumps_to_is_dropped_but_not_a_paragraph_that_shar
         page = f"<html><body><article>{words}{kept}{words}</article></body></html>"
         out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
         assert ("We asked 400 firms" in out) if "methods" in kept else ("In short" in out)
+
+
+def test_an_article_split_around_an_advert_is_put_back_together():
+    first = "".join(
+        f"<p>Paragraph {n} of the drone story, about ships struck off the coast at night.</p>" for n in range(12)
+    )
+    rest = "".join(
+        f"<p>Later paragraph {n} on hybrid warfare across Europe and the ports it hit.</p>" for n in range(5)
+    )
+
+    def page(second):
+        return (
+            "<html><body><main><div class='grid'><div class='col'><div class='post-content'>"
+            f"{first}</div></div></div><div class='ad ad--mid'></div>"
+            f"<div class='grid'><div class='col'><div class='post-content'>{second}</div></div></div>"
+            "</main></body></html>"
+        )
+
+    out = extract("https://news.example/a", page(f"<h2>Hybrid warfare</h2>{rest}"), "", "page").body.text_content()
+    assert "Paragraph 11" in out and "Later paragraph 4" in out and "Hybrid warfare" in out
+    # A box of the same class that is not more of the article stays out: links to other
+    # stories, or a reporter's note and a line of comments.
+    related = "".join(
+        f"<p><a href='/s{n}'>Another story about drones and ships, number {n} in the list</a></p>" for n in range(5)
+    )
+    note = (
+        "<p>Olha Konovalova contributed reporting.</p><p>From the comments</p>"
+        "<p>Later paragraph from a reader: I lived in Kyiv for years and the nights are like that.</p>"
+        "<p>Later paragraph, a reporter's reply: thank you for reading and for writing in.</p>"
+    )
+    for second in (related, note):
+        body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+        _continue_article(body, page(second))
+        out = body.text_content()
+        assert "Paragraph 11" in out and "Another story" not in out and "Later paragraph" not in out
