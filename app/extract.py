@@ -1867,13 +1867,19 @@ DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of
 # "Enjoyed this post? Follow me on".
 # It names the piece, unlike "If you like, you can…" or "If you found a bug…".
 CLOSING_PITCH = re.compile(
-    r"^(if you (liked|enjoyed|like|enjoy|appreciated|found value in) (this|my|reading)\b|"
+    r"^(if you (liked|enjoyed|like|enjoy|appreciated|found value in) (this|my)\b|"
     r"if you found (this|my) \w+ (useful|helpful|interesting|valuable)\b|"
     r"enjoyed (this|my) (article|post|piece|essay|story|newsletter)\b|"
     r"support (me|us|my work|this (blog|site|newsletter))\b)",
     re.IGNORECASE,
 )
 ITEM_PITCH = re.compile(r"\blike button\b|\bclap\b", re.IGNORECASE)  # with LEAD_PITCH and REFILL_FURNITURE
+# Where a sign-up link goes: a path or a newsletter service.
+SIGNUP_LINK = re.compile(
+    r"/(newsletter|subscribe|signup|sign-up|join|feed|rss)(/|$|[?#.])|\.xml$|"
+    r"(kit|convertkit|substack|buttondown|beehiiv|list-manage|mailchi|ghost)\.(com|io|so|mp)\b",
+    re.IGNORECASE,
+)
 BROKEN_OFF = re.compile(r"(,|\b(please|and|or|via))\s*$", re.IGNORECASE)
 
 
@@ -1903,6 +1909,8 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     text = " ".join(last.text_content().split())
     if _words(text) > DANGLING_MAX_WORDS or not CLOSING_PITCH.search(text) or not BROKEN_OFF.search(text):
         return
+    if last.xpath(".//a") or re.search(r"[.!?]\s", text):
+        return  # a link of its own ("part two is here"), or a finished sentence before a sign-off
     try:
         page = lxml.html.fromstring(page_html)
     except (etree.ParserError, ValueError):
@@ -1920,17 +1928,28 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) 
     # The site by its whole host: one blog on a platform's domain ("me.substack.com") is not another.
     site = _host(url)
 
+    def profile(href: str) -> bool:  # an account on a social site, not one of its posts
+        try:
+            path = urlsplit(urljoin(url, href)).path.strip("/")
+        except ValueError:
+            return False
+        return bool(SOCIAL_HOST.fullmatch(_host(url, href))) and "/" not in path
+
     def pitch(item: lxml.html.HtmlElement) -> bool:
         words = " ".join(" ".join(item.itertext()).split())
         hrefs = [(a.get("href") or "").strip() for a in item.iter("a")]
+        says = LEAD_PITCH.search(words) or REFILL_FURNITURE.search(words) or ITEM_PITCH.search(words)
+        # Its words only when it links nowhere or to a sign-up: a post's title may say "newsletter".
         return bool(
-            LEAD_PITCH.search(words)
-            or REFILL_FURNITURE.search(words)
-            or ITEM_PITCH.search(words)
-            or any(SHARE_LINK.search(href) or SOCIAL_HOST.fullmatch(_host(url, href)) for href in hrefs)
+            (says and (not hrefs or any(SIGNUP_LINK.search(href) for href in hrefs)))
+            or any(SHARE_LINK.search(href) or profile(href) for href in hrefs)
         )
 
-    items = [li for li in after if isinstance(li.tag, str) and li.tag == "li"]
+    items = [
+        li
+        for li in after
+        if isinstance(li.tag, str) and li.tag == "li" and (li.text_content().strip() or li.xpath(".//a"))
+    ]
     if not items or sum(map(pitch, items)) * 2 <= len(items):
         return  # most of what the sentence led to is not a pitch
     hosts = [_host(url, a.get("href") or "") for a in after.iter("a")]

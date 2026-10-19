@@ -1710,7 +1710,7 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
         "Next we will look at", "<li><a href='/a'>allocators</a></li><li><a href='/b'>arenas</a></li>"
     )
     # A pitch whose list the article kept.
-    items = "<li><a href='/n'>subscribe to my newsletter</a></li>"
+    items = "<li><a href='/newsletter'>subscribe to my newsletter</a></li>"
     assert "If you liked this, please" in left("If you liked this, please", items, f"<ul>{items}</ul>")
     # A finished sentence.
     assert "Subscribe to my newsletter." in left("Subscribe to my newsletter.", items)
@@ -1774,6 +1774,27 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
     # A pitch over a list mostly of the article's own links.
     mostly = "<li><a href='/a'>Arenas</a></li><li><a href='/b'>Pools</a></li><li><a href='/newsletter'>my newsletter</a></li>"
     assert "If you liked this post, please" in left("If you liked this post, please", mostly)
+    # A link in the line; threads on a social site, not its accounts; the site's own posts whose
+    # titles say "newsletter"; a finished sentence before a sign-off.
+    pitches = "<li><a href='/newsletter'>Subscribe to the newsletter</a></li><li>Follow me on <a href='https://twitter.com/me'>Twitter</a></li>"
+    body = lxml.html.fromstring(
+        f"<div>{article}<p>If you enjoyed this post, <a href='/p2'>part two is here</a>, and</p></div>"
+    )
+    page = f"<html><body>{article}<p>If you enjoyed this post, <a href='/p2'>part two is here</a>, and</p><ul>{pitches}</ul></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "part two is here" in body.text_content()
+    threads = "<li><a href='https://www.reddit.com/r/sysadmin/comments/abc/x/'>the outage thread</a></li><li><a href='https://x.com/a/status/1'>the post</a></li>"
+    assert "If you found this story useful, the threads are," in left(
+        "If you found this story useful, the threads are,", threads
+    )
+    posts = "<li><a href='/p/quit-my-newsletter'>Why I quit my newsletter</a></li><li><a href='/p/subscribe-or-die'>Subscribe or die</a></li><li><a href='/p/rss'>In defence of the RSS feed</a></li>"
+    assert "If you enjoyed this post, my earlier pieces are," in left(
+        "If you enjoyed this post, my earlier pieces are,", posts
+    )
+    assert "If you liked this post, thanks for reading. Until next time," in left(
+        "If you liked this post, thanks for reading. Until next time,", pitches
+    )
+
     # A video under the heading: the heading stays, saying it was there.
     body = lxml.html.fromstring(
         f"<div>{article}<h2>Watch the talk</h2><p>If you liked this article, please</p><video src='/t.mp4'></video></div>"
