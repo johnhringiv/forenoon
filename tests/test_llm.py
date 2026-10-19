@@ -763,3 +763,32 @@ def test_the_schedulers_look_for_a_test_needs_no_table_and_makes_no_database(tmp
     Store(cfg.db_path).close()
     assert not cli._test_models(cfg), "no model_tests table yet"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["100% sure? #1"], "nothing made at a cut-short path"
+
+
+def test_the_reading_pass_sees_a_long_articles_ending_and_is_not_fooled_by_the_gap():
+    import json as _json
+
+    from app.read import Reading, _listing, _validated
+
+    long_one = Reading("a", "Long", "Blog", 5000, "word " * 2500, [], "and that is how it ends.")
+    cut_one = Reading("b", "Cut", "Blog", 5000, "word " * 2500, [], "and then the text stops in the mid")
+    whole = Reading("c", "Short", "Blog", 300, "word " * 300, [])
+    listed = _json.loads(_listing([long_one, whole], 30_000).split("\n")[1])
+    assert listed[0]["ending"] == "and that is how it ends." and "ending" not in listed[1]
+    answer = {
+        "articles": [
+            {
+                "id": i,
+                "score": 5,
+                "reason": "r",
+                "complete": "suspect",
+                "problem": "Text is truncated mid-article.",
+                "links": [],
+            }
+            for i in ("a", "b", "c")
+        ]
+    }
+    verdicts = _validated(answer, [long_one, cut_one, whole])
+    # The gap between beginning and ending is not a cut; an ending that stops mid-word is.
+    assert verdicts["a"].complete == "ok" and verdicts["a"].problem == ""
+    assert verdicts["b"].complete == "suspect" and verdicts["c"].complete == "suspect"
