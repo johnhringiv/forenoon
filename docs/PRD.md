@@ -558,7 +558,7 @@ source).
   seconds. The page is any site's, scripts and all, in the container that holds the
   cookies, so:
   - Chrome runs in its own sandbox, which the container's seccomp profile
-    (`browser/seccomp.json`: Docker's default plus `clone`, `unshare` and `chroot`) allows.
+    (`browser/seccomp.json`: Docker's default for 64-bit x86 and ARM only, plus `clone`, `unshare` and `chroot`) allows.
     Without the profile, or on a kernel without user namespaces, no pictures are taken.
   - It runs in a child process killed at the deadline, whatever the page does.
   - It reaches the network only through a proxy in the container that connects to public

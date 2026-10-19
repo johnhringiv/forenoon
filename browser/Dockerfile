@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* /root/.cache
 ENV HOME=/tmp PYTHONUNBUFFERED=1 SESSIONS_DIR=/sessions
 COPY fetcher.py /usr/local/bin/fetcher.py
-# Docker's default seccomp profile, plus what Chrome's own sandbox needs to make namespaces.
+# Docker's default seccomp profile for 64-bit x86 and ARM only (no 32-bit system calls), plus what Chrome's own sandbox needs to make namespaces.
 # The container must run with it (deploy.sh copies it out of the image; docker-compose.yml
 # names this file): pictures of any site's figures are taken only with the sandbox on.
 COPY seccomp.json /etc/forenoon/seccomp.json
