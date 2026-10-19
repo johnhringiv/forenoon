@@ -1326,3 +1326,24 @@ def test_a_back_to_top_link_in_a_heading_is_not_freed():
     words = _paragraphs("Article", 6)
     page = f"<html><body id='top'><div id='page'><article>{words}<h3><a href='#top'>Back to top</a></h3></article></div></body></html>"
     assert "Back to top" not in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_sites_lists_of_its_stories_stay_out_and_author_lead_ins_count():
+    words = _paragraphs("Article", 8)
+
+    def kept(block):
+        page = f"<html><body><article><h1>Title</h1>{words}{block}{words}</article></body></html>"
+        return extract("https://example.com/post", page, "", "page").body.text_content()
+
+    most_read = "<h2>Most read</h2><ul>" + "".join(
+        f"<li><a href='/x{n}'>Man bites dog in local park number {n}</a> <time>{n + 2} hours ago</time> {n + 3} comments</li>"
+        for n in range(4)
+    )
+    keep_reading = "<div class='more-stories'><h2>Keep reading</h2><ul>" + "".join(
+        f"<li><a href='/y{n}'>Why we left the cloud, part {n}</a><span>By Jane Doe · 6 min read · March {n + 2}</span></li>"
+        for n in range(4)
+    )
+    assert "Man bites dog" not in kept(most_read + "</ul>")
+    assert "left the cloud" not in kept(keep_reading + "</ul></div>")
+    steps = "".join(f"<li><a href='/docs/{n}'>Run the setup command for step {n}</a></li>" for n in range(4))
+    assert "setup command for step 3" in kept(f"<p>To install it, do the following:</p><ul>{steps}</ul>")

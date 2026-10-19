@@ -1087,13 +1087,22 @@ def _fix_nesting(root: lxml.html.HtmlElement) -> None:
 LIST_OWN_CHARS = 20  # of each item's text outside its links, on average, for a list that says something
 
 
+# What a site's list of its own stories carries beside each link: a time, a byline, a count.
+LIST_METADATA = re.compile(
+    r"\d+\s*(s|m|h|d|mins?|minutes?|hrs?|hours?|days?|weeks?|months?)\s+ago|\d+\s*(min|minute)s?\s+read|"
+    r"\d+\s*(comments?|replies|responses|shares|views)|\bby\s+[A-Z][\w.'-]*(\s+[A-Z][\w.'-]*)*|[·•|]",
+)
+
+
 def _own_chars(ul: lxml.html.HtmlElement) -> float:
-    """How much of a list's items is text of their own rather than the links in them."""
-    items = ul.findall("li")
-    own = [
-        len(" ".join(li.text_content().split())) - sum(len(" ".join(a.text_content().split())) for a in li.iter("a"))
-        for li in items
-    ]
+    """How much of a list's items is text of their own rather than the links in them, or the
+    times, bylines and counts a site's list of its stories gives each one."""
+    own = []
+    for li in ul.findall("li"):
+        li = copy.deepcopy(li)
+        for el in list(li.iter("a", "time")):
+            el.drop_tree()
+        own.append(len(" ".join(LIST_METADATA.sub(" ", li.text_content()).split())))
     return sum(own) / len(own) if own else 0.0
 
 
@@ -1105,13 +1114,30 @@ def _lead(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
     return before if before is not None and before.tag == "p" else None
 
 
-# What a site puts before its own lists: "Related posts:", "Filed under:", "Share this:".
+# What a site puts before its own lists: "Related posts:", "Filed under:", "Share this:",
+# "Most read", "Keep reading".
 LEAD_FURNITURE = re.compile(
-    r"(related|more|popular|recent|similar|categor|filed|tag|share|like this|follow|subscribe|"
-    r"newsletter|contents|on this page|in this (post|article)|table of contents|sponsor|advert)",
+    r"\b(related|popular|similar|categor(y|ies)|filed|tags?|tagged|share|follow (us|me)|subscribe|"
+    r"newsletter|contents|on this page|in this (post|article)|sponsor\w*|advert\w*|most (read|viewed|popular)|"
+    r"keep reading|latest|trending|top stories|editor'?s picks|recommended|read (more|next)|up next|"
+    r"more (from|on|in|stories|posts|articles|like this))\b|^like this\W*$",
     re.IGNORECASE,
 )
 LEAD_FURNITURE_WORDS = 6
+
+
+def _heading_over(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The heading just over a list ("<h2>Most read</h2><ul>"), past at most its lead-in
+    paragraph, or over the box the list opens."""
+    el = ul
+    while el is not None:
+        before = el.getprevious()
+        while before is not None and (not isinstance(before.tag, str) or before.tag == "p" and before is _lead(el)):
+            before = before.getprevious()
+        if before is not None:
+            return before if before.tag in HEADINGS else None
+        el = el.getparent()
+    return None
 
 
 def _furniture_lead(lead: lxml.html.HtmlElement) -> bool:
@@ -1181,6 +1207,9 @@ class _Document(Document):
             return False
         lead = _lead(ul)
         if lead is not None and _furniture_lead(lead):
+            return False
+        heading = _heading_over(ul)
+        if heading is not None and _furniture_lead(heading):
             return False
         return _led_in(ul) or _own_chars(ul) >= LIST_OWN_CHARS
 
