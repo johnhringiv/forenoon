@@ -128,6 +128,11 @@ LOAD_FAILURE = re.compile(
 # A request to pick the site as a source on Google ("select us as your Preferred Source").
 PREFERRED_SOURCE = re.compile(r"\b(select|add|choose|set|make|pick) us\b.{0,40}\bpreferred source", re.IGNORECASE)
 NOTICE_MAX_WORDS = 25
+# A code block's box named as page furniture that the patterns above do not name (readability's
+# own "negative" words are too broad here: code editors put theirs in a "cm-scroller").
+CODE_BOX_FURNITURE = re.compile(r"masthead|promo|outbrain|shopping|banner", re.IGNORECASE)
+# What makes an element beside a heading or a code block more than an empty link or button.
+MEDIA_XPATH = ".//img | .//picture | .//video | .//audio | .//iframe | .//object | .//embed"
 # A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
 # quoted in a story about an outage is not.
 NOTICE_CLASS = re.compile(r"(^|[\s_-])(message|notice|fallback|placeholder|error|unavailable)([\s_-]|$)", re.IGNORECASE)
@@ -319,6 +324,20 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
     """
     unlikely = READABILITY_PATTERNS["unlikelyCandidatesRe"]
     for heading in list(root.iter(*HEADINGS)):
+        # A heading's text wrapped in an element classed like furniture ("group/mdHeader") is
+        # deleted on its own, and the heading is left empty: the wrappers inside lose their
+        # classes (the book keeps none).
+        length = len(" ".join(heading.text_content().split()))
+        for inner in heading.iterdescendants():
+            if (
+                not isinstance(inner.tag, str)
+                or not unlikely.search(_names(inner))
+                or FURNITURE_CLASS.search(_names(inner))
+            ):
+                continue
+            # The heading's text, not a permalink beside it ("#", "¶"), which may well go.
+            if len(" ".join(inner.text_content().split())) * 2 > length:
+                inner.attrib.pop("class", None)
         anchor = heading.get("id") or ""
         # By accident only when the word is buried in a longer one ("freshrss"); a whole part of
         # the id ("tweet-this", "sponsor", "comments") names the furniture on purpose.
@@ -337,6 +356,7 @@ def _free_headings(root: lxml.html.HtmlElement) -> None:
                 isinstance(child.tag, str)
                 and child.tag in ("a", "span", "svg")
                 and not " ".join(child.text_content().split())
+                and not child.xpath(MEDIA_XPATH)
                 and not (child.tail or "").strip()
                 for child in others
             )
@@ -356,6 +376,35 @@ def _names_word(pattern: re.Pattern, part: str) -> bool:
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
+    """Unwrap the box a code block sits in when it holds nothing else but empty buttons and
+    links (a highlighter's "copy"): readability deletes any box with under 25 letters, so a
+    one-line block ("trait Magic: Copy { }") went with its box. A <pre> on its own stays."""
+    for pre in list(root.iter("pre")):
+        box = pre.getparent()
+        if box is None or box is root or box.tag != "div" or (box.text or "").strip() or (pre.tail or "").strip():
+            continue
+        others = [child for child in box if child is not pre]
+        names = _names(box)
+        if (
+            FURNITURE_CLASS.search(names)
+            or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names)
+            or CODE_BOX_FURNITURE.search(names)
+        ):
+            continue
+        if all(
+            isinstance(child.tag, str)
+            and child.tag in ("button", "a", "span", "svg")
+            and not " ".join(child.text_content().split())
+            and not child.xpath(MEDIA_XPATH)
+            and not (child.tail or "").strip()
+            for child in others
+        ):
+            for child in others:
+                child.drop_tree()
+            box.drop_tag()
 
 
 def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
@@ -575,6 +624,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
     _free_headings(root)
+    _free_code_blocks(root)
     _drop_page_notices(root)
     _unclass_data_tables(root)
     if not notes:

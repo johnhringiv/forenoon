@@ -872,3 +872,31 @@ def test_furniture_ids_and_notice_boxes_with_more_in_them_stay_as_they_were():
         page = f"<html><body><article>{words}{words}{heading}</article></body></html>"
         text = extract("https://news.example/b", page, "", "page").body.text_content()
         assert lxml.html.fromstring(heading).text_content() not in text, heading
+
+
+def test_one_line_code_blocks_and_wrapped_heading_text_survive():
+    words = "<p>" + "Plain words about traits, supertraits and who proves what in a type system. " * 10 + "</p>"
+    code = "<div class='highlight'><pre><code>trait Magic: Copy { }</code></pre><button class='copy'></button></div>"
+    heading = "<h2 id='user-content-setup'><span class='group/mdHeader'>Setup</span><a class='headerlink' href='#x'>#</a></h2>"
+    page = f"<html><body><article>{words}{code}{words}{heading}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
+    assert "trait Magic: Copy { }" in out and "<h2>Setup</h2>" in out
+
+
+def test_pictures_beside_code_and_furniture_wrappers_stay_as_they_were():
+    words = "<p>" + "Plain words about traits, supertraits and who proves what in a type system. " * 10 + "</p>"
+    picture = (
+        "<div><pre>fn main() {}</pre><a href='https://e.com/full.png'><img src='https://e.com/full.png'></a></div>"
+    )
+    page = f"<html><body><article>{words}{picture}{words}</article></body></html>"
+    assert "full.png" in lxml.html.tostring(
+        extract("https://blog.example/a", page, "", "page").body, encoding="unicode"
+    )
+    for block in (
+        "<h3><span class='sidebar-title'>Popular posts</span></h3>",
+        "<div class='community'><pre>irc.libera.chat #example</pre></div>",
+        "<div class='masthead'><pre>brew install exampleapp</pre></div>",
+    ):
+        page = f"<html><body><article>{words}{words}{block}</article></body></html>"
+        text = extract("https://blog.example/b", page, "", "page").body.text_content()
+        assert lxml.html.fromstring(block).text_content() not in text, block
