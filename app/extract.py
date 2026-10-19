@@ -1307,11 +1307,11 @@ def _live_blog(page_html: str, kept: lxml.html.HtmlElement | None = None) -> lxm
         return None
     entries, box = found[best], boxes[best]
     # The live blog is the article: what readability kept of the page (one of its entries)
-    # is in it, and it is not a box at the side of the page.
+    # is in its entries, and it is not a box at the side of the page.
     if any(_unlikely(a) for a in box.iterancestors()):
         return None
     if kept is not None:
-        inside = _norm(box.text_content())
+        inside = _norm(" ".join(entry.text_content() for entry in entries))
         long = [p for p in kept.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
         if not long or not all(_norm(p.text_content()) in inside for p in long):
             return None

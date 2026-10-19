@@ -286,6 +286,18 @@ All fetched content is treated as untrusted.
   words or more), the smallest page element holding at least 90% of it is tried instead, and
   used if it recovers more without exceeding 1.3 times the page's text. This recovers
   articles laid out as several sibling blocks.
+- **Continued articles.** When the page goes on with the article in a later box, its
+  paragraphs are put back after the article: a box of the same kind and class nearby, in the
+  same `<article>`, as when an advert splits the text in two, or the box right after the
+  article's whose paragraphs are classed like the article's, as behind a "read more" button.
+  Only a box of paragraphs (three or more of some length, mostly not links, not already in
+  the article) counts, and the search stops at a heading between the boxes, at the next
+  story's title, and at a box named as comments or page furniture.
+- **Live blogs.** A live blog (a box named `liveblog` or `liveblog-body` holding three or
+  more `<article>` entries) is taken entry by entry, newest first as the page has them, when
+  that gives at least 1.5 times the words of the main content and holds what the main content
+  kept. Entries that are mostly links, comments, a pinned entry shown twice, and relative
+  times such as "1h ago" are left out.
 - **Structure.** Before the article is picked out of the page, structure that the page
   expresses only through class names and in-page links is rebuilt, by shape and by widely
   used class names, not per site:
@@ -298,6 +310,8 @@ All fetched content is treated as untrusted.
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
+  - The label a "skip past" link jumps to ("after newsletter promotion"), which is there for
+    screen readers, is dropped with the link.
   - Asides that are not the article are dropped: a teaser (a short label and then only
     links, two or more, such as "Recommended" or "You may like") and one holding a form with an
     address field and little else (a newsletter sign-up). Never dropped: a box classed as a callout (a warning,
@@ -560,13 +574,16 @@ Sonnet 5.5).
 - **What it is given**, all marked as untrusted data whose instructions are to be ignored: the
   title, source, address and word count; the article as numbered blocks (paragraphs,
   headings, lists, quotes, code, figures, tables and notes, each with its HTML; an embedded
-  picture is written `picture:N`), whole up to 30,000 characters and shortened after; and the
+  picture is written `picture:N`), whole up to 30,000 characters and shortened after, each
+  shortened block marked as such with the tool that shows it, so a listing that stops is not
+  taken for an article that does; and the
   first 8,000 characters of the saved page's visible text (no scripts, styles or navigation)
   with its total length.
 - **Its tools**: `page_find` (where a phrase is on the page, with 300 characters around each
   of up to 10 places), `page_read` (up to 6,000 characters from an offset), `page_view` (a
   screenshot of the live page, section 7d; unavailable while the browser container is not
-  running), `article_read` (a shortened block in full), `replace_blocks`, `delete_blocks`,
+  running), `article_read` (blocks in full, up to 16,000 characters, saying where it stops),
+  `replace_blocks`, `delete_blocks`,
   `insert_after`, and `finish` (a verdict, `ok`, `fixed` or `cannot_fix`, a summary of at most
   300 characters, and each problem found: its kind, what was wrong and why it thinks so). The
   kinds are cut short, missing content, page furniture, broken media, formatting, wrong
