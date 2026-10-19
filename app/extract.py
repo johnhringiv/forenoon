@@ -591,7 +591,7 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
 # "next-post"; not "sponsored-content" or "subscribe-model", which may be an article's.
 SELLS_NAME = re.compile(
     r"([a-z0-9]+[_-]+)*(newsletters?|signup|sign-up|subscribe|sponsor|sponsored|promo|next-(post|article|story))"
-    r"([_-]+(box|block|wrap|wrapper|container|shortcode|widget|form|cta|module|section|signup|inline))?",
+    r"([_-]+(box|wrap|wrapper|shortcode|widget|form|cta|signup|inline))?",
     re.IGNORECASE,
 )
 CALL_TO_ACTION = re.compile(
@@ -726,6 +726,8 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
             continue
         if any(_inline_link(p) for p in box.iter("p")):
             continue  # a digest's item: a summary that cites its source in a sentence
+        if not all({"nofollow", "sponsored"} & set((a.get("rel") or "").lower().split()) for a in links):
+            continue  # an advert's links are marked as not the site's say-so; a digest's are not
         headed = any(
             " ".join(h.text_content().split()) == " ".join(a.text_content().split())
             for h in box.iter("h2", "h3", "h4", "h5", "h6")

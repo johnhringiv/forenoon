@@ -327,7 +327,7 @@ All fetched content is treated as untrusted.
   - Boxes that sell, credit or play are dropped by their markup: a sign-up form (one asking
     for an email address) and the box around it when that only pitches it; a short box named
     for a newsletter, a sponsor, a promotion or the next story, with a call to act in it; an
-    advert card whose links all go to one address off the site; an author box at the end that
+    advert card whose links all go to one address off the site, marked `nofollow` or `sponsored`; an author box at the end that
     opens with a link marked as the author's and names them; a player's controls; a table of
     contents a script was to fill; and, at the end, a line that is only a short link to the
     page itself ("Share", "Read more") or to an author's page.

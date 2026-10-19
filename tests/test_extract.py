@@ -1476,9 +1476,9 @@ def test_boxes_that_sell_credit_or_play_are_dropped():
         "<p>Get highlights delivered to your email inbox</p><form><input type='email' name='EMAIL'><button>Subscribe</button></form></section>",
         "Sign Me Up": "<div class='ars-newsletter-shortcode'><p>Keep up with the latest launches.</p>"
         "<a href='/newsletters/?subscribe=space'>Sign Me Up!</a></div>",
-        "Get the report": "<div class='article-callout'><a href='https://hubs.li/abc'><img src='/r.png'></a>"
-        "<h3><a href='https://hubs.li/abc'>The Blue Report 2026</a></h3><p>Measures defenses technique by technique.</p>"
-        "<a href='https://hubs.li/abc'>Get the report</a></div>",
+        "Get the report": "<div class='article-callout'><a rel='noopener nofollow' href='https://hubs.li/abc'><img src='/r.png'></a>"
+        "<h3><a rel='noopener nofollow' href='https://hubs.li/abc'>The Blue Report 2026</a></h3><p>Measures defenses technique by technique.</p>"
+        "<a rel='noopener nofollow' href='https://hubs.li/abc'>Get the report</a></div>",
         "security professional": "<div class='saboxplugin-wrap'><a class='vcard author' href='https://news.example/author/admin/'>Dave Farquhar</a>"
         "<p>David Farquhar is a computer security professional, entrepreneur, and author who writes about old computers.</p></div>",
         "Listen to this article": "<div class='tts-player'><span>Listen to this article instead</span><button>Play</button>"
@@ -1596,3 +1596,19 @@ def test_a_digests_items_and_a_wrapped_guest_bio_stay():
     )
     page = f"<html><body><article><h1>Title</h1><div class='entry-content'>{bio}{words}</div></article></body></html>"
     assert "guest contributor" in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_digest_item_with_a_plain_summary_or_a_named_digest_section_stays():
+    words = _paragraphs("Article", 6)
+    item = (
+        "<div class='item'><h3><a href='https://other.org/a'>Item 1 headline about a thing</a></h3>"
+        "<a href='https://other.org/a'><img src='https://img.example/1.jpg'></a><p>Summary of item 1: researchers found "
+        "that the widget decreases cost by forty percent in trials.</p><a href='https://other.org/a'>Read more</a></div>"
+    )
+    section = (
+        "<div class='newsletter-section'><h2>Story 0</h2><p>The council voted to approve the plan for the new bridge.</p>"
+        "<a href='/bridge'>Read the story</a></div>"
+    )
+    for block, needle in ((item, "forty percent"), (section, "new bridge")):
+        page = f"<html><body><article><h1>Digest</h1>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://blog.example/a", page, "", "page").body.text_content()
