@@ -516,3 +516,31 @@ def test_notes_after_sentence_ends_and_boxes_beside_the_end_are_left_as_they_wer
         page = f"<html><body><article>{words}{words}{tail}</article></body></html>"
         out = lxml.html.tostring(extract(url, page, "", "page").body, encoding="unicode")
         assert (needle[1:] not in out) if needle.startswith("!") else (needle in out), needle
+
+
+def test_short_sentences_with_side_notes_and_appendix_footnotes_keep_their_text():
+    words = "<p>" + "Plain words about the council and the long survey of rural households. " * 10 + "</p>"
+    url = "https://news.example/post/"
+    note = (
+        "<span class='ltx_note ltx_role_footnote'><sup class='ltx_note_mark'>1</sup><span class='ltx_note_outer'>"
+        "<span class='ltx_note_content'><sup class='ltx_note_mark'>1</sup>The note text here.</span></span></span>"
+    )
+    for needle, snippet in {
+        "Experimental setup": f"<h2>Experimental setup{note}</h2>",
+        "Results are shown below.": f"<p>Results are shown below.{note}</p>",
+        "the county clerk's records": "<p>The full story is told in the Appendix <a href='#fn1'>1</a>.</p>"
+        "<ol class='footnotes'><li id='fn1'>Ibid., the county clerk's records.</li></ol>",
+    }.items():
+        page = f"<html><body><article>{words}{snippet}{words}</article></body></html>"
+        out = lxml.html.tostring(extract(url, page, "", "page").body, encoding="unicode")
+        assert needle in out, needle
+    # The site's own links under "Links" are not put back.
+    links = (
+        "<h2>Links</h2><ul><li><a href='https://gh.example/a'>My GitHub profile page</a></li>"
+        "<li><a href='https://m.example/@a'>Follow me on Mastodon</a></li></ul>"
+    )
+    out = lxml.html.tostring(
+        extract(url, f"<html><body><article>{words}{words}{links}</article></body></html>", "", "page").body,
+        encoding="unicode",
+    )
+    assert "Mastodon" not in out

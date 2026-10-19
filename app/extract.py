@@ -57,7 +57,7 @@ NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
 # LaTeXML (arXiv's HTML) writes each footnote in the text the same way, with its number twice.
 SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note", "ltx_role_footnote"}
-SIDENOTE_CHROME = {"margin-toggle", "sidenote-number", "ltx_note_mark", "ltx_tag_note"}
+SIDENOTE_CHROME = {"margin-toggle", "sidenote-number", "ltx_note_mark", "ltx_tag_note", "ltx_note_type"}
 INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", "mono"}
 # Substack's section headings. Readability deletes them for the "header" in the class.
 SECTION_HEADING_CLASSES = {"header-anchor-post"}
@@ -81,7 +81,13 @@ WIDEN_MIN_WORDS = 500
 WIDEN_COVERAGE = 0.9  # share of the page text an element must hold to be the article
 WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page text is rejected
 WORDS_PER_MINUTE = 230
-REFILL_MAX_WORDS = 400  # the most text put back under a heading readability left empty
+REFILL_MAX_WORDS = 400
+# What a box of the site's own links says, under a heading that would otherwise be refilled.
+REFILL_FURNITURE = re.compile(
+    r"\b(subscribe|newsletter|follow (me|us)|previous (post|article)|next (post|article)|become a "
+    r"member|webinar|rss feed|donate|patreon|ko-fi|free ebook)\b",
+    re.IGNORECASE,
+)  # the most text put back under a heading readability left empty
 REFILL_BLOCKS = {"p", "ul", "ol", "dl", "table", "pre", "blockquote", "figure"}
 # Page furniture by its class name or id, for what readability left out.
 FURNITURE_CLASS = re.compile(
@@ -204,7 +210,10 @@ def _cross_reference(ref: lxml.html.HtmlElement, label: str) -> bool:
 def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: lxml.html.HtmlElement):
     """The element holding the note a link points at, or None when the target is not a note:
     a figure, or anything the link names as numbered in the text ("see Figure 3")."""
-    if target.tag == "figure" or _cross_reference(ref, " ".join(ref.text_content().split())):
+    # A footnote's own shape (an item of a list, or classed as a note) is a note whatever the
+    # text before its link says ("…told in the Appendix 1").
+    shaped = target.tag == "li" or next(target.iterancestors("li"), None) is not None or "note" in _names(target)
+    if target.tag == "figure" or (not shaped and _cross_reference(ref, " ".join(ref.text_content().split()))):
         return None
     el = target
     # The id is often on a marker inside the note; the note is the block around it.
@@ -399,6 +408,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
             and el is not root
             and _words(el.text_content()) <= NOTE_CHROME_WORDS
             and not el.xpath(".//img | .//pre")
+            # A sentence a side note sat in keeps its reference: it is text, not a box of notes.
+            and not el.xpath(f".//a[@{MARK}='ref']")
         ):
             top, el = el, el.getparent()
         if top is not None and top.getparent() is not None:
@@ -661,6 +672,8 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
         already = any(text and text in kept for text in (_norm(el.text_content()) for el in section))
         if not words or words > REFILL_MAX_WORDS or already or _short_links(section):
             continue
+        if any(REFILL_FURNITURE.search(" ".join(el.itertext())) for el in section):  # items apart
+            continue  # the site's own links ("Follow me on Mastodon"), not the article's
         anchor = heading
         for el in section:
             if _pictures_already(el, body):
