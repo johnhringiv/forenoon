@@ -1249,7 +1249,11 @@ class _Document(Document):
         if REFILL_FURNITURE.search(" ".join(ul.itertext())):
             return False
         # A table of contents: every link to a place on this page, however it is written.
-        ids = {el.get("id") for el in ul.getroottree().iter() if isinstance(el.tag, str) and el.get("id")}
+        root = ul.getroottree()
+        if getattr(self, "_ids_of", None) is not root:
+            self._ids_of = root
+            self._ids = {el.get("id") for el in root.iter() if isinstance(el.tag, str) and el.get("id")}
+        ids = self._ids
         fragments = [(a.get("href") or "").partition("#") for a in ul.iter("a")]
         if fragments and all(sep and (not page or unquote(target) in ids) for page, sep, target in fragments):
             return False
@@ -1259,9 +1263,13 @@ class _Document(Document):
         heading = _heading_over(ul)
         if heading is not None and _furniture_lead(heading):
             return False
+        says = _own_chars(ul) >= LIST_OWN_CHARS
         if _led_in(ul):
-            return not self._cards(ul)  # the author's sentence says what the list is
-        return _own_chars(ul) >= LIST_OWN_CHARS and not self._site_list(ul)
+            # The author's sentence says what the list is; not a bare list of the site's own
+            # stories, which a news site introduces with a sentence of its own ("Here is what
+            # else we are reporting today:").
+            return not self._cards(ul) and (says or not self._site_list(ul))
+        return says and not self._site_list(ul)
 
 
 def _readability(page_html: str, url: str = "") -> lxml.html.HtmlElement | None:

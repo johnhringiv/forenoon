@@ -1345,7 +1345,9 @@ def test_a_sites_lists_of_its_stories_stay_out_and_author_lead_ins_count():
     )
     assert "Man bites dog" not in kept(most_read + "</ul>")
     assert "left the cloud" not in kept(keep_reading + "</ul></div>")
-    steps = "".join(f"<li><a href='/docs/{n}'>Run the setup command for step {n}</a></li>" for n in range(4))
+    steps = "".join(
+        f"<li><a href='/docs/{n}'>Step {n}</a>: run the setup command for step {n} and check it</li>" for n in range(4)
+    )
     assert "setup command for step 3" in kept(f"<p>To install it, do the following:</p><ul>{steps}</ul>")
 
 
@@ -1383,3 +1385,15 @@ def test_a_news_sites_story_packages_stay_out_however_they_are_labelled():
         f"<p>Get the best stories in your inbox each morning:</p><ul>{bare}</ul>",
     ):
         assert not leaked(block), block[:40]
+
+
+def test_a_sentence_before_the_sites_own_headlines_does_not_make_them_the_articles():
+    words = _paragraphs("Article", 12)
+    heads = "".join(
+        f"<li><a href='/2026/10/19/s{n}'>Headline number {n} about a fire in the hills above town</a></li>"
+        for n in range(3)
+    )
+    for lead in ("Here is what else we are reporting today:", "Our journalists are also covering these stories:"):
+        page = f"<html><body><article><h1>Title</h1>{words}<p>{lead}</p><ul>{heads}</ul></article></body></html>"
+        out = extract("https://news.example.com/2026/10/19/story", page, "", "page").body.text_content()
+        assert "Headline number 2" not in out
