@@ -1211,3 +1211,43 @@ def test_a_live_blog_at_the_side_of_an_article_or_wrapping_its_entries_in_an_art
     )
     live = extract_module._live_blog(f"<html><body><article class='liveblog'>{entries}</article></body></html>")
     assert live.text_content().count("Entry 1:") == 1
+
+
+def test_lists_that_are_part_of_the_text_are_kept_though_they_are_links():
+    words = _paragraphs("Article", 8)
+
+    def kept(block):
+        page = f"<html><body><article>{words}{block}{words}</article></body></html>"
+        return extract("https://blog.example/a", page, "", "page").body.text_content()
+
+    issues = "".join(
+        f"<li><a href='https://github.com/golang/go/issues/{n}'>golang/go#{n}: Refactoring {n}</a></li>"
+        for n in range(4)
+    )
+    talks = "".join(
+        f"<li><a href='/talk{n}'>Minimalism versus types</a> ({2019 + n}), a talk at a conference about the language</li>"
+        for n in range(4)
+    )
+    # Introduced by a paragraph ending in a colon, or saying something beside its links.
+    assert "golang/go#3" in kept(f"<p>Some of the requests we have had, including:</p><ul>{issues}</ul>")
+    assert "(2022), a talk" in kept(f"<ul>{talks}</ul>")
+    assert "golang/go#3" in kept(f"<p>References</p><ul>{issues}</ul>")
+    # Not a site's links: one-word links, a table of contents, a sign-up call, a share bar.
+    for furniture in (
+        "<p>Share this:</p><ul>"
+        + "".join(
+            f"<li><a href='/s{n}'>{site}</a></li>"
+            for n, site in enumerate(("Facebook", "Mastodon", "Bluesky", "Email"))
+        )
+        + "</ul>",
+        "<p>Contents:</p><ul>"
+        + "".join(f"<li><a href='#s{n}'>Section {n} of the article</a></li>" for n in range(5))
+        + "</ul>",
+        (
+            "<p>If you liked this article, please:</p><ul><li><a href='/like'>hit on the like button</a>,</li>"
+            "<li><a href='/newsletter'>subscribe to my newsletter</a></li><li>and let's connect on <a href='/t'>Twitter</a>!</li></ul>"
+        ),
+        "<ul class='share-links'>" + talks + "</ul>",
+    ):
+        out = kept(furniture)
+        assert "Facebook" not in out and "Section 4 of" not in out and "newsletter" not in out and "(2022)" not in out

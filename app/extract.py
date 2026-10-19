@@ -1006,9 +1006,67 @@ def _fix_nesting(root: lxml.html.HtmlElement) -> None:
             break
 
 
+LIST_OWN_CHARS = 20  # of each item's text outside its links, on average, for a list that says something
+
+
+def _own_chars(ul: lxml.html.HtmlElement) -> float:
+    """How much of a list's items is text of their own rather than the links in them."""
+    items = ul.findall("li")
+    own = [
+        len(" ".join(li.text_content().split())) - sum(len(" ".join(a.text_content().split())) for a in li.iter("a"))
+        for li in items
+    ]
+    return sum(own) / len(own) if own else 0.0
+
+
+def _led_in(ul: lxml.html.HtmlElement) -> bool:
+    """Whether a paragraph introduces the list: it ends in a colon ("…please at least:"), or it
+    is the whole of a short reference heading set as a paragraph ("References")."""
+    before = ul.getprevious()
+    while before is not None and not isinstance(before.tag, str):
+        before = before.getprevious()
+    if before is None or before.tag != "p":
+        return False
+    text = " ".join(before.text_content().split())
+    return text.endswith(":") or (len(text) <= LEAD_HEADING_CHARS and bool(REFILL_HEADING.match(_norm(text))))
+
+
+LEAD_HEADING_CHARS = 40
+
+
+class _Document(Document):
+    """Readability, keeping the lists that are part of the text.
+
+    Readability drops a list that is more than a fifth links (a quarter in an article) unless
+    its name is in its favour; that is how a site's menus go, and also an author's list of
+    issues, talks, libraries or references. A list is kept here whatever its links when it is
+    not named or worded as furniture, holds no form or button, is not a run of one-word links
+    or a table of contents, and either a paragraph introduces it or its items say something
+    of their own beside their links."""
+
+    def get_preserved_elements(self, node):
+        allowed = super().get_preserved_elements(node)
+        for ul in self.tags(node, "ul"):
+            if ul not in allowed and self._text_list(ul):
+                allowed[ul] = True
+        return allowed
+
+    def _text_list(self, ul) -> bool:
+        if not ul.findall("li") or self.class_weight(ul) < 0 or FURNITURE_CLASS.search(_names(ul)):
+            return False
+        if ul.xpath(".//form | .//input | .//button | .//nav") or _short_links([ul]):
+            return False
+        if REFILL_FURNITURE.search(" ".join(ul.itertext())):
+            return False
+        hrefs = [(a.get("href") or "").strip() for a in ul.iter("a")]
+        if hrefs and all(h.startswith("#") for h in hrefs):
+            return False  # a table of contents
+        return _led_in(ul) or _own_chars(ul) >= LIST_OWN_CHARS
+
+
 def _readability(page_html: str) -> lxml.html.HtmlElement | None:
     try:
-        document = Document(page_html, positive_keywords=[DATA_TABLE_CLASS])
+        document = _Document(page_html, positive_keywords=[DATA_TABLE_CLASS])
         return _parse_fragment(document.summary(html_partial=True))
     except Exception:  # noqa: BLE001 - third-party parsers on hostile input
         return None
