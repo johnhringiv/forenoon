@@ -134,7 +134,8 @@ what its own users configure and delivers only to the addresses its readers have
   session.
 
 - **Settings** for the whole install (delivery time, how old an article may be, ranking,
-  its models and token cap, how many articles are read in full, alerts, what is kept) are
+  its models and token cap, how many articles are read in full, the book check, alerts, what
+  is kept) are
   on the web pages' Settings page (admins only) and live in the database. A setting stays
   only when it controls cost, depends on the deploy, or is a real choice; what used to be a
   switch for a later feature is now just how Forenoon works, described here.
@@ -394,7 +395,8 @@ part-way never causes a resend.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
   the install, not a rating or a reason: it is logged, written to the extraction log, and
-  listed for admins on the web pages' Problems page. The rating is left as it was.
+  listed for admins on the web pages' Problems page, with what the book check found
+  (section 7i). The rating is left as it was.
 - **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
   log.
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
@@ -534,6 +536,59 @@ source).
 - It runs on `llm.model`: the verdicts change nothing that is delivered, so the routine model
   is enough. It always runs when ranking does.
 
+## 7i. The book check (optional, off by default)
+
+An agent that compares each article, as it will be printed, with the page it came from, and
+fixes what extraction got wrong. Every fix is logged as a problem, so the extractor can be
+improved for the next article like it. "Check every article with an agent before it is sent"
+(`llm.book_check`) on the Settings page turns it on; `llm.check_model` is the model (Claude
+Sonnet 5.5).
+
+- **When.** For each article about to go in a book, as it is assembled: after the pictures of
+  interactive figures are put in, before its images are fetched. Not in a dry run, not for
+  an article that will be held back anyway (judged not the article, or over the word limit),
+  and not for one sent again from the web pages. An article with no saved page (a feed's own
+  text, or saved pages turned off) is not checked; the report counts it.
+- **Only an Anthropic model**: the check needs tool use with pictures, through Anthropic's own
+  client and key. With any other model the check is skipped and the run report says why.
+- **What it is given**, all marked as untrusted data whose instructions are to be ignored: the
+  title, source, address and word count; the article as numbered blocks (paragraphs,
+  headings, lists, quotes, code, figures, tables and notes, each with its HTML; an embedded
+  picture is written `picture:N`), whole up to 30,000 characters and shortened after; and the
+  first 8,000 characters of the saved page's visible text (no scripts, styles or navigation)
+  with its total length.
+- **Its tools**: `page_find` (where a phrase is on the page, with 300 characters around each
+  of up to 10 places), `page_read` (up to 6,000 characters from an offset), `page_view` (a
+  screenshot of the live page, section 7d; unavailable while the browser container is not
+  running), `article_read` (a shortened block in full), `replace_blocks`, `delete_blocks`,
+  `insert_after`, and `finish` (a verdict, `ok`, `fixed` or `cannot_fix`, a summary of at most
+  300 characters, and each problem found: its kind, what was wrong and why it thinks so). The
+  kinds are cut short, missing content, page furniture, broken media, formatting, wrong
+  article and other. Blocks are numbered afresh after each edit, and the edit's answer lists
+  the blocks around it with their new numbers.
+- **What it may do.** It is told to edit only to restore what the page has or remove what is
+  not the article, and never to rewrite, summarise or add to the author's text. Everything it
+  writes goes through the extractor's allowlist (section 4) before it is put in the article;
+  links to the article's own notes and headings stay links in the book, and a link left
+  pointing at nothing is unwrapped. An image must be one the article has or one whose address
+  is on the saved page; it is fetched and converted with the rest (section 5).
+- **Limits.** At most 12 calls for an article, 200,000 tokens (input, cached input and
+  output), three minutes, and the day's token cap (`llm.daily_token_cap`), checked before
+  each call. Its edits are kept only when it finishes: at a limit the check is recorded as
+  `incomplete` and the article goes out as it was. A failed call, a refusal or anything else
+  that goes wrong is logged and leaves the article as it was; a delivery is never stopped by
+  it. Each call uses adaptive thinking at medium effort, with the system prompt, the tools and
+  the conversation so far marked for the prompt cache.
+- **Where it is logged.** Every call in the model log (`book-check`, with its cached tokens,
+  priced like any other); every check in the `book_checks` table (verdict, summary, the
+  problems, each edit with the HTML before and after, and its tokens); `fixed` and
+  `cannot_fix` on the Problems page (section 9a) with the summary and each problem; and in
+  the run report, how many were checked, with each verdict, their tokens and cost.
+- **Cost**, at Sonnet 5.5's prices: about $0.02 for an article that is fine (one call), and
+  about $0.15 for one it fixes (several calls, most of each read from the cache): roughly
+  $0.40 to $0.50 a day for a reader with ten articles. The delivery waits for the checks, up
+  to three minutes an article.
+
 ## 7d. The browser container (optional)
 
 - A separate container holds Chrome, the only thing that reads a subscriber session's cookie.
@@ -574,6 +629,12 @@ source).
     stale, so an install without it never waits; a page whose pictures time out is not
     followed by more requests for pictures in that run, and a request for a subscriber's page
     that waits behind a busy container does not count as the container being down.
+- It also shows the book check's model a page as a reader sees it (section 7i): one
+  screenshot of an 800 by 1200 screen, scrolled so a phrase the model names is in its middle
+  (or the top of the page), as JPEG of at most 1 MB. It is taken the same way as the pictures
+  of figures (the sandbox, the child process killed at the deadline, the public-only proxy),
+  of the article's own page only, with its site's session when it has one, and waits its
+  turn behind the 20 seconds between pages of one site.
 - There were Calibre news recipes here until October 2026, fetching whole papers once a day.
   They went once every source had a feed: the subscriber sessions above fetch only what the
   ranking picks. Articles that came in through a recipe keep the route `recipe`.
@@ -834,9 +895,13 @@ database with the pipeline.
   text to read with when they were last rewritten, a switch to keep them or not, a
   "Correct these notes" toggle that opens a box to edit them (2,000 characters at most),
   and the last 10 versions with who wrote each and a button to restore it. `/learned`, the notes' old address, leads here.
+- **Problems** (`/problems`, admins only). The articles readers reported as broken or
+  incomplete (section 7), and those the book check fixed or could not fix (section 7i) with
+  its summary and each problem it found, newest first, each with its word count and what the
+  extractor made of it.
 - **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
   name: Newsstand, Archive, Reading, Sources, then for an admin Settings, Accounts and
-  Problems (with the count of reports), then the reader's name, which opens the account page. The current
+  Problems (with the count of reports and book check findings), then the reader's name, which opens the account page. The current
   page is marked. Sign out is on the account page. Below the row each page has its own
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.
