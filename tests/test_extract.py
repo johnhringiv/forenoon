@@ -286,3 +286,55 @@ def test_a_notes_link_back_is_not_taken_for_a_reference():
     assert "A claim in the text." in text and "It goes on for a while" in text and "The note itself." not in text
     assert text.count('class="noteref"') == 1 and notes.count("<aside") == 1
     assert '<a href="#fnref-1">1</a> The note itself.' in notes
+
+
+def test_embedded_posts_survive_picking_the_article_out_of_the_page():
+    words = "<p>" + "Plain words about hardware wallets and the shops that sell them second hand. " * 12 + "</p>"
+    tweet = (
+        "<figure class='wp-block-embed is-provider-twitter wp-block-embed-twitter'><blockquote class='twitter-tweet'>"
+        "<p>Ledger Flex sold at an airport shop confirmed to contain a spy implant</p>— Danny (@d) October 13</blockquote>"
+        "<script src='https://platform.twitter.com/widgets.js'></script></figure>"
+    )
+    page = f"<html><body><article>{words}{tweet}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert "<blockquote><p>Ledger Flex sold at an airport shop" in out and "twitter-tweet" not in out
+
+
+def test_only_tweet_class_names_are_taken_off_quotes():
+    words = "<p>" + "Plain words about council votes and the budget for the new bridge. " * 12 + "</p>"
+    # A quote in a sidenote is still a note: its class names are not the tweet's.
+    page = f"<html><body><article>{words}<aside class='sidenote'><blockquote>A side remark quoted.</blockquote></aside>{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert 'class="noteref"' in out and "A side remark quoted." in out[out.index("<h3>Notes</h3>") :]
+    # A testimonial in the site's header stays page furniture.
+    junk = "<blockquote><p>Best paper in town, say readers, again, and again, and again.</p></blockquote>"
+    page = f"<html><body><header class='site-header'>{junk}</header><div>{words * 4}</div></body></html>"
+    assert "Best paper" not in lxml.html.tostring(
+        extract("https://news.example/b", page, "", "page").body, encoding="unicode"
+    )
+
+
+def test_many_quotes_are_handled_in_linear_time():
+    import time
+
+    thread = "<div>" + "<blockquote><p>An earlier reply quoted.</p></blockquote><p>A reply.</p>" * 5000 + "</div>"
+    started = time.monotonic()
+    extract("https://forum.example/t", f"<html><body>{thread}</body></html>", "", "page")
+    assert time.monotonic() - started < 10
+
+
+def test_tweet_furniture_stays_out_and_empty_quotes_are_fast():
+    import time
+
+    words = "<p>" + "Plain words about council votes and the budget for the new bridge. " * 12 + "</p>"
+    follow = (
+        "<aside class='twitter-follow'><p>Follow us on Twitter for the latest updates from the council.</p></aside>"
+    )
+    page = f"<html><body><article>{words}{follow}{words}</article></body></html>"
+    assert "Follow us" not in lxml.html.tostring(
+        extract("https://news.example/a", page, "", "page").body, encoding="unicode"
+    )
+    empty = "<div>" + "<blockquote></blockquote>" * 20000 + "</div>"
+    started = time.monotonic()
+    extract("https://news.example/b", f"<html><body>{words}{empty}</body></html>", "", "page")
+    assert time.monotonic() - started < 10
