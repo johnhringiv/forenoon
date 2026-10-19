@@ -408,6 +408,15 @@ def test_section_headings_classed_like_a_header_survive():
     assert [h.text_content() for h in out.iter("h2", "h5")] == ["The methodology"]
 
 
+def test_a_site_header_classed_like_a_header_stays_out():
+    filler = "<p>" + "Plain words about forecasting and base rates. " * 30 + "</p>"
+    page = f"""<html><body><div><h1 class="site-header-title">My Great Blog</h1>
+    <h2 class="header-tagline">Thoughts on stuff</h2></div><article><h1>Title</h1>{filler}</article>
+    <div><h3 class="footer-header">About</h3><p>This blog is written by me.</p></div></body></html>"""
+    out = extract("https://blog.example/post", page, "").body.text_content()
+    assert "My Great Blog" not in out and "Thoughts on stuff" not in out and "written by me" not in out
+
+
 def test_a_side_note_inside_a_footnote_stays_in_it():
     """It used to be numbered on its own with a reference the page cannot parse, and the
     whole structure pass fell back: no notes at all."""
