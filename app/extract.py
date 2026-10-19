@@ -82,6 +82,8 @@ WIDEN_COVERAGE = 0.9  # share of the page text an element must hold to be the ar
 WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page text is rejected
 WORDS_PER_MINUTE = 230
 REFILL_MAX_WORDS = 400
+DATA_TABLE_CLASS = "forenoon-data-table"
+TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
 REFILL_FURNITURE = re.compile(
     r"\b(subscribe|newsletter|follow (me|us)|previous (post|article)|next (post|article)|become a "
@@ -225,6 +227,25 @@ def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: 
     return el if 0 < size <= NOTE_MAX_CHARS else None
 
 
+def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
+    """Take the furniture-sounding class names off real tables, their rows and cells, and mark the
+    table for readability to keep (it drops a small table of numbers as layout): readability
+    deletes anything classed with "header" or "foot" in it, and arXiv classes its tables
+    "ltx_guessed_headers", so a paper lost every table it left in the text. A real table has
+    header cells, a caption or a figure around it; a site's layout table keeps its classes."""
+    for table in root.iter("table"):
+        real = table.xpath(".//th | .//thead | .//caption") or next(table.iterancestors("figure"), None) is not None
+        if not real:
+            continue
+        for el in (table, *table.iter("thead", "tbody", "tfoot", "tr", "th", "td")):
+            names = (el.get("class") or "").split()
+            kept = [name for name in names if not TABLE_FURNITURE_NAME.search(name)]
+            if el is table:
+                kept.append(DATA_TABLE_CLASS)  # and readability is told to keep it: see _readability
+            if kept != names:
+                el.set("class", " ".join(kept))
+
+
 def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
@@ -359,6 +380,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         names = _names(heading) + " " + (_names(parent) if parent is not None else "")
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
+    _unclass_data_tables(root)
     if not notes:
         return None
     holder = lxml.html.Element("div")
@@ -585,7 +607,8 @@ def _fix_nesting(root: lxml.html.HtmlElement) -> None:
 
 def _readability(page_html: str) -> lxml.html.HtmlElement | None:
     try:
-        return _parse_fragment(Document(page_html).summary(html_partial=True))
+        document = Document(page_html, positive_keywords=[DATA_TABLE_CLASS])
+        return _parse_fragment(document.summary(html_partial=True))
     except Exception:  # noqa: BLE001 - third-party parsers on hostile input
         return None
 

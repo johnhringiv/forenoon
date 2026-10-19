@@ -544,3 +544,21 @@ def test_short_sentences_with_side_notes_and_appendix_footnotes_keep_their_text(
         encoding="unicode",
     )
     assert "Mastodon" not in out
+
+
+def test_a_papers_tables_stay_in_the_text():
+    """arXiv's shape: tables classed "ltx_guessed_headers", in figures, linked as "Table 1"."""
+    words = "<p>" + "Plain words about tokenizers, accuracy and the datasets used to measure it. " * 12 + "</p>"
+    table = (
+        "<figure class='ltx_table' id='S5.T1'><table class='ltx_tabular ltx_guessed_headers'>"
+        "<thead><tr><th>Dataset</th><th>Previous SoTA</th><th>Our approach</th></tr></thead>"
+        "<tbody><tr><td>TOEFL9</td><td>95.1%</td><td>96.0%</td></tr><tr><td>ICNALE</td><td>88.2%</td><td>90.4%</td></tr>"
+        "</tbody></table><figcaption>Table 1: Full-text accuracy.</figcaption></figure>"
+    )
+    page = (
+        f"<html><body><article>{words}<p>Table <a href='#S5.T1'>1</a> compares the results.</p>"
+        f"{table}{words}</article></body></html>"
+    )
+    out = lxml.html.tostring(extract("https://arxiv.example/html/1", page, "", "page").body, encoding="unicode")
+    assert "TOEFL9" in out and "90.4%" in out and "Table 1: Full-text accuracy." in out
+    assert out.index("TOEFL9") < out.index(words[3:40], out.index("compares the results")), "in place, not a note"
