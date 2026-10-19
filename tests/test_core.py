@@ -45,7 +45,7 @@ def test_token_round_trip_and_rejections():
     for signal in ("up", "down", "done", "f4", "r2", "clear"):  # not something a link carries
         with pytest.raises(TokenError):
             make_token(SECRET, "john", "abc", signal, expires)
-    # Only "Done with this issue" names several articles.
+    # Only "Mark unrated as skipped" names several articles.
     assert verify_token(SECRET, make_token(SECRET, "john", "a,b", "skip-rest", expires)).article_id == "a,b"
     with pytest.raises(TokenError):
         make_token(SECRET, "john", "a,b", "skip", expires)
@@ -308,7 +308,7 @@ def test_skips_do_not_push_the_verdicts_out_of_what_the_model_sees():
     for n in range(3):
         store.upsert_article(f"v{n}", f"https://x.example/v{n}", "Blog", f"Judged {n}", "", None)
         store.record_feedback("john", f"v{n}", "end-worth-it", "kindle-footer", f"2026-10-01T0{n}:00:00+00:00")
-    for n in range(60):  # weeks of "Done with this issue", all newer
+    for n in range(60):  # weeks of "Mark unrated as skipped", all newer
         store.upsert_article(f"s{n}", f"https://x.example/s{n}", "Blog", f"Skipped {n}", "", None)
         store.record_feedback("john", f"s{n}", "skip", "kindle-footer", f"2026-10-10T00:{n:02d}:00+00:00")
     store.upsert_article("p", "https://x.example/p", "Blog", "Progress only", "", None)

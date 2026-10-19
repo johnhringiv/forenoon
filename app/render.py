@@ -488,13 +488,13 @@ def _done_page(link: str) -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en">
-<head><meta charset="utf-8"/><title>Done with this issue</title>
+<head><meta charset="utf-8"/><title>Mark unrated as skipped</title>
 <link rel="stylesheet" type="text/css" href="style.css"/></head>
 <body>
 <p class="meta"><a href="contents.xhtml">Contents</a></p>
 <div class="feedback"><p>That is the whole issue.</p>
-<p class="rate"><a href={quoteattr(link)}>Done with this issue</a></p>
-<p class="hint">Marks every article here you have not rated as skipped.</p></div>
+<p class="rate"><a href={quoteattr(link)}>Mark unrated as skipped</a></p>
+<p class="hint">Rate any of them later to change it.</p></div>
 </body>
 </html>
 """
@@ -521,7 +521,7 @@ def render_issue(
 
     Deterministic for the same entries, day and part. `title` and `cover` replace the daily
     issue's own, for a book that is one story sent on request. `grayscale` is the images setting;
-    the daily cover follows it. `done_link`, "Done with this issue", is on a last page of its own.
+    the daily cover follows it. `done_link`, "Mark unrated as skipped", is on a last page of its own.
     """
     title = title or issue_title(day, part)
     book_id = uuid.uuid5(uuid.NAMESPACE_URL, "forenoon:" + ",".join(e.article.id for e in entries)).urn
@@ -531,7 +531,7 @@ def render_issue(
         chapters.append((f"a{index:02d}", entry.article.title, page))
         assets += chapter_assets
     if done_link:
-        chapters.append(("done", "Done with this issue", _done_page(done_link)))
+        chapters.append(("done", "Mark unrated as skipped", _done_page(done_link)))
     chapters = [(name, label, wrap_emoji(page)) for name, label, page in chapters]
     contents = wrap_emoji(_issue_contents(entries, title, day))
     pages = [page for _, _, page in chapters] + [contents]

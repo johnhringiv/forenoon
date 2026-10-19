@@ -579,7 +579,7 @@ def _feedback_links(cfg: Config, user: User, article_id: str, now: datetime) -> 
 
 
 def _done_link(cfg: Config, user: User, article_ids: list[str], now: datetime) -> str:
-    """ "Done with this issue" for a book of these articles: skips the ones given nothing."""
+    """ "Mark unrated as skipped" for a book of these articles: skips the ones given nothing."""
     if not cfg.public_base_url or not article_ids:
         return ""
     expires = int((now + timedelta(days=cfg.token_ttl_days)).timestamp())

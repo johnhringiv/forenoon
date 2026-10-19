@@ -35,7 +35,7 @@ pub enum Tap {
     Rate(Signal),
     /// "This article came out broken or incomplete": a report about the delivery, not a rating.
     Problem,
-    /// "Done with this issue": the claim's article is the book's articles, comma-separated.
+    /// "Mark unrated as skipped": the claim's article is the book's articles, comma-separated.
     SkipRest,
 }
 

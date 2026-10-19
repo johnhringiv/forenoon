@@ -2576,12 +2576,12 @@ async fn done_with_this_issue_skips_only_what_was_given_nothing() {
     let mut browser = Browser::default();
     browser.sign_in(&site, "john").await;
     let page = browser.get(&site, "/").await;
-    assert!(page.text.contains("Mark the rest skipped (1 not rated)"), "{}", page.text);
+    assert!(page.text.contains("Mark unrated as skipped (1)"), "{}", page.text);
     let form = [("csrf", page.csrf()), ("issue", sent.to_owned()), ("back", "/".to_owned())];
     let form: Vec<(&str, &str)> = form.iter().map(|(key, value)| (*key, value.as_str())).collect();
     assert_eq!(browser.post(&site, "/skip-rest", &form).await.location, "/");
     assert_eq!(progress("a3").await.as_deref(), Some("skipped"));
-    assert!(!browser.get(&site, "/").await.text.contains("Mark the rest skipped"));
+    assert!(!browser.get(&site, "/").await.text.contains("Mark unrated as skipped"));
     let wrong = [("csrf", "wrong"), ("issue", sent)];
     assert_eq!(browser.post(&site, "/skip-rest", &wrong).await.status, StatusCode::FORBIDDEN);
 }

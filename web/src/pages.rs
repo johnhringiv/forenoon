@@ -819,7 +819,7 @@ struct Issue {
     short: String,
     count: String,
     stories: Vec<Story>,
-    /// Articles sent in it that the reader has given nothing for: "Mark the rest skipped".
+    /// Articles sent in it that the reader has given nothing for: "Mark unrated as skipped".
     open: usize,
 }
 
@@ -1295,7 +1295,7 @@ pub async fn rate(
     back_to(&form.back, &form.article)
 }
 
-/// "Mark the rest skipped": every article of one issue the reader has given nothing for.
+/// "Mark unrated as skipped": every article of one issue the reader has given nothing for.
 pub async fn skip_rest(
     State(state): State<AppState>,
     auth: AuthSession,

@@ -349,7 +349,7 @@ are dropped and counted in the report.
   - one chapter per article: title, author, source, date, reading time, a link to the
     original, a "Skip this one" link, the body, then the rating links (section 7); a
     "Contents" link at the top and bottom;
-  - a last page with "Done with this issue" (section 7);
+  - a last page with "Mark unrated as skipped" (section 7);
   - a navigation table so the e-reader's own "go to" menu lists every article.
 - **Format `articles`.** One EPUB per article, titled `FN YYYY-MM-DD · Source · Title`.
 - Output is EPUB 3 with an NCX for older converters, and is byte-for-byte reproducible for
@@ -391,10 +391,10 @@ it was worth to them (**verdict**). Either can be given without the other.
   the verdict and that the article was finished, since the reader is at its end. Under them,
   "Did not finish it? Stopped partway" records only that; the page it opens offers the
   verdicts. The last
-  page of each daily issue has "Done with this issue", which marks skipped every article in
+  page of each daily issue has "Mark unrated as skipped", which skips every article in
   that book the reader has given nothing for (a book sent on request has no such page).
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
-  article (for "Done with this issue", the book's articles), signal and expiry (default 60
+  article (for "Mark unrated as skipped", the book's articles), signal and expiry (default 60
   days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
   small page stating what is now stored ("Worth it, finished."), then the reasons that fit,
@@ -424,15 +424,15 @@ it was worth to them (**verdict**). Either can be given without the other.
   the install, not a rating or a reason: it is logged, written to the extraction log, and
   listed for admins on the web pages' Problems page. The rating is left as it was.
 - **Latest tap wins** for verdict, progress and reason. Every tap is also kept in an event
-  log; "Done with this issue" and "Mark the rest skipped" are logged as `skip-rest` against
-  each article they skipped, so a sweep can be told from "Skip this one".
+  log; "Mark unrated as skipped", in the book or on the web pages, is logged as `skip-rest` against
+  each article it skipped, so a sweep can be told from "Skip this one".
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
 not use them). The model is given the 40 most recent with a verdict, and with them the 15
-most recent skips, so that "Done with this issue" cannot push the verdicts out; progress with
+most recent skips, so that "Mark unrated as skipped" cannot push the verdicts out; progress with
 no verdict is left out. Each comes with its verdict and progress, the article's length, why
 it was picked and the reader's reason when there is one. The model is told what each means: a
 verdict is strong, "not for me" about the subject (or the reader's level, when the reason
@@ -830,8 +830,8 @@ database with the pipeline.
   partway or skipped; choose the reason with one click; or clear the rating. A verdict given
   there leaves progress as it was, since the web pages cannot tell how far the reader got;
   pressing the choice already made records nothing.
-  Each issue with articles given nothing has "Mark the rest skipped", as the book's "Done
-  with this issue". Changes are logged like taps, with `web` as their source.
+  Each issue with articles given nothing has "Mark unrated as skipped", as the book's last
+  page does. Changes are logged like taps, with `web` as their source.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything
   delivered to them, and everything the model weighed for them and passed over (section 7g).
   A row shows the source, the title linked to the original, the summary when there is one,

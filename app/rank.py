@@ -140,7 +140,7 @@ def abstract(item: Item) -> str:
 def rated_entries(user: User, store: Store, latest: int) -> list[dict]:
     """The reader's latest ratings as the model is shown them, oldest first.
 
-    The latest with a verdict, and apart from them the latest skips: "Done with this issue"
+    The latest with a verdict, and apart from them the latest skips: "Mark unrated as skipped"
     skips several a day, and would otherwise push the verdicts out. Progress with no verdict
     says too little and is left out.
     """

@@ -239,7 +239,7 @@ def test_issue_format_sends_one_book_with_contents_and_per_article_ratings(env):
             assert f"OEBPS/{src}" in names
     assert seen == set(report.delivered)
     assert all(store.is_delivered("john", article_id) for article_id in report.delivered)
-    # The last page: "Done with this issue", for every article of the book.
+    # The last page: "Mark unrated as skipped", for every article of the book.
     done = epub.read("OEBPS/done.xhtml").decode()
     etree.fromstring(done.encode())
     claim = verify_token(SECRET.encode(), done.split("https://fb.example/f/")[1].split('"')[0], now=NOW.timestamp())

@@ -815,7 +815,7 @@ class Store:
         )
 
     def skip_rest(self, user_id: str, article_ids: list[str], source: str) -> int:
-        """ "Done with this issue": skip each of these articles the reader has given nothing for,
+        """ "Mark unrated as skipped": skip each of these articles the reader has given nothing for,
         among those delivered to them. Returns how many were skipped."""
         skipped, when = 0, now_iso()
         self.db.execute("BEGIN IMMEDIATE")

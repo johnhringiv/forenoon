@@ -1246,7 +1246,7 @@ async fn record_in(
     Ok(rating)
 }
 
-/// "Done with this issue": skip each of these articles delivered to the reader that they have
+/// "Mark unrated as skipped": skip each of these articles delivered to the reader that they have
 /// given nothing for. Returns how many were skipped.
 pub async fn skip_rest(pool: &SqlitePool, user: &str, articles: &[&str], source: &str) -> Result<usize, sqlx::Error> {
     let mut tx = pool.begin().await?;

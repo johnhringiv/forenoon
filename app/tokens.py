@@ -22,7 +22,7 @@ PROGRESS = {"finished": "finished", "partway": "stopped partway", "skipped": "sk
 #   end-<verdict>     the links at an article's end: the verdict, and finished
 #   finished, partway progress only
 #   skip              skipped: drops the verdict
-#   skip-rest         "Done with this issue": skip every article of the book given nothing
+#   skip-rest         "Mark unrated as skipped": skip every article of the book given nothing
 #   why-<reason>      the reason, one optional tap after a verdict
 # The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
 # not in SIGNALS; anything replaying feedback_events must handle it.
