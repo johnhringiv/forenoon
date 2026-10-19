@@ -208,8 +208,9 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
 
     def in_page(anchor: lxml.html.HtmlElement) -> str:
         href = (anchor.get("href") or "").strip()
-        if href.startswith(page + "#"):
-            href = href[len(page) :]
+        if not href.startswith("#"):  # also "/post/#fn-1": the page's own address, written out
+            resolved = urljoin(page, href) if "#" in href else ""
+            href = resolved[len(page) :] if resolved.startswith(page + "#") else ""
         return unquote(href[1:]) if href.startswith("#") else ""
 
     # lxml hands out element objects on demand, and an id() is only unique while its object
@@ -246,6 +247,15 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
                 anchor.set(MARK_FIRST, "1")
             anchor.set(MARK, "ref")
             anchor.set(MARK_N, str(numbers[id(body)]))
+            # Readability deletes anything with a class or id that reads like page furniture
+            # ("footnote-ref" has "foot" in it), so the reference and the wrappers that hold
+            # only it lose theirs here. The allowlist would remove them anyway, and the
+            # targets were all found above.
+            wrapper = anchor
+            while wrapper is not None and wrapper is not root and " ".join(wrapper.text_content().split()) == label:
+                wrapper.attrib.pop("class", None)
+                wrapper.attrib.pop("id", None)
+                wrapper = wrapper.getparent()
             continue
         heading = target if target.tag in HEADINGS else target.getparent()
         if heading is not None and heading.tag in HEADINGS:

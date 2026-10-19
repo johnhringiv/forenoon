@@ -295,3 +295,19 @@ def test_a_comment_inside_a_note_does_not_undo_the_notes():
     </article></body></html>"""
     out = lxml.html.tostring(extract("https://blog.example/post", page, "").body, encoding="unicode")
     assert out.count('class="noteref"') == 1 and '<a href="#fnref-1">1</a> The note itself.' in out
+
+
+def test_references_classed_like_a_footer_survive_readability():
+    """Hugo's and markdown-it's shapes: "footnote-ref" on the link or its <sup>, and a link
+    that spells out the page's own path."""
+    filler = "<p>" + "Plain words about package managers and lockfiles. " * 30 + "</p>"
+    page = f"""<html><body><main><article>
+    <p>A claim.<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup>
+    Another.<sup class="footnote-reference" id="fr-2-1"><a href="/post/#fn-2">[2]</a></sup></p>{filler}
+    <div class="footnotes" role="doc-endnotes"><hr><ol>
+    <li id="fn:1"><p>The first note. <a href="#fnref:1" class="footnote-backref">↩︎</a></p></li>
+    <li id="fn-2"><p>The second note. <a href="#fr-2-1">↩</a></p></li></ol></div>
+    </article></main></body></html>"""
+    out = lxml.html.tostring(extract("https://blog.example/post/", page, "").body, encoding="unicode")
+    assert out.count('class="noteref"') == 2 and out.count("<aside") == 2
+    assert '<a href="#fnref-1">1</a> The first note.' in out and '<a href="#fnref-2">[2]</a> The second note.' in out
