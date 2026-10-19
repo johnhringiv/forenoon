@@ -79,6 +79,7 @@ COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name
 # A copy's name mistyped, standing alone: "Copy:1", "copy: 1", "copy:1000", "[copy:1]".
 MISTYPED = re.compile(r"\s*[\[(]?copy\s*:\s*\d+[\])]?\s*", re.IGNORECASE)
 COPY_NAME = re.compile(r"(?<![\w/=])copy:(\d{1,3})(?![\w/])")
+LOOSE_NAME = re.compile(r"(?<![\w/=])copy\s*:\s*\d", re.IGNORECASE)  # between blocks: only ever meant as a name
 RUN_ON = re.compile(r"(copy:\d{1,3})(?=copy:\d)")  # two names with no space between: "copy:1copy:2"
 QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
 VERDICTS = ("ok", "fixed", "cannot_fix")
@@ -120,7 +121,22 @@ HIDDEN_TAGS = (
     "select",
     "textarea",
 )
-TEXT_BREAKS = {*BLOCK_TAGS, "div", "section", "article", "main", "header", "footer", "li", "tr", "br", "h1", "dt", "dd"}
+TEXT_BREAKS = {
+    *BLOCK_TAGS,
+    "div",
+    "section",
+    "article",
+    "main",
+    "header",
+    "footer",
+    "li",
+    "tr",
+    "br",
+    "h1",
+    "dt",
+    "dd",
+    "summary",
+}
 INTERNAL = re.compile(r"(fn|fnref|sec)-(\d{1,4})")
 XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*>")  # lxml refuses a string that carries one
 
@@ -221,7 +237,8 @@ TOOLS = [
         "description": (
             "Copy a passage of the saved page as HTML, from the block where `start` occurs to the block where `end` "
             "occurs (the same block when they are in one), reduced to the elements the article may hold. Returns the "
-            "copy's name (copy:N) and its HTML; pass the name as the html of insert_after or replace_blocks."
+            "copy's name (copy:N) and its HTML; pass the name as the html of insert_after or replace_blocks. When the "
+            "start is a block the page repeats (a heading over several sections), it is the one nearest before `end`."
         ),
         "input_schema": {
             "type": "object",
@@ -554,8 +571,8 @@ class _Article:
             whole = [n for n in at if start in texts[n]]  # the whole of the block's words, either way
             heads = [n for n in whole if found[n].tag in extract.HEADINGS]
 
-            def same(ns: list[int]) -> bool:  # a block the page repeats (for phone and desk), whatever its classes
-                return len({(found[n].tag, texts[n]) for n in ns}) == 1
+            def same(ns: list[int]) -> bool:  # a block the page repeats, whatever its tag and classes
+                return len({texts[n] for n in ns}) == 1
 
             def reach(n: int) -> int:  # how many blocks on the end phrase is from this start
                 ends = (m for m in range(n, len(texts)) if any(end in text for text in texts[m]))
@@ -564,16 +581,10 @@ class _Article:
             count = len(at)
             for pick, what in ((heads, "the heading"), (whole, "the one that is only that phrase"), (at, "")):
                 if len(pick) == 1 or (pick and same(pick)):
-                    near = min(pick, key=reach)
-                    others = [m for m in pick if m != near and reach(m) < len(texts)]  # the end phrase follows them too
-                    if any(set(range(min(m, near) + 1, max(m, near))) - set(pick) for m in others):
-                        raise ToolError(
-                            f"that start phrase is the whole of {len(pick)} blocks of the page with other text between "
-                            "them; start from a phrase of the block after it"
-                        )
+                    near = min(pick, key=reach)  # the nearest before the end phrase
                     at = [near]
                     if len(pick) > 1:
-                        chose = f" (the page has this block {len(pick)} times; this is the one nearest the end phrase)"
+                        chose = f" (the page has this block {len(pick)} times; this is the one nearest before the end phrase)"
                     else:
                         chose = f" (the start phrase is in {count} blocks of the page; this is {what})"
                     break
@@ -639,8 +650,8 @@ class _Article:
                 before.tail = (before.tail or "") + words
             root.remove(p)
         # A copy's name only between blocks: inside a heading, a quote, emphasis or code it would
-        # be printed, or lose what is around it. A name mistyped is refused too, but not the
-        # model's own code.
+        # be printed, or lose what is around it. A name mistyped is refused too, except in the
+        # model's own code, where "copy: 2" may be the code's.
         for node in root.iter():
             places = []
             if isinstance(node.tag, str) and node is not root:
@@ -649,6 +660,8 @@ class _Article:
                 places.append((node.tail or "", node.getparent()))
             for text, holder in places:
                 if COPY_NAME.search(text):
+                    if holder.tag == "p" and holder.getparent() is not None and holder.getparent() is not root:
+                        holder = holder.getparent()  # the name is a paragraph of its own, in a wrapper
                     raise ToolError(
                         f"name a copy between blocks, not inside <{holder.tag}>: to make a copy a heading, a quote or "
                         "a code block, write that block's HTML yourself"
@@ -658,12 +671,14 @@ class _Article:
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
         out: list[lxml.html.HtmlElement] = []
         pending: list[str] = []
+        real = [False]  # whether what is pending has an element or a word, not only punctuation
 
         def flush() -> None:
             own = "".join(pending)
             pending.clear()
-            if not re.search(r"<|\w", own):
-                return  # a comma or a space between two copies
+            if not real[0]:
+                return  # a comma, a quote or a space between two copies
+            real[0] = False
             blocks = self.clean(own)
             words = " ".join(
                 text
@@ -680,15 +695,19 @@ class _Article:
                 if n % 2:
                     flush()
                     out.extend(blocks_of(int(piece)))
-                elif MISTYPED.fullmatch(piece):
+                elif LOOSE_NAME.search(piece):
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
                 else:
+                    real[0] = real[0] or bool(re.search(r"\w", piece))
                     pending.append(escape(piece))
 
         loose(root.text or "")
         for child in root:
             tail, child.tail = child.tail, None
+            if not real[0]:
+                pending.clear()  # a quote or a comma before a block of the model's own
             pending.append(lxml.html.tostring(child, encoding="unicode"))
+            real[0] = True
             loose(tail or "")
         flush()
         return out, used
@@ -814,7 +833,7 @@ PHRASING = {
 }
 # Where each part of a list, table, definition list or figure belongs.
 PART_OF = {
-    "li": ("ul", "ol", "menu"),
+    "li": ("ul", "ol"),
     "dt": ("dl",),
     "dd": ("dl",),
     "td": ("tr", "thead", "tbody", "tfoot"),

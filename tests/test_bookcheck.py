@@ -691,7 +691,9 @@ def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
     with pytest.raises(bookcheck.ToolError, match="in 2 blocks of the page"):
         article.copy("Same words", "end of it")
     # A block the page repeats word for word: the first, said so.
-    assert "the page has this block 2 times; this is the one nearest the end phrase" in article.copy("x = 1", "x = 1")
+    assert "the page has this block 2 times; this is the one nearest before the end phrase" in article.copy(
+        "x = 1", "x = 1"
+    )
     with pytest.raises(bookcheck.ToolError, match="from the start phrase on"):
         article.copy("end of it", "Unique start")
     monkeypatch.setattr(bookcheck, "COPY_CHARS", 20)
@@ -754,9 +756,17 @@ def test_a_copy_goes_in_as_it_was_made_even_beside_the_models_own_html():
     html = lxml.html.tostring(article.body, encoding="unicode")
     assert '<img src="https://ex.com/f.png"' in html and "<figcaption>Figure 1. The packet path.</figcaption>" in html
     assert "<p>,</p>" not in html and "<h2>Figures</h2>" in html and "img" in alone
-    # A block the page repeats with other text between: which one is meant is not known.
-    with pytest.raises(bookcheck.ToolError, match="with other text between them"):
-        article.copy("* * *", "Part two")
+    # A block the page repeats (a heading over each section): the one nearest before the end phrase.
+    part_two = article.copy("* * *", "Part two")
+    assert "Part one" not in part_two and "nearest before the end phrase" in part_two
+    # Punctuation or quotes between copies are not blocks; a mistyped name among them is refused.
+    article.insert(1, '"copy:1" & copy:2')
+    article.insert(1, '"<h2>Sponsors</h2>copy:2"')
+    marks = [p for p in article.body.iter("p") if p.text_content().strip() in ('"', "&", "'", ",")]
+    assert not marks, "a paragraph of only the punctuation between copies"
+    for typo in ("copy:1, copy: 2", "copy:1, Copy:2", "copy:1 then copy: 2"):
+        with pytest.raises(bookcheck.ToolError, match="exactly as copy:N"):
+            article.insert(1, typo)
     # A box of its own beside a link does not run into it.
     assert "Skip to essay</p>" in article.copy("Skip to essay", "Skip to essay")
     # A copy's name as a paragraph inside a quote or a list item, after a comment or as an
