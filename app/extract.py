@@ -15,6 +15,7 @@ import lxml.html
 import trafilatura
 from lxml import etree
 from readability import Document
+from readability.readability import REGEXES as READABILITY
 
 KEEP = {
     "p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "table", "thead",
@@ -75,6 +76,7 @@ WIDEN_MIN_WORDS = 500
 WIDEN_COVERAGE = 0.9  # share of the page text an element must hold to be the article
 WIDEN_MAX_RATIO = 1.3  # a widened body larger than this multiple of the page text is rejected
 WORDS_PER_MINUTE = 230
+UNLIKELY = READABILITY["unlikelyCandidatesRe"]  # class names readability deletes on sight
 REFILL_MAX_WORDS = 400  # the most text put back under a heading readability left empty
 REFILL_BLOCKS = {"p", "ul", "ol", "dl", "table", "pre", "blockquote", "figure"}
 # Page furniture by its class name or id, for what readability left out.
@@ -309,6 +311,15 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
             ref = etree.Element("a", {MARK: "ref", MARK_N: str(len(notes)), MARK_FIRST: "1"})
             ref.text = str(len(notes))
             el.addprevious(ref)
+    # Readability deletes a heading whose class merely sounds like page furniture, as
+    # Substack's "header-anchor-post" does (it has "header" in it), and an article loses its
+    # section titles. Such a class goes, unless it or the class of the box the heading is
+    # in names something that is furniture to us too ("newsletter", "related", "comments").
+    for heading in root.iter(*HEADINGS):
+        parent = heading.getparent()
+        names = _names(heading) + " " + (_names(parent) if parent is not None else "")
+        if UNLIKELY.search(heading.get("class", "")) and not FURNITURE_CLASS.search(names):
+            heading.attrib.pop("class", None)
     if not notes:
         return None
     holder = lxml.html.Element("div")

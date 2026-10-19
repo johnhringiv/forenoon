@@ -394,3 +394,15 @@ def test_an_xhtml_page_declaring_its_encoding_is_still_read_whole():
     {filler}<ol><li id="fn1">The note.</li></ol></article></body></html>"""
     out = lxml.html.tostring(extract("https://docs.example/manual", page, "").body, encoding="unicode")
     assert out.count('class="noteref"') == 1 and '<a href="#fnref-1">1</a> The note.' in out
+
+
+def test_section_headings_classed_like_a_header_survive():
+    """Substack's "header-anchor-post" has "header" in it, and readability deleted every
+    section title. A newsletter box's heading still goes."""
+    filler = "<p>" + "Plain words about forecasting and base rates. " * 30 + "</p>"
+    page = f"""<html><body><article><div class="body markup">{filler}
+    <h2 class="header-anchor-post">The methodology</h2>{filler}
+    <div class="newsletter-box"><h5 class="newsletter-box-header">Rocket Report</h5></div>{filler}
+    </div></article></body></html>"""
+    out = extract("https://writer.example/p/post", page, "").body
+    assert [h.text_content() for h in out.iter("h2", "h5")] == ["The methodology"]
