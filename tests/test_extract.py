@@ -1689,7 +1689,7 @@ def test_a_closing_pitch_without_its_list_goes_with_its_heading():
         "<li>and let's connect on <a href='https://twitter.com/me'>Twitter</a>!</li></ul>"
     )
     body = lxml.html.fromstring(f"<div>{article}<h2>Connect deeper</h2><p>If you liked this article, please</p></div>")
-    extract_module._drop_dangling_pitch(body, f"<html><body>{article}{pitch}</body></html>")
+    extract_module._drop_dangling_pitch(body, f"<html><body>{article}{pitch}</body></html>", "https://x.example/post")
     assert "liked this article" not in body.text_content() and "Connect deeper" not in body.text_content()
     assert "three functions" in body.text_content()
 
@@ -1702,7 +1702,7 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
         page = (
             f"<html><body>{article}<h2>Next</h2><p>{lead}</p><ul>{items}</ul><p>More of the article.</p></body></html>"
         )
-        extract_module._drop_dangling_pitch(body, page)
+        extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
         return body.text_content()
 
     # A list of the article's own, which readability dropped: the lead-in shows it was there.
@@ -1732,8 +1732,17 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
     )
     # A pitch that breaks off, over a list that sells nothing.
     assert "If you liked this, see" in left("If you liked this, see", own)
+    # A finished line that ends in a word a pitch could break off at.
+    for line in ("If you enjoy puzzles, this is the game to start with", "If you found a mistake, please email me"):
+        assert line in left(line, share), line
+    # A pitch over a list whose links all go to other sites: the author's picks, an appeal.
+    assert "If you enjoyed this, my favourite newsletters are, in order," in left(
+        "If you enjoyed this, my favourite newsletters are, in order,", own
+    )
+    appeal = "<li><a href='https://redcross.example'>Donate to the Red Cross</a></li>"
+    assert "If you liked this report, please" in left("If you liked this report, please", appeal)
     # More of the section after the list on the page: the heading stays.
     body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>If you liked this, please</p></div>")
     page = f"<html><body>{article}<h2>Next</h2><p>If you liked this, please</p><ul>{items}</ul><p>A last real word.</p></body></html>"
-    extract_module._drop_dangling_pitch(body, page)
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
     assert "Next" in body.text_content() and "If you liked" not in body.text_content()

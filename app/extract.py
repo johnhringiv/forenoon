@@ -1870,10 +1870,10 @@ CLOSING_PITCH = re.compile(
     r"thanks for reading\b)",
     re.IGNORECASE,
 )
-BROKEN_OFF = re.compile(r"(,|\b(please|and|or|to|on|at|via|with|me|us))\s*$", re.IGNORECASE)
+BROKEN_OFF = re.compile(r"(,|\b(please|and|or|via))\s*$", re.IGNORECASE)
 
 
-def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str) -> None:
+def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) -> None:
     """Remove the half-sentence that ends the article when it is a pitch ("If you liked this
     article, please") broken off where it led into a list of the site's own links that
     readability left out ("If you liked this article, please" over "subscribe to my
@@ -1905,7 +1905,15 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str) -> None:
     if not listed or _norm(listed) in _norm(body.text_content()):
         return  # the list is in the article: the sentence leads into it
     if not (LEAD_PITCH.search(listed) or REFILL_FURNITURE.search(listed)):
-        return  # what the sentence led to is not a pitch of the site's
+        return  # what the sentence led to is not a pitch
+    site = _place(url)
+    places = [_place(url, a.get("href") or "") for a in after.iter("a")]
+    shares = [a for a in after.iter("a") if SHARE_LINK.search(a.get("href") or "")]
+    if not shares and not any(
+        place is not None and (SOCIAL_HOST.fullmatch(place[0]) or (site is not None and place[0] == site[0]))
+        for place in places
+    ):
+        return  # its links go only to other sites: an appeal or a reading list of the author's
     heading = next((el for el in last.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
     over = next((el for el in lead.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
     rest = [el for el in after.itersiblings() if isinstance(el.tag, str) and el.text_content().strip()]
@@ -2222,7 +2230,7 @@ def extract(
         if page is not None:
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
-            _drop_dangling_pitch(page, page_html)
+            _drop_dangling_pitch(page, page_html, url)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
