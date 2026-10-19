@@ -407,6 +407,10 @@ def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
             box.drop_tag()
 
 
+SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
+SKIP_TARGET_MAX_WORDS = 6
+
+
 def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
     """Remove what a page shows in place of a script that did not run ("Some content could not
     load. Check your internet connection…"), and a request to pick the site as a preferred
@@ -433,6 +437,40 @@ def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
         asks = preferred and not quoted and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
         if notice or asks:
             el.drop_tree()
+
+
+def _drop_skip_targets(root: lxml.html.HtmlElement) -> None:
+    """Remove the label a skip link jumps to past a box ("skip past newsletter promotion" leads
+    to "after newsletter promotion"): it is there for screen readers and is left behind in the
+    article when the box is gone. Only a short paragraph that a link starting "skip" points at,
+    whose text is its own aria-label and holds nothing else, and then the skip links themselves."""
+    links = [
+        a
+        for a in root.iter("a")
+        if (a.get("href") or "").startswith("#") and SKIP_LINK.match(" ".join(a.text_content().split()))
+    ]
+    targets = {a.get("href")[1:] for a in links}
+    dropped = set()
+    for el in list(root.iter("p")):  # not a box or a span, which may be a section's heading
+        text = " ".join(el.text_content().split())
+        if (
+            el.get("id") in targets
+            and el.getparent() is not None
+            and text
+            and _words(text) <= SKIP_TARGET_MAX_WORDS
+            and text.casefold() == " ".join((el.get("aria-label") or "").split()).casefold()
+            and not el.xpath(MEDIA_XPATH)
+        ):
+            el.drop_tree()
+            dropped.add(el.get("id"))
+    for a in (a for a in links if a.get("href")[1:] in dropped):
+        # The link that jumped there, when it is a short label and nothing else.
+        if (
+            a.getparent() is not None
+            and _words(a.text_content()) <= SKIP_TARGET_MAX_WORDS + 2
+            and not a.xpath(MEDIA_XPATH)
+        ):
+            a.drop_tree()
 
 
 def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
@@ -626,6 +664,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     _free_headings(root)
     _free_code_blocks(root)
     _drop_page_notices(root)
+    _drop_skip_targets(root)
     _unclass_data_tables(root)
     if not notes:
         return None
@@ -1002,6 +1041,114 @@ def _pictures_already(el: lxml.html.HtmlElement, body: lxml.html.HtmlElement) ->
     return bool(names) and names <= have
 
 
+CONTINUATION_DEPTH = 3  # how far up the article's box and a continuation of it meet
+CONTINUATION_MIN_PARAGRAPHS = 3
+CONTINUATION_MIN_WORDS = 80
+CONTINUATION_LINK_SHARE = 0.25
+CONTINUATION_PARAGRAPH_WORDS = 12
+CONTINUATION_TAGS = ("p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "blockquote", "pre", "figure", "table")
+
+
+def _unlikely(el: lxml.html.HtmlElement) -> bool:
+    """Whether an element's class or id names it as page furniture or comments."""
+    names = _names(el)
+    return bool(FURNITURE_CLASS.search(names) or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names))
+
+
+def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
+    """Put back the rest of an article that the page splits into boxes around an advert.
+
+    Ars Technica ends one box of the article's paragraphs at an advert and starts a second box,
+    of the same kind and class, after it; Yahoo puts the second half in a box of its own after
+    the first, behind a "read more" button. Readability keeps the first box and the article
+    stops halfway. A later box is taken as more of the article only when it has the class of
+    the box holding the article's last paragraph and sits near it on the page, or follows
+    that box beside it and its paragraphs have the class of the article's; and it is itself
+    paragraphs of text: it opens with a paragraph or heading, holds at least three paragraphs
+    of some length, and is mostly not links. A run of comments, a reporter's note or a list
+    of related stories in a box of the same class is none of these together. Nor is a box in
+    another <article> than the article's, or after a page title (<h1>) that comes after the
+    article's box: that is the next story on a page that loads one after another. Nor is a
+    box named, or inside a box named, as furniture or comments. Only the box's own
+    paragraphs, headings, lists, quotes, code, figures and tables are put back, after the
+    article, in the page's order, and a box's text only once. The search stops at a heading
+    between the boxes, which titles whatever comes next."""
+    paragraphs = [p for p in body.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+    if not paragraphs:
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    last = _norm(paragraphs[-1].text_content())
+    found = [p for p in page.iter("p") if _norm(p.text_content()) == last]
+    if len(found) != 1:
+        return
+    box, style = found[0].getparent(), found[0].get("class")
+    # Only the box right after the article's, past a "read more" button or label: a box further
+    # on, past others, is something else.
+    following = next(
+        (
+            el
+            for el in box.itersiblings()
+            if isinstance(el.tag, str)
+            and (el.find(".//p") is not None or _words(el.text_content()) >= CONTINUATION_PARAGRAPH_WORDS)
+        ),
+        None,
+    )
+    siblings = {following} if style and following is not None else set()
+    # Not the page's own top boxes, which hold everything on it.
+    near = [a for a in list(box.iterancestors())[:CONTINUATION_DEPTH] if a.tag not in ("html", "body", "main")]
+    if _unlikely(box):
+        return
+    story = next(box.iterancestors("article"), None)
+    shared = set(box.iterancestors())  # the elements, not their id(): lxml makes new proxies
+    kept = _norm(body.text_content())
+    holder = paragraphs[-1].getparent()
+    while holder.tag not in ("div", "article", "section", "main", "body") and holder.getparent() is not None:
+        holder = holder.getparent()
+    after, taken = False, []
+    for el in page.iter(box.tag, *HEADINGS):
+        if el is box:
+            after = True
+            continue
+        if not after or box in el.iterancestors():
+            continue
+        if el.tag in HEADINGS:
+            if any(t in el.iterancestors() for t in taken):
+                continue  # a heading of the continuation itself
+            break  # a heading between the boxes: the next story's title, or a box's beside it
+        if next(el.iterancestors("article"), None) is not story:
+            continue
+        own = [el, *(a for a in el.iterancestors() if a not in shared)]
+        if any(_unlikely(a) for a in own):
+            continue
+        children = [c for c in el if isinstance(c.tag, str)]
+        long = [c for c in children if c.tag == "p" and _words(c.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+        same_box = box.get("class") and el.get("class") == box.get("class")
+        same_paragraphs = el in siblings and long and all(c.get("class") == style for c in long)
+        if not (same_box and any(a in near for a in el.iterancestors())) and not same_paragraphs:
+            continue
+        text = " ".join(el.text_content().split())
+        links = sum(len(" ".join(a.text_content().split())) for a in el.iter("a"))
+        if (
+            not children
+            or children[0].tag not in ("p", *HEADINGS)
+            or len(long) < CONTINUATION_MIN_PARAGRAPHS
+            or _words(text) < CONTINUATION_MIN_WORDS
+            or links >= CONTINUATION_LINK_SHARE * len(text)
+            or _norm(long[0].text_content()) in kept
+        ):
+            continue
+        taken.append(el)
+        for child in children:
+            if child.tag in CONTINUATION_TAGS:
+                piece = copy.deepcopy(child)
+                piece.tail = None
+                holder.append(piece)
+        kept = _norm(body.text_content())
+
+
 def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back what readability removed from under a heading it kept.
 
@@ -1105,6 +1252,83 @@ def _plain_blocks(el: lxml.html.HtmlElement) -> bool:
 
 def _names(el: lxml.html.HtmlElement) -> str:
     return f"{el.get('class', '')} {el.get('id', '')}"
+
+
+LIVE_BLOG = re.compile(r"(js-)?live-?blog(-body)?", re.IGNORECASE)
+LIVE_ENTRIES_MIN = 3
+RELATIVE_TIME = re.compile(r"(\d+\s*(s|m|h|d|sec|min|mins|hr|hrs|hour|hours|day|days)|just now)( ago)?", re.IGNORECASE)
+LIVE_ENTRY_MIN_WORDS = 20
+LIVE_ENTRY_LINK_SHARE = 0.5
+LIVE_OVER_PAGE = 1.5  # how many times the words of readability's body the live blog must have
+
+
+def _live_entry(el: lxml.html.HtmlElement, box: lxml.html.HtmlElement) -> bool:
+    """Whether an <article> in a live blog's box is an entry: not inside another, of some
+    length, mostly not links (a teaser for the live blog elsewhere), and neither it nor a box
+    around it inside the live blog named as comments or furniture."""
+    around = []
+    for a in el.iterancestors():
+        if a is box:
+            break
+        around.append(a)
+    if any(a.tag == "article" for a in around):
+        return False
+    text = " ".join(el.text_content().split())
+    links = sum(len(" ".join(a.text_content().split())) for a in el.iter("a"))
+    if _words(text) < LIVE_ENTRY_MIN_WORDS or links >= LIVE_ENTRY_LINK_SHARE * len(text):
+        return False
+    return not any(_unlikely(a) for a in (el, *around))
+
+
+def _live_blog(page_html: str, kept: lxml.html.HtmlElement | None = None) -> lxml.html.HtmlElement | None:
+    """A live blog's entries, newest first as the page has them.
+
+    Readability keeps one entry of a live blog (the pinned one, or the longest) and the rest
+    of the day's reporting is lost. The Guardian puts each entry in an <article> of its own
+    inside a box named "liveblog-body", beside a carousel of key events and adverts. Only
+    such a box, named so in its id or as one of its classes, and holding at least three
+    entries of some length, gives a body: its entries and nothing else of it."""
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return None
+    boxes = [
+        el
+        for el in page.iter()
+        if isinstance(el.tag, str)
+        and any(LIVE_BLOG.fullmatch(name) for name in [el.get("id") or "", *(el.get("class") or "").split()])
+    ]
+    # The innermost box named so: a "liveblog" wrapper around its "liveblog-body" holds other
+    # cards beside the entries.
+    boxes = [box for box in boxes if not any(other in box.iterdescendants() for other in boxes)]
+    found = [[el for el in box.iter("article") if el is not box and _live_entry(el, box)] for box in boxes]
+    best = max(range(len(found)), key=lambda i: len(found[i]), default=None)
+    if best is None or len(found[best]) < LIVE_ENTRIES_MIN:
+        return None
+    entries, box = found[best], boxes[best]
+    # The live blog is the article: what readability kept of the page (one of its entries)
+    # is in its entries, and it is not a box at the side of the page.
+    if any(_unlikely(a) for a in box.iterancestors()):
+        return None
+    if kept is not None:
+        inside = _norm(" ".join(entry.text_content() for entry in entries))
+        long = [p for p in kept.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+        if not long or not all(_norm(p.text_content()) in inside for p in long):
+            return None
+    body, seen = lxml.html.Element("div"), set()
+    for entry in entries:
+        entry = copy.deepcopy(entry)
+        entry.tail = None
+        for time in list(entry.iter("time")):
+            if RELATIVE_TIME.fullmatch(" ".join(time.text_content().split())):
+                time.drop_tree()  # "1h ago": stale in a book read later
+        text = _norm(" ".join(t for t in entry.itertext() if t.strip()))
+        if text in seen:
+            continue  # a pinned entry shown again in the stream
+        seen.add(text)
+        entry.tag = "div"
+        body.append(entry)
+    return body
 
 
 def _widest(page_html: str, reference: int) -> lxml.html.HtmlElement | None:
@@ -1292,6 +1516,7 @@ def extract(
         page = _readability(page_html)
         if page is not None:
             _refill_sections(page, page_html)
+            _continue_article(page, page_html)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
@@ -1303,6 +1528,12 @@ def extract(
             # Only when it recovers the article without dragging in much else.
             if wide is not None and kept < _words(wide.text_content()) <= WIDEN_MAX_RATIO * reference:
                 candidates["page-wide"] = wide
+        live = _live_blog(page_html, page)
+        live = sanitize(live, url, marked=True) if live is not None else None
+        # Only when it has far more than readability kept: one entry of the day's reporting.
+        if live is not None and _words(live.text_content()) >= LIVE_OVER_PAGE * kept:
+            candidates["page-live"] = live
+            notes["page-live"] = notes["page"]
     if mode != "page" or not candidates:
         feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False)
         feed = _parse_fragment(feed_html)

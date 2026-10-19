@@ -1,6 +1,7 @@
 import lxml.html
 from lxml import etree
 
+from app import extract as extract_module
 from app.extract import extract, sanitize
 
 
@@ -900,3 +901,313 @@ def test_pictures_beside_code_and_furniture_wrappers_stay_as_they_were():
         page = f"<html><body><article>{words}{words}{block}</article></body></html>"
         text = extract("https://blog.example/b", page, "", "page").body.text_content()
         assert lxml.html.fromstring(block).text_content() not in text, block
+
+
+def test_the_label_a_skip_link_jumps_to_is_dropped_but_not_a_paragraph_that_shares_its_name():
+    words = "<p>" + "Plain words about the price of training and who pays for it at work. " * 10 + "</p>"
+    promo = (
+        "<figure><a href='#EmailSignup-skip-link-15'>skip past newsletter promotion</a>"
+        "<aside aria-label='newsletter promotion'><p>Sign up to Business Today</p>"
+        "<form><input type='email' name='email'><button type='submit'>Sign up</button></form></aside>"
+        "<p id='EmailSignup-skip-link-15' aria-label='after newsletter promotion' role='note'>"
+        "after newsletter promotion</p></figure>"
+    )
+    page = f"<html><body><article>{words}{promo}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert "newsletter promotion" not in out and out.count("Plain words") == 20
+    # A paragraph a skip link points at is the article's when its text is not its own label, or
+    # when no skip link points at it.
+    for kept in (
+        "<a href='#methods'>Skip to the methods</a><p id='methods' aria-label='Methods'>We asked 400 firms.</p>",
+        "<p id='summary' aria-label='In short'>In short</p>",
+    ):
+        page = f"<html><body><article>{words}{kept}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert ("We asked 400 firms" in out) if "methods" in kept else ("In short" in out)
+
+
+def test_an_article_split_around_an_advert_is_put_back_together():
+    first = "".join(
+        f"<p>Paragraph {n} of the drone story, about ships struck off the coast at night.</p>" for n in range(12)
+    )
+    rest = "".join(
+        f"<p>Later paragraph {n} on hybrid warfare across Europe and the ports it hit.</p>" for n in range(8)
+    )
+
+    def page(second):
+        return (
+            "<html><body><main><article><div class='grid'><div class='col'><div class='post-content'>"
+            f"{first}</div></div></div><div class='ad ad--mid'></div>"
+            f"<div class='grid'><div class='col'><div class='post-content'>{second}</div></div></div>"
+            "</article></main></body></html>"
+        )
+
+    # What readability kept of the page: the first box only (on Ars Technica, where the boxes are
+    # further apart than here and the advert between them is filled).
+    body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+    extract_module._continue_article(body, page(f"<h2>Hybrid warfare</h2>{rest}"))
+    out = body.text_content()
+    assert out.index("Paragraph 11") < out.index("Hybrid warfare") < out.index("Later paragraph 4")
+    # A box of the same class that is not more of the article stays out: links to other
+    # stories, or a reporter's note and a line of comments.
+    related = "".join(
+        f"<p><a href='/s{n}'>Another story about drones and ships, number {n} in the list</a></p>" for n in range(5)
+    )
+    note = (
+        "<p>Olha Konovalova contributed reporting.</p><p>From the comments</p>"
+        "<p>Later paragraph from a reader: I lived in Kyiv for years and the nights are like that.</p>"
+        "<p>Later paragraph, a reporter's reply: thank you for reading and for writing in.</p>"
+    )
+    for second in (related, note):
+        body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+        extract_module._continue_article(body, page(second))
+        out = body.text_content()
+        assert "Paragraph 11" in out and "Another story" not in out and "Later paragraph" not in out
+
+
+def test_the_half_of_an_article_behind_a_read_more_button_is_put_back():
+    first = "".join(
+        f"<p class='text paragraph'>Paragraph {n} about the deficit and what the government spent in the year to October.</p>"
+        for n in range(12)
+    )
+    rest = "".join(
+        f"<p class='text paragraph'>Later paragraph {n} on tariffs, refunds and the revenue that fell this year.</p>"
+        for n in range(8)
+    )
+    other = "".join(
+        f"<p class='promo'>Later paragraph {n}: more from the markets desk, read it in the app today.</p>"
+        for n in range(8)
+    )
+
+    def page(second):
+        return (
+            f"<html><body><article><div class='body'><div class='bodyItems-wrapper'>{first}</div>"
+            f"<div class='read-more-wrapper'><h2 class='text heading'>Revenue downturn</h2>{second}</div>"
+            "</div></article></body></html>"
+        )
+
+    body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+    extract_module._continue_article(body, page(rest))
+    out = body.text_content()
+    assert out.index("Paragraph 11") < out.index("Revenue downturn") < out.index("Later paragraph 7")
+    body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+    extract_module._continue_article(body, page(other))
+    assert "Later paragraph" not in body.text_content()
+
+
+def test_a_live_blog_keeps_every_entry_and_not_its_carousel_or_adverts():
+    def entry(n):
+        return (
+            f"<article class='block' id='block-{n}'><div><a href='#block-{n}'>0{n}.15 EDT</a></div>"
+            f"<h2>Update {n}</h2><p>Entry {n}: police in Paris arrested more people overnight, the ministry said, "
+            "as protests spread to other cities and the damage was counted on Sunday morning.</p></article>"
+        )
+
+    def page(count):
+        return (
+            "<html><body><div id='liveblog'><div class='js-liveblog-body' id='liveblog-body'>"
+            "<div id='key-events-carousel'><ul><li><a href='#block-1'>45m ago Update 1</a></li></ul></div>"
+            + "<aside class='ad-slot-container'>Advertisement</aside>".join(entry(n) for n in range(1, count + 1))
+            + "</div></div><footer>About us · Contact</footer></body></html>"
+        )
+
+    # Readability keeps one entry of a real live blog; this one is small enough that it may keep
+    # them all, so the live blog's own body is checked as well as what extraction picks.
+    for body in (extract_module._live_blog(page(5)), extract("https://news.example/live", page(5), "", "page").body):
+        out = body.text_content()
+        assert all(f"Entry {n}:" in out for n in range(1, 6))
+        assert out.index("Entry 1:") < out.index("Entry 5:") and "05.15 EDT" in out
+    out = extract_module._live_blog(page(5)).text_content()
+    assert "45m ago" not in out and "Advertisement" not in out and "About us" not in out
+    # Two entries are not a live blog to put together.
+    assert extract_module._live_blog(page(2)) is None
+
+
+def _paragraphs(label, count):
+    return "".join(
+        f"<p>{label} paragraph {n} about the council vote, the budget and what the town will build next year.</p>"
+        for n in range(count)
+    )
+
+
+def test_a_continuation_is_not_the_next_story_a_comment_or_a_second_copy():
+    first = _paragraphs("First", 12)
+
+    def continued(page):
+        body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+        extract_module._continue_article(body, page)
+        return body.text_content()
+
+    # The next story on a page that loads one after another: in another <article>, or after
+    # its own title.
+    stacked = (
+        f"<main><article class='story'><h1>Council vote</h1><div class='article-body'>{first}</div></article>"
+        f"<article class='story'><h1>Other story</h1><div class='article-body'>{_paragraphs('Second', 10)}</div></article></main>"
+    )
+    wrapped = (
+        f"<main><div class='story-wrap'><h1>Council vote</h1><div class='article-body'>{first}</div></div>"
+        f"<div class='up-next'>Up next</div><div class='story-wrap'><h1>Other story</h1>"
+        f"<div class='article-body'>{_paragraphs('Second', 10)}</div></div></main>"
+    )
+    # A reader's comment whose box has the article box's class.
+    comment = (
+        f"<div id='page'><main><article><div class='entry-content'>{first}</div></article>"
+        "<section id='respond'><ol class='commentlist'><li><div class='entry-content'>"
+        f"{_paragraphs('Reader', 3)}</div></li></ol></section></main></div>"
+    )
+    for page in (stacked, wrapped, comment):
+        out = continued(f"<html><body>{page}</body></html>")
+        assert "Second paragraph" not in out and "Reader paragraph" not in out
+    # The same continuation twice (a copy for phones and one for desktops) is put back once.
+    twice = (
+        f"<main><article><div class='grid'><div class='col'><div class='post-content'>{first}</div></div></div>"
+        + f"<div class='grid'><div class='col'><div class='post-content'>{_paragraphs('Later', 8)}</div></div></div>"
+        * 2
+        + "</article></main>"
+    )
+    assert continued(f"<html><body>{twice}</body></html>").count("Later paragraph 7") == 1
+
+
+def test_a_live_blog_is_not_a_teaser_box_or_its_comments():
+    article = (
+        f"<article class='story'><h1>School board</h1><div class='body'>{_paragraphs('Article', 14)}</div></article>"
+    )
+    teaser = "<aside class='liveblog'><h4>Live: election night</h4>" + "".join(
+        f"<article class='teaser'><a href='/live#p{n}'>Latest {n}: the count continues in the county with "
+        "turnout up on last time and three wards still to declare tonight.</a></article>"
+        for n in range(12)
+    )
+    out = extract(
+        "https://news.example/a",
+        f"<html><body><div class='wrap'>{article}{teaser}</aside></div></body></html>",
+        "",
+        "page",
+    )
+    assert out.method != "page-live" and "Article paragraph 13" in out.body.text_content()
+    entries = "".join(
+        f"<article class='post'><p>Entry {n}: the river rose again overnight and the council opened two "
+        "more shelters in the town centre for families.</p></article>"
+        for n in range(5)
+    )
+    comments = "<section class='comments'>" + "".join(
+        f"<article class='comment'><p>Reader {n}: I live near the river and the water reached our street "
+        "at about four in the morning, much faster than last year.</p></article>"
+        for n in range(8)
+    )
+    live = extract_module._live_blog(
+        f"<html><body><div id='liveblog'><div class='liveblog-body'>{entries}</div>{comments}</section></div></body></html>"
+    )
+    assert "Entry 4" in live.text_content() and "Reader" not in live.text_content()
+    # A pinned entry the stream shows again is kept once.
+    pinned = entries.split("</article>")[0] + "</article>"
+    live = extract_module._live_blog(f"<html><body><div class='liveblog-body'>{pinned}{entries}</div></body></html>")
+    assert live.text_content().count("Entry 0:") == 1
+
+
+def test_a_box_a_skip_link_points_at_is_kept():
+    words = _paragraphs("Article", 10)
+    page = (
+        f"<html><body><article>{words}<a href='#methodology'>Skip to methodology</a>{words}"
+        "<div id='methodology' aria-label='How we did it'>How we did it</div>"
+        f"<p>{'We asked four hundred firms about training. ' * 5}</p></article></body></html>"
+    )
+    assert "How we did it" in extract("https://news.example/a", page, "", "page").body.text_content()
+
+
+def test_continuations_with_theme_names_on_the_page_and_shallow_pages():
+    first = _paragraphs("First", 12)
+
+    def continued(page):
+        body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
+        extract_module._continue_article(body, page)
+        return body.text_content()
+
+    # A theme's class on <body> ("has-sidebar") is not the continuation's own name.
+    ars = (
+        "<html><body class='single has-sidebar header-fixed'><main><article>"
+        f"<div class='grid'><div class='col'><div class='post-content'>{first}</div></div></div>"
+        f"<div class='grid'><div class='col'><div class='post-content'>{_paragraphs('Later', 8)}</div></div></div>"
+        "</article></main></body></html>"
+    )
+    assert "Later paragraph 7" in continued(ars)
+    # On a shallow page every box shares <body> or <main>: the next story, or excerpts, are not
+    # near the article for that.
+    next_story = (
+        f"<main><div class='post'><h1>Council vote</h1><div class='entry-content'>{first}</div></div>"
+        f"<div class='post'><h2><a href='/b'>Other story</a></h2><div class='entry-content'>{_paragraphs('Second', 6)}</div></div></main>"
+    )
+    excerpts = (
+        f"<div class='post'><h1>Council vote</h1><div class='entry-content'>{first}</div></div>"
+        "<div class='more'><h3>More from the desk</h3><div class='excerpts'><div class='teaser'>"
+        f"<div class='entry-content'>{_paragraphs('Second', 6)}</div></div></div></div>"
+    )
+    for page in (next_story, excerpts):
+        assert "Second paragraph" not in continued(f"<html><body>{page}</body></html>")
+
+
+def test_a_skip_target_inside_a_heading_is_kept():
+    words = _paragraphs("Article", 6)
+    page = (
+        f"<html><body><article>{words}<a href='#part-2'>Skip to part two</a>{words}"
+        f"<h2><span id='part-2' aria-label='Part two'>Part two</span></h2>{words}</article></body></html>"
+    )
+    assert "Part two" in extract("https://news.example/a", page, "", "page").body.text_content()
+
+
+def test_a_live_blog_is_its_innermost_box_and_drops_stale_times():
+    def entry(n, time=True):
+        stamp = f"<time>{n}h ago</time>" if time else ""
+        return (
+            f"<article class='block'>{stamp}<p>Entry {n}: police in Paris arrested more people overnight, the "
+            "ministry said, as protests spread to other cities and the damage was counted.</p></article>"
+        )
+
+    cards = "<section class='dcr-9xk2'>" + "".join(
+        f"<article class='dcr-q1w2'><a href='/s{n}'>Other story</a><p>Card {n}: a standfirst for another "
+        "story on the site that has nothing to do with the protests in France today.</p></article>"
+        for n in range(3)
+    )
+    stream = "".join(entry(n) for n in range(1, 6))
+    page = f"<html><body><article class='content'><div id='liveblog'><div id='liveblog-body'>{entry(3, time=False)}{stream}</div>{cards}</section></div></article></body></html>"
+    live = extract_module._live_blog(page).text_content()
+    assert "Card" not in live and live.count("Entry 3:") == 1 and "Entry 5:" in live and "ago" not in live
+
+
+def test_a_continuation_stops_at_the_next_title_and_takes_only_the_next_box():
+    first = "".join(f"<p class='para'>{p}</p>" for p in _paragraphs("First", 12)[3:-4].split("</p><p>"))
+
+    def continued(page):
+        body = lxml.html.fromstring(f"<div><div>{_paragraphs('First', 12)}</div></div>")
+        extract_module._continue_article(body, f"<html><body>{page}</body></html>")
+        return body.text_content()
+
+    titled = (
+        f"<div id='feed'><div class='item'><h1>One</h1><div class='c'>{_paragraphs('First', 12)}</div></div>"
+        f"<div class='item'><h2>Another story</h2><div class='c'>{_paragraphs('Next', 6)}</div></div></div>"
+    )
+    assert "Next paragraph" not in continued(titled)
+    paras = _paragraphs("Next", 6).replace("<p>", "<p class='para'>")
+    past = (
+        f"<div class='c'>{first}</div><div class='more-stories'><p class='para'>More from the desk today.</p></div>"
+        f"<div class='x'>{paras}</div>"
+    )
+    assert "Next paragraph" not in continued(past)
+
+
+def test_a_live_blog_at_the_side_of_an_article_or_wrapping_its_entries_in_an_article():
+    story = _paragraphs("Story", 8)
+    cards = "".join(
+        f"<article class='card'><div>Other {n}: lorem ipsum dolor sit amet consectetur adipiscing elit sed do "
+        "eiusmod tempor incididunt ut labore et dolore magna aliqua.</div></article>"
+        for n in range(40)
+    )
+    page = f"<html><body><main><article><h1>Story</h1><div class='body'>{story}</div></article><aside class='sidebar'><div class='live-blog'>{cards}</div></aside></main></body></html>"
+    assert extract("https://news.example/a", page, "", "page").method != "page-live"
+    assert extract_module._live_blog(page, lxml.html.fromstring(f"<div>{story}</div>")) is None
+    entries = "".join(
+        f"<article><p>Entry {n}: the river rose again overnight and the council opened two more shelters "
+        "in the town centre for families who had to leave.</p></article>"
+        for n in range(3)
+    )
+    live = extract_module._live_blog(f"<html><body><article class='liveblog'>{entries}</article></body></html>")
+    assert live.text_content().count("Entry 1:") == 1

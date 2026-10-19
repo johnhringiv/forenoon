@@ -55,6 +55,13 @@ PAGE_START_CHARS = 8_000  # of the saved page's text, in the first message
 READ_CHARS = 6_000  # the most `page_read` returns
 FIND_CONTEXT = 150  # characters each side of a match
 MAX_FINDS = 10
+# Where a listing leaves a block out. Worded so it cannot pass for the end of the article's own
+# text: a bare "(shortened)" did, and the check "restored" sentences that were never cut.
+LISTING_NOTE = "[not the end of the article: {more} more characters of block {n} are not shown here{hint}]"
+TEXT_ONLY_NOTE = "[not the whole block: block {n} is shown as its text only, without its markup or pictures{cut}; article_read first={n} last={n} shows it]"
+READ_HINT = "; article_read first={n} last={n} shows more"
+TOO_LONG_HINT = "; no tool shows more of this block: find its later text on the page with page_find"
+READ_STOP = "[not the end of the article: article_read stops before block {n}; read from block {n} for the rest]"
 LISTING_CHARS = 30_000  # of the article's blocks shown whole in the first message; the rest shortened
 SHORT_BLOCK_CHARS = 160
 BLOCK_CHARS = 6_000  # the most of one block shown in a tool's answer
@@ -134,6 +141,10 @@ code, figure, figcaption, img, table, a, em, strong. Everything you write is red
 scripts, styles, classes and other attributes are removed.
 - An image must be one the article already has (written as it is listed, src="picture:N" for \
 an embedded one) or one whose address is on the saved page.
+- A listing or a reading may stop partway through a block or before one, marked "[not the \
+end of the article: …]", or show a block as its text only, marked "[not the whole block: …]". \
+The article is not cut there and its pictures are not missing; read on with article_read, \
+or find the passage with page_find, before judging how the article ends or what it lacks.
 - Block numbers change after every edit. Each edit's answer lists the blocks around it with \
 their new numbers; use those.
 - Use page_find to locate a passage on the page, page_read to read more of it, and page_view \
@@ -182,7 +193,10 @@ TOOLS = [
     },
     {
         "name": "article_read",
-        "description": "The whole HTML of the article's blocks from first to last, for blocks the listing shortened.",
+        "description": (
+            "The HTML of the article's blocks from first to last, for blocks the listing shortened. "
+            f"It shows up to {READ_BLOCKS_CHARS:,} characters, and says where it stops."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {"first": {"type": "integer"}, "last": {"type": "integer"}},
@@ -329,13 +343,14 @@ class _Article:
             self.pictures.append(data)
         return self.pictures.index(data) + 1
 
-    def listing(self, first: int, last: int, cap: int = BLOCK_CHARS) -> str:
+    def listing(self, first: int, last: int, cap: int = BLOCK_CHARS, hint: str = READ_HINT) -> str:
         found = blocks(self.body)
         lines = []
         for n in range(max(1, first), min(len(found), last) + 1):
             html = self.shown(found[n - 1])
             if len(html) > cap:
-                html = html[:cap] + f" …(cut at {cap} characters; article_read shows it all)"
+                note = LISTING_NOTE.format(n=n, more=len(html) - cap, hint=hint.format(n=n))
+                html = f"{html[:cap]} {note}"
             lines.append(f"[{n}] {html}")
         return "\n".join(lines) or "(no blocks)"
 
@@ -346,9 +361,9 @@ class _Article:
             html = self.shown(el)
             if spent + len(html) > LISTING_CHARS:
                 text = " ".join(el.text_content().split())
-                html = (
-                    f"<{el.tag}> {text[:SHORT_BLOCK_CHARS]}{'…' if len(text) > SHORT_BLOCK_CHARS else ''} (shortened)"
-                )
+                more = len(text) - SHORT_BLOCK_CHARS
+                cut = f", and {more} more characters of its text are not shown" if more > 0 else ""
+                html = f"<{el.tag}> {text[:SHORT_BLOCK_CHARS]} {TEXT_ONLY_NOTE.format(n=n, cut=cut)}"
             spent += len(html)
             lines.append(f"[{n}] {html}")
         return "\n".join(lines)
@@ -360,8 +375,19 @@ class _Article:
         return found[first - 1 : last]
 
     def read(self, first: int, last: int) -> str:
+        """The blocks whole, up to READ_BLOCKS_CHARS: a block longer than that is cut with a note
+        saying so, and the reading stops before a block that would not fit, saying so; never in
+        the middle of the text without a word, which reads as the article being cut."""
         self._range(first, last)
-        return self.listing(first, last, READ_BLOCKS_CHARS)[:READ_BLOCKS_CHARS]
+        lines, spent = [], 0
+        for n in range(first, last + 1):
+            line = self.listing(n, n, READ_BLOCKS_CHARS, hint=TOO_LONG_HINT)
+            if lines and spent + len(line) > READ_BLOCKS_CHARS:
+                lines.append(READ_STOP.format(n=n))
+                break
+            lines.append(line)
+            spent += len(line)
+        return "\n".join(lines)
 
     def replace(self, first: int, last: int, html: str) -> str:
         old = self._range(first, last)
