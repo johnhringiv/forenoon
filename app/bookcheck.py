@@ -67,11 +67,14 @@ SHORT_BLOCK_CHARS = 160
 BLOCK_CHARS = 6_000  # the most of one block shown in a tool's answer
 READ_BLOCKS_CHARS = 16_000  # the most `article_read` returns
 RECORD_CHARS = 4_000  # of each edit's before and after, as recorded
-COPY_CHARS = 40_000  # the most HTML one `page_copy` takes from the page
+COPY_CHARS = 40_000  # the most HTML one `page_copy` gives, once cleaned
+COPY_RAW_CHARS = 400_000  # the most of the page's own HTML it reads for one copy
 COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
-QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " "})
+COPY_LIKE = re.compile(r"(?<![\w/])copy\s*:\s*\d", re.IGNORECASE)  # a copy's name mistyped
+TAG = re.compile(r"(<[^>]*>)")
+QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "\u00a0": " ", "\u00ad": None, "\u200b": None})
 VERDICTS = ("ok", "fixed", "cannot_fix")
 KINDS = ("cut_short", "missing_content", "page_furniture", "broken_media", "formatting", "wrong_article", "other")
 MAX_SUMMARY = 300
@@ -140,10 +143,11 @@ rewrite, shorten, summarise or correct the author's text, never add words of you
 never add commentary or notes about your changes.
 - Restore from the page with page_copy, and pass its copy as the html of insert_after or \
 replace_blocks (html "copy:1"): it brings the page's own markup, with its links, emphasis, \
-headings and quotes. Copy even a single heading, line or code block; never retype the page's \
-text. Write HTML yourself only to fix formatting the page's markup does not give (a heading \
-the page shows as a bold paragraph, say), and then keep the block's links and emphasis as \
-they are.
+headings and quotes. Copy even a single heading, line or code block, and name a copy inside \
+your own HTML where you need to (html "<h2>Sponsors</h2>copy:2"). Write HTML yourself only to \
+fix formatting the page's markup does not give (a heading the page shows as a bold paragraph, \
+say), keeping the block's links and emphasis as they are, or when page_copy cannot take a \
+passage page_find shows, copying its text exactly.
 - Change only the blocks that are wrong. Never replace a block that is right, or rewrite many \
 blocks to fix one.
 - Most articles are fine. When this one is, call finish with verdict "ok" at once, without \
@@ -487,26 +491,42 @@ class _Article:
         """The page's blocks from the one holding `start` to the next one from there holding
         `end`, cleaned as an edit's HTML is, kept as copy:N for an edit to use."""
         found = self._page_blocks()
-        texts = [_plain(" ".join(el.text_content().split())) for el in found]
+        # Each block's words as they run on (text_content) and with its lines apart (itertext,
+        # as page_find sees them): a phrase found either way is in the block.
+        texts = [
+            (_plain(" ".join(el.text_content().split())), _plain(" ".join(" ".join(el.itertext()).split())))
+            for el in found
+        ]
         start, end = _plain(" ".join(start.split())), _plain(" ".join(end.split()))
         if not start or not end:
             raise ToolError("give a phrase from the passage's first block and one from its last")
-        at = [n for n, text in enumerate(texts) if start in text]
+        at = [n for n, pair in enumerate(texts) if any(start in text for text in pair)]
         if not at:
             raise ToolError("that start phrase is in no block of the page; check it with page_find")
         if len(at) > 1:
+            # A heading's words are often a table of contents' too: the block that is just the
+            # phrase, and a heading before any other.
+            whole = [n for n in at if start in texts[n]]  # the whole of the block's words, either way
+            heads = [n for n in whole if found[n].tag in extract.HEADINGS]
+            at = heads if len(heads) == 1 else whole if len(whole) == 1 else at
+        if len(at) > 1:
             raise ToolError(f"that start phrase is in {len(at)} blocks of the page; give a longer one")
-        to = next((n for n in range(at[0], len(texts)) if end in texts[n]), None)
+        to = next((n for n in range(at[0], len(texts)) if any(end in text for text in texts[n])), None)
         if to is None:
             raise ToolError("that end phrase is in no block of the page from the start phrase on")
         html = "".join(lxml.html.tostring(el, encoding="unicode", with_tail=False) for el in found[at[0] : to + 1])
-        if len(html) > COPY_CHARS:
-            raise ToolError(f"that passage is {len(html):,} characters of HTML, over {COPY_CHARS:,}: copy it in parts")
+        if len(html) > COPY_RAW_CHARS:
+            raise ToolError(f"that passage is {len(html):,} characters of the page's HTML: copy it in parts")
         new = self.clean(html, from_page=True)
         if not new:
             raise ToolError("nothing is left of that passage once it is reduced to the allowed elements")
+        kept = "".join(lxml.html.tostring(el, encoding="unicode", with_tail=False) for el in new)
+        if len(kept) > COPY_CHARS:
+            raise ToolError(
+                f"that passage is {len(kept):,} characters once cleaned, over {COPY_CHARS:,}: copy it in parts"
+            )
         shown = "\n".join(self.shown(el) for el in new)
-        self.copies.append("".join(lxml.html.tostring(el, encoding="unicode", with_tail=False) for el in new))
+        self.copies.append(kept)
         name = f"copy:{len(self.copies)}"
         if len(shown) > COPY_SHOWN_CHARS:
             more = len(shown) - COPY_SHOWN_CHARS
@@ -540,8 +560,14 @@ class _Article:
         if COPY_REF.fullmatch(html.strip()):  # the copy as it is: already cleaned
             pasted = COPY_REF.sub(paste, html.strip())
             return _as_blocks(lxml.html.fragment_fromstring(pasted, create_parent="div")), used[0]
-        pasted = COPY_REF.sub(paste, html)
-        return self.clean(pasted), used[0] if used else 0
+        # Named between tags only, never inside one (an attribute), and none mistyped.
+        parts = TAG.split(html)
+        for n, part in enumerate(parts):
+            if n % 2 == 0:
+                if COPY_LIKE.search(COPY_REF.sub("", part)):
+                    raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
+                parts[n] = COPY_REF.sub(paste, part)
+        return self.clean("".join(parts)), used[0] if used else 0
 
     def clean(self, html: str, from_page: bool = False) -> list[lxml.html.HtmlElement]:
         """The model's HTML as blocks the article may hold: through the extractor's allowlist,
@@ -552,6 +578,7 @@ class _Article:
             fragment = lxml.html.fragment_fromstring(html, create_parent="div")
         except (etree.ParserError, ValueError) as exc:
             raise ToolError(f"that HTML cannot be read: {exc}") from exc
+        within: list[lxml.html.HtmlElement] = []
         for el in fragment.iter():
             if not isinstance(el.tag, str):
                 continue
@@ -564,8 +591,14 @@ class _Article:
                 el.attrib.pop("id", None)  # the page's own ids are not the article's
                 if el.tag == "h1":
                     el.tag = "h2"
+                elif el.tag in PART_OF and (el.getparent() is None or el.getparent().tag not in PART_OF[el.tag]):
+                    el.tag = "div"  # a part outside its whole (a footnote's <dt> in an <aside>)
+                elif el.tag == "a" and (el.get("href") or "").strip().startswith("#"):
+                    within.append(el)  # a link within the web page, which the article's are not
             else:
                 _mark_internal(el)
+        for el in within:
+            el.drop_tag()
         clean = extract.sanitize(fragment, self.url, marked=True)
         return _as_blocks(clean)
 
@@ -589,29 +622,94 @@ def _plain(text: str) -> str:
     return text.translate(QUOTES).casefold()
 
 
-PAGE_CONTAINERS = {"div", "section", "article", "main", "header", "footer", "span", "center", "font", "body", "details"}
+PAGE_BLOCKS = {*BLOCK_TAGS, "h1", "summary"}
+# Where each part of a list, table, definition list or figure belongs.
+PART_OF = {
+    "li": ("ul", "ol", "menu"),
+    "dt": ("dl", "div"),
+    "dd": ("dl", "div"),
+    "td": ("tr",),
+    "th": ("tr",),
+    "tr": ("table", "thead", "tbody", "tfoot"),
+    "thead": ("table",),
+    "tbody": ("table",),
+    "tfoot": ("table",),
+    "caption": ("table",),
+    "figcaption": ("figure",),
+}
 
 
 def _page_blocks(root: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
     """The page's blocks in reading order, as page_copy counts them: each paragraph, heading,
     list, table, quote, figure or code block, and a box of words with no block in it (a <div>
-    of loose text and links). A box with both is looked into; its loose words are left out."""
+    of loose text and links). Any other element holding blocks is looked into, whatever its
+    name (a site's own <w-article>, a link around a heading), and the words loose in it
+    beside its blocks are made paragraphs of their own, so every word on the page is in one."""
     found: list[lxml.html.HtmlElement] = []
+    xpath = " | ".join(f".//{tag}" for tag in sorted(PAGE_BLOCKS))
+
+    def blocky(el) -> bool:
+        return isinstance(el.tag, str) and (el.tag in PAGE_BLOCKS or bool(el.xpath(xpath)))
 
     def walk(parent: lxml.html.HtmlElement) -> None:
+        _paragraphs_apart(parent, blocky)
         for child in parent:
             if not isinstance(child.tag, str):
                 continue
-            if child.tag in BLOCK_TAGS or child.tag == "h1":
+            if child.tag in PAGE_BLOCKS:
                 found.append(child)
-            elif child.tag in PAGE_CONTAINERS:
-                if child.xpath(BLOCK_XPATH):
-                    walk(child)
-                elif child.text_content().strip() or child.xpath(".//img"):
-                    found.append(child)
+            elif blocky(child):
+                walk(child)
+            elif child.text_content().strip() or child.xpath(".//img"):
+                found.append(child)
 
     walk(root)
     return found
+
+
+def _paragraphs_apart(box: lxml.html.HtmlElement, blocky) -> None:
+    """Words and inline elements loose beside blocks in a box, each run put in a paragraph."""
+    children = list(box)
+    if not any(blocky(child) for child in children):
+        return
+    loose = (box.text or "").strip() or any(
+        (child.tail or "").strip() or (isinstance(child.tag, str) and not blocky(child)) for child in children
+    )
+    if not loose:
+        return
+    run: lxml.html.HtmlElement | None = None
+    text, box.text = box.text, None
+    for child in children:
+        box.remove(child)
+    out: list[lxml.html.HtmlElement] = []
+
+    def add(piece) -> None:
+        nonlocal run
+        if run is None:
+            run = lxml.html.Element("p")
+            out.append(run)
+        if isinstance(piece, str):
+            if len(run):
+                run[-1].tail = (run[-1].tail or "") + piece
+            else:
+                run.text = (run.text or "") + piece
+        else:
+            run.append(piece)
+
+    if text and text.strip():
+        add(text)
+    for child in children:
+        tail, child.tail = child.tail, None
+        if blocky(child):
+            run = None
+            out.append(child)
+        else:
+            add(child)
+        if tail and tail.strip():
+            add(tail)
+    for el in out:
+        if blocky(el) or el.text_content().strip() or el.xpath(".//img"):
+            box.append(el)
 
 
 def _keep_only(img, src: str) -> None:
@@ -648,7 +746,6 @@ def _mark_internal(el) -> None:
 
 # Parts of a list, table, definition list or figure: only ever inside one.
 PARTS = {"li", "td", "th", "tr", "thead", "tbody", "tfoot", "caption", "dt", "dd", "figcaption"}
-BLOCK_XPATH = " | ".join(f".//{tag}" for tag in sorted({*BLOCK_TAGS, "h1"}))
 
 
 def _as_blocks(root: lxml.html.HtmlElement, parts_refused: bool = True) -> list[lxml.html.HtmlElement]:

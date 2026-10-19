@@ -644,8 +644,42 @@ def test_a_copy_named_inside_the_models_own_html_is_pasted_not_printed():
     assert "copy:1" not in html and article.edits[-1]["copy"] == 1
     with pytest.raises(bookcheck.ToolError, match="there is no copy:4"):
         article.insert(1, "<h2>More</h2>copy:4")
-    article.insert(1, "<p>The file is at http://x.example/copy:1 and runs copy:12a.</p>")  # not names of copies
-    assert "http://x.example/copy:1" in article.body.text_content() and "copy:12a" in article.body.text_content()
+    article.insert(1, "<p>The file is at http://x.example/copy:1 today.</p>")  # not the name of a copy
+    assert "http://x.example/copy:1" in article.body.text_content()
+    # A name mistyped is refused, not printed; and a copy is never pasted inside a tag.
+    for typo in ("Copy:1", "COPY:1", "copy: 1", "copy:1000", "copy:1copy:2", "copy:12a"):
+        with pytest.raises(bookcheck.ToolError, match="exactly as copy:N"):
+            article.insert(1, f"<p>{typo}</p>")
+    article.insert(1, '<p><a title="copy:1" href="https://s.example">t</a></p>')
+    assert "Our sponsors" not in article.body.xpath("//a[@href='https://s.example']")[-1].get("title", "")
+
+
+def test_page_copy_reaches_every_word_the_page_shows():
+    page = (
+        "<html><body><main><w-article><p>Inside a site's own element.</p></w-article>"
+        "<div>At the recently concluded meeting, <a href='/m'>members</a> agreed.<blockquote><p>A quote.</p>"
+        "</blockquote>The end result was a new rule.</div>"
+        "<a href='/h'><h2>Linked heading</h2></a><details><summary>Show me the graphs</summary><p>Graphs.</p></details>"
+        "<ul class='toc'><li><a href='#c'>Conclusion</a></li></ul><h2 id='c'>Conclusion</h2>"
+        "<p>Line one<br>line two, and see <a href='#note-1'>note 1</a>.</p>"
+        "<aside class='footnote'><dt>[1]</dt><dd>The note.</dd></aside></main></body></html>"
+    )
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=page)
+    assert "Inside a site's own element." in article.copy("Inside a site", "own element")
+    loose = article.copy("At the recently concluded", "The end result")
+    assert (
+        '<a href="https://blog.example/m">members</a>' in loose and "<blockquote><p>A quote.</p></blockquote>" in loose
+    )
+    assert loose.startswith("copy:2, 3 blocks")
+    assert "<h2>Linked heading</h2>" in article.copy("Linked heading", "Linked heading")
+    assert "Show me the graphs" in article.copy("Show me the graphs", "Graphs.")
+    # A heading whose words a table of contents has too.
+    assert "<h2>Conclusion</h2>" in article.copy("Conclusion", "Conclusion")
+    # A phrase across a line break, as page_find shows it; a link within the web page unwrapped.
+    lines = article.copy("one line two", "note 1")
+    assert "Line one<br>line two, and see note 1.</p>" in lines and "#note-1" not in lines
+    # A part outside its whole, as footnotes are written on some sites: taken, not refused.
+    assert "The note." in article.copy("[1]", "The note.")
 
 
 def test_page_copy_refuses_an_ambiguous_or_oversized_passage(monkeypatch):
