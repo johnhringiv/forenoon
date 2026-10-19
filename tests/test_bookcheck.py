@@ -843,6 +843,12 @@ def test_the_start_is_one_the_end_phrase_follows():
     article.insert(1, '<b>A</b><!-- c -->, <b>B</b> copy:1 <span></span>, copy:1 <img src="nope.png">. copy:1')
     assert "A, B" in article.body.text_content()
     assert not [p for p in article.body.iter("p") if p.text_content().strip() in (",", ".")]
+    # An image with an empty srcset, a name split by a tag, a lone surrogate.
+    article.insert(1, 'copy:1 <img srcset=","> copy:1')
+    with pytest.raises(bookcheck.ToolError, match="hidden"):
+        article.insert(1, "copy:<b>1</b> and copy:1")
+    article.insert(1, "copy:1 \ud800 <p>after it</p>")
+    assert "after it" in article.body.text_content()
     # Punctuation in a line of the model's own stays in it.
     article.insert(1, "<b>Note</b>: <i>see below</i>, <b>Tom</b> &amp; <b>Jerry</b>. copy:1")
     assert "Note: see below, Tom & Jerry." in article.body.text_content()

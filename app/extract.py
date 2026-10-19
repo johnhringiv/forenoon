@@ -247,7 +247,8 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
     if not src and el.get("srcset"):
-        src = el.get("srcset").split(",")[-1].split()[0]
+        # The last candidate with an address ("a.jpg 1x, b.jpg 2x"); none in a blank or "," srcset.
+        src = next((part.split()[0] for part in reversed(el.get("srcset").split(",")) if part.split()), "")
     return src
 
 

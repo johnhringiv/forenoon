@@ -1819,3 +1819,9 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
     page = f"<html><body>{article}<h2>Next</h2><p>If you liked this, please</p><ul>{items}</ul><p>A last real word.</p></body></html>"
     extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
     assert "Next" in body.text_content() and "If you liked" not in body.text_content()
+
+
+def test_an_image_with_an_empty_srcset_is_left_out_not_a_crash():
+    for srcset in (",", "  ", "a.jpg 1x, "):
+        img = lxml.html.fromstring(f'<img srcset="{srcset}">')
+        assert extract_module._image_src(img) == ("a.jpg" if "a.jpg" in srcset else "")

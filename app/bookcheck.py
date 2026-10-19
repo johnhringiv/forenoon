@@ -74,6 +74,7 @@ COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/=])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # in a page's text, refused by lxml when set again
+SURROGATE = re.compile(r"[\ud800-\udfff]")
 TOOL_NAME = re.compile(r"(?<![/=])copy:\d")  # the tool's own syntax left in the text, not a link's
 COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name a copy
 # A copy's name mistyped, standing alone: "Copy:1", "copy: 1", "copy:1000", "[copy:1]".
@@ -636,7 +637,7 @@ class _Article:
             used.append(n)
             return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
-        html = CONTROL.sub("", html)  # refused by lxml where it is set as text
+        html = SURROGATE.sub("", CONTROL.sub("", html))  # refused by lxml, or the end of its reading
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
         root = _fragment(RUN_ON.sub(r"\1 ", html))
@@ -680,7 +681,7 @@ class _Article:
             if not words:
                 return
             fragment = _fragment(words)
-            pictures = [img for img in fragment.iter("img") if self._image(extract._image_src(img))]
+            pictures = [img for img in fragment.iter("img") if self._image(img.get("src") or "")]  # as clean() reads it
             if PUNCTUATION.fullmatch(fragment.text_content() or " ") and not pictures:
                 return  # a comma, a quote or a space between two copies, or a copy and a block
             pending.append(words)
@@ -692,7 +693,7 @@ class _Article:
             if not own:
                 return
             blocks = self.clean(own)
-            words = " ".join(
+            words = "".join(  # as it reads: a name split by a tag ("copy:<b>1</b>") is one
                 text
                 for el in blocks
                 if el.tag not in ("pre", "code")
