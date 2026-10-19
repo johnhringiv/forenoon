@@ -170,6 +170,10 @@ class Rating:
     reason: str = ""  # keys of tokens.REASONS, comma-separated, when the reader said why
 
 
+# Work whose tokens are counted against a budget of its own, not the daily token cap.
+OWN_BUDGET = ("book-check",)
+
+
 class Store:
     def __init__(self, path: Path | str):
         if path != ":memory:":
@@ -845,13 +849,17 @@ class Store:
             purpose, model, exc.input_tokens, exc.output_tokens, status, str(exc)[:300], priced=exc.priced
         )
 
-    def llm_tokens_since(self, start: str) -> int:
+    def llm_tokens_since(self, start: str, purpose: str = "") -> int:
         """Every priced token since `start`, cached ones too: what the daily cap counts. Calls to a
-        server you run cost nothing (`cost` 0) and are left out; an unknown price counts."""
+        server you run cost nothing (`cost` 0) and are left out; an unknown price counts.
+
+        With a `purpose` (one of OWN_BUDGET), that work's tokens alone; without one, everything
+        but that work, which has a budget of its own."""
+        same = "purpose = ?" if purpose else f"purpose NOT IN ({', '.join('?' * len(OWN_BUDGET))})"
         row = self.db.execute(
             "SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens), 0) AS n"
-            " FROM llm_calls WHERE created_at >= ? AND (cost IS NULL OR cost > 0)",
-            (start,),
+            f" FROM llm_calls WHERE created_at >= ? AND (cost IS NULL OR cost > 0) AND {same}",
+            (start, *((purpose,) if purpose else OWN_BUDGET)),
         ).fetchone()
         return row["n"]
 

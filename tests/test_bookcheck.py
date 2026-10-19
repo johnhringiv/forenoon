@@ -215,9 +215,13 @@ def test_limits_stop_the_check_and_leave_the_article_as_it_was(check, monkeypatc
     assert "180 seconds" in _rows(store)[-1]["summary"] and _html(result) == BODY
 
 
-def test_the_days_token_cap_skips_the_check(check):
+def test_the_check_has_a_budget_of_its_own(check):
     make, item, store = check
+    # The ranking's tokens do not count against the check, nor the check's against the ranking.
     store.log_llm_call("rank", "anthropic/claude-haiku-5-5", 598_000, 1_000, "ok")
+    store.log_llm_call("book-check", "anthropic/claude-sonnet-5-5", 2_999_000, 500, "ok")
+    assert store.llm_tokens_since(TODAY) == 599_000
+    assert store.llm_tokens_since(TODAY, purpose="book-check") == 2_999_500
     checker, client, result = make(_reply(_finish()))
     assert checker.check(item, result) is None and client.asked == [] and _rows(store) == []
     assert (

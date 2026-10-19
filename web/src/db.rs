@@ -42,8 +42,10 @@ pub async fn pipeline_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 }
 
 pub struct Usage {
-    /// Priced tokens: what the daily cap counts.
+    /// Priced tokens, as the daily cap counts them: all but the book check's, which has its own.
     pub tokens: i64,
+    /// The book check's priced tokens (`llm.check_daily_tokens`).
+    pub check_tokens: i64,
     /// Tokens on servers you run, which cost nothing.
     pub free_tokens: i64,
     pub cost: f64,
@@ -56,7 +58,9 @@ pub async fn usage_since(pool: &SqlitePool, start: &str) -> Result<Usage, sqlx::
     sqlx::query_as!(
         Usage,
         r#"SELECT COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
-                    FILTER (WHERE cost IS NULL OR cost > 0), 0) AS "tokens!: i64",
+                    FILTER (WHERE (cost IS NULL OR cost > 0) AND purpose != 'book-check'), 0) AS "tokens!: i64",
+           COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
+                    FILTER (WHERE (cost IS NULL OR cost > 0) AND purpose = 'book-check'), 0) AS "check_tokens!: i64",
            COALESCE(SUM(input_tokens + cache_write_tokens + cache_read_tokens + output_tokens)
                     FILTER (WHERE cost = 0), 0) AS "free_tokens!: i64",
            COALESCE(SUM(cost), 0.0) AS "cost!: f64",

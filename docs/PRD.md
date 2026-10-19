@@ -573,10 +573,10 @@ Sonnet 5.5).
   pointing at nothing is unwrapped. An image must be one the article has or one whose address
   is on the saved page; it is fetched and converted with the rest (section 5).
 - **Limits.** At most 12 calls for an article, 200,000 tokens (input, cached input and
-  output), three minutes, and the day's token cap (`llm.daily_token_cap`), checked before
-  each call. The cap counts cached input, so a check that fixes an article can use 100,000 to
-  200,000 of it: with the check on, raise the cap to match, or the day's later runs go
-  without the model. `finish` is taken only as a turn's one call, so the verdict is given
+  output), three minutes, and the check's own daily budget (`llm.check_daily_tokens`,
+  3,000,000), checked before each call. It is apart from `llm.daily_token_cap`: the check's
+  tokens never count against the ranking's, so a busy morning of checks cannot leave the
+  next run without the model; the settings page shows the two apart. `finish` is taken only as a turn's one call, so the verdict is given
   knowing how the edits went. Its edits are kept only when it finishes: at a limit the check
   is recorded as `incomplete` and the article goes out as it was. A failed call, a refusal or anything else
   that goes wrong is logged and leaves the article as it was; a delivery is never stopped by

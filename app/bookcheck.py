@@ -669,7 +669,8 @@ class Checker:
         self.skipped[why] = self.skipped.get(why, 0) + 1
 
     def _over_cap(self, estimate: int) -> bool:
-        return self.store.llm_tokens_since(self.today_start) + estimate > self.cfg.llm.daily_token_cap
+        used = self.store.llm_tokens_since(self.today_start, purpose="book-check")
+        return used + estimate > self.cfg.llm.check_daily_tokens
 
     def _run(self, item: Item, result: Extracted, page_html: str, keep: list) -> Outcome:
         text = page_text(page_html)
