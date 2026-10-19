@@ -1714,6 +1714,24 @@ def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
     assert "If you liked this, please" in left("If you liked this, please", items, f"<ul>{items}</ul>")
     # A finished sentence.
     assert "Subscribe to my newsletter." in left("Subscribe to my newsletter.", items)
+    share = "<li><a href='/s'>Share this on Facebook</a></li><li><a href='/rss'>Subscribe via RSS</a></li>"
+    # A closing line that is not a pitch, before the site's share list: a poem's last line, a
+    # credit, a sign-off.
+    for line in (
+        "and the river keeps its own counsel",
+        "Additional reporting by Helen Sullivan in London",
+        "-Abner",
+        "See you all next week",
+    ):
+        assert line in left(line, share), line
+    # A lead-in to the author's own list that names newsletters or subscribing.
+    own = "<li><a href='https://a.example'>Money Stuff newsletter</a></li><li><a href='https://b.example'>Platformer</a></li>"
+    assert "The newsletters I read every morning are" in left("The newsletters I read every morning are", own)
+    assert "To stop the emails, open your account page and" in left(
+        "To stop the emails, open your account page and", "<li><a href='/account'>click Unsubscribe</a></li>"
+    )
+    # A pitch that breaks off, over a list that sells nothing.
+    assert "If you liked this, see" in left("If you liked this, see", own)
     # More of the section after the list on the page: the heading stays.
     body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>If you liked this, please</p></div>")
     page = f"<html><body>{article}<h2>Next</h2><p>If you liked this, please</p><ul>{items}</ul><p>A last real word.</p></body></html>"

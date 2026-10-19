@@ -1862,12 +1862,21 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
 
 
 DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of the site's links
-SENTENCE_END = re.compile(r"[.!?…:;\"”’)\]]\W*$")
+# A closing pitch that breaks off where its list began: "If you liked this article, please",
+# "Enjoyed this post? Follow me on".
+CLOSING_PITCH = re.compile(
+    r"^(if you (liked|enjoyed|found|like|enjoy|appreciated)\b|enjoy(ed)? (this|reading)\b|"
+    r"(want|like) (more|to read more)\b|support (me|us|my work|this (blog|site|newsletter))\b|"
+    r"thanks for reading\b)",
+    re.IGNORECASE,
+)
+BROKEN_OFF = re.compile(r"(,|\b(please|and|or|to|on|at|via|with|me|us))\s*$", re.IGNORECASE)
 
 
 def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str) -> None:
-    """Remove the half-sentence that ends the article when it led into a list of the site's own
-    links that readability left out ("If you liked this article, please" over "subscribe to my
+    """Remove the half-sentence that ends the article when it is a pitch ("If you liked this
+    article, please") broken off where it led into a list of the site's own links that
+    readability left out ("If you liked this article, please" over "subscribe to my
     newsletter" and "connect on Twitter"), and the heading over the two when nothing else was
     under it. Without its list the sentence reads as an article cut off mid-sentence."""
     texts = body.xpath("(.//text()[normalize-space()])[last()]")
@@ -1879,7 +1888,7 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str) -> None:
     if last is None or last.tag != "p" or last.xpath("following::img"):
         return
     text = " ".join(last.text_content().split())
-    if _words(text) > DANGLING_MAX_WORDS or SENTENCE_END.search(text):
+    if _words(text) > DANGLING_MAX_WORDS or not CLOSING_PITCH.search(text) or not BROKEN_OFF.search(text):
         return
     try:
         page = lxml.html.fromstring(page_html)
@@ -1895,9 +1904,9 @@ def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str) -> None:
     listed = " ".join(after.text_content().split())
     if not listed or _norm(listed) in _norm(body.text_content()):
         return  # the list is in the article: the sentence leads into it
-    if not (LEAD_PITCH.search(f"{text} {listed}") or REFILL_FURNITURE.search(f"{text} {listed}")):
-        return
-    heading = last.getprevious()
+    if not (LEAD_PITCH.search(listed) or REFILL_FURNITURE.search(listed)):
+        return  # what the sentence led to is not a pitch of the site's
+    heading = next((el for el in last.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
     over = next((el for el in lead.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
     rest = [el for el in after.itersiblings() if isinstance(el.tag, str) and el.text_content().strip()]
     last.drop_tree()
