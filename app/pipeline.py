@@ -1120,6 +1120,9 @@ def run(
     # ratings count, and nothing is emailed. Send to Kindle still works for an address they have.
     report.no_address = not user.kindle_addresses
     report.web_only = report.no_address or not user.daily_to_kindle
+    # Each article's place in what was built, across every message: the web pages show the
+    # issue in this order, whatever the ranking recorded.
+    positions = {i: n for n, i in enumerate(i for attachment in attachments for i in attachment.article_ids)}
     if attachments:
         try:
             messages = [(None, attachments)] if report.web_only else build_messages(user, attachments, cfg.smtp)
@@ -1134,7 +1137,7 @@ def run(
                 if not dry_run:
                     if message is not None:
                         sender([message], cfg.smtp)
-                    store.mark_delivered(user.id, ids, now, story_of)
+                    store.mark_delivered(user.id, ids, now, story_of, positions=positions)
                     if cfg.keep_issues_days != 0:
                         # A copy of what was sent, for checking a book without the device.
                         cfg.issues_dir.mkdir(parents=True, exist_ok=True)
