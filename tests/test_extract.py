@@ -1397,3 +1397,41 @@ def test_a_sentence_before_the_sites_own_headlines_does_not_make_them_the_articl
         page = f"<html><body><article><h1>Title</h1>{words}<p>{lead}</p><ul>{heads}</ul></article></body></html>"
         out = extract("https://news.example.com/2026/10/19/story", page, "", "page").body.text_content()
         assert "Headline number 2" not in out
+
+
+def test_lists_in_a_sites_boxes_or_of_its_social_links_stay_out():
+    words = _paragraphs("Article", 12)
+
+    def leaked(block, needle):
+        page = f"<html><body><article><h1>Title</h1>{words}{block}</article></body></html>"
+        return needle in extract("https://www.example-news.com/2026/10/story", page, "", "page").body.text_content()
+
+    outside = "".join(
+        f"<li><a href='https://other{n}.org/x'>Outside story {n}</a> — an in-depth look at how councils budget for roads</li>"
+        for n in range(4)
+    )
+    for box in ("recommend-box", "taboola", "c-river", "social-links"):
+        assert not leaked(f"<div class='{box}'><ul>{outside}</ul></div>", "Outside story")
+    shares = "".join(
+        f"<li><a href='https://twitter.com/share?u={n}'>Share on network number {n}</a></li>" for n in range(3)
+    )
+    assert not leaked(
+        f"<p>If you enjoyed this post, please consider sharing it with others:</p><ul>{shares}</ul>", "network number"
+    )
+    follows = "".join(
+        f"<li><a href='https://{h}/ourpaper'>Our account on {h}</a></li>"
+        for h in ("bsky.app", "threads.net", "www.instagram.com")
+    )
+    assert not leaked(
+        f"<p>Find our reporters and editors on the platforms where they post:</p><ul>{follows}</ul>", "Our account"
+    )
+    local = "".join(
+        f"<li><a href='https://local.example-news.com/2026/10/s{n}'>Headline number {n} about the vote</a></li>"
+        for n in range(4)
+    )
+    assert not leaked(f"<p>Read more of our coverage of the election here:</p><ul>{local}</ul>", "Headline number")
+    assert not leaked(
+        f"<p>See <a href='http://[bad'>this</a>:</p><ul>{local}<li><a href='http://[bad'>Bad</a></li></ul>",
+        "Headline number",
+    )
+    assert leaked("", "Article paragraph 11")

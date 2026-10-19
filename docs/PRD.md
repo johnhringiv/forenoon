@@ -312,11 +312,14 @@ All fetched content is treated as untrusted.
     (bold) in highlighted code blocks keep their meaning as elements.
   - Lists that are part of the text are kept though they are mostly links (the main-content
     step drops such lists as menus): one a sentence introduces ("…please at least:"), or a
-    short "References", or whose items say something beside their links (times, bylines and
-    counts aside). Not one under a label or heading of the site's (related posts, tags,
-    sharing, a newsletter, "Most read", "More news"), a table of contents, a run of one-word
-    links, story cards (a link beside a teaser block), or, with no sentence introducing it,
-    one whose links go mostly to the site's other pages.
+    short paragraph such as "References", "Sources" or "See also", or whose items say
+    something beside their links (times, bylines and counts aside). Not one under a label or
+    heading of the site's (related posts, tags, sharing, a newsletter, "Most read", "More
+    news"), in a box named as the site's (recommendations, social links, a sign-up), holding a
+    form or button, a table of contents, a run of one-word links, links to share the page or
+    to social accounts, story cards (a link beside a teaser block), or one whose links go
+    mostly to the site's other pages, unless a sentence introduces it and its items say
+    something of their own.
   - Section headings marked up as links to themselves (permalinks), with ids that spell
     their text, or with scroll margins are kept, and so is a real table (with header cells
     or a caption) in a scrolling box or under any heading. A heading an article ends on

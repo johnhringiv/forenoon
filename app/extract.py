@@ -1126,7 +1126,10 @@ LEAD_FURNITURE = re.compile(
     re.IGNORECASE,
 )
 LEAD_FURNITURE_WORDS = 6
-LEAD_PITCH = re.compile(r"in your inbox|newsletter|subscribe|sign up for", re.IGNORECASE)  # at any length
+LEAD_PITCH = re.compile(  # at any length
+    r"in your inbox|newsletter|subscribe|sign up for|\bshar(e|ing) (it|this)|follow(ing)? us|on social media",
+    re.IGNORECASE,
+)
 
 
 def _heading_over(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
@@ -1171,6 +1174,40 @@ def _led_in(ul: lxml.html.HtmlElement) -> bool:
 
 
 LEAD_HEADING_CHARS = 40
+# The names of boxes a site keeps its own lists in.
+LIST_BOX = re.compile(
+    r"recommend|more-stories|river|taboola|outbrain|partner|social|signup|sign-up|newsletter|follow|share",
+    re.IGNORECASE,
+)
+SHARE_LINK = re.compile(r"/share\b|sharer|intent/tweet|/submit\?|^mailto:\?", re.IGNORECASE)
+SOCIAL_HOST = re.compile(
+    r"(.+\.)?(twitter\.com|x\.com|facebook\.com|bsky\.app|threads\.net|instagram\.com|linkedin\.com|"
+    r"tiktok\.com|reddit\.com|pinterest\.com|whatsapp\.com|t\.me|telegram\.me)"
+)
+# Second-level names a country registry sells under ("bbc.co.uk"), for the site's own domain.
+REGISTRY_SECOND = {"co", "com", "org", "net", "ac", "gov", "edu", "ne", "or"}
+
+
+def _domain(host: str) -> str:
+    """A host's registrable domain: "local.example-news.com" and "www.example-news.com" are one site."""
+    labels = host.lower().removeprefix("www.").split(".")
+    keep = 3 if len(labels) >= 3 and labels[-2] in REGISTRY_SECOND and len(labels[-1]) == 2 else 2
+    return ".".join(labels[-keep:])
+
+
+def _place(base: str, href: str = "") -> tuple[str, str] | None:
+    """A link's site and path, resolved against the page; None for one that is not a web
+    address or does not parse."""
+    try:
+        parts = urlsplit(urljoin(base, href.strip()) if href else base)
+        host = parts.hostname or ""
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not host:
+        return None
+    return _domain(host), parts.path.rstrip("/")
+
+
 LEAD_MIN_WORDS = 3
 SITE_LINK_SHARE = 0.5  # of a list's links to other pages of the site, past which it is the site's
 
@@ -1189,6 +1226,16 @@ class _Document(Document):
     def __init__(self, *args, url: str = "", **kwargs):
         super().__init__(*args, **kwargs)
         self._page_url = url
+
+    def _social(self, ul) -> bool:
+        """Whether most of a list's links share the page or go to the site's social accounts."""
+        links = [(a.get("href") or "").strip() for a in ul.iter("a")]
+        social = 0
+        for href in links:
+            place = _place(self._page_url or "https://localhost/", href)
+            if SHARE_LINK.search(href) or (place is not None and SOCIAL_HOST.fullmatch(place[0])):
+                social += 1
+        return bool(links) and social * 2 > len(links)
 
     @staticmethod
     def _cards(ul) -> bool:
@@ -1210,15 +1257,12 @@ class _Document(Document):
             return True
         if not self._page_url:
             return False
-        here = urlsplit(self._page_url)
-        site, page = (here.hostname or "").removeprefix("www."), here.path.rstrip("/")
-        links = [urlsplit(urljoin(self._page_url, (a.get("href") or "").strip())) for a in ul.iter("a")]
-        links = [link for link in links if link.scheme in ("http", "https")]
-        own = [
-            link
-            for link in links
-            if (link.hostname or "").removeprefix("www.") == site and link.path.rstrip("/") != page
-        ]
+        here = _place(self._page_url)
+        if here is None:
+            return False
+        links = [_place(self._page_url, a.get("href") or "") for a in ul.iter("a")]
+        links = [link for link in links if link is not None]
+        own = [link for link in links if link[0] == here[0] and link[1] != here[1]]
         return bool(links) and len(own) > SITE_LINK_SHARE * len(links)
 
     def get_preserved_elements(self, node):
@@ -1243,6 +1287,11 @@ class _Document(Document):
 
     def _text_list(self, ul) -> bool:
         if not ul.findall("li") or self.class_weight(ul) < 0 or FURNITURE_CLASS.search(_names(ul)):
+            return False
+        # Nor one in a box named as the site's: recommendations, social links, a sign-up.
+        if any(FURNITURE_CLASS.search(_names(a)) or LIST_BOX.search(_names(a)) for a in ul.iterancestors()):
+            return False
+        if self._social(ul):
             return False
         if ul.xpath(".//form | .//input | .//button | .//nav") or _short_links([ul]):
             return False
