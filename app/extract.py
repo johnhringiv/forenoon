@@ -132,6 +132,7 @@ NOTICE_MAX_WORDS = 25
 # own "negative" words are too broad here: code editors put theirs in a "cm-scroller").
 CODE_BOX_FURNITURE = re.compile(r"masthead|promo|outbrain|shopping|banner", re.IGNORECASE)
 # What makes an element beside a heading or a code block more than an empty link or button.
+MEDIA_TAGS = {"img", "picture", "video", "audio", "iframe", "object", "embed"}
 MEDIA_XPATH = ".//img | .//picture | .//video | .//audio | .//iframe | .//object | .//embed"
 # A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
 # quoted in a story about an outage is not.
@@ -1861,6 +1862,122 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
         anchor.tail, heading.tail = heading.tail, None
 
 
+DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of the site's links
+# A closing pitch that breaks off where its list began: "If you liked this article, please".
+# It names the piece, unlike "If you like, you can…" or "If you found a bug…".
+CLOSING_PITCH = re.compile(
+    r"^(if you (liked|enjoyed|like|enjoy|appreciated|found value in) (this|my)\b|"
+    r"if you found (this|my) \w+ (useful|helpful|interesting|valuable)\b|"
+    r"enjoyed (this|my) (article|post|piece|essay|story|newsletter)\b|"
+    r"support (me|us|my work|this (blog|site|newsletter))\b)",
+    re.IGNORECASE,
+)
+ITEM_PITCH = re.compile(r"\blike button\b|\bclap\b", re.IGNORECASE)  # with LEAD_PITCH and REFILL_FURNITURE
+# Where a sign-up link goes: a path or a newsletter service.
+SIGNUP_LINK = re.compile(
+    r"/(newsletter|subscribe|signup|sign-up|join|feed|rss)(/|$|[?#.])|\.xml$|"
+    r"(kit|convertkit|substack|buttondown|beehiiv|list-manage|mailchi|ghost)\.(com|io|so|mp)\b",
+    re.IGNORECASE,
+)
+BROKEN_OFF = re.compile(r"(,|\b(please|and|or|via))\s*$", re.IGNORECASE)
+
+
+def _host(base: str, href: str = "") -> str:
+    """A link's whole host, resolved against the page, or "" for one that does not parse."""
+    try:
+        return (urlsplit(urljoin(base, href.strip())).hostname or "").removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str, url: str) -> None:
+    """Remove the half-sentence that ends the article when it is a pitch ("If you liked this
+    article, please") broken off where it led into a list of the site's own links that
+    readability left out ("If you liked this article, please" over "subscribe to my
+    newsletter" and "connect on Twitter"), and the heading over the two when nothing else was
+    under it. Without its list the sentence reads as an article cut off mid-sentence."""
+    texts = body.xpath("(.//text()[normalize-space()])[last()]")
+    if not texts or texts[0].is_tail:
+        return  # the article ends in words loose after an element, not in a paragraph's own
+    last = texts[0].getparent()
+    while last is not None and last.tag != "p" and last is not body:
+        last = last.getparent()
+    media = "following::img | following::picture | following::video | following::audio | following::iframe"
+    if last is None or last.tag != "p" or last.xpath(f"{MEDIA_XPATH} | {media}"):
+        return
+    text = " ".join(last.text_content().split())
+    if _words(text) > DANGLING_MAX_WORDS or not CLOSING_PITCH.search(text) or not BROKEN_OFF.search(text):
+        return
+    if last.xpath(".//a") or re.search(r"[.!?]\s", text):
+        return  # a link of its own ("part two is here"), or a finished sentence before a sign-off
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    found = [p for p in page.iter("p") if _norm(p.text_content()) == _norm(text)]
+    if len(found) != 1:
+        return
+    lead = found[0]
+    after = next((el for el in lead.itersiblings() if isinstance(el.tag, str)), None)
+    if after is None or after.tag not in ("ul", "ol"):
+        return
+    listed = " ".join(" ".join(after.itertext()).split())
+    if not listed or _norm(listed) in _norm(body.text_content()):
+        return  # the list is in the article: the sentence leads into it
+    # The site by its whole host: one blog on a platform's domain ("me.substack.com") is not another.
+    site = _host(url)
+
+    def profile(href: str) -> bool:  # an account on a social site, not one of its posts
+        try:
+            path = urlsplit(urljoin(url, href)).path.strip("/")
+        except ValueError:
+            return False
+        return bool(SOCIAL_HOST.fullmatch(_host(url, href))) and "/" not in path
+
+    def pitch(item: lxml.html.HtmlElement) -> bool:
+        words = " ".join(" ".join(item.itertext()).split())
+        hrefs = [(a.get("href") or "").strip() for a in item.iter("a")]
+        says = LEAD_PITCH.search(words) or REFILL_FURNITURE.search(words) or ITEM_PITCH.search(words)
+        # Its words only when it links nowhere or to a sign-up: a post's title may say "newsletter".
+        return bool(
+            (says and (not hrefs or any(SIGNUP_LINK.search(href) for href in hrefs)))
+            or any(SHARE_LINK.search(href) or profile(href) for href in hrefs)
+        )
+
+    items = [
+        li
+        for li in after
+        if isinstance(li.tag, str) and li.tag == "li" and (li.text_content().strip() or li.xpath(".//a"))
+    ]
+    if not items or sum(map(pitch, items)) * 2 <= len(items):
+        return  # most of what the sentence led to is not a pitch
+    hosts = [_host(url, a.get("href") or "") for a in after.iter("a")]
+    shares = [a for a in after.iter("a") if SHARE_LINK.search(a.get("href") or "")]
+    if not shares and not any(host and (host == site or SOCIAL_HOST.fullmatch(host)) for host in hosts):
+        return  # its links go only to other sites: an appeal or a reading list of the author's
+    heading = next((el for el in last.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
+    over = next((el for el in lead.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
+    rest = [
+        el
+        for el in after.itersiblings()
+        if isinstance(el.tag, str)
+        and (
+            el.text_content().strip() or el.tag in MEDIA_TAGS or el.tag == "svg" or el.xpath(f"{MEDIA_XPATH} | .//svg")
+        )
+    ]
+    last.drop_tree()
+    if (
+        heading is not None
+        and heading.tag in HEADINGS
+        and over is not None
+        and over.tag in HEADINGS
+        and _norm(over.text_content()) == _norm(heading.text_content())
+        and not rest
+        and not heading.xpath(f"following::text()[normalize-space()] | {media}")
+    ):
+        heading.drop_tree()
+
+
 def _short_links(section: list[lxml.html.HtmlElement]) -> bool:
     """Whether a run of blocks is nearly all links of a word each: tags, share buttons. A
     list of references or further reading names what it links to."""
@@ -2161,6 +2278,7 @@ def extract(
         if page is not None:
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
+            _drop_dangling_pitch(page, page_html, url)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)

@@ -1679,3 +1679,143 @@ def test_a_picture_by_a_form_a_series_list_and_a_written_outline_stay():
     assert "Background of the dispute" in out(
         "<h4>Contents</h4><ul class='toc'><li>Background of the dispute</li><li>What the council decided</li></ul>"
     )
+
+
+def test_a_closing_pitch_without_its_list_goes_with_its_heading():
+    article = "<p>The API is three functions, and the simplest additions are often the most useful ones.</p>"
+    pitch = (  # minified, as many pages are: no space between the items
+        "<h2>Connect deeper</h2><p>If you liked this article, please</p>"
+        "<ul><li>hit on the like button,</li><li><a href='https://x.example/n'>subscribe to my newsletter</a></li>"
+        "<li>and let's connect on <a href='https://twitter.com/me'>Twitter</a>!</li></ul>"
+    )
+    body = lxml.html.fromstring(f"<div>{article}<h2>Connect deeper</h2><p>If you liked this article, please</p></div>")
+    extract_module._drop_dangling_pitch(body, f"<html><body>{article}{pitch}</body></html>", "https://x.example/post")
+    assert "liked this article" not in body.text_content() and "Connect deeper" not in body.text_content()
+    assert "three functions" in body.text_content()
+
+
+def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
+    article = "<p>The API is three functions, and the simplest additions are often the most useful ones.</p>"
+
+    def left(lead, items, kept=""):
+        body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>{lead}</p>{kept}</div>")
+        page = (
+            f"<html><body>{article}<h2>Next</h2><p>{lead}</p><ul>{items}</ul><p>More of the article.</p></body></html>"
+        )
+        extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+        return body.text_content()
+
+    # A list of the article's own, which readability dropped: the lead-in shows it was there.
+    assert "Next we will look at" in left(
+        "Next we will look at", "<li><a href='/a'>allocators</a></li><li><a href='/b'>arenas</a></li>"
+    )
+    # A pitch whose list the article kept.
+    items = "<li><a href='/newsletter'>subscribe to my newsletter</a></li>"
+    assert "If you liked this, please" in left("If you liked this, please", items, f"<ul>{items}</ul>")
+    # A finished sentence.
+    assert "Subscribe to my newsletter." in left("Subscribe to my newsletter.", items)
+    share = "<li><a href='/s'>Share this on Facebook</a></li><li><a href='/rss'>Subscribe via RSS</a></li>"
+    # A closing line that is not a pitch, before the site's share list: a poem's last line, a
+    # credit, a sign-off.
+    for line in (
+        "and the river keeps its own counsel",
+        "Additional reporting by Helen Sullivan in London",
+        "-Abner",
+        "See you all next week",
+    ):
+        assert line in left(line, share), line
+    # A lead-in to the author's own list that names newsletters or subscribing.
+    own = "<li><a href='https://a.example'>Money Stuff newsletter</a></li><li><a href='https://b.example'>Platformer</a></li>"
+    assert "The newsletters I read every morning are" in left("The newsletters I read every morning are", own)
+    assert "To stop the emails, open your account page and" in left(
+        "To stop the emails, open your account page and", "<li><a href='/account'>click Unsubscribe</a></li>"
+    )
+    # A pitch that breaks off, over a list that sells nothing.
+    assert "If you liked this, see" in left("If you liked this, see", own)
+    # A finished line that ends in a word a pitch could break off at.
+    for line in ("If you enjoy puzzles, this is the game to start with", "If you found a mistake, please email me"):
+        assert line in left(line, share), line
+    # A pitch over a list whose links all go to other sites: the author's picks, an appeal.
+    assert "If you enjoyed this, my favourite newsletters are, in order," in left(
+        "If you enjoyed this, my favourite newsletters are, in order,", own
+    )
+    appeal = "<li><a href='https://redcross.example'>Donate to the Red Cross</a></li>"
+    assert "If you liked this report, please" in left("If you liked this report, please", appeal)
+    # A sign-off before the author's links.
+    author = (
+        "<li><a href='/about'>Jane Doe</a></li><li><a href='https://twitter.com/jane'>Follow me on Twitter</a></li>"
+    )
+    assert "Thanks for reading," in left("Thanks for reading,", author)
+    for line in ("Enjoy reading,", "Enjoy this week's issue, and"):
+        assert line in left(line, author), line
+    # Other blogs on the same platform are not the site's own.
+    article_html = f"<div>{article}<p>If you enjoyed this, read these,</p></div>"
+    picks = "<ul><li><a href='https://money.substack.com/'>Money Stuff newsletter</a></li></ul>"
+    body = lxml.html.fromstring(article_html)
+    extract_module._drop_dangling_pitch(
+        body,
+        f"<html><body>{article}<p>If you enjoyed this, read these,</p>{picks}</body></html>",
+        "https://me.substack.com/p/x",
+    )
+    assert "read these" in body.text_content()
+    # Lines that open like a pitch but do not name the piece, over the article's own lists.
+    for line, own_items in (
+        (
+            "If you like, you can get the new release via",
+            "<li><a href='/download'>downloads</a></li><li><a href='/feed.xml'>our RSS feed</a></li>",
+        ),
+        ("Want more detail? The design notes are on the wiki, and", "<li><a href='/wiki/design'>Design notes</a></li>"),
+        (
+            "If you found a bug in this release, please",
+            "<li><a href='/issues'>the tracker</a></li><li>follow us on <a href='https://mastodon.social/@a'>Mastodon</a></li><li><a href='/forum'>the forum</a></li>",
+        ),
+    ):
+        assert line in left(line, own_items), line
+    # A pitch over a list mostly of the article's own links.
+    mostly = "<li><a href='/a'>Arenas</a></li><li><a href='/b'>Pools</a></li><li><a href='/newsletter'>my newsletter</a></li>"
+    assert "If you liked this post, please" in left("If you liked this post, please", mostly)
+    # A link in the line; threads on a social site, not its accounts; the site's own posts whose
+    # titles say "newsletter"; a finished sentence before a sign-off.
+    pitches = "<li><a href='/newsletter'>Subscribe to the newsletter</a></li><li>Follow me on <a href='https://twitter.com/me'>Twitter</a></li>"
+    body = lxml.html.fromstring(
+        f"<div>{article}<p>If you enjoyed this post, <a href='/p2'>part two is here</a>, and</p></div>"
+    )
+    page = f"<html><body>{article}<p>If you enjoyed this post, <a href='/p2'>part two is here</a>, and</p><ul>{pitches}</ul></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "part two is here" in body.text_content()
+    threads = "<li><a href='https://www.reddit.com/r/sysadmin/comments/abc/x/'>the outage thread</a></li><li><a href='https://x.com/a/status/1'>the post</a></li>"
+    assert "If you found this story useful, the threads are," in left(
+        "If you found this story useful, the threads are,", threads
+    )
+    posts = "<li><a href='/p/quit-my-newsletter'>Why I quit my newsletter</a></li><li><a href='/p/subscribe-or-die'>Subscribe or die</a></li><li><a href='/p/rss'>In defence of the RSS feed</a></li>"
+    assert "If you enjoyed this post, my earlier pieces are," in left(
+        "If you enjoyed this post, my earlier pieces are,", posts
+    )
+    assert "If you liked this post, thanks for reading. Until next time," in left(
+        "If you liked this post, thanks for reading. Until next time,", pitches
+    )
+
+    # Words loose after the line end the article: nothing is cut.
+    body = lxml.html.fromstring(f"<div>{article}<p>If you liked this article, please</p>share it with a friend.</div>")
+    page = f"<html><body>{article}<p>If you liked this article, please</p>share it with a friend.<ul>{pitches}</ul></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "If you liked this article, please" in body.text_content()
+    # A video under the heading: the heading stays, saying it was there.
+    body = lxml.html.fromstring(
+        f"<div>{article}<h2>Watch the talk</h2><p>If you liked this article, please</p><video src='/t.mp4'></video></div>"
+    )
+    page = f"<html><body>{article}<h2>Watch the talk</h2><p>If you liked this article, please</p><ul>{items}</ul><video src='/t.mp4'></video></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "Watch the talk" in body.text_content()
+
+    # A picture in the line goes nowhere with it: the line stays.
+    pitch = "<p><img src='https://blog.example/chart.png'><br>If you liked this article, please</p>"
+    body = lxml.html.fromstring(f"<div>{article}{pitch}</div>")
+    page = f"<html><body>{article}{pitch}<ul><li><a href='/newsletter'>Subscribe to my newsletter</a></li></ul></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert body.xpath("//img") and "If you liked" in body.text_content()
+    # More of the section after the list on the page: the heading stays.
+    body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>If you liked this, please</p></div>")
+    page = f"<html><body>{article}<h2>Next</h2><p>If you liked this, please</p><ul>{items}</ul><p>A last real word.</p></body></html>"
+    extract_module._drop_dangling_pitch(body, page, "https://blog.example/post")
+    assert "Next" in body.text_content() and "If you liked" not in body.text_content()
