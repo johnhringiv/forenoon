@@ -4,53 +4,10 @@
  "archMap": [
   {
    "architecture": "SCMP_ARCH_X86_64",
-   "subArchitectures": [
-    "SCMP_ARCH_X86",
-    "SCMP_ARCH_X32"
-   ]
+   "subArchitectures": null
   },
   {
    "architecture": "SCMP_ARCH_AARCH64",
-   "subArchitectures": [
-    "SCMP_ARCH_ARM"
-   ]
-  },
-  {
-   "architecture": "SCMP_ARCH_MIPS64",
-   "subArchitectures": [
-    "SCMP_ARCH_MIPS",
-    "SCMP_ARCH_MIPS64N32"
-   ]
-  },
-  {
-   "architecture": "SCMP_ARCH_MIPS64N32",
-   "subArchitectures": [
-    "SCMP_ARCH_MIPS",
-    "SCMP_ARCH_MIPS64"
-   ]
-  },
-  {
-   "architecture": "SCMP_ARCH_MIPSEL64",
-   "subArchitectures": [
-    "SCMP_ARCH_MIPSEL",
-    "SCMP_ARCH_MIPSEL64N32"
-   ]
-  },
-  {
-   "architecture": "SCMP_ARCH_MIPSEL64N32",
-   "subArchitectures": [
-    "SCMP_ARCH_MIPSEL",
-    "SCMP_ARCH_MIPSEL64"
-   ]
-  },
-  {
-   "architecture": "SCMP_ARCH_S390X",
-   "subArchitectures": [
-    "SCMP_ARCH_S390"
-   ]
-  },
-  {
-   "architecture": "SCMP_ARCH_RISCV64",
    "subArchitectures": null
   }
  ],
@@ -503,18 +460,6 @@
   },
   {
    "names": [
-    "sync_file_range2",
-    "swapcontext"
-   ],
-   "action": "SCMP_ACT_ALLOW",
-   "includes": {
-    "arches": [
-     "ppc64le"
-    ]
-   }
-  },
-  {
-   "names": [
     "arm_fadvise64_64",
     "arm_sync_file_range",
     "sync_file_range2",
@@ -525,7 +470,6 @@
    "action": "SCMP_ACT_ALLOW",
    "includes": {
     "arches": [
-     "arm",
      "arm64"
     ]
    }
@@ -537,8 +481,7 @@
    "action": "SCMP_ACT_ALLOW",
    "includes": {
     "arches": [
-     "amd64",
-     "x32"
+     "amd64"
     ]
    }
   },
@@ -549,34 +492,7 @@
    "action": "SCMP_ACT_ALLOW",
    "includes": {
     "arches": [
-     "amd64",
-     "x32",
-     "x86"
-    ]
-   }
-  },
-  {
-   "names": [
-    "s390_pci_mmio_read",
-    "s390_pci_mmio_write",
-    "s390_runtime_instr"
-   ],
-   "action": "SCMP_ACT_ALLOW",
-   "includes": {
-    "arches": [
-     "s390",
-     "s390x"
-    ]
-   }
-  },
-  {
-   "names": [
-    "riscv_flush_icache"
-   ],
-   "action": "SCMP_ACT_ALLOW",
-   "includes": {
-    "arches": [
-     "riscv64"
+     "amd64"
     ]
    }
   },
@@ -636,35 +552,6 @@
      "op": "SCMP_CMP_MASKED_EQ"
     }
    ],
-   "excludes": {
-    "caps": [
-     "CAP_SYS_ADMIN"
-    ],
-    "arches": [
-     "s390",
-     "s390x"
-    ]
-   }
-  },
-  {
-   "names": [
-    "clone"
-   ],
-   "action": "SCMP_ACT_ALLOW",
-   "args": [
-    {
-     "index": 1,
-     "value": 2114060288,
-     "op": "SCMP_CMP_MASKED_EQ"
-    }
-   ],
-   "comment": "s390 parameter ordering for clone is different",
-   "includes": {
-    "arches": [
-     "s390",
-     "s390x"
-    ]
-   },
    "excludes": {
     "caps": [
      "CAP_SYS_ADMIN"
@@ -836,7 +723,7 @@
     "chroot"
    ],
    "action": "SCMP_ACT_ALLOW",
-   "comment": "Forenoon: Chrome's own sandbox makes user, PID and network namespaces and chroots into them, without CAP_SYS_ADMIN or CAP_SYS_CHROOT. Everything else is Docker's default profile (moby v27.5.1, profiles/seccomp/default.json)."
+   "comment": "Forenoon: Chrome's own sandbox makes user, PID and network namespaces and chroots into them, without CAP_SYS_ADMIN or CAP_SYS_CHROOT. Everything else is Docker's default profile (moby v27.5.1, profiles/seccomp/default.json), trimmed to 64-bit x86 and ARM: no 32-bit system calls, and no rules for other architectures."
   }
  ]
 }
