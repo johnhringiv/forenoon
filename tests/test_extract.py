@@ -327,3 +327,17 @@ def test_a_link_to_a_numbered_figure_or_equation_is_not_a_footnote():
     notes = out.index("<h3>Notes</h3>")
     assert out.index("Figure 15: Small drafts.") < out.index("The paragraph after the figure.") < notes
     assert "L = E + A" not in out[notes:] and "The real note." in out[notes:]
+
+
+def test_latexml_footnotes_in_the_text_become_notes():
+    """arXiv's HTML writes a footnote inside its paragraph, its number shown twice."""
+    filler = "<p>" + "Plain words about attention and copying tasks. " * 30 + "</p>"
+    page = f"""<html><body><article><p>Separators are not needed.<span class="ltx_note ltx_role_footnote">
+    <sup class="ltx_note_mark">5</sup><span class="ltx_note_outer"><span class="ltx_note_content">
+    <sup class="ltx_note_mark">5</sup><span class="ltx_tag ltx_tag_note">5</span>Whitespace may help.</span>
+    </span></span> The reuse of these positions continues.</p>{filler}</article></body></html>"""
+    out = lxml.html.tostring(extract("https://arxiv.example/html/1", page, "").body, encoding="unicode")
+    text, notes = out.split("<h3>Notes</h3>")
+    assert "Whitespace may help." not in text and "5" not in text
+    assert 'needed.<a href="#fn-1" class="noteref" id="fnref-1">1</a> The reuse' in text
+    assert '<a href="#fnref-1">1</a> Whitespace may help.' in " ".join(notes.split())

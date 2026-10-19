@@ -51,8 +51,9 @@ NOTE_MAX_CHARS = 4000
 CROSS_REFERENCE = re.compile(r"\b[A-Z][a-z]+\.?\s+\(?$")
 NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
-SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note"}
-SIDENOTE_CHROME = {"margin-toggle", "sidenote-number"}
+# LaTeXML (arXiv's HTML) writes each footnote in the text the same way, with its number twice.
+SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note", "ltx_role_footnote"}
+SIDENOTE_CHROME = {"margin-toggle", "sidenote-number", "ltx_note_mark", "ltx_tag_note"}
 INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", "mono"}
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
@@ -188,7 +189,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
-    for el in list(root.iter("span", "tt", "font", "div", "aside", "section", "p", "label", "input")):
+    for el in list(root.iter("span", "sup", "tt", "font", "div", "aside", "section", "p", "label", "input")):
         classes = _classes(el)
         if el.tag in ("label", "input"):  # toggles and their captions; never content
             el.drop_tree()
