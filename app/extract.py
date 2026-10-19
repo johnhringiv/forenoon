@@ -15,6 +15,7 @@ import lxml.html
 import trafilatura
 from lxml import etree
 from readability import Document
+from readability.readability import REGEXES as READABILITY_PATTERNS
 
 KEEP = {
     "p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "table", "thead",
@@ -116,6 +117,23 @@ DATA_TABLE_LINK_SHARE = (
 LAYOUT_TABLE_NAME = re.compile(
     r"(^|[\s_-])(site|page|post|global)?[_-]?(header|footer|masthead|nav)(\s|$)", re.IGNORECASE
 )
+# What a page shows where a script's content did not appear, as the whole of a short block.
+LOAD_FAILURE = re.compile(
+    r"(some |this )?(content|chart|graphic|graphics|interactive|embed|map|video)( content)? (could not|couldn.t|"
+    r"failed to|did not|didn.t) (be )?(load|display|shown?)\.?( (please )?(check your (internet )?connection"
+    r"( or browser settings)?|refresh the page|try again( later)?)\.?)?|(please )?(enable|turn on|activate) "
+    r"javascript to (see|view|read|load) (this|the) (content|chart|graphic|map|video|page)\.?",
+    re.IGNORECASE,
+)
+# A request to pick the site as a source on Google ("select us as your Preferred Source").
+PREFERRED_SOURCE = re.compile(r"\b(select|add|choose|set|make|pick) us\b.{0,40}\bpreferred source", re.IGNORECASE)
+NOTICE_MAX_WORDS = 25
+# A notice is shown in a box the page names as one ("o-message o-message--notice"); a line
+# quoted in a story about an outage is not.
+NOTICE_CLASS = re.compile(r"(^|[\s_-])(message|notice|fallback|placeholder|error|unavailable)([\s_-]|$)", re.IGNORECASE)
+NOTICE_DEPTH = 4  # how far up the notice's own boxes are looked at
+QUOTE_MARKS = re.compile(r"[“”\"«»]|['‘]\s*(select|add|choose|set|make|pick) us\b", re.IGNORECASE)
+PROMPT_MAX_WORDS = 45  # a "select us as your Preferred Source" request, which says why at some length
 TABLE_FURNITURE_NAME = re.compile(r"header|foot", re.IGNORECASE)  # in a table's class names: see _unclass_data_tables
 # What a box of the site's own links says, under a heading that would otherwise be refilled.
 REFILL_FURNITURE = re.compile(
@@ -286,6 +304,86 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         holder.tail = figure.text
         figure.text = None
         figure.insert(0, holder)
+
+
+def _free_headings(root: lxml.html.HtmlElement) -> None:
+    """Keep readability from deleting a section's heading for how it is marked up.
+
+    - A heading's id can sound like page furniture by accident: readability takes "rss" in
+      id="freshrss" (on "FreshRSS") for a feed box. An id that is just the heading's own text
+      goes, after in-page links to the heading are recorded (sanitize gives it an id of our
+      own); any other name ("rssfeed" on "Subscribe via RSS") was given on purpose and stays.
+    - GitHub puts each README heading in a box of its own with an empty anchor link beside it,
+      and readability deletes any box with under 25 letters: "Debugging" and "License" went.
+      A box holding only a heading and such links is unwrapped.
+    """
+    unlikely = READABILITY_PATTERNS["unlikelyCandidatesRe"]
+    for heading in list(root.iter(*HEADINGS)):
+        anchor = heading.get("id") or ""
+        # By accident only when the word is buried in a longer one ("freshrss"); a whole part of
+        # the id ("tweet-this", "sponsor", "comments") names the furniture on purpose.
+        whole = any(_names_word(unlikely, part) for part in re.split(r"[\s_-]+", anchor.lower()) if part)
+        if unlikely.search(anchor) and not whole and _slug(anchor) == _slug(heading.text_content()):
+            heading.attrib.pop("id", None)  # the heading's own text as its anchor: named by accident
+        box = heading.getparent()
+        if box is None or box is root or box.tag not in ("div", "section") or (box.text or "").strip():
+            continue
+        others = [child for child in box if child is not heading]
+        box_names = _names(box)
+        if not others or unlikely.search(box_names) or FURNITURE_CLASS.search(box_names):
+            continue  # a box's own name may be all that keeps furniture out ("share-header")
+        if (
+            all(
+                isinstance(child.tag, str)
+                and child.tag in ("a", "span", "svg")
+                and not " ".join(child.text_content().split())
+                and not (child.tail or "").strip()
+                for child in others
+            )
+            and not (heading.tail or "").strip()
+        ):
+            for child in others:
+                child.drop_tree()
+            box.drop_tag()
+
+
+def _names_word(pattern: re.Pattern, part: str) -> bool:
+    """Whether a part of a name is the pattern's word itself, give or take a short ending
+    ("footer", "sponsored", "comments"), rather than a longer word holding it ("freshrss")."""
+    found = pattern.match(part)
+    return found is not None and len(part) - found.end() <= 3
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
+    """Remove what a page shows in place of a script that did not run ("Some content could not
+    load. Check your internet connection…"), and a request to pick the site as a preferred
+    source on Google: neither is the article. Only a short paragraph or box that is the notice
+    and nothing else, with no picture or list in it; a sentence that reports such a failure
+    ("Video failed to load for hours on Monday…") is the article's."""
+    media = ".//p | .//div | .//img | .//picture | .//video | .//figure | .//ul | .//ol | .//table"
+    for el in list(root.iter("p", "div")):
+        if el.getparent() is None or el.xpath(media):
+            continue
+        text = " ".join(el.text_content().split())
+        if not text:
+            continue
+        preferred = any("google.com/preferences/source" in (a.get("href") or "") for a in el.iter("a"))
+        quoted = next(el.iterancestors("blockquote", "q"), None) is not None or QUOTE_MARKS.search(text)
+        notice = (
+            _words(text) <= NOTICE_MAX_WORDS
+            and LOAD_FAILURE.fullmatch(text)
+            and any(
+                NOTICE_CLASS.search(_names(box)) and " ".join(box.text_content().split()) == text
+                for box in (el, *list(el.iterancestors())[:NOTICE_DEPTH])
+            )
+        )
+        asks = preferred and not quoted and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
+        if notice or asks:
+            el.drop_tree()
 
 
 def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
@@ -476,6 +574,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
         names = _names(heading) + " " + (_names(parent) if parent is not None else "")
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
+    _free_headings(root)
+    _drop_page_notices(root)
     _unclass_data_tables(root)
     if not notes:
         return None

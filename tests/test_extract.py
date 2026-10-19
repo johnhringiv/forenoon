@@ -803,3 +803,72 @@ def test_interactive_figures_leave_a_placeholder_and_ordinary_ones_are_kept():
     # A feed's copy is not the page a browser shows: no placeholder there.
     fed = extract("https://blog.example/codecs", None, f"{words}{chart}{words}{words}", "feed")
     assert "shot-" not in lxml.html.tostring(fed.body, encoding="unicode")
+
+
+def test_headings_in_their_own_boxes_or_with_unlucky_names_and_page_notices():
+    words = "<p>" + "Plain words about self-hosting and the services that run at home on a small box. " * 10 + "</p>"
+    readme = (
+        "<div class='markdown-heading'><h2 class='heading-element'>Debugging</h2>"
+        "<a class='anchor' href='#debugging' aria-label='Permalink: Debugging'><svg></svg></a></div>"
+    )
+    page = (
+        f"<html><body><article>{words}{readme}{words}<h3 id='freshrss'>FreshRSS</h3>{words}"
+        "<div class='o-message'><p>Some content could not load. Check your internet connection or browser settings.</p></div>"
+        "<p><em>If you rely on our team, please take a moment to </em>select us "
+        "<a href='https://www.google.com/preferences/source?q=dw.com'>as your Preferred Source</a> on Google.</p>"
+        f"{words}</article></body></html>"
+    )
+    out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
+    assert "<h2>Debugging</h2>" in out and "<h3>FreshRSS</h3>" in out
+    assert "could not load" not in out and "Preferred Source" not in out
+
+
+def test_reports_of_failures_and_furniture_headings_stay_as_they_were():
+    words = "<p>" + "Plain words about the outage and how the county's systems coped with demand. " * 10 + "</p>"
+    keep = {
+        "Video failed to load for hours": "<p>Video failed to load for hours on Monday as the platform's servers buckled.</p>",
+        "Users saw the message": "<p>Users saw the message <span>video failed to load</span> and then nothing else.</p>",
+        "a feature Google launched": "<p>Readers can now pick outlets at <a href='https://www.google.com/preferences/source'>"
+        "Google's settings</a>, a feature Google launched in August.</p>",
+    }
+    for needle, block in keep.items():
+        page = f"<html><body><article>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle
+    for heading, block in {
+        "Share this story": "<div class='share-header'><h4>Share this story</h4><a href='/s'><svg></svg></a></div>",
+        "Subscribe via RSS": "<h3 class='rssfeed'>Subscribe via RSS</h3>",
+    }.items():
+        page = f"<html><body><article>{words}{words}{block}</article></body></html>"
+        assert heading not in extract("https://news.example/b", page, "", "page").body.text_content(), heading
+
+
+def test_quoted_notices_and_prompts_are_the_articles_own():
+    words = "<p>" + "Plain words about the outage and how the county's systems coped with demand. " * 10 + "</p>"
+    for needle, block in {
+        "Please try again later": "<p>Readers saw one line:</p><blockquote><p>Video failed to load. Please try again later.</p></blockquote>",
+        "Embed failed to load": "<p>The log line to grep for is:</p><p><code>Embed failed to load</code></p>",
+        "Add us as a preferred source": "<p>Publishers now end stories with “Add us as a preferred source on Google”, linking to "
+        "<a href='https://www.google.com/preferences/source'>the setting</a>.</p>",
+    }.items():
+        page = f"<html><body><article>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle
+
+
+def test_furniture_ids_and_notice_boxes_with_more_in_them_stay_as_they_were():
+    words = "<p>" + "Plain words about the outage and how the county's systems coped with demand. " * 10 + "</p>"
+    for needle, block in {
+        "This video did not load.": "<div class='notice'><p>If the player stays blank:</p><p>This video did not load.</p>"
+        "<p>Then clear your cache and reload.</p></div>",
+        "preferred source": "<p>Sites now ask readers to 'select us as your <a href='https://www.google.com/preferences/source'>"
+        "preferred source</a>' on Google.</p>",
+    }.items():
+        page = f"<html><body><article class='post category-terrorism'>{words}{block}{words}</article></body></html>"
+        assert needle in extract("https://news.example/a", page, "", "page").body.text_content(), needle
+    for heading in (
+        "<h3 id='tweet-this'>Tweet this</h3>",
+        "<h3 id='sponsored'>Sponsored</h3>",
+        "<h3 id='footer'>Footer</h3>",
+    ):
+        page = f"<html><body><article>{words}{words}{heading}</article></body></html>"
+        text = extract("https://news.example/b", page, "", "page").body.text_content()
+        assert lxml.html.fromstring(heading).text_content() not in text, heading
