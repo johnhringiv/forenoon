@@ -546,14 +546,25 @@ def test_every_request_asks_for_the_refusal_fallback(check):
     assert asked["extra_headers"] == {"anthropic-beta": "server-side-fallback-2026-07-01"}
 
 
-def test_a_listing_that_stops_early_says_the_article_does_not(monkeypatch):
-    # A bare "(shortened)" at the end of a block read as the article's own last words, and the
-    # check "restored" text that had never been cut.
+def test_a_listing_or_reading_that_stops_early_says_the_article_does_not(monkeypatch):
+    # A bare "(shortened)" at the end of a block read as the article's own last words, and so
+    # did a reading cut at its length limit with no word: the check "restored" text that had
+    # never been cut.
     monkeypatch.setattr(bookcheck, "LISTING_CHARS", 300)
     body = lxml.html.fromstring(f"<div><p>First. {WORDS}</p><p>Second. {WORDS}</p></div>")
     article = bookcheck._Article(body, URL, page_images=set())
     first = article.first_listing().splitlines()
     assert "shortened" not in first[1]
-    assert first[1].endswith("[the listing stops here, not the article: article_read first=2 last=2 shows it whole]")
-    assert article.listing(1, 1, cap=50).endswith("article_read first=1 last=1 shows it whole]")
-    assert "not cut in the article" in bookcheck.SYSTEM
+    assert first[1].endswith("are not shown here; article_read first=2 last=2 shows more]")
+    assert "[not the end of the article: " in first[1]
+    assert "not the end of the article" in bookcheck.SYSTEM
+    monkeypatch.setattr(bookcheck, "READ_BLOCKS_CHARS", 200)
+    one = article.read(1, 1)
+    assert one.endswith(" more characters of block 1 are not shown here]") and "article_read first=1" not in one
+    article = bookcheck._Article(
+        lxml.html.fromstring(f"<div><p>{WORDS}</p><p>{WORDS}</p></div>"), URL, page_images=set()
+    )
+    both = article.read(1, 2)
+    assert both.startswith("[1] <p>") and both.endswith(
+        "article_read stops before block 2; read from block 2 for the rest]"
+    )
