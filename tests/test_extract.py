@@ -462,3 +462,25 @@ def test_furniture_under_a_bare_heading_is_not_put_back():
         assert "Jane" not in out and "physics" not in out
     page = f"<html><body><article>{filler}{filler}<h3>See also</h3>{titles}</article></body></html>"
     assert "How bees navigate" in extract("https://blog.example/post", page, "").body.text_content()
+
+
+def test_a_closing_paragraph_that_mentions_signing_up_is_kept():
+    """Only a paragraph that does nothing but ask for a subscription to the publication goes."""
+    filler = "<p>" + "Plain words about the city budget and its rebates. " * 30 + "</p>"
+    kept = [
+        "<p>Residents who qualify can sign up for the rebate program now at the city website.</p>",
+        "<p>Voter registration closes on Friday, so sign up today at your county office.</p>",
+        "<p>To follow development, subscribe to the mailing list of the project now.</p>",
+        "<p>Next steps:</p><ul><li>Install it.</li><li>Subscribe to our newsletter today.</li></ul>",
+    ]
+    for ending in kept:
+        page = f"<html><body><article>{filler}{ending}</article></body></html>"
+        out = extract("https://news.example/story", page, "").body.text_content()
+        assert lxml.html.fromstring(f"<div>{ending}</div>").text_content() in out
+    # Nor is the only paragraph of a feed entry, and the words are counted without what goes.
+    entry = "Plain words about the harbour and its tides. " * 10 + "Sign up for our newsletter today."
+    result = extract("https://news.example/story", None, f"<p>{entry}</p>")
+    assert "Sign up for our newsletter" in result.body.text_content()
+    page = f"<html><body><article>{filler}<p>Enjoying it? Subscribe to our free newsletter.</p></article></body></html>"
+    result = extract("https://news.example/story", page, "")
+    assert "newsletter" not in result.body.text_content() and result.word_count == 9 * 30

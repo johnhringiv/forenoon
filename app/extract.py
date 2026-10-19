@@ -116,13 +116,18 @@ COOKIE_WALL = re.compile(
     re.IGNORECASE,
 )
 XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*\?>")
-# A call to subscribe, as publishers end their articles with it.
+# A call to subscribe to the publication itself, as publishers end their articles with it:
+# to its newsletter or its emails, or for free to its new posts, or a bare "Subscribe now".
+# Signing up for a rebate, a register or a project's mailing list is the article's news.
 PROMOTION = re.compile(
-    r"\b(sign up|subscribe)\b[^.]{0,80}\b(newsletter|to our|today|now)\b|"
-    r"\bnewsletter\b[^.]{0,40}\b(sign up|subscribe)\b",
+    r"\b(sign up|sign-up|subscribe)\b[^.!?]{0,80}\bnewsletters?\b|\bnewsletters?\b[^.!?]{0,40}\b(sign up|"
+    r"subscribe)\b|\b(sign up|subscribe)\b[^.!?]{0,40}\b(our|my)\b[^.!?]{0,30}\b(mailing list|emails?|"
+    r"inbox)\b|\bsubscribe for free\b|^(sign up|subscribe)( now| today| here)?\W*$",
     re.IGNORECASE,
 )
-PROMOTION_MAX_WORDS = 60
+PROMOTION_MAX_WORDS = 30  # a promotion is no longer than this
+PROMOTION_SHARE = 0.6  # of its words in the sentences that ask
+PROMOTION_STOP_WORDS = 60  # a paragraph this long is the article's own: none before it is looked at
 PROMOTION_LOOKBACK = 3  # how many of the last paragraphs may be one
 TRUNCATED_TAIL = re.compile(
     r"(\[(…|\.\.\.)\]|…|\.\.\.|read more|continue reading|read the (full|rest)[^.]{0,40})\W*$",
@@ -671,21 +676,35 @@ def _short_links(section: list[lxml.html.HtmlElement]) -> bool:
 def _drop_trailing_promotions(body: lxml.html.HtmlElement) -> None:
     """Remove the publisher's sign-up lines from the end of an article ("Sign up for our
     Politics Essential newsletter", "Enjoying Nautilus? Subscribe to our free newsletter."):
-    short paragraphs among the last few that ask the reader to subscribe. A paywall's
-    message is kept, so that the article is still judged a stub."""
+    short paragraphs among the last few that do nothing but ask the reader to subscribe. Never
+    an item of a list, which is the article's ("Next steps"), nor the only paragraph. A
+    paywall's message is kept, so that the article is still judged a stub."""
     leaves = [
         el
-        for el in body.iter(*PROSE, "div")
-        if el.text_content().strip() and next(el.iterdescendants(*BLOCK, "li"), None) is None
+        for el in body.iterdescendants("p", "blockquote", "div")
+        if el.text_content().strip()
+        and next(el.iterdescendants(*BLOCK, "li"), None) is None
+        and next(el.iterancestors("li"), None) is None
     ]
+    if len(leaves) < 2:
+        return
     for last in reversed(leaves[-PROMOTION_LOOKBACK:]):
         text = " ".join(last.text_content().split())
-        if _words(text) > PROMOTION_MAX_WORDS:
+        if _words(text) > PROMOTION_STOP_WORDS:
             return  # the article's own text: anything before it is too
-        if PROMOTION.search(text) and not PAYWALL.search(text):
+        if _promotion(text) and not PAYWALL.search(text):
             while last.getparent() is not body and _norm(last.getparent().text_content()) == _norm(text):
                 last = last.getparent()  # wrappers that hold only this line
             last.drop_tree()
+
+
+def _promotion(text: str) -> bool:
+    """Whether a paragraph is a call to subscribe and little else."""
+    words = _words(text)
+    if words > PROMOTION_MAX_WORDS:
+        return False
+    asking = sum(_words(sentence) for sentence in re.split(r"(?<=[.!?])\s+", text) if PROMOTION.search(sentence))
+    return asking >= PROMOTION_SHARE * words
 
 
 def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
@@ -928,6 +947,7 @@ def extract(
     body, words = candidates[method], counts[method]
     _drop_trailing_promotions(body)
     _drop_trailing_headings(body)
+    words = _words(body.text_content())
     if page_html:
         pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
     if page_html and description:
