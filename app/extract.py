@@ -407,6 +407,10 @@ def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
             box.drop_tag()
 
 
+SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
+SKIP_TARGET_MAX_WORDS = 6
+
+
 def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
     """Remove what a page shows in place of a script that did not run ("Some content could not
     load. Check your internet connection…"), and a request to pick the site as a preferred
@@ -433,6 +437,40 @@ def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
         asks = preferred and not quoted and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
         if notice or asks:
             el.drop_tree()
+
+
+def _drop_skip_targets(root: lxml.html.HtmlElement) -> None:
+    """Remove the label a skip link jumps to past a box ("skip past newsletter promotion" leads
+    to "after newsletter promotion"): it is there for screen readers and is left behind in the
+    article when the box is gone. Only a short paragraph that a link starting "skip" points at,
+    whose text is its own aria-label and holds nothing else, and then the skip links themselves."""
+    links = [
+        a
+        for a in root.iter("a")
+        if (a.get("href") or "").startswith("#") and SKIP_LINK.match(" ".join(a.text_content().split()))
+    ]
+    targets = {a.get("href")[1:] for a in links}
+    dropped = set()
+    for el in list(root.iter("p", "span", "div")):
+        text = " ".join(el.text_content().split())
+        if (
+            el.get("id") in targets
+            and el.getparent() is not None
+            and text
+            and _words(text) <= SKIP_TARGET_MAX_WORDS
+            and text.casefold() == " ".join((el.get("aria-label") or "").split()).casefold()
+            and not el.xpath(MEDIA_XPATH)
+        ):
+            el.drop_tree()
+            dropped.add(el.get("id"))
+    for a in (a for a in links if a.get("href")[1:] in dropped):
+        # The link that jumped there, when it is a short label and nothing else.
+        if (
+            a.getparent() is not None
+            and _words(a.text_content()) <= SKIP_TARGET_MAX_WORDS + 2
+            and not a.xpath(MEDIA_XPATH)
+        ):
+            a.drop_tree()
 
 
 def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
@@ -626,6 +664,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     _free_headings(root)
     _free_code_blocks(root)
     _drop_page_notices(root)
+    _drop_skip_targets(root)
     _unclass_data_tables(root)
     if not notes:
         return None

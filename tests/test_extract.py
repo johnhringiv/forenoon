@@ -900,3 +900,26 @@ def test_pictures_beside_code_and_furniture_wrappers_stay_as_they_were():
         page = f"<html><body><article>{words}{words}{block}</article></body></html>"
         text = extract("https://blog.example/b", page, "", "page").body.text_content()
         assert lxml.html.fromstring(block).text_content() not in text, block
+
+
+def test_the_label_a_skip_link_jumps_to_is_dropped_but_not_a_paragraph_that_shares_its_name():
+    words = "<p>" + "Plain words about the price of training and who pays for it at work. " * 10 + "</p>"
+    promo = (
+        "<figure><a href='#EmailSignup-skip-link-15'>skip past newsletter promotion</a>"
+        "<aside aria-label='newsletter promotion'><p>Sign up to Business Today</p>"
+        "<form><input type='email' name='email'><button type='submit'>Sign up</button></form></aside>"
+        "<p id='EmailSignup-skip-link-15' aria-label='after newsletter promotion' role='note'>"
+        "after newsletter promotion</p></figure>"
+    )
+    page = f"<html><body><article>{words}{promo}{words}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+    assert "newsletter promotion" not in out and out.count("Plain words") == 20
+    # A paragraph a skip link points at is the article's when its text is not its own label, or
+    # when no skip link points at it.
+    for kept in (
+        "<a href='#methods'>Skip to the methods</a><p id='methods' aria-label='Methods'>We asked 400 firms.</p>",
+        "<p id='summary' aria-label='In short'>In short</p>",
+    ):
+        page = f"<html><body><article>{words}{kept}{words}</article></body></html>"
+        out = lxml.html.tostring(extract("https://news.example/a", page, "", "page").body, encoding="unicode")
+        assert ("We asked 400 firms" in out) if "methods" in kept else ("In short" in out)
