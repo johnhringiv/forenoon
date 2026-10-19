@@ -1460,3 +1460,52 @@ def test_a_furniture_heading_with_a_slug_id_or_promoted_lists_stay_out():
     ):
         page = f"<html><body><article><h1>Story</h1>{words}{block}</article></body></html>"
         assert needle not in extract("https://blog.example/a", page, "", "page").body.text_content(), needle
+
+
+def test_boxes_that_sell_credit_or_play_are_dropped():
+    words = _paragraphs("Article", 8)
+
+    def out(block, url="https://news.example/2026/10/story/"):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}{words}</article></body></html>"
+        return extract(url, page, "", "page").body.text_content()
+
+    furniture = {
+        "The Quanta Newsletter": "<section id='newsletter' class='newsletter'><h2>The Quanta Newsletter</h2>"
+        "<p>Get highlights delivered to your email inbox</p><form><input type='email' name='EMAIL'><button>Subscribe</button></form></section>",
+        "Sign Me Up": "<div class='ars-newsletter-shortcode'><p>Keep up with the latest launches.</p>"
+        "<a href='/newsletters/?subscribe=space'>Sign Me Up!</a></div>",
+        "Get the report": "<div class='article-callout'><a href='https://hubs.li/abc'><img src='/r.png'></a>"
+        "<h3><a href='https://hubs.li/abc'>The Blue Report 2026</a></h3><p>Measures defenses technique by technique.</p>"
+        "<a href='https://hubs.li/abc'>Get the report</a></div>",
+        "security professional": "<div class='saboxplugin-wrap'><a class='vcard author' href='https://news.example/author/admin/'>Dave Farquhar</a>"
+        "<p>David Farquhar is a computer security professional, entrepreneur, and author who writes about old computers.</p></div>",
+        "Listen to this article": "<div class='tts-player'><span>Listen to this article instead</span><button>Play</button>"
+        "<span>0:00 / 0:00</span><audio src='/a.mp3'></audio></div>",
+        "AutoTOC": "<h4>Table of Contents</h4><ul class='table-of-contents toc'><li>AutoTOC</li></ul>",
+        "Share": "<p class='button-wrapper'><a class='button' href='https://news.example/2026/10/story/?utm=share'>Share</a></p>",
+    }
+    for needle, block in furniture.items():
+        assert needle not in out(block), needle
+
+
+def test_boxes_that_tell_stay_though_they_look_like_furniture():
+    words = _paragraphs("Article", 8)
+
+    def out(block):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}{words}</article></body></html>"
+        return extract("https://news.example/2026/10/story/", page, "", "page").body.text_content()
+
+    # A form beside a long paragraph of the article; a link to the page in a sentence; an
+    # author's own words about someone else; a newsletter named in prose.
+    assert "The council asked" in out(
+        "<div class='newsletter-story'><p>The council asked residents to sign up for flood alerts by email, and more "
+        "than four thousand did so in the first week, the town clerk said on Monday.</p>"
+        "<form><input type='email'><button>Sign up</button></form></div>"
+    )
+    assert "as I wrote" in out(
+        "<p>See <a href='https://news.example/2026/10/story/'>as I wrote</a> before, for the history.</p>"
+    )
+    assert "the first engineer" in out(
+        "<div class='profile'><a href='https://news.example/people/ada'>Ada Lovelace</a> was, in Babbage's words, "
+        "<p>the first engineer of the engine Lovelace described, whose notes ran longer than the paper.</p></div>"
+    )
