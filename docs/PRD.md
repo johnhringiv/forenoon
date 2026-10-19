@@ -331,7 +331,9 @@ All fetched content is treated as untrusted.
     `nofollow` or `sponsored`; a box named as the author's at the end of the post that opens
     with a link to them and whose bio names them; a player's controls; a table of contents a
     script was to fill; and, at the end, a line that is only a short link to the page itself
-    ("Share", "Read more") or to an author's page.
+    ("Share", "Read more") or to an author's page; and a half-sentence the article ends on
+    that led into a list of the site's links left out ("If you liked this article, please"
+    over "subscribe to my newsletter"), with its heading when nothing else was under it.
   - The label a "skip past" link jumps to ("after newsletter promotion"), which is there for
     screen readers, is dropped with the link.
   - Asides that are not the article are dropped: a teaser (a short label and then only

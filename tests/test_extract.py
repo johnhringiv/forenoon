@@ -1679,3 +1679,43 @@ def test_a_picture_by_a_form_a_series_list_and_a_written_outline_stay():
     assert "Background of the dispute" in out(
         "<h4>Contents</h4><ul class='toc'><li>Background of the dispute</li><li>What the council decided</li></ul>"
     )
+
+
+def test_a_closing_pitch_without_its_list_goes_with_its_heading():
+    article = "<p>The API is three functions, and the simplest additions are often the most useful ones.</p>"
+    pitch = (
+        "<h2>Connect deeper</h2><p>If you liked this article, please</p>"
+        "<ul><li>hit on the like button,</li><li><a href='https://x.example/n'>subscribe to my newsletter</a></li>"
+        "<li>and let's connect on <a href='https://twitter.com/me'>Twitter</a>!</li></ul>"
+    )
+    body = lxml.html.fromstring(f"<div>{article}<h2>Connect deeper</h2><p>If you liked this article, please</p></div>")
+    extract_module._drop_dangling_pitch(body, f"<html><body>{article}{pitch}</body></html>")
+    assert "liked this article" not in body.text_content() and "Connect deeper" not in body.text_content()
+    assert "three functions" in body.text_content()
+
+
+def test_a_closing_lead_in_stays_when_its_list_is_the_articles_or_is_kept():
+    article = "<p>The API is three functions, and the simplest additions are often the most useful ones.</p>"
+
+    def left(lead, items, kept=""):
+        body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>{lead}</p>{kept}</div>")
+        page = (
+            f"<html><body>{article}<h2>Next</h2><p>{lead}</p><ul>{items}</ul><p>More of the article.</p></body></html>"
+        )
+        extract_module._drop_dangling_pitch(body, page)
+        return body.text_content()
+
+    # A list of the article's own, which readability dropped: the lead-in shows it was there.
+    assert "Next we will look at" in left(
+        "Next we will look at", "<li><a href='/a'>allocators</a></li><li><a href='/b'>arenas</a></li>"
+    )
+    # A pitch whose list the article kept.
+    items = "<li><a href='/n'>subscribe to my newsletter</a></li>"
+    assert "If you liked this, please" in left("If you liked this, please", items, f"<ul>{items}</ul>")
+    # A finished sentence.
+    assert "Subscribe to my newsletter." in left("Subscribe to my newsletter.", items)
+    # More of the section after the list on the page: the heading stays.
+    body = lxml.html.fromstring(f"<div>{article}<h2>Next</h2><p>If you liked this, please</p></div>")
+    page = f"<html><body>{article}<h2>Next</h2><p>If you liked this, please</p><ul>{items}</ul><p>A last real word.</p></body></html>"
+    extract_module._drop_dangling_pitch(body, page)
+    assert "Next" in body.text_content() and "If you liked" not in body.text_content()

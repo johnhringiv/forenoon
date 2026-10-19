@@ -1861,6 +1861,58 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
         anchor.tail, heading.tail = heading.tail, None
 
 
+DANGLING_MAX_WORDS = 12  # the most words of a half-sentence left over a list of the site's links
+SENTENCE_END = re.compile(r"[.!?…:;\"”’)\]]\W*$")
+
+
+def _drop_dangling_pitch(body: lxml.html.HtmlElement, page_html: str) -> None:
+    """Remove the half-sentence that ends the article when it led into a list of the site's own
+    links that readability left out ("If you liked this article, please" over "subscribe to my
+    newsletter" and "connect on Twitter"), and the heading over the two when nothing else was
+    under it. Without its list the sentence reads as an article cut off mid-sentence."""
+    texts = body.xpath("(.//text()[normalize-space()])[last()]")
+    if not texts:
+        return
+    last = texts[0].getparent()
+    while last is not None and last.tag != "p" and last is not body:
+        last = last.getparent()
+    if last is None or last.tag != "p" or last.xpath("following::img"):
+        return
+    text = " ".join(last.text_content().split())
+    if _words(text) > DANGLING_MAX_WORDS or SENTENCE_END.search(text):
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    found = [p for p in page.iter("p") if _norm(p.text_content()) == _norm(text)]
+    if len(found) != 1:
+        return
+    lead = found[0]
+    after = next((el for el in lead.itersiblings() if isinstance(el.tag, str)), None)
+    if after is None or after.tag not in ("ul", "ol"):
+        return
+    listed = " ".join(after.text_content().split())
+    if not listed or _norm(listed) in _norm(body.text_content()):
+        return  # the list is in the article: the sentence leads into it
+    if not (LEAD_PITCH.search(f"{text} {listed}") or REFILL_FURNITURE.search(f"{text} {listed}")):
+        return
+    heading = last.getprevious()
+    over = next((el for el in lead.itersiblings(preceding=True) if isinstance(el.tag, str)), None)
+    rest = [el for el in after.itersiblings() if isinstance(el.tag, str) and el.text_content().strip()]
+    last.drop_tree()
+    if (
+        heading is not None
+        and heading.tag in HEADINGS
+        and over is not None
+        and over.tag in HEADINGS
+        and _norm(over.text_content()) == _norm(heading.text_content())
+        and not rest
+        and not heading.xpath("following::text()[normalize-space()] | following::img")
+    ):
+        heading.drop_tree()
+
+
 def _short_links(section: list[lxml.html.HtmlElement]) -> bool:
     """Whether a run of blocks is nearly all links of a word each: tags, share buttons. A
     list of references or further reading names what it links to."""
@@ -2161,6 +2213,7 @@ def extract(
         if page is not None:
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
+            _drop_dangling_pitch(page, page_html)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
