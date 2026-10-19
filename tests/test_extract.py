@@ -769,3 +769,37 @@ def test_a_long_table_never_takes_the_place_of_a_short_article():
     ):
         text = extract("https://news.example/a", page, "", "auto").body.text_content()
         assert "council met" in text and "MySite" not in text
+
+
+def test_interactive_figures_leave_a_placeholder_and_ordinary_ones_are_kept():
+    words = "<p>" + "Plain words about image codecs and how their encoders trade size for time. " * 12 + "</p>"
+    chart = (
+        "<figure><div class='line-chart'><fieldset><legend>Scale</legend><input type='radio'></fieldset>"
+        "<div>Encode time</div><span>0 ms</span><span>1 s</span><svg><path d='M0 0L9 9'></path></svg>"
+        "<script>render()</script></div><figcaption>Encode time by quality</figcaption></figure>"
+    )
+    photo = (
+        "<figure><img src='https://e.com/car.jpg'><button>Full screen</button><figcaption>A car</figcaption></figure>"
+    )
+    code = "<figure><pre><code>let x = 1;</code></pre><button><svg><path d='M0'></path></svg></button></figure>"
+    quote = "<figure><blockquote><p>A quote worth keeping here</p></blockquote><script>embed()</script></figure>"
+    player = "<figure><button><svg><path d='M0'></path></svg></button><span>00:00 / 56:52</span></figure>"
+    page = f"<html><body><article>{words}{photo}{chart}{words}{code}{quote}{player}{words}</article></body></html>"
+    result = extract("https://blog.example/codecs", page, "", "page")
+    out = lxml.html.tostring(result.body, encoding="unicode")
+
+    # The chart is the page's second of five figures: a placeholder leads it, and its own
+    # text and caption stay for a book made without a picture.
+    assert '<figure><p id="shot-1-5">An interactive figure from the original page.</p>' in out
+    assert "Encode time by quality" in out
+    # Pictures, code, quotes and players are kept as they are.
+    assert "car.jpg" in out and "let x = 1;" in out and "A quote worth keeping" in out
+    assert out.count('id="shot-') == 1
+    # Figures a browser running scripts does not count are not counted.
+    hidden = f"<html><body><article>{words}<noscript><figure><img src='https://e.com/a.jpg'></figure></noscript>{chart}{words}</article></body></html>"
+    assert 'id="shot-0-1"' in lxml.html.tostring(
+        extract("https://blog.example/x", hidden, "", "page").body, encoding="unicode"
+    )
+    # A feed's copy is not the page a browser shows: no placeholder there.
+    fed = extract("https://blog.example/codecs", None, f"{words}{chart}{words}{words}", "feed")
+    assert "shot-" not in lxml.html.tostring(fed.body, encoding="unicode")

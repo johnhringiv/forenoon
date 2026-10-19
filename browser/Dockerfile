@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* /root/.cache
 ENV HOME=/tmp PYTHONUNBUFFERED=1 SESSIONS_DIR=/sessions
 COPY fetcher.py /usr/local/bin/fetcher.py
+# Docker's default seccomp profile for 64-bit x86 and ARM only (no 32-bit system calls), plus what Chrome's own sandbox needs to make namespaces.
+# The container must run with it (deploy.sh copies it out of the image; docker-compose.yml
+# names this file): pictures of any site's figures are taken only with the sandbox on.
+COPY seccomp.json /etc/forenoon/seccomp.json
 # Same fixed UID/GID as the app, so both can use the one data folder. /browser holds what the
 # browser keeps of a sign-in: a volume of its own that only this container mounts.
 RUN useradd --uid 1000 --create-home forenoon && mkdir /logins /browser && chown 1000:1000 /logins /browser

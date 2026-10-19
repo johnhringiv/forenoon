@@ -553,6 +553,33 @@ source).
   and nothing answers a CAPTCHA.
 - How each session's last page went, with the day the site says its sign-in ends, is kept in
   `<data>/sessions/status.json` for the Sources page and the run's alerts.
+- It also takes pictures of interactive figures: a `<figure>` the page's scripts draw (a
+  chart, a slider comparing pictures), recognised by having controls, a canvas or a script,
+  and no picture, player, table, code or quote of its own. Without the scripts it is often
+  only its labels run together, so extraction puts a placeholder first in it, numbered by
+  the figure's place among the page's figures (not counting any in `<noscript>` or
+  `<template>`, as a browser running scripts counts them) with the page's total. For each
+  article going in a book, the pipeline asks for up to 20 (fewer when the article's own
+  pictures leave less room), with the site's session when it has one, and a deadline of 150
+  seconds. The page is any site's, scripts and all, in the container that holds the
+  cookies, so:
+  - Chrome runs in its own sandbox, which the container's seccomp profile
+    (`browser/seccomp.json`: Docker's default for 64-bit x86 and ARM only, plus `clone`, `unshare` and `chroot`) allows.
+    Without the profile, or on a kernel without user namespaces, no pictures are taken.
+  - It runs in a child process killed at the deadline, whatever the page does.
+  - It reaches the network only through a proxy in the container that connects to public
+    internet addresses alone, by the address it resolves itself: https only, and never this
+    machine, the LAN or the Docker host, whatever a redirect, socket, worker or DNS answer
+    says. Service workers are blocked.
+    Chrome refuses the page if its figures are not as many as the saved page's, opens any
+    closed `<details>`, and photographs each figure as it first appears, caption hidden. The
+    picture replaces what the figure held, with a line saying it is interactive on the
+    original page; without a picture (none taken, or not kept for the article's picture
+    budget) the figure keeps its own text, with the line. The container touches
+    `<data>/sessions/.fetch/alive` every five seconds, and nothing is asked for while it is
+    stale, so an install without it never waits; a page whose pictures time out is not
+    followed by more requests for pictures in that run, and a request for a subscriber's page
+    that waits behind a busy container does not count as the container being down.
 - There were Calibre news recipes here until October 2026, fetching whole papers once a day.
   They went once every source had a feed: the subscriber sessions above fetch only what the
   ranking picks. Articles that came in through a recipe keep the route `recipe`.

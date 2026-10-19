@@ -168,3 +168,133 @@ def test_the_pipeline_asks_for_a_subscribers_pages_and_waits_for_the_answer(tmp_
         sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=30)
     assert time.monotonic() - started < 1
     sessions._silent_until = 0.0
+
+
+def test_pictures_of_interactive_figures_are_asked_for_only_while_the_browser_runs(tmp_path):
+    import base64
+    import os
+    import threading
+
+    from app import sessions
+    from app.fetch import FetchError
+
+    # No browser container: nothing is asked for, and nothing is waited for.
+    started = time.monotonic()
+    with pytest.raises(FetchError, match="not running"):
+        sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0, 3], 7, wait=30)
+    assert time.monotonic() - started < 1
+    alive = tmp_path / ".fetch" / "alive"
+    alive.parent.mkdir(parents=True)
+    alive.touch()
+    os.utime(alive, (time.time() - 60, time.time() - 60))  # stopped a minute ago
+    assert not sessions.browser_running(tmp_path)
+    alive.touch()
+    assert sessions.browser_running(tmp_path)
+
+    def answer():
+        for _ in range(200):
+            waiting = list((tmp_path / ".fetch").glob("*.json"))
+            if waiting:
+                wanted = json.loads(waiting[0].read_text())
+                assert wanted.pop("until") > time.time()
+                assert wanted == {"session": "", "url": "https://blog.example/a", "shots": [0, 3], "figures": 7}
+                waiting[0].unlink()
+                # Figure 3 could not be shown; 9 was never asked for.
+                taken = {"0": base64.b64encode(b"jpeg 0").decode(), "9": base64.b64encode(b"x").decode()}
+                partial = waiting[0].with_name(".answer.tmp")  # whole or not at all, as the container writes
+                partial.write_text(json.dumps(taken))
+                partial.replace(waiting[0].with_suffix(".shots"))
+                return
+            time.sleep(0.01)
+
+    worker = threading.Thread(target=answer)
+    worker.start()
+    assert sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0, 3], 7, wait=5, poll=0.01) == {0: b"jpeg 0"}
+    worker.join()
+    assert [p.name for p in (tmp_path / ".fetch").iterdir()] == ["alive"], "nothing else is left behind"
+
+
+def test_the_browser_takes_pictures_with_the_sites_session_or_with_none(tmp_path):
+    import os
+
+    runner = _fetcher()
+    out, logins = tmp_path / "sessions", tmp_path / "logins"
+    (out / ".fetch").mkdir(parents=True)
+    logins.mkdir()
+    (logins / "site-paper.example.json").write_text('{"cookie": "session=s3cret", "domain": "paper.example"}')
+    seen = []
+
+    def shooter(url, session, name, figures, total, until):
+        seen.append((url, session.get("cookie"), figures, total))
+        if "broken" in url:
+            raise ValueError("the browser failed: crashed")
+        return {figures[0]: b"jpeg"}
+
+    later = time.time() + 300
+    requests = [
+        {"session": "", "url": "https://blog.example/a", "shots": [2, 5], "figures": 9, "until": later},
+        {"session": "site-paper.example", "url": "https://paper.example/b", "shots": [0], "figures": 1, "until": later},
+        {
+            "session": "site-paper.example",
+            "url": "https://paper.example/broken",
+            "shots": [1],
+            "figures": 2,
+            "until": later,
+        },
+        {"session": "", "url": "https://blog.example/c", "shots": ["0"], "figures": 1, "until": later},
+        {"session": "", "url": "https://blog.example/d", "shots": [0], "figures": 1, "until": time.time() - 1},
+        ["not", "a", "request"],
+    ]
+    ids = [c * 32 for c in "abcdef"]
+    for n, (name, wanted) in enumerate(zip(ids, requests, strict=True)):
+        path = out / ".fetch" / f"{name}.json"
+        path.write_text(json.dumps(wanted))
+        os.utime(path, (time.time() - 100 + n, time.time() - 100 + n))  # asked in this order
+    assert runner.answer_fetches(out, logins, shooter=shooter) == 6
+    assert json.loads((out / ".fetch" / f"{ids[0]}.shots").read_text()) == {"2": "anBlZw=="}
+    assert json.loads((out / ".fetch" / f"{ids[1]}.shots").read_text()) == {"0": "anBlZw=="}
+    assert (out / ".fetch" / f"{ids[2]}.err").read_text() == "the browser failed: crashed"
+    assert (out / ".fetch" / f"{ids[3]}.err").read_text() == "not a list of figures"
+    assert (out / ".fetch" / f"{ids[4]}.err").read_text() == "nobody is waiting for these pictures any more"
+    assert (out / ".fetch" / f"{ids[5]}.err").read_text() == "not a request"
+    # A page with no session is read without one; a page on the site, signed in.
+    assert seen[:2] == [
+        ("https://blog.example/a", None, [2, 5], 9),
+        ("https://paper.example/b", "session=s3cret", [0], 1),
+    ]
+    # A failed picture says nothing about the session: the Sources page shows how its pages go.
+    assert not (out / "status.json").exists()
+
+
+def test_the_pictures_proxy_reaches_nothing_but_public_https():
+    import socket
+
+    runner = _fetcher()
+    proxy = runner._PublicProxy()
+    proxy.start()
+    targets = ("127.0.0.1:443", "localhost:443", "10.0.0.5:443", "192.168.1.1:443", "[::1]:443", "example.com:80")
+    for target in (*targets, "[64:ff9b::a00:1]:443"):
+        with socket.create_connection(("127.0.0.1", proxy.port)) as client:
+            client.sendall(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+            assert client.recv(100).startswith(b"HTTP/1.1 403"), target
+    with socket.create_connection(("127.0.0.1", proxy.port)) as client:
+        client.sendall(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        assert client.recv(100).startswith(b"HTTP/1.1 403")
+
+
+def test_a_busy_browser_is_not_taken_for_a_stopped_one(tmp_path, monkeypatch):
+    from app import sessions
+    from app.fetch import FetchError
+
+    monkeypatch.setattr(sessions, "_silent_until", 0.0)
+    monkeypatch.setattr(sessions, "_no_shots_until", 0.0)
+    (tmp_path / ".fetch").mkdir()
+    (tmp_path / ".fetch" / "alive").touch()  # running, but never picks the request up
+    with pytest.raises(FetchError, match="busy"):
+        sessions.fetch(tmp_path, "site-paper.example", "https://paper.example/a", wait=0.05, poll=0.01)
+    assert sessions._silent_until == 0.0, "the next page is still asked for"
+    # Pictures that time out are not asked for again in the same run.
+    with pytest.raises(FetchError, match="longer than"):
+        sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=0.05, poll=0.01)
+    with pytest.raises(FetchError, match="timed out earlier"):
+        sessions.figure_shots(tmp_path, "", "https://blog.example/a", [0], 1, wait=5)

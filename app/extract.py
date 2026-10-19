@@ -63,6 +63,15 @@ INLINE_CODE_CLASSES = {"inline-code", "inlinecode", "code-inline", "monospace", 
 SECTION_HEADING_CLASSES = {"header-anchor-post"}
 CALLOUT_CLASSES = {"callout", "admonition", "alert", "notice", "warning", "tip", "infobox", "pullquote"}
 CALLOUT_MAX_WORDS = 400
+# A figure drawn by the page's own scripts (a chart, a slider comparing pictures): without
+# them it is often only its labels, run together. It has controls, a canvas or a script, and
+# none of what a figure keeps as it is (a picture, a video or audio player, a table, code or
+# a quote, an embedded tweet among them). A drawing with a button is not enough: static
+# diagrams have download buttons.
+WIDGET_MARKERS = ".//input | .//select | .//textarea | .//fieldset | .//canvas | .//script"
+WIDGET_KEPT = ".//img | .//picture | .//video | .//audio | .//table | .//iframe | .//pre | .//code | .//blockquote"
+SHOT_ID = "shot-"  # the placeholder left for such a figure: the pipeline puts a picture of it here
+
 # A box beside the text that is mostly links is a teaser for other pages ("Recommended",
 # "You may like", a topic tag), not part of the article. Real notes and callouts carry a few
 # links in their sentences: in the saved pages none was over 40% link text.
@@ -87,6 +96,7 @@ INLINE_WRAPPERS = ("a", "sup", "sub", "span", "b", "i", "em", "strong", "small")
 MARK = "data-fn"  # our own marker attributes, set by _structure and read by sanitize
 MARK_N = "data-fn-n"
 MARK_FIRST = "data-fn-first"
+MARK_OF = "data-fn-of"  # a shot's placeholder: how many figures the page has
 
 MIN_WORDS = 40
 MAX_PREVIEW_URL = 2000
@@ -250,6 +260,34 @@ def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: 
     return el if 0 < size <= NOTE_MAX_CHARS else None
 
 
+def _interactive(figure: lxml.html.HtmlElement) -> bool:
+    """Whether a figure is drawn by the page's scripts; see WIDGET_MARKERS."""
+    return not figure.xpath(WIDGET_KEPT) and bool(figure.xpath(WIDGET_MARKERS))
+
+
+def _mark_widgets(root: lxml.html.HtmlElement) -> None:
+    """Put a placeholder first in each interactive figure, saying which of the page's figures
+    it is (counted in document order as a browser with scripts counts them: not inside
+    <noscript> or <template>) and how many the page has. A browser can then take a picture of
+    that figure for the book; the figure's own text stays for when it cannot."""
+    figures = [
+        figure
+        for figure in root.iter("figure")
+        if not any(ancestor.tag in ("noscript", "template") for ancestor in figure.iterancestors())
+    ]
+    for number, figure in enumerate(figures):
+        if not _interactive(figure):
+            continue
+        holder = lxml.html.Element("p")
+        holder.set(MARK, "shot")
+        holder.set(MARK_N, str(number))
+        holder.set(MARK_OF, str(len(figures)))
+        holder.text = "An interactive figure from the original page."
+        holder.tail = figure.text
+        figure.text = None
+        figure.insert(0, holder)
+
+
 def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
     """Take the furniture-sounding class names off real tables, their rows and cells, and mark the
     table for readability to keep (it drops a small table of numbers as layout): readability
@@ -285,7 +323,7 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
                 el.set("class", " ".join(kept))
 
 
-def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElement | None:
+def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
     Works on the whole page, before the article is picked out of it, and returns the notes
@@ -303,6 +341,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
+    if whole_page:  # a feed's copy is not the page a browser would show
+        _mark_widgets(root)
     # The page's own quotes only: before asides and callouts are made quotes below.
     _unclass_quotes(root)
     # Boxes are judged against the page as it was, before any is dropped.
@@ -623,7 +663,7 @@ def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
-        notes = _structure(root, base_url)
+        notes = _structure(root, base_url, whole_page)
         return lxml.html.tostring(root, encoding="unicode"), notes
     except Exception:  # noqa: BLE001 - hostile input; the article is still delivered without this
         # Unprocessed, so any marker in it is the page's own: make sure none is acted on.
@@ -672,6 +712,8 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
             keep.update({"id": f"fn-{number}", "class": "footnote"})
         elif mark == "target":
             keep["id"] = f"sec-{number}"
+        elif mark == "shot" and tag == "p" and el.get(MARK_OF, "").isdigit():
+            keep["id"] = f"{SHOT_ID}{number}-{el.get(MARK_OF)}"
         if tag == "a" and mark == "ref":
             keep.update({"href": f"#fn-{number}", "class": "noteref"})
             if el.get(MARK_FIRST):
