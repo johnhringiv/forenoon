@@ -1578,7 +1578,8 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
     // What the model used, priced by the pipeline when it logged each call; a call to a model
     // with no known price is said apart. Nothing about prices is a setting.
     assert!(
-        page.text.contains("Today: 0 of 600,000 tokens, about $0.0000 in all.") && !page.text.contains("Price per million")
+        page.text.contains("Today: 0 of 600,000 tokens, about $0.0000 in all.")
+            && !page.text.contains("Price per million")
     );
     let now = forenoon_web::db::now_iso();
     for (model, cost) in [("anthropic/claude-haiku-5-5", Some(0.0125)), ("anthropic/claude-new-9", None)] {
@@ -1594,7 +1595,10 @@ async fn settings_are_saved_by_admins_and_only_where_they_differ_from_the_defaul
         .unwrap();
     }
     let text = admin.get(&site, "/settings").await.text;
-    assert!(text.contains("Today: 103,000 of 600,000 tokens, about $0.0125 in all.") && text.contains("This month: 103,000"));
+    assert!(
+        text.contains("Today: 103,000 of 600,000 tokens, about $0.0125 in all.")
+            && text.contains("This month: 103,000")
+    );
     assert!(text.contains("1 calls this month were to a model with no known price"));
     // A server you run costs nothing and is outside the cap; a call that never got through is not "unpriced".
     for (model, tokens, status, cost) in [("lan/qwen", 9000, "ok", Some(0.0)), ("lan/qwen", 0, "unreachable", None)] {
