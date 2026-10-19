@@ -1219,6 +1219,51 @@ def _names(el: lxml.html.HtmlElement) -> str:
     return f"{el.get('class', '')} {el.get('id', '')}"
 
 
+LIVE_BLOG = re.compile(r"(js-)?live-?blog(-body)?", re.IGNORECASE)
+LIVE_ENTRIES_MIN = 3
+LIVE_ENTRY_MIN_WORDS = 20
+
+
+def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
+    """A live blog's entries, newest first as the page has them.
+
+    Readability keeps one entry of a live blog (the pinned one, or the longest) and the rest
+    of the day's reporting is lost. The Guardian puts each entry in an <article> of its own
+    inside a box named "liveblog-body", beside a carousel of key events and adverts. Only
+    such a box, named so in its id or as one of its classes, and holding at least three
+    entries of some length, gives a body: its entries and nothing else of it."""
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return None
+    boxes = [
+        el
+        for el in page.iter()
+        if isinstance(el.tag, str)
+        and any(LIVE_BLOG.fullmatch(name) for name in [el.get("id") or "", *(el.get("class") or "").split()])
+    ]
+    # The box with the most entries, when more than one is named so (a "liveblog" wrapper
+    # around its "liveblog-body" holds the same entries).
+    found = [
+        [
+            el
+            for el in box.iter("article")
+            if next(el.iterancestors("article"), None) is None and _words(el.text_content()) >= LIVE_ENTRY_MIN_WORDS
+        ]
+        for box in boxes
+    ]
+    entries = max(found, key=len, default=[])
+    if len(entries) < LIVE_ENTRIES_MIN:
+        return None
+    body = lxml.html.Element("div")
+    for entry in entries:
+        entry = copy.deepcopy(entry)
+        entry.tail = None
+        entry.tag = "div"
+        body.append(entry)
+    return body
+
+
 def _widest(page_html: str, reference: int) -> lxml.html.HtmlElement | None:
     """The smallest element holding nearly all of the page's article text.
 
@@ -1416,6 +1461,10 @@ def extract(
             # Only when it recovers the article without dragging in much else.
             if wide is not None and kept < _words(wide.text_content()) <= WIDEN_MAX_RATIO * reference:
                 candidates["page-wide"] = wide
+        live = _live_blog(page_html)
+        if live is not None:
+            candidates["page-live"] = sanitize(live, url, marked=True)
+            notes["page-live"] = notes["page"]
     if mode != "page" or not candidates:
         feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False)
         feed = _parse_fragment(feed_html)

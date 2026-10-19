@@ -1,7 +1,8 @@
 import lxml.html
 from lxml import etree
 
-from app.extract import _continue_article, extract, sanitize
+from app import extract as extract_module
+from app.extract import extract, sanitize
 
 
 def clean(html: str, base: str = "https://example.com/post/") -> str:
@@ -944,7 +945,7 @@ def test_an_article_split_around_an_advert_is_put_back_together():
     # What readability kept of the page: the first box only (on Ars Technica, where the boxes are
     # further apart than here and the advert between them is filled).
     body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
-    _continue_article(body, page(f"<h2>Hybrid warfare</h2>{rest}"))
+    extract_module._continue_article(body, page(f"<h2>Hybrid warfare</h2>{rest}"))
     out = body.text_content()
     assert out.index("Paragraph 11") < out.index("Hybrid warfare") < out.index("Later paragraph 4")
     # A box of the same class that is not more of the article stays out: links to other
@@ -959,7 +960,7 @@ def test_an_article_split_around_an_advert_is_put_back_together():
     )
     for second in (related, note):
         body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
-        _continue_article(body, page(second))
+        extract_module._continue_article(body, page(second))
         out = body.text_content()
         assert "Paragraph 11" in out and "Another story" not in out and "Later paragraph" not in out
 
@@ -986,9 +987,37 @@ def test_the_half_of_an_article_behind_a_read_more_button_is_put_back():
         )
 
     body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
-    _continue_article(body, page(rest))
+    extract_module._continue_article(body, page(rest))
     out = body.text_content()
     assert out.index("Paragraph 11") < out.index("Revenue downturn") < out.index("Later paragraph 7")
     body = lxml.html.fromstring(f"<div><div>{first}</div></div>")
-    _continue_article(body, page(other))
+    extract_module._continue_article(body, page(other))
     assert "Later paragraph" not in body.text_content()
+
+
+def test_a_live_blog_keeps_every_entry_and_not_its_carousel_or_adverts():
+    def entry(n):
+        return (
+            f"<article class='block' id='block-{n}'><div><a href='#block-{n}'>0{n}.15 EDT</a></div>"
+            f"<h2>Update {n}</h2><p>Entry {n}: police in Paris arrested more people overnight, the ministry said, "
+            "as protests spread to other cities and the damage was counted on Sunday morning.</p></article>"
+        )
+
+    def page(count):
+        return (
+            "<html><body><div id='liveblog'><div class='js-liveblog-body' id='liveblog-body'>"
+            "<div id='key-events-carousel'><ul><li><a href='#block-1'>45m ago Update 1</a></li></ul></div>"
+            + "<aside class='ad-slot-container'>Advertisement</aside>".join(entry(n) for n in range(1, count + 1))
+            + "</div></div><footer>About us · Contact</footer></body></html>"
+        )
+
+    # Readability keeps one entry of a real live blog; this one is small enough that it may keep
+    # them all, so the live blog's own body is checked as well as what extraction picks.
+    for body in (extract_module._live_blog(page(5)), extract("https://news.example/live", page(5), "", "page").body):
+        out = body.text_content()
+        assert all(f"Entry {n}:" in out for n in range(1, 6))
+        assert out.index("Entry 1:") < out.index("Entry 5:") and "05.15 EDT" in out
+    out = extract_module._live_blog(page(5)).text_content()
+    assert "45m ago" not in out and "Advertisement" not in out and "About us" not in out
+    # Two entries are not a live blog to put together.
+    assert extract_module._live_blog(page(2)) is None
