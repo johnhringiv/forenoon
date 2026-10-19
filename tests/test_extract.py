@@ -1579,3 +1579,20 @@ def test_a_malformed_address_or_a_bare_byline_costs_nothing():
     assert "Jeremy White" in extract("https://news.example/story/", byline, "", "page").body.text_content()
     more = f"<html><body><article><h1>Story</h1>{words}<p><a href='https://news.example/author/jeremy-white/'>More from Jeremy White</a></p></article></body></html>"
     assert "More from" not in extract("https://news.example/story/", more, "", "page").body.text_content()
+
+
+def test_a_digests_items_and_a_wrapped_guest_bio_stay():
+    words = _paragraphs("Article", 6)
+    item = (
+        "<div><h3><a href='https://www.nature.com/articles/a'>A study on a</a></h3><p>A new "
+        "<a href='https://www.nature.com/articles/a'>paper</a> finds that the river had warmed by two degrees over a "
+        "decade, changing which fish could live there.</p><p><a href='https://www.nature.com/articles/a'>Read the study</a></p></div>"
+    )
+    page = f"<html><body><article><h1>Digest</h1>{words}{item}{words}</article></body></html>"
+    assert "river had warmed" in extract("https://blog.example/a", page, "", "page").body.text_content()
+    bio = (
+        "<div class='wp-block-group'><div class='author-bio'><a href='/author/sam-lee'>Sam Lee</a><p>Sam Lee is a guest "
+        "contributor and the director of a nonprofit that studies rural water systems.</p></div></div>"
+    )
+    page = f"<html><body><article><h1>Title</h1><div class='entry-content'>{bio}{words}</div></article></body></html>"
+    assert "guest contributor" in extract("https://blog.example/a", page, "", "page").body.text_content()

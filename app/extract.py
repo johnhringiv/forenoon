@@ -643,6 +643,29 @@ def _author_link(a) -> bool:
         return False
 
 
+INLINE_LINK_WORDS = 8  # of a paragraph's own text around a link, for a link in a sentence
+
+
+def _inline_link(p) -> bool:
+    """Whether a paragraph has a link inside prose rather than being a link or a label."""
+    links = list(p.iter("a"))
+    own = _words(p.text_content()) - sum(_words(a.text_content()) for a in links)
+    return bool(links) and own >= INLINE_LINK_WORDS
+
+
+def _text_after(box) -> bool:
+    """Whether text of some length follows a box in what holds it, up to the article: an author
+    box ends a post, and a guest post's introduction comes before it, however it is wrapped."""
+    el = box
+    while el is not None and el.tag not in ("article", "main", "body"):
+        if any(
+            isinstance(after.tag, str) and _words(after.text_content()) >= BIO_MIN_WORDS for after in el.itersiblings()
+        ):
+            return True
+        el = el.getparent()
+    return False
+
+
 def _sells_name(el) -> bool:
     return any(SELLS_NAME.fullmatch(name) for name in [el.get("id") or "", *(el.get("class") or "").split()])
 
@@ -701,6 +724,8 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
             continue
         if _words(box.text_content()) > CARD_MAX_WORDS or box.xpath(CONTENT_XPATH):
             continue
+        if any(_inline_link(p) for p in box.iter("p")):
+            continue  # a digest's item: a summary that cites its source in a sentence
         headed = any(
             " ".join(h.text_content().split()) == " ".join(a.text_content().split())
             for h in box.iter("h2", "h3", "h4", "h5", "h6")
@@ -733,9 +758,7 @@ def _drop_furniture(root, base_url: str, page_words: int, linked_to: set) -> Non
         if first is None:
             continue
         # At the end of what it is in: a guest post's introduction comes before the post.
-        if any(
-            isinstance(after.tag, str) and _words(after.text_content()) >= BIO_MIN_WORDS for after in box.itersiblings()
-        ):
+        if _text_after(box):
             continue
         name = " ".join(first.text_content().split())
         if not text.startswith(name):
