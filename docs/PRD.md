@@ -877,8 +877,10 @@ database with the pipeline.
   pages stand.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
-  icons and the health check; everything else there is 404. It is the one page meant to be
-  indexed, and it carries `Cache-Control: public, max-age=300`. Unset on an ordinary install.
+  icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
+  It carries `Cache-Control: public, max-age=300`. It and the demo hosts' three pages are the
+  only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
+  names it. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the

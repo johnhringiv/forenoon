@@ -186,6 +186,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
     or class from the page reaches the book.
     """
     _unmark(root)
+    # The page's own quotes only: before asides and callouts are made quotes below.
+    _unclass_quotes(root)
     # Boxes are judged against the page as it was, before any is dropped.
     page_words = _words(_visible_text(root))
     linked_to = _in_page_targets(root, base_url)
@@ -342,6 +344,42 @@ def _structure(root: lxml.html.HtmlElement, base_url: str) -> lxml.html.HtmlElem
         if top is not None and top.getparent() is not None:
             top.drop_tree()
     return holder
+
+
+EMBED_CLASS = re.compile(r"tweet|twitter", re.IGNORECASE)
+EMBED_WRAPPER_DEPTH = 3  # figure > div > blockquote, as embed plugins nest them
+EMBED_WRAPPER_CHILDREN = 8  # the quote, its loader and a caption at most: no longer a wrapper past this
+
+
+def _unclass_quotes(root: lxml.html.HtmlElement) -> None:
+    """Take the tweet class names off embedded posts and the wrappers that hold only them:
+    picking the article out of the page throws away anything classed like page furniture,
+    and that includes "tweet" and "twitter" ("twitter-tweet", "wp-block-embed-twitter").
+    Every other class name stays, for the passes that read them."""
+    for quote in root.iter("blockquote"):
+        el = quote
+        for _ in range(EMBED_WRAPPER_DEPTH + 1):
+            classes = (el.get("class") or "").split()
+            if any(EMBED_CLASS.search(name) for name in classes):
+                el.set("class", " ".join(name for name in classes if not EMBED_CLASS.search(name)))
+            wrapper = el.getparent()
+            if wrapper is None or wrapper is root or wrapper.tag in ("body", "html") or not _holds_only(wrapper, el):
+                break
+            el = wrapper
+
+
+def _holds_only(wrapper: lxml.html.HtmlElement, child: lxml.html.HtmlElement) -> bool:
+    """Whether `child` is all `wrapper` shows: no text of its own, and beside it only scripts
+    and empty elements (the embed's loader, an empty caption)."""
+    if (wrapper.text or "").strip() or len(wrapper) > EMBED_WRAPPER_CHILDREN:
+        return False
+    for other in wrapper:
+        if (other.tail or "").strip():
+            return False
+        loader = other is child or not isinstance(other.tag, str) or other.tag in ("script", "style", "noscript")
+        if not loader and ((other.text or "").strip() or len(other)):
+            return False
+    return True
 
 
 def _boxed(el: lxml.html.HtmlElement, classes: set[str]) -> bool:

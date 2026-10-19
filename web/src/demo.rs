@@ -98,6 +98,8 @@ pub async fn gate(State(personas): State<Arc<[Persona]>>, request: Request, next
     let Some(persona) = persona else {
         return next.run(request).await;
     };
+    // The pages are the demo's pitch, meant to be found; the rest keeps its noindex.
+    let page = matches!(request.uri().path(), "/" | "/archive" | "/sources");
     let mut response = if allowed(&request) {
         let mut request = request;
         request.extensions_mut().insert(Demo { reader: persona.id.clone(), personas: personas.clone() });
@@ -112,6 +114,9 @@ pub async fn gate(State(personas): State<Arc<[Persona]>>, request: Request, next
     // port, say), which the session layer would answer by clearing it: not on a page a
     // cache may keep.
     response.headers_mut().remove(header::SET_COOKIE);
+    if page && response.status().is_success() {
+        response.headers_mut().remove("x-robots-tag");
+    }
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_str(&format!("public, max-age={CACHE_SECONDS}")).expect("a plain header"),
