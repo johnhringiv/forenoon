@@ -7,6 +7,7 @@ SCHEMA regenerate the copy and run `web/dev-db.sh`.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -119,6 +120,21 @@ CREATE TABLE IF NOT EXISTS assessments (
     lasting TEXT NOT NULL DEFAULT '',
     deferred_at TEXT NOT NULL DEFAULT '',  -- left out of an issue for variety, when
     PRIMARY KEY (user_id, article_id)
+);
+CREATE TABLE IF NOT EXISTS book_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    verdict TEXT NOT NULL,  -- ok, fixed, cannot_fix, incomplete or error
+    summary TEXT NOT NULL DEFAULT '',
+    fixes TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"kind", "what", "why"}], as the model gave them
+    edits TEXT NOT NULL DEFAULT '[]',  -- JSON: [{"tool", "first", "last", "before", "after"}]
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -901,6 +917,34 @@ class Store:
                 " VALUES (?, ?, ?, ?, ?)",
                 (article_id, now_iso(), verdict, problem, model),
             )
+
+    def record_book_check(
+        self,
+        article_id: str,
+        user_id: str,
+        model: str,
+        verdict: str,
+        summary: str,
+        fixes: list[dict],
+        edits: list[dict],
+        tokens: tuple[int, int, int, int],
+    ) -> None:
+        """What the book check made of an article (app/bookcheck.py). "fixed" and "cannot_fix"
+        are listed on the web pages' Problems page; `tokens` are input, output, cache read and
+        cache write, summed over the check's calls."""
+        with self.db:
+            self.db.execute(
+                "INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict, summary, fixes, edits,"
+                " input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    article_id, user_id, now_iso(), model, verdict, summary,
+                    json.dumps(fixes, ensure_ascii=False), json.dumps(edits, ensure_ascii=False), *tokens,
+                ),
+            )  # fmt: skip
+
+    def book_check_rows(self, limit: int = 200) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM book_checks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
 
     def review_rows(self, limit: int = 200) -> list[sqlite3.Row]:
         """Newest first, with the article and the extractor's own verdict beside the model's."""

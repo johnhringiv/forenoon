@@ -82,6 +82,11 @@ class Llm:
     choose_model: str = ""  # for choosing the day's set; "" for `model`
     # Used for the whole run when a model's connection cannot be reached at its start; "" for none.
     fallback_model: str = ""
+    # The book check (app/bookcheck.py): an agent compares every article going in a book with its
+    # saved page and fixes what extraction got wrong, logging each fix as a problem. It needs tool
+    # use with pictures, so only an Anthropic model; off by default, as it costs cents an article.
+    book_check: bool = False
+    check_model: str = "anthropic/claude-sonnet-5-5"
     # Each reader's own (User), set for their run by `for_reader`:
     most_per_subject: int = 2  # when choosing the day's set: at most this many on one broad subject; 0 for no limit
     explore_slots: int = 1  # 1 = the last slot of the day goes to a random lower-ranked article
