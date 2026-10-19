@@ -189,6 +189,11 @@ class AnthropicBackend:
         self._timeout = cfg.timeout
         self._client = anthropic.Anthropic(api_key=api_key, timeout=cfg.timeout, max_retries=1)
 
+    @property
+    def client(self):
+        """The SDK's own client, for the book check's tool loop (app/bookcheck.py)."""
+        return self._client
+
     def bounded(self, timeout: float) -> AnthropicBackend:
         """The same, waiting at most `timeout` seconds for an answer and not asking twice."""
         copy_ = copy.copy(self)
