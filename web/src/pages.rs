@@ -1007,7 +1007,7 @@ pub async fn newsstand(State(state): State<AppState>, viewer: Viewer, Query(quer
         }
         let Some(issue) = page.issues.last_mut() else { continue };
         let (key, leads) = (row.story.clone(), row.story == row.id);
-        // Articles of one story are not always next to each other in the ranking order.
+        // Articles of one story are not always next to each other in the order shown.
         match issue.stories.iter_mut().find(|story| !key.is_empty() && story.key == key) {
             Some(story) if leads => story.cards.insert(0, card(row)),
             Some(story) => story.cards.push(card(row)),

@@ -955,6 +955,9 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
 
     listing = _listing([Candidate(post1, "Post 1", "Blog", 350, 9, "read", "years", "", True)], 1, 2, 2, {})
     assert '"deferred": true' in listing and "<most_per_subject>2</most_per_subject>" in listing
+    assert '"read_in_part": false' in listing
+    long_one = Candidate("x", "Long", "Blog", 9000, 8, "read", "years", "", False, True)
+    assert '"read_in_part": true' in _listing([long_one], 1, 0, 2, {})
 
     # A reply naming nothing usable leaves the reading's order: the best read goes.
     fresh = Store(cfg.data_dir / "second.sqlite3")
@@ -1001,6 +1004,14 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
     assert report.ranking.startswith("model") and "read in full" in report.ranking
     titles = [store.get_article(i).title for i in report.delivered]
     assert titles[:2] == ["Post 9", "Post 2"] and "Post 1" not in titles  # pinned first, then the best read
+    # Each delivery keeps its place in the issue, which the web pages show it in; a pick shown
+    # only as a link was never in it.
+    placed = store.db.execute(
+        "SELECT article_id FROM deliveries WHERE user_id = ? AND position IS NOT NULL ORDER BY position", (user.id,)
+    ).fetchall()
+    assert [r["article_id"] for r in placed if r["article_id"] in report.delivered] == report.delivered
+    links = store.db.execute("SELECT position FROM deliveries WHERE link_only = 1").fetchall()
+    assert links and all(r["position"] is None for r in links)
     held = next(i for s in report.sources for i in s.items if i.title == "Post 1")
     assert "held back" in held.reason and held.review == "bad: Paywall notice only"
     # The model saw the article text, cut to the word limit and marked as cut.

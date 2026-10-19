@@ -33,7 +33,7 @@ from .images import embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
 from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
-from .read import Reading, Verdict
+from .read import ENDING_WORDS, Reading, Verdict
 from .read import read as read_candidates
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
@@ -502,6 +502,7 @@ def _chosen(
         Candidate(
             item.id, item.title, item.source.name, words.get(item.id, 0), verdicts[item.id].score,
             verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""), item.id in deferred,
+            words.get(item.id, 0) > cfg.llm.read_words,
         )
         for item in read
     ]  # fmt: skip
@@ -871,6 +872,7 @@ def run(
                     len(words),
                     " ".join(words[: cfg.llm.read_words]),
                     [{"site": k.item.site, "text": k.text, "context": k.context} for k in links_of[item.id]],
+                    " ".join(words[-ENDING_WORDS:]) if len(words) > cfg.llm.read_words else "",
                 )
             )
         verdicts = read_candidates(cfg.llm, backend, store, user, readings, today)
@@ -1189,6 +1191,9 @@ def run(
     # ratings count, and nothing is emailed. Send to Kindle still works for an address they have.
     report.no_address = not user.kindle_addresses
     report.web_only = report.no_address or not user.daily_to_kindle
+    # Each article's place in what was built, across every message: the web pages show the
+    # issue in this order, whatever the ranking recorded.
+    positions = {i: n for n, i in enumerate(i for attachment in attachments for i in attachment.article_ids)}
     if attachments:
         try:
             messages = [(None, attachments)] if report.web_only else build_messages(user, attachments, cfg.smtp)
@@ -1203,7 +1208,7 @@ def run(
                 if not dry_run:
                     if message is not None:
                         sender([message], cfg.smtp)
-                    store.mark_delivered(user.id, ids, now, story_of)
+                    store.mark_delivered(user.id, ids, now, story_of, positions=positions)
                     if cfg.keep_issues_days != 0:
                         # A copy of what was sent, for checking a book without the device.
                         cfg.issues_dir.mkdir(parents=True, exist_ok=True)
