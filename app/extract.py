@@ -242,24 +242,28 @@ def _join(base: str, address: str) -> str:
         return ""
 
 
+SRCSET_SPACE = "\t\n\f\r "  # the spec's whitespace, not Python's wider one
+SRCSET_SKIP = SRCSET_SPACE + ","
+
+
 def srcset_urls(srcset: str) -> list[str]:
     """The addresses in a srcset, as a browser reads it: an address runs to a space (so a data:
     address keeps its commas), a comma it ends with closes its candidate, and otherwise the
     candidate's descriptors run to the next comma outside brackets."""
     urls, n = [], 0
     while n < len(srcset):
-        while n < len(srcset) and (srcset[n].isspace() or srcset[n] == ","):
+        while n < len(srcset) and srcset[n] in SRCSET_SKIP:
             n += 1
         start = n
-        while n < len(srcset) and not srcset[n].isspace():
+        while n < len(srcset) and srcset[n] not in SRCSET_SPACE:
             n += 1
         url = srcset[start:n]
         if url.endswith(","):
             url = url.rstrip(",")
         else:
-            depth = 0
-            while n < len(srcset) and (srcset[n] != "," or depth):
-                depth += {"(": 1, ")": -1}.get(srcset[n], 0)
+            bracket = False  # "(" opens, the next ")" closes: not nested
+            while n < len(srcset) and (srcset[n] != "," or bracket):
+                bracket = srcset[n] == "(" or (bracket and srcset[n] != ")")
                 n += 1
         if url:
             urls.append(url)

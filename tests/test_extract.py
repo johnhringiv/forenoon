@@ -1828,6 +1828,8 @@ def test_an_image_with_an_empty_srcset_is_left_out_not_a_crash():
     assert extract_module._image_src(lxml.html.fromstring('<img srcset="a.jpg 1x,b.jpg 2x">')) == "b.jpg"
     for srcset, urls in (
         ("a.jpg, b.jpg", ["a.jpg", "b.jpg"]),
+        ("a.jpg 1x), b.jpg 2x", ["a.jpg", "b.jpg"]),
+        ("a.jpg ((x) , b.jpg 2x", ["a.jpg", "b.jpg"]),
         ("a.jpg 1x, , b.jpg 2x", ["a.jpg", "b.jpg"]),
         (",a.jpg 2x", ["a.jpg"]),
         ("i.jpg?a=1,b=2 800w, j.jpg 1600w", ["i.jpg?a=1,b=2", "j.jpg"]),
