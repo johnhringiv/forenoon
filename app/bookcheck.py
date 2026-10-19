@@ -773,17 +773,22 @@ def _fragment(html: str) -> lxml.html.HtmlElement:
         raise ToolError(f"that HTML cannot be read: {exc}") from exc
 
 
+LINE_BREAKS = {*TEXT_BREAKS, "td", "th", "caption", "figcaption"}
+
+
 def _lines(el: lxml.html.HtmlElement) -> str:
     """An element's words as they read, a line per block or <br>, without its code: a name split
     by a tag ("copy:<b>1</b>") is on one line, the end of one paragraph and the start of the
     next are not."""
     el = copy.deepcopy(el)
-    for code in list(el.iter("pre", "code")):
-        code.drop_tree() if code is not el and code.getparent() is not None else None
     if el.tag in ("pre", "code"):
         return ""
+    for code in list(el.iter("pre", "code")):
+        if code.getparent() is not None:
+            code.tail = "\n" + (code.tail or "")  # what is either side of it is not one line
+            code.drop_tree()
     for part in el.iter():
-        if isinstance(part.tag, str) and part.tag in TEXT_BREAKS:
+        if isinstance(part.tag, str) and part.tag in LINE_BREAKS:
             part.tail = "\n" + (part.tail or "")
             part.text = "\n" + (part.text or "")
     return el.text_content()

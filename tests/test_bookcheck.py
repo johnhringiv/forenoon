@@ -852,6 +852,8 @@ def test_the_start_is_one_the_end_phrase_follows():
         "<p>Steps to copy:</p><p>1. Open the file.</p>",
         "<p>Paste copy:<br>3 times</p>",
         "<p>a=</p><p>b</p> copy:1",
+        "copy:1 <table><tr><td>Press copy:</td><td>1 time</td></tr></table>",
+        "copy:1 <div>Steps to copy:<pre>x</pre>1 more</div>",
     ):
         article.insert(1, own)
     article.insert(1, "copy:1 \ud800 <p>after it</p>")

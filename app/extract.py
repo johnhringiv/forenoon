@@ -40,6 +40,7 @@ TRANSPARENT = {"a", "del", "ins"}
 PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", "a", "pre")
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
+SRCSET_URL = re.compile(r"(?:^|,)\s*(\S+)")  # each candidate's address: up to its first space
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 
 # Structure that pages express only through class names and in-page links. It is rebuilt
@@ -246,9 +247,11 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
-    if not src and el.get("srcset") and "data:" not in el.get("srcset"):  # a data: address has commas of its own
-        # The last candidate with an address ("a.jpg 1x, b.jpg 2x"); none in a blank or "," srcset.
-        src = next((part.split()[0] for part in reversed(el.get("srcset").split(",")) if part.split()), "")
+    if not src and el.get("srcset"):
+        # The last candidate's address ("a.jpg 1x, b.jpg 2x"), not a data: placeholder's (whose
+        # own commas are part of it); none in a blank or "," srcset.
+        found = [part.rstrip(",") for part in SRCSET_URL.findall(el.get("srcset"))]
+        src = next((part for part in reversed(found) if part and not part.startswith("data:")), "")
     return src
 
 
