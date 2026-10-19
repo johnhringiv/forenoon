@@ -127,6 +127,8 @@ PROMOTION = re.compile(
     r"inbox)\b|\bsubscribe for free\b|^(sign up|subscribe)( now| today| here)?\W*$",
     re.IGNORECASE,
 )
+# What a promotion says around its call ("Power up with unlimited access to WIRED.").
+PROMOTION_PITCH = re.compile(r"\bsubscri(ber|ption)s?\b|\bunlimited access\b", re.IGNORECASE)
 PROMOTION_MAX_WORDS = 30  # a promotion is no longer than this
 PROMOTION_SHARE = 0.6  # of its words in the sentences that ask
 PROMOTION_STOP_WORDS = 60  # a paragraph this long is the article's own: none before it is looked at
@@ -702,11 +704,13 @@ def _drop_trailing_promotions(body: lxml.html.HtmlElement) -> None:
 
 
 def _promotion(text: str) -> bool:
-    """Whether a paragraph is a call to subscribe and little else."""
+    """Whether a paragraph is a call to subscribe and little else: the call, and the pitch
+    for a subscription around it."""
     words = _words(text)
-    if words > PROMOTION_MAX_WORDS:
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    if words > PROMOTION_MAX_WORDS or not any(PROMOTION.search(sentence) for sentence in sentences):
         return False
-    asking = sum(_words(sentence) for sentence in re.split(r"(?<=[.!?])\s+", text) if PROMOTION.search(sentence))
+    asking = sum(_words(s) for s in sentences if PROMOTION.search(s) or PROMOTION_PITCH.search(s))
     return asking >= PROMOTION_SHARE * words
 
 

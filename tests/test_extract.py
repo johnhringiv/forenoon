@@ -497,3 +497,6 @@ def test_a_closing_paragraph_that_mentions_signing_up_is_kept():
     page = f"<html><body><article>{filler}<p>Enjoying it? Subscribe to our free newsletter.</p></article></body></html>"
     result = extract("https://news.example/story", page, "")
     assert "newsletter" not in result.body.text_content() and result.word_count == 9 * 30
+    pitch = "<p>Power up with unlimited access to Example. Get exclusive subscriber content. Subscribe Today.</p>"
+    result = extract("https://news.example/story", page.replace("</article>", pitch + "</article>"), "")
+    assert "Example" not in result.body.text_content() and result.word_count == 9 * 30
