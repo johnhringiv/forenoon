@@ -55,6 +55,9 @@ PAGE_START_CHARS = 8_000  # of the saved page's text, in the first message
 READ_CHARS = 6_000  # the most `page_read` returns
 FIND_CONTEXT = 150  # characters each side of a match
 MAX_FINDS = 10
+# Where a listing leaves a block out. Worded so it cannot pass for the end of the article's own
+# text: a bare "(shortened)" did, and the check "restored" sentences that were never cut.
+LISTING_NOTE = "[the listing stops here, not the article: article_read first={n} last={n} shows it whole]"
 LISTING_CHARS = 30_000  # of the article's blocks shown whole in the first message; the rest shortened
 SHORT_BLOCK_CHARS = 160
 BLOCK_CHARS = 6_000  # the most of one block shown in a tool's answer
@@ -134,6 +137,9 @@ code, figure, figcaption, img, table, a, em, strong. Everything you write is red
 scripts, styles, classes and other attributes are removed.
 - An image must be one the article already has (written as it is listed, src="picture:N" for \
 an embedded one) or one whose address is on the saved page.
+- A listing may stop partway through a block, marked "[the listing stops here, not the \
+article: …]". That block is not cut in the article; read it with article_read before \
+judging its end.
 - Block numbers change after every edit. Each edit's answer lists the blocks around it with \
 their new numbers; use those.
 - Use page_find to locate a passage on the page, page_read to read more of it, and page_view \
@@ -335,7 +341,7 @@ class _Article:
         for n in range(max(1, first), min(len(found), last) + 1):
             html = self.shown(found[n - 1])
             if len(html) > cap:
-                html = html[:cap] + f" …(cut at {cap} characters; article_read shows it all)"
+                html = html[:cap] + f" {LISTING_NOTE.format(n=n)}"
             lines.append(f"[{n}] {html}")
         return "\n".join(lines) or "(no blocks)"
 
@@ -346,9 +352,7 @@ class _Article:
             html = self.shown(el)
             if spent + len(html) > LISTING_CHARS:
                 text = " ".join(el.text_content().split())
-                html = (
-                    f"<{el.tag}> {text[:SHORT_BLOCK_CHARS]}{'…' if len(text) > SHORT_BLOCK_CHARS else ''} (shortened)"
-                )
+                html = f"<{el.tag}> {text[:SHORT_BLOCK_CHARS]} {LISTING_NOTE.format(n=n)}"
             spent += len(html)
             lines.append(f"[{n}] {html}")
         return "\n".join(lines)

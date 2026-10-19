@@ -544,3 +544,16 @@ def test_every_request_asks_for_the_refusal_fallback(check):
     asked = client.asked[0]
     assert asked["extra_body"] == {"fallbacks": "default"}
     assert asked["extra_headers"] == {"anthropic-beta": "server-side-fallback-2026-07-01"}
+
+
+def test_a_listing_that_stops_early_says_the_article_does_not(monkeypatch):
+    # A bare "(shortened)" at the end of a block read as the article's own last words, and the
+    # check "restored" text that had never been cut.
+    monkeypatch.setattr(bookcheck, "LISTING_CHARS", 300)
+    body = lxml.html.fromstring(f"<div><p>First. {WORDS}</p><p>Second. {WORDS}</p></div>")
+    article = bookcheck._Article(body, URL, page_images=set())
+    first = article.first_listing().splitlines()
+    assert "shortened" not in first[1]
+    assert first[1].endswith("[the listing stops here, not the article: article_read first=2 last=2 shows it whole]")
+    assert article.listing(1, 1, cap=50).endswith("article_read first=1 last=1 shows it whole]")
+    assert "not cut in the article" in bookcheck.SYSTEM
