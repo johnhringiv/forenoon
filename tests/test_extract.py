@@ -1211,3 +1211,252 @@ def test_a_live_blog_at_the_side_of_an_article_or_wrapping_its_entries_in_an_art
     )
     live = extract_module._live_blog(f"<html><body><article class='liveblog'>{entries}</article></body></html>")
     assert live.text_content().count("Entry 1:") == 1
+
+
+def test_lists_that_are_part_of_the_text_are_kept_though_they_are_links():
+    words = _paragraphs("Article", 8)
+
+    def kept(block):
+        page = f"<html><body><article>{words}{block}{words}</article></body></html>"
+        return extract("https://blog.example/a", page, "", "page").body.text_content()
+
+    issues = "".join(
+        f"<li><a href='https://github.com/golang/go/issues/{n}'>golang/go#{n}: Refactoring {n}</a></li>"
+        for n in range(4)
+    )
+    talks = "".join(
+        f"<li><a href='https://www.youtube.com/watch?v=t{n}'>Minimalism versus types</a> ({2019 + n}), a talk at a conference about the language</li>"
+        for n in range(4)
+    )
+    # Introduced by a paragraph ending in a colon, or saying something beside its links.
+    assert "golang/go#3" in kept(f"<p>Some of the requests we have had, including:</p><ul>{issues}</ul>")
+    assert "(2022), a talk" in kept(f"<ul>{talks}</ul>")
+    assert "golang/go#3" in kept(f"<p>References</p><ul>{issues}</ul>")
+    # Not a site's links: one-word links, a table of contents, a sign-up call, a share bar.
+    for furniture in (
+        "<p>Share this:</p><ul>"
+        + "".join(
+            f"<li><a href='/s{n}'>{site}</a></li>"
+            for n, site in enumerate(("Facebook", "Mastodon", "Bluesky", "Email"))
+        )
+        + "</ul>",
+        "<p>Contents:</p><ul>"
+        + "".join(f"<li><a href='#s{n}'>Section {n} of the article</a></li>" for n in range(5))
+        + "</ul>",
+        (
+            "<p>If you liked this article, please:</p><ul><li><a href='/like'>hit on the like button</a>,</li>"
+            "<li><a href='/newsletter'>subscribe to my newsletter</a></li><li>and let's connect on <a href='/t'>Twitter</a>!</li></ul>"
+        ),
+        "<ul class='share-links'>" + talks + "</ul>",
+    ):
+        out = kept(furniture)
+        assert "Facebook" not in out and "Section 4 of" not in out and "newsletter" not in out and "(2022)" not in out
+
+
+def test_section_headings_marked_up_as_links_ids_or_scroll_margins_are_kept():
+    words = _paragraphs("Article", 4)
+    page = (
+        f"<html><body><article>{words}"
+        "<h2 id='setup'><a href='#setup'>Setup</a></h2>"
+        f"{words}<section id='abstract'><h2><a class='toc-backref' href='#abstract'>Abstract</a></h2>{words}</section>"
+        f"<h2 id='part-2-why-metascience'>Part 2 – Why metascience</h2>{words}"
+        f"<h2 class='scroll-mt-24 text-xl'>The early days</h2>{words}"
+        f"<h2 id='registration'>Registration<a class='anchor' href='#registration'>#</a></h2>{words}"
+        f"<h2 id='related'>Related</h2><p><a href='/x'>Another post</a></p></article></body></html>"
+    )
+    out = lxml.html.tostring(extract("https://blog.example/a", page, "", "page").body, encoding="unicode")
+    for heading in ("Setup", "Abstract", "Part 2 – Why metascience", "The early days"):
+        assert f">{heading}</h2>" in out
+    # A permalink sign is not made text; a heading an article ends on is not freed.
+    assert "Registration#" not in out and "Related" not in out
+
+
+def test_a_comparison_table_in_a_scrolling_box_or_of_download_links_is_kept():
+    words = _paragraphs("Article", 6)
+    rows = "".join(f"<tr><td>Question {n}</td><td>Answer one {n}</td><td>Answer two {n}</td></tr>" for n in range(6))
+    scrolling = f"<h2>The Comparison</h2><div class='table-scroll'><table><thead><tr><th>Question</th><th>v1</th><th>v2</th></tr></thead>{rows}</table></div>"
+    links = "".join(f"<tr><td>R{n}</td><td><a href='/configs/r{n}.txt'>Click here</a></td></tr>" for n in range(5))
+    downloads = f"<h2>Router Configs</h2><table><thead><tr><th>Router</th><th>Link</th></tr></thead>{links}</table>"
+    for table, needle in ((scrolling, "Answer two 5"), (downloads, "R4")):
+        page = f"<html><body><article><h1>Two engines</h1>{words}{table}<h2>Results</h2>{words}</article></body></html>"
+        assert needle in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_kept_list_of_links_does_not_cost_the_article_its_paragraphs():
+    # Readability judges each box around the list by its links too: once the list stayed, the
+    # article it was in went instead.
+    prose = "".join(
+        f"<p>Paragraph {n} of the round-up. It says a little about the week and what was worth reading.</p>"
+        for n in range(3)
+    )
+    links = "".join(
+        f"<li><a href='https://example.org/{n}'>A rather long descriptive title of an interesting article number {n}</a></li>"
+        for n in range(12)
+    )
+    for box in ("<main><div>", "<main><div class='entry-content'>"):
+        page = (
+            f"<html><body>{box}<h1>Links for the week</h1>{prose}<p>This week I read:</p><ul>{links}</ul>"
+            "<p>That is all for now, and thanks for reading this far.</p></div></main></body></html>"
+        )
+        result = extract("https://blog.example/a", page, "", "page")
+        out = result.body.text_content()
+        assert "Paragraph 2 of" in out and "number 11" in out and "thanks for reading" in out
+
+
+def test_lists_a_site_introduces_or_that_point_at_the_page_stay_out():
+    words = _paragraphs("Article", 8)
+
+    def kept(block):
+        page = f"<html><body><article><div class='entry-content'>{words}{block}</div></article></body></html>"
+        return extract("https://blog.example/2026/10/post/", page, "", "page").body.text_content()
+
+    titles = "".join(f"<li><a href='/p{n}'>How we built thing number {n} at work</a></li>" for n in range(5))
+    for lead in ("Related posts:", "Filed under:", "Share this:", "Get the newsletter and you will receive:"):
+        assert "thing number 4" not in kept(f"<p>{lead}</p><ul>{titles}</ul>")
+    sections = "".join(
+        f"<li><a href='https://blog.example/2026/10/post/#s{n}'>Section number {n} of this post</a></li>"
+        for n in range(4)
+    )
+    targets = "".join(f"<h2 id='s{n}'>Part {n}</h2>{_paragraphs(f'Part {n}', 2)}" for n in range(4))
+    page = f"<html><body><article>{words}<p>Contents:</p><ul>{sections}</ul>{targets}</article></body></html>"
+    assert "Section number 3" not in extract("https://blog.example/2026/10/post/", page, "", "page").body.text_content()
+
+
+def test_a_back_to_top_link_in_a_heading_is_not_freed():
+    words = _paragraphs("Article", 6)
+    page = f"<html><body id='top'><div id='page'><article>{words}<h3><a href='#top'>Back to top</a></h3></article></div></body></html>"
+    assert "Back to top" not in extract("https://blog.example/a", page, "", "page").body.text_content()
+
+
+def test_a_sites_lists_of_its_stories_stay_out_and_author_lead_ins_count():
+    words = _paragraphs("Article", 8)
+
+    def kept(block):
+        page = f"<html><body><article><h1>Title</h1>{words}{block}{words}</article></body></html>"
+        return extract("https://example.com/post", page, "", "page").body.text_content()
+
+    most_read = "<h2>Most read</h2><ul>" + "".join(
+        f"<li><a href='/x{n}'>Man bites dog in local park number {n}</a> <time>{n + 2} hours ago</time> {n + 3} comments</li>"
+        for n in range(4)
+    )
+    keep_reading = "<div class='more-stories'><h2>Keep reading</h2><ul>" + "".join(
+        f"<li><a href='/y{n}'>Why we left the cloud, part {n}</a><span>By Jane Doe · 6 min read · March {n + 2}</span></li>"
+        for n in range(4)
+    )
+    assert "Man bites dog" not in kept(most_read + "</ul>")
+    assert "left the cloud" not in kept(keep_reading + "</ul></div>")
+    steps = "".join(
+        f"<li><a href='/docs/{n}'>Step {n}</a>: run the setup command for step {n} and check it</li>" for n in range(4)
+    )
+    assert "setup command for step 3" in kept(f"<p>To install it, do the following:</p><ul>{steps}</ul>")
+
+
+def test_a_news_sites_story_packages_stay_out_however_they_are_labelled():
+    words = _paragraphs("Article", 12)
+
+    def leaked(block):
+        page = (
+            f"<html><body><article><h1>Title</h1><div class='article-body'>{words}{block}</div></article></body></html>"
+        )
+        return "Headline" in extract("https://news.example/2026/10/story", page, "", "page").body.text_content()
+
+    teased = "".join(
+        f"<li><a href='/2026/10/s{n}'>Headline number {n} of the day</a> A teaser line saying what story {n} is about.</li>"
+        for n in range(5)
+    )
+    cards = "".join(
+        f"<li><a href='https://other.example/s{n}'>Headline {n}</a><p>A teaser for story {n} in its own block.</p></li>"
+        for n in range(5)
+    )
+    bare = "".join(f"<li><a href='/2026/10/s{n}'>Headline number {n} of the day</a></li>" for n in range(4))
+    bylined = "".join(
+        f"<li><a href='/2026/10/s{n}'>Headline number {n} about the council and the budget</a> <span>By Jane Doe and John Roe</span> <span>Updated 3:15 PM ET</span></li>"
+        for n in range(5)
+    )
+    for block in (
+        f"<h2>More news</h2><ul>{teased}</ul>",
+        f"<h2>Editors’ Picks</h2><ul>{teased}</ul>",
+        f"<div><h4>Around the web</h4></div><ul>{teased}</ul>",
+        f"<div class='river'><ul>{teased}</ul></div>",
+        f"<h2>Our coverage</h2><ul>{cards}</ul>",
+        f"<h2>Our coverage</h2><ul>{bylined}</ul>",
+        f"<p>More:</p><ul>{bare}</ul>",
+        f"<p>Also read:</p><ul>{bare}</ul>",
+        f"<p>Get the best stories in your inbox each morning:</p><ul>{bare}</ul>",
+    ):
+        assert not leaked(block), block[:40]
+
+
+def test_a_sentence_before_the_sites_own_headlines_does_not_make_them_the_articles():
+    words = _paragraphs("Article", 12)
+    heads = "".join(
+        f"<li><a href='/2026/10/19/s{n}'>Headline number {n} about a fire in the hills above town</a></li>"
+        for n in range(3)
+    )
+    for lead in ("Here is what else we are reporting today:", "Our journalists are also covering these stories:"):
+        page = f"<html><body><article><h1>Title</h1>{words}<p>{lead}</p><ul>{heads}</ul></article></body></html>"
+        out = extract("https://news.example.com/2026/10/19/story", page, "", "page").body.text_content()
+        assert "Headline number 2" not in out
+
+
+def test_lists_in_a_sites_boxes_or_of_its_social_links_stay_out():
+    words = _paragraphs("Article", 12)
+
+    def leaked(block, needle):
+        page = f"<html><body><article><h1>Title</h1>{words}{block}</article></body></html>"
+        return needle in extract("https://www.example-news.com/2026/10/story", page, "", "page").body.text_content()
+
+    outside = "".join(
+        f"<li><a href='https://other{n}.org/x'>Outside story {n}</a> — an in-depth look at how councils budget for roads</li>"
+        for n in range(4)
+    )
+    for box in ("recommend-box", "taboola", "c-river", "social-links"):
+        assert not leaked(f"<div class='{box}'><ul>{outside}</ul></div>", "Outside story")
+    shares = "".join(
+        f"<li><a href='https://twitter.com/share?u={n}'>Share on network number {n}</a></li>" for n in range(3)
+    )
+    assert not leaked(
+        f"<p>If you enjoyed this post, please consider sharing it with others:</p><ul>{shares}</ul>", "network number"
+    )
+    follows = "".join(
+        f"<li><a href='https://{h}/ourpaper'>Our account on {h}</a></li>"
+        for h in ("bsky.app", "threads.net", "www.instagram.com")
+    )
+    assert not leaked(
+        f"<p>Find our reporters and editors on the platforms where they post:</p><ul>{follows}</ul>", "Our account"
+    )
+    local = "".join(
+        f"<li><a href='https://local.example-news.com/2026/10/s{n}'>Headline number {n} about the vote</a></li>"
+        for n in range(4)
+    )
+    assert not leaked(f"<p>Read more of our coverage of the election here:</p><ul>{local}</ul>", "Headline number")
+    assert not leaked(
+        f"<p>See <a href='http://[bad'>this</a>:</p><ul>{local}<li><a href='http://[bad'>Bad</a></li></ul>",
+        "Headline number",
+    )
+    assert leaked("", "Article paragraph 11")
+
+
+def test_a_furniture_heading_with_a_slug_id_or_promoted_lists_stay_out():
+    words = _paragraphs("Article", 8)
+    for block, needle in (
+        (
+            "<h2 id='follow-us-on-twitter'>Follow us on Twitter</h2><ul><li><a href='https://twitter.com/ex'>@ex</a></li></ul>",
+            "Follow us",
+        ),
+        (
+            "<h2 id='join-our-community'>Join our community</h2><ul><li><a href='https://forum.example/'>Forum</a></li></ul>",
+            "Join our",
+        ),
+        (
+            "<h2>From our partners</h2><ul>"
+            + "".join(
+                f"<li><a href='https://p{n}.example/'>Partner story {n}</a> about a thing you may want to buy soon</li>"
+                for n in range(5)
+            )
+            + "</ul>",
+            "Partner story",
+        ),
+    ):
+        page = f"<html><body><article><h1>Story</h1>{words}{block}</article></body></html>"
+        assert needle not in extract("https://blog.example/a", page, "", "page").body.text_content(), needle

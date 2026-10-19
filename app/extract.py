@@ -158,7 +158,8 @@ TRAILING_FURNITURE = re.compile(
     r"(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
     r"replies|discussion|recommended( reading| for you)?|popular|trending|read next|up next|follow us|"
     r"elsewhere|advertisement|sponsored|support us|leave a (reply|comment)( cancel reply)?|post a comment|"
-    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like)\W*$"
+    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like|"
+    r"you may have missed|more from (the |this |our )?(blog|site|author|archive|newsletter)|popular (tags|posts|stories|articles)|back to top( of page)?)\W*$"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
 NOTES_HEADING = re.compile(
@@ -372,6 +373,83 @@ def _names_word(pattern: re.Pattern, part: str) -> bool:
     ("footer", "sponsored", "comments"), rather than a longer word holding it ("freshrss")."""
     found = pattern.match(part)
     return found is not None and len(part) - found.end() <= 3
+
+
+TAILWIND_SCROLL = re.compile(r"(?:[\w-]+:)*scroll-[mp][trblxyse]?-\S+")  # "scroll-mt-24": a margin
+
+
+def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
+    """Keep section headings and tables that readability drops for how they are marked up.
+
+    - A heading whose text is a link to itself, or to the section it heads (a permalink,
+      "<h2><a href='#setup'>Setup</a></h2>"), is all link to readability, which drops a heading
+      more than a third links: the link's tag goes and its text stays, when the link holds
+      most of the heading and no picture.
+    - An id that only spells the heading's text ("part-2-metascience", "a-final-remark") is
+      judged by that text, not by a word in it that readability takes for furniture ("meta",
+      "remark", "tool", "header"): it goes, unless it names furniture to us too or the
+      heading is one an article ends on ("Related", "Comments") or opens with the furniture
+      word ("Tweet this").
+    - A Tailwind scroll margin ("scroll-mt-24") is not a scrolling widget: it goes.
+    - The box a real table scrolls in ("table-scroll"), holding the table alone, loses the
+      name readability holds against it."""
+    page = base_url.split("#")[0]
+    negative, unlikely = READABILITY_PATTERNS["negativeRe"], READABILITY_PATTERNS["unlikelyCandidatesRe"]
+    for heading in list(root.iter(*HEADINGS)):
+        text = " ".join(heading.text_content().split())
+        # The heading's own id, those inside it, and those of the boxes it opens (a <section>
+        # whose first element it is): not a page's "#top", which a "Back to top" link names.
+        opened = [heading]
+        while (box := opened[-1].getparent()) is not None and box is not root:
+            first = next((c for c in box if isinstance(c.tag, str)), None)
+            if first is not opened[-1] or (box.text or "").strip():
+                break
+            opened.append(box)
+        own = {el.get("id") for el in opened if el.get("id")}
+        own |= {
+            el.get("id") or el.get("name")
+            for el in heading.iterdescendants()
+            if isinstance(el.tag, str) and (el.get("id") or (el.tag == "a" and el.get("name")))
+        }
+        own.discard(None)
+        for a in list(heading.iter("a")):
+            href = (a.get("href") or "").strip()
+            if not href.startswith("#"):
+                resolved = _join(page, href) if "#" in href else ""
+                href = resolved[len(page) :] if resolved.startswith(page + "#") else ""
+            inner = len(" ".join(a.text_content().split()))
+            if href.startswith("#") and unquote(href[1:]) in own and not a.xpath(MEDIA_XPATH) and inner * 2 > len(text):
+                a.drop_tag()
+        anchor = heading.get("id") or ""
+        if (
+            anchor
+            and (negative.search(anchor) or unlikely.search(anchor))
+            and _slug(anchor) == _slug(text)
+            and not FURNITURE_CLASS.search(anchor)
+            and not TRAILING_FURNITURE.match(_norm(text))
+            and not any(p.fullmatch(text.split()[0]) for p in (negative, unlikely))
+            and not _furniture_lead(heading)
+        ):
+            heading.attrib.pop("id", None)
+        names = (heading.get("class") or "").split()
+        if any(TAILWIND_SCROLL.fullmatch(name) for name in names):
+            heading.set("class", " ".join(name for name in names if not TAILWIND_SCROLL.fullmatch(name)))
+    for table in root.iter("table"):
+        box = table.getparent()
+        if (
+            not table.xpath(".//th | .//thead | .//caption")
+            or box is None
+            or box is root
+            or box.tag != "div"
+            or (box.text or "").strip()
+            or (table.tail or "").strip()
+            or [c for c in box if isinstance(c.tag, str)] != [table]
+            or FURNITURE_CLASS.search(_names(box))
+        ):
+            continue
+        if negative.search(_names(box)) or unlikely.search(_names(box)):
+            box.attrib.pop("class", None)
+            box.attrib.pop("id", None)
 
 
 def _slug(text: str) -> str:
@@ -661,6 +739,7 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
         names = _names(heading) + " " + (_names(parent) if parent is not None else "")
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
+    _free_section_headings(root, base_url)
     _free_headings(root)
     _free_code_blocks(root)
     _drop_page_notices(root)
@@ -1006,9 +1085,248 @@ def _fix_nesting(root: lxml.html.HtmlElement) -> None:
             break
 
 
-def _readability(page_html: str) -> lxml.html.HtmlElement | None:
+LIST_OWN_CHARS = 20  # of each item's text outside its links, on average, for a list that says something
+
+
+# What a site's list of its own stories carries beside each link: a time, a byline, a count.
+LIST_METADATA = re.compile(
+    r"\d+\s*(s|m|h|d|mins?|minutes?|hrs?|hours?|days?|weeks?|months?)\s+ago|\d+\s*(min|minute)s?\s+read|"
+    r"\d+\s*(comments?|replies|responses|shares|views)|\bby\s+[A-Z][\w.'-]*(\s+[A-Z][\w.'-]*)*|[·•|]",
+)
+
+
+def _own_chars(ul: lxml.html.HtmlElement) -> float:
+    """How much of a list's items is text of their own rather than the links in them, or the
+    times, bylines and counts a site's list of its stories gives each one."""
+    own = []
+    for li in ul.findall("li"):
+        li = copy.deepcopy(li)
+        for el in list(li.iter("a", "time")):
+            el.drop_tree()
+        own.append(len(" ".join(LIST_METADATA.sub(" ", li.text_content()).split())))
+    return sum(own) / len(own) if own else 0.0
+
+
+def _lead(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The paragraph just before a list, if that is what comes before it."""
+    before = ul.getprevious()
+    while before is not None and not isinstance(before.tag, str):
+        before = before.getprevious()
+    return before if before is not None and before.tag == "p" else None
+
+
+# What a site puts before its own lists: "Related posts:", "Filed under:", "Share this:",
+# "Most read", "Keep reading".
+LEAD_FURNITURE = re.compile(
+    r"\b(related|popular|similar|categor(y|ies)|filed|tags?|tagged|share|follow (us|me)|subscribe|"
+    r"newsletter|contents|on this page|in this (post|article)|sponsor\w*|advert\w*|most (read|viewed|popular)|"
+    r"keep reading|latest|trending|top stories|editor'?s picks|recommended|read (more|next)|up next|"
+    r"more (from|on|in|news|stories|posts|articles|like this)|in your inbox|(you )?(may have )?missed|"
+    r"don.?t miss|around the web|most shared|editor.?s.? (picks|choice)|also read|previously|watch|explore|"
+    r"partners?|promoted|paid (content|posts?)|our network|deals?|join (us|our))\b"
+    r"|^like this\W*$",
+    re.IGNORECASE,
+)
+LEAD_FURNITURE_WORDS = 6
+LEAD_PITCH = re.compile(  # at any length
+    r"in your inbox|newsletter|subscribe|sign up for|\bshar(e|ing) (it|this)|follow(ing)? us|on social media",
+    re.IGNORECASE,
+)
+
+
+def _heading_over(ul: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The heading just over a list ("<h2>Most read</h2><ul>"), past at most its lead-in
+    paragraph, or over the box the list opens."""
+    el = ul
+    while el is not None:
+        before = el.getprevious()
+        while before is not None and (not isinstance(before.tag, str) or before.tag == "p" and before is _lead(el)):
+            before = before.getprevious()
+        if before is not None:
+            return before if before.tag in HEADINGS else None
+        el = el.getparent()
+    return None
+
+
+def _furniture_lead(lead: lxml.html.HtmlElement) -> bool:
+    """Whether the paragraph before a list introduces the site's lists, not the author's: a
+    short label naming related posts, tags, sharing or a table of contents, or a newsletter or
+    paywall's wording at any length."""
+    text = " ".join(lead.text_content().split())
+    label = _words(text) <= LEAD_FURNITURE_WORDS and LEAD_FURNITURE.search(text)
+    return bool(
+        label
+        or LEAD_PITCH.search(text)
+        or TRAILING_FURNITURE.match(_norm(text))
+        or REFILL_FURNITURE.search(text)
+        or PAYWALL.search(text)
+    )
+
+
+def _led_in(ul: lxml.html.HtmlElement) -> bool:
+    """Whether a paragraph introduces the list: it ends in a colon ("…please at least:"), or it
+    is the whole of a short reference heading set as a paragraph ("References")."""
+    before = _lead(ul)
+    if before is None:
+        return False
+    text = " ".join(before.text_content().split())
+    # A sentence that ends in a colon, not a label that does ("More:", "Also read:").
+    sentence = text.endswith(":") and _words(text) > LEAD_MIN_WORDS
+    return sentence or (len(text) <= LEAD_HEADING_CHARS and bool(REFILL_HEADING.match(_norm(text))))
+
+
+LEAD_HEADING_CHARS = 40
+# The names of boxes a site keeps its own lists in.
+LIST_BOX = re.compile(
+    r"recommend|more-stories|river|taboola|outbrain|partner|social|signup|sign-up|newsletter|follow|share",
+    re.IGNORECASE,
+)
+SHARE_LINK = re.compile(r"/share\b|sharer|intent/tweet|/submit\?|^mailto:\?", re.IGNORECASE)
+SOCIAL_HOST = re.compile(
+    r"(.+\.)?(twitter\.com|x\.com|facebook\.com|bsky\.app|threads\.net|instagram\.com|linkedin\.com|"
+    r"tiktok\.com|reddit\.com|pinterest\.com|whatsapp\.com|t\.me|telegram\.me)"
+)
+# Second-level names a country registry sells under ("bbc.co.uk"), for the site's own domain.
+REGISTRY_SECOND = {"co", "com", "org", "net", "ac", "gov", "edu", "ne", "or"}
+
+
+def _domain(host: str) -> str:
+    """A host's registrable domain: "local.example-news.com" and "www.example-news.com" are one site."""
+    labels = host.lower().removeprefix("www.").split(".")
+    keep = 3 if len(labels) >= 3 and labels[-2] in REGISTRY_SECOND and len(labels[-1]) == 2 else 2
+    return ".".join(labels[-keep:])
+
+
+def _place(base: str, href: str = "") -> tuple[str, str] | None:
+    """A link's site and path, resolved against the page; None for one that is not a web
+    address or does not parse."""
     try:
-        document = Document(page_html, positive_keywords=[DATA_TABLE_CLASS])
+        parts = urlsplit(urljoin(base, href.strip()) if href else base)
+        host = parts.hostname or ""
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not host:
+        return None
+    return _domain(host), parts.path.rstrip("/")
+
+
+LEAD_MIN_WORDS = 3
+SITE_LINK_SHARE = 0.5  # of a list's links to other pages of the site, past which it is the site's
+
+
+class _Document(Document):
+    """Readability, keeping the lists that are part of the text.
+
+    Readability drops a list that is more than a fifth links (a quarter in an article) unless
+    its name is in its favour; that is how a site's menus go, and also an author's list of
+    issues, talks, libraries or references. A list is kept here whatever its links when it is
+    not named or worded as furniture, holds no form or button, is not a run of one-word links
+    or a table of contents, and either a paragraph introduces it or its items say something
+    of their own beside their links. The links of a list kept so do not count against the
+    boxes around it either: else the box holding it, the article itself, goes in its place."""
+
+    def __init__(self, *args, url: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._page_url = url
+
+    def _social(self, ul) -> bool:
+        """Whether most of a list's links share the page or go to the site's social accounts."""
+        links = [(a.get("href") or "").strip() for a in ul.iter("a")]
+        social = 0
+        for href in links:
+            place = _place(self._page_url or "https://localhost/", href)
+            if SHARE_LINK.search(href) or (place is not None and SOCIAL_HOST.fullmatch(place[0])):
+                social += 1
+        return bool(links) and social * 2 > len(links)
+
+    @staticmethod
+    def _cards(ul) -> bool:
+        """Whether most of a list's items are story cards: a link beside a teaser of its own."""
+        items = ul.findall("li")
+        cards = sum(
+            1
+            for li in items
+            if any(c.tag == "a" for c in li if isinstance(c.tag, str))
+            and any(c.tag in ("p", "div") and " ".join(c.text_content().split()) for c in li if isinstance(c.tag, str))
+        )
+        return bool(items) and cards * 2 >= len(items)
+
+    def _site_list(self, ul) -> bool:
+        """Whether a list no sentence introduces is the site's own: its items are story cards,
+        or most of its links go to other pages of the site (its stories, sections, archives).
+        An author's list of references, talks or libraries points elsewhere."""
+        if self._cards(ul):
+            return True
+        if not self._page_url:
+            return False
+        here = _place(self._page_url)
+        if here is None:
+            return False
+        links = [_place(self._page_url, a.get("href") or "") for a in ul.iter("a")]
+        links = [link for link in links if link is not None]
+        own = [link for link in links if link[0] == here[0] and link[1] != here[1]]
+        return bool(links) and len(own) > SITE_LINK_SHARE * len(links)
+
+    def get_preserved_elements(self, node):
+        allowed = super().get_preserved_elements(node)
+        self._kept_lists, self._kept_root = set(), node.getroottree().getroot()
+        for ul in self.tags(node, "ul"):
+            if ul not in allowed and self._text_list(ul):
+                allowed[ul] = True
+                self._kept_lists.add(ul)
+        return allowed
+
+    def get_link_density(self, elem):
+        kept = getattr(self, "_kept_lists", None)
+        # Readability's second try parses the page again: lists kept on the first are not here.
+        if not kept or elem.getroottree().getroot() is not self._kept_root:
+            return super().get_link_density(elem)
+        links = sum(
+            len(" ".join(a.text_content().split()))
+            for a in elem.iter("a")
+            if not any(ul in kept for ul in a.iterancestors("ul"))
+        )
+        return links / max(len(" ".join(elem.text_content().split())), 1)
+
+    def _text_list(self, ul) -> bool:
+        if not ul.findall("li") or self.class_weight(ul) < 0 or FURNITURE_CLASS.search(_names(ul)):
+            return False
+        # Nor one in a box named as the site's: recommendations, social links, a sign-up.
+        if any(FURNITURE_CLASS.search(_names(a)) or LIST_BOX.search(_names(a)) for a in ul.iterancestors()):
+            return False
+        if self._social(ul):
+            return False
+        if ul.xpath(".//form | .//input | .//button | .//nav") or _short_links([ul]):
+            return False
+        if REFILL_FURNITURE.search(" ".join(ul.itertext())):
+            return False
+        # A table of contents: every link to a place on this page, however it is written.
+        root = ul.getroottree().getroot()  # the element: a tree object is made afresh each call
+        if getattr(self, "_ids_of", None) is not root:
+            self._ids_of = root
+            self._ids = {el.get("id") for el in root.iter() if isinstance(el.tag, str) and el.get("id")}
+        ids = self._ids
+        fragments = [(a.get("href") or "").partition("#") for a in ul.iter("a")]
+        if fragments and all(sep and (not page or unquote(target) in ids) for page, sep, target in fragments):
+            return False
+        lead = _lead(ul)
+        if lead is not None and _furniture_lead(lead):
+            return False
+        heading = _heading_over(ul)
+        if heading is not None and _furniture_lead(heading):
+            return False
+        says = _own_chars(ul) >= LIST_OWN_CHARS
+        if _led_in(ul):
+            # The author's sentence says what the list is; not a bare list of the site's own
+            # stories, which a news site introduces with a sentence of its own ("Here is what
+            # else we are reporting today:").
+            return not self._cards(ul) and (says or not self._site_list(ul))
+        return says and not self._site_list(ul)
+
+
+def _readability(page_html: str, url: str = "") -> lxml.html.HtmlElement | None:
+    try:
+        document = _Document(page_html, positive_keywords=[DATA_TABLE_CLASS], url=url)
         return _parse_fragment(document.summary(html_partial=True))
     except Exception:  # noqa: BLE001 - third-party parsers on hostile input
         return None
@@ -1175,10 +1493,12 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     kept = _norm(body.text_content())
     for heading in empty:
         found = by_text.get(_norm(heading.text_content()), [])
-        # Not on the page as it is, or not only once; or not a heading of references or reading:
-        # under any other, what readability left out was its own judgement (often rightly).
-        if len(found) != 1 or not REFILL_HEADING.match(_norm(heading.text_content())):
+        # Not on the page as it is, or not only once; or neither a heading of references or
+        # reading nor one over tables alone: under any other, what readability left out was its
+        # own judgement (often rightly). A table of figures with links in it it drops as links.
+        if len(found) != 1:
             continue
+        named = REFILL_HEADING.match(_norm(heading.text_content()))
         source = found[0]
         if FURNITURE_CLASS.search(_names(source)):
             continue
@@ -1200,6 +1520,11 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
             if not _plain_blocks(el) or el.xpath(".//form | .//nav") or FURNITURE_CLASS.search(_names(el)):
                 break
             section.append(el)
+        tables = bool(section) and all(
+            el.tag == "table" and el.xpath(".//th | .//thead | .//caption") for el in section
+        )
+        if not named and not tables:
+            continue
         words = sum(_words(el.text_content()) for el in section)
         already = any(text and text in kept for text in (_norm(el.text_content()) for el in section))
         if not words or words > REFILL_MAX_WORDS or already or _short_links(section):
@@ -1513,7 +1838,7 @@ def extract(
         page_html = XML_DECLARATION.sub("", page_html, count=1)
         page_html, notes["page"] = _lift(page_html, url, whole_page=True)
         notes["page-wide"] = notes["page"]
-        page = _readability(page_html)
+        page = _readability(page_html, url)
         if page is not None:
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
