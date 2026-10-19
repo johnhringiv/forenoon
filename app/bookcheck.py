@@ -31,7 +31,7 @@ from lxml import etree
 
 from . import archive, extract, models, sessions
 from .config import Config, User
-from .extract import Extracted
+from .extract import MIN_WORDS, Extracted, _words
 from .fetch import FetchError
 from .llm import Backend, LlmError
 from .sources import Item
@@ -43,6 +43,10 @@ PURPOSE = "book-check"
 MAX_TURNS = 12  # calls to the model for one article
 MAX_ARTICLE_TOKENS = 200_000  # input (cached too) and output, over one article's calls
 MAX_SECONDS = 180.0  # for one article, a view of the page included
+MIN_CALL_SECONDS = 30  # left of MAX_SECONDS: below this no call is started
+# Edits are kept only when the article they leave has at least this share of the words it had,
+# and the extractor's minimum: an untrusted page may talk the model into gutting the article.
+KEEP_AT_LEAST = 0.5
 MAX_OUTPUT_TOKENS = 16_000
 EFFORT = "medium"
 CALL_ESTIMATE = 4_000  # tokens a call adds beyond the prompt it repeats, for the caps
@@ -524,16 +528,23 @@ def _as_blocks(root: lxml.html.HtmlElement, parts_refused: bool = True) -> list[
 
 
 def _wrap_loose(body: lxml.html.HtmlElement) -> None:
-    """Words directly in the article's top element, between its blocks, put in paragraphs, so
-    every word is in a block the model is shown."""
-    if not (body.text or "").strip() and not any((child.tail or "").strip() for child in body):
-        return
-    parts = _as_blocks(body, parts_refused=False)
-    body.text = None
-    for child in list(body):
-        body.remove(child)
-    for part in parts:
-        body.append(part)
+    """Words between blocks put in paragraphs, so every word is in a block the model is shown:
+    directly in the article's top element, and in any wrapper inside it that holds blocks (a
+    "Show me the graphs!" left from a <details> summary would otherwise make the whole wrapper,
+    the whole article, one block)."""
+    for box in [body, *(div for div in body.iter("div") if div is not body)]:
+        children = [child for child in box if isinstance(child.tag, str)]
+        loose = (box.text or "").strip() or any((child.tail or "").strip() for child in children)
+        if box is not body and not (children and all(_is_block(child) for child in children)):
+            continue  # a block of its own with words and inline elements: shown whole
+        if not loose:
+            continue
+        parts = _as_blocks(box, parts_refused=False)
+        box.text = None
+        for child in list(box):
+            box.remove(child)
+        for part in parts:
+            box.append(part)
 
 
 def _tidy_links(body: lxml.html.HtmlElement) -> None:
@@ -697,7 +708,7 @@ class Checker:
             if spent + prompt + CALL_ESTIMATE > MAX_ARTICLE_TOKENS:
                 outcome.summary = f"stopped at {MAX_ARTICLE_TOKENS:,} tokens; the article went out as it was"
                 return outcome
-            if left <= 5:
+            if left <= MIN_CALL_SECONDS:  # a call this late would most likely time out
                 outcome.summary = f"stopped after {MAX_SECONDS:.0f} seconds; the article went out as it was"
                 return outcome
             response = self._call(model, messages, left, outcome)
@@ -851,6 +862,8 @@ class Checker:
         verdict = args.get("verdict") if args.get("verdict") in VERDICTS else "cannot_fix"
         if verdict == "ok" and article.edits:
             verdict = "fixed"  # it changed the article, whatever it says
+        if verdict == "fixed" and not article.edits:
+            verdict = "cannot_fix" if args.get("fixes") else "ok"  # it says so, but changed nothing
         outcome.verdict = verdict
         outcome.summary = " ".join(str(args.get("summary", "")).split())[:MAX_SUMMARY]
         fixes = args.get("fixes") if isinstance(args.get("fixes"), list) else []
@@ -864,6 +877,12 @@ class Checker:
             if isinstance(fix, dict)
         ]
         outcome.edits = article.edits
+        before, after = _words(result.body.text_content()), _words(article.body.text_content())
+        if article.edits and ((before >= MIN_WORDS > after) or after < KEEP_AT_LEAST * before):
+            # Kept for the record, not in the book: the article goes out as extracted.
+            outcome.verdict = "cannot_fix"
+            outcome.summary = f"Edits not kept: they left {after} of {before} words. {outcome.summary}"[:MAX_SUMMARY]
+            return outcome
         if article.edits:
             _swap(result.body, article.body)
             result.word_count = len(result.body.text_content().split())

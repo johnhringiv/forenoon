@@ -504,3 +504,34 @@ def test_loose_words_beside_a_stray_list_item_are_kept():
     assert lxml.html.tostring(body, encoding="unicode") == (
         "<div><p>loose <b>x</b> more</p><p>para</p><li>item</li><p>after</p><p>end</p></div>"
     )
+
+
+def test_edits_that_gut_the_article_are_not_kept(check):
+    make, item, store = check
+    # Told by the page (or wrongly sure) that this is the wrong article, it deletes it all.
+    checker, _client, result = make(
+        _reply(("delete_blocks", {"first": 1, "last": 2})),
+        _reply(_finish("fixed", "Removed the wrong article.", [{"kind": "wrong_article", "what": "all", "why": "x"}])),
+    )
+    outcome = checker.check(item, result)
+    assert _html(result) == BODY, "the article goes out as extracted"
+    assert outcome.verdict == "cannot_fix" and _rows(store)[-1]["verdict"] == "cannot_fix"
+    assert _rows(store)[-1]["summary"].startswith("Edits not kept: they left")
+
+
+def test_fixed_with_nothing_changed_is_not_counted_as_fixed(check):
+    make, item, _store = check
+    checker, _client, result = make(_reply(_finish("fixed", "All good.", [])))
+    assert checker.check(item, result).verdict == "ok"
+    found = [{"kind": "cut_short", "what": "ends early", "why": "page has more"}]
+    checker, _client, result = make(_reply(_finish("fixed", "Could not restore.", found)))
+    assert checker.check(item, result).verdict == "cannot_fix" and _html(result) == BODY
+
+
+def test_loose_words_inside_a_wrapper_do_not_make_the_article_one_block():
+    body = lxml.html.fragment_fromstring(
+        f"<div><div><p>First. {WORDS}</p>\nShow me the graphs!\n<ul><li>One</li></ul><p>Last. {WORDS}</p></div></div>"
+    )
+    bookcheck._wrap_loose(body)
+    found = bookcheck.blocks(body)
+    assert len(found) == 4 and found[1].text_content() == "Show me the graphs!"

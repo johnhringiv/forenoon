@@ -279,7 +279,7 @@ async fn usage(state: &AppState, stored: &HashMap<String, String>) -> Result<Vec
     let month = db::usage_since(&state.pool, &start(today.with_day(1).unwrap_or(today))).await?;
     let mut lines = vec![
         format!(
-            "Today: {} of {} tokens, about ${:.4}.",
+            "Today: {} of {} tokens, about ${:.4} in all.",
             thousands(day.tokens),
             thousands(cap.parse().unwrap_or(0)),
             day.cost
