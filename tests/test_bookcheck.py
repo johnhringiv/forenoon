@@ -836,3 +836,6 @@ def test_the_start_is_one_the_end_phrase_follows():
     article.insert(1, "<p>Mine</p>, copy:1 * * * copy:2")
     texts = [p.text_content().strip() for p in article.body.iter("p")]
     assert "," not in texts and "* * *" in texts
+    # Punctuation in a line of the model's own stays in it.
+    article.insert(1, "<b>Note</b>: <i>see below</i>, <b>Tom</b> &amp; <b>Jerry</b>. copy:1")
+    assert "Note: see below, Tom & Jerry." in article.body.text_content()

@@ -672,13 +672,14 @@ class _Article:
         out: list[lxml.html.HtmlElement] = []
         pending: list[str] = []
         real = [False]  # whether what is pending has an element or a word, not only punctuation
+        inline = [False]  # whether what is pending ends in a run of the model's own words
 
         def flush() -> None:
             own = "".join(pending)
             pending.clear()
             if not real[0]:
                 return  # a comma, a quote or a space between two copies
-            real[0] = False
+            real[0] = inline[0] = False
             blocks = self.clean(own)
             words = " ".join(
                 text
@@ -698,10 +699,10 @@ class _Article:
                 elif LOOSE_NAME.search(piece):
                     raise ToolError("write a copy's name exactly as copy:N, as page_copy gave it")
                 elif piece.strip() and not PUNCTUATION.fullmatch(piece):
-                    real[0] = True
+                    real[0] = inline[0] = True
                     pending.append(escape(piece))
-                elif not piece.strip():
-                    pending.append(piece)  # a space, which may sit between two inline elements
+                elif not piece.strip() or inline[0]:
+                    pending.append(escape(piece))  # a space, or punctuation in a line of its own ("<b>A</b>, <b>B</b>")
                 # and punctuation alone between blocks or copies ("copy:1, copy:2") is left out
 
         loose(root.text or "")
@@ -711,6 +712,7 @@ class _Article:
                 pending.clear()  # spaces before a block of the model's own
             pending.append(lxml.html.tostring(child, encoding="unicode"))
             real[0] = True
+            inline[0] = child.tag in PHRASING or "-" in str(child.tag)
             loose(tail or "")
         flush()
         return out, used
