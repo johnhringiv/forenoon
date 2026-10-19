@@ -1071,7 +1071,8 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     article's box: that is the next story on a page that loads one after another. Nor is a
     box named, or inside a box named, as furniture or comments. Only the box's own
     paragraphs, headings, lists, quotes, code, figures and tables are put back, after the
-    article, in the page's order, and a box's text only once."""
+    article, in the page's order, and a box's text only once. The search stops at a heading
+    between the boxes, which titles whatever comes next."""
     paragraphs = [p for p in body.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
     if not paragraphs:
         return
@@ -1084,7 +1085,18 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     if len(found) != 1:
         return
     box, style = found[0].getparent(), found[0].get("class")
-    siblings = set(box.itersiblings()) if style else set()
+    # Only the box right after the article's, past a "read more" button or label: a box further
+    # on, past others, is something else.
+    following = next(
+        (
+            el
+            for el in box.itersiblings()
+            if isinstance(el.tag, str)
+            and (el.find(".//p") is not None or _words(el.text_content()) >= CONTINUATION_PARAGRAPH_WORDS)
+        ),
+        None,
+    )
+    siblings = {following} if style and following is not None else set()
     # Not the page's own top boxes, which hold everything on it.
     near = [a for a in list(box.iterancestors())[:CONTINUATION_DEPTH] if a.tag not in ("html", "body", "main")]
     if _unlikely(box):
@@ -1095,15 +1107,17 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     holder = paragraphs[-1].getparent()
     while holder.tag not in ("div", "article", "section", "main", "body") and holder.getparent() is not None:
         holder = holder.getparent()
-    after = False
-    for el in page.iter(box.tag, "h1"):
+    after, taken = False, []
+    for el in page.iter(box.tag, *HEADINGS):
         if el is box:
             after = True
             continue
         if not after or box in el.iterancestors():
             continue
-        if el.tag == "h1":
-            break  # the next story's title
+        if el.tag in HEADINGS:
+            if any(t in el.iterancestors() for t in taken):
+                continue  # a heading of the continuation itself
+            break  # a heading between the boxes: the next story's title, or a box's beside it
         if next(el.iterancestors("article"), None) is not story:
             continue
         own = [el, *(a for a in el.iterancestors() if a not in shared)]
@@ -1126,6 +1140,7 @@ def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
             or _norm(long[0].text_content()) in kept
         ):
             continue
+        taken.append(el)
         for child in children:
             if child.tag in CONTINUATION_TAGS:
                 piece = copy.deepcopy(child)
@@ -1265,7 +1280,7 @@ def _live_entry(el: lxml.html.HtmlElement, box: lxml.html.HtmlElement) -> bool:
     return not any(_unlikely(a) for a in (el, *around))
 
 
-def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
+def _live_blog(page_html: str, kept: lxml.html.HtmlElement | None = None) -> lxml.html.HtmlElement | None:
     """A live blog's entries, newest first as the page has them.
 
     Readability keeps one entry of a live blog (the pinned one, or the longest) and the rest
@@ -1286,10 +1301,20 @@ def _live_blog(page_html: str) -> lxml.html.HtmlElement | None:
     # The innermost box named so: a "liveblog" wrapper around its "liveblog-body" holds other
     # cards beside the entries.
     boxes = [box for box in boxes if not any(other in box.iterdescendants() for other in boxes)]
-    found = [[el for el in box.iter("article") if _live_entry(el, box)] for box in boxes]
-    entries = max(found, key=len, default=[])
-    if len(entries) < LIVE_ENTRIES_MIN:
+    found = [[el for el in box.iter("article") if el is not box and _live_entry(el, box)] for box in boxes]
+    best = max(range(len(found)), key=lambda i: len(found[i]), default=None)
+    if best is None or len(found[best]) < LIVE_ENTRIES_MIN:
         return None
+    entries, box = found[best], boxes[best]
+    # The live blog is the article: what readability kept of the page (one of its entries)
+    # is in it, and it is not a box at the side of the page.
+    if any(_unlikely(a) for a in box.iterancestors()):
+        return None
+    if kept is not None:
+        inside = _norm(box.text_content())
+        long = [p for p in kept.iter("p") if _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS]
+        if not long or not all(_norm(p.text_content()) in inside for p in long):
+            return None
     body, seen = lxml.html.Element("div"), set()
     for entry in entries:
         entry = copy.deepcopy(entry)
@@ -1503,7 +1528,7 @@ def extract(
             # Only when it recovers the article without dragging in much else.
             if wide is not None and kept < _words(wide.text_content()) <= WIDEN_MAX_RATIO * reference:
                 candidates["page-wide"] = wide
-        live = _live_blog(page_html)
+        live = _live_blog(page_html, page)
         live = sanitize(live, url, marked=True) if live is not None else None
         # Only when it has far more than readability kept: one entry of the day's reporting.
         if live is not None and _words(live.text_content()) >= LIVE_OVER_PAGE * kept:

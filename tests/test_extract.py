@@ -1171,3 +1171,43 @@ def test_a_live_blog_is_its_innermost_box_and_drops_stale_times():
     page = f"<html><body><article class='content'><div id='liveblog'><div id='liveblog-body'>{entry(3, time=False)}{stream}</div>{cards}</section></div></article></body></html>"
     live = extract_module._live_blog(page).text_content()
     assert "Card" not in live and live.count("Entry 3:") == 1 and "Entry 5:" in live and "ago" not in live
+
+
+def test_a_continuation_stops_at_the_next_title_and_takes_only_the_next_box():
+    first = "".join(f"<p class='para'>{p}</p>" for p in _paragraphs("First", 12)[3:-4].split("</p><p>"))
+
+    def continued(page):
+        body = lxml.html.fromstring(f"<div><div>{_paragraphs('First', 12)}</div></div>")
+        extract_module._continue_article(body, f"<html><body>{page}</body></html>")
+        return body.text_content()
+
+    titled = (
+        f"<div id='feed'><div class='item'><h1>One</h1><div class='c'>{_paragraphs('First', 12)}</div></div>"
+        f"<div class='item'><h2>Another story</h2><div class='c'>{_paragraphs('Next', 6)}</div></div></div>"
+    )
+    assert "Next paragraph" not in continued(titled)
+    paras = _paragraphs("Next", 6).replace("<p>", "<p class='para'>")
+    past = (
+        f"<div class='c'>{first}</div><div class='more-stories'><p class='para'>More from the desk today.</p></div>"
+        f"<div class='x'>{paras}</div>"
+    )
+    assert "Next paragraph" not in continued(past)
+
+
+def test_a_live_blog_at_the_side_of_an_article_or_wrapping_its_entries_in_an_article():
+    story = _paragraphs("Story", 8)
+    cards = "".join(
+        f"<article class='card'><div>Other {n}: lorem ipsum dolor sit amet consectetur adipiscing elit sed do "
+        "eiusmod tempor incididunt ut labore et dolore magna aliqua.</div></article>"
+        for n in range(40)
+    )
+    page = f"<html><body><main><article><h1>Story</h1><div class='body'>{story}</div></article><aside class='sidebar'><div class='live-blog'>{cards}</div></aside></main></body></html>"
+    assert extract("https://news.example/a", page, "", "page").method != "page-live"
+    assert extract_module._live_blog(page, lxml.html.fromstring(f"<div>{story}</div>")) is None
+    entries = "".join(
+        f"<article><p>Entry {n}: the river rose again overnight and the council opened two more shelters "
+        "in the town centre for families who had to leave.</p></article>"
+        for n in range(3)
+    )
+    live = extract_module._live_blog(f"<html><body><article class='liveblog'>{entries}</article></body></html>")
+    assert live.text_content().count("Entry 1:") == 1
