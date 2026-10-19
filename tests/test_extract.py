@@ -500,3 +500,36 @@ def test_a_closing_paragraph_that_mentions_signing_up_is_kept():
     pitch = "<p>Power up with unlimited access to Example. Get exclusive subscriber content. Subscribe Today.</p>"
     result = extract("https://news.example/story", page.replace("</article>", pitch + "</article>"), "")
     assert "Example" not in result.body.text_content() and result.word_count == 9 * 30
+
+
+def test_sentences_about_newsletters_and_headings_over_media_stay():
+    words = "<p>" + "Plain words about the council and its budget for the new bridge this year. " * 10 + "</p>"
+    for needle, tail in {
+        "five million people": "<p>More than five million people now subscribe to paid newsletters on the platform.</p>",
+        "through the city newsletter": "<p>Residents can sign up for the rebate through the city newsletter until March.</p>",
+        "How to sign up": "<h2>How to sign up</h2><p>Residents can sign up for the newsletter at the city's website.</p>",
+        "for part two": "<p>Subscribe to my newsletter for part two.</p>",
+        "labelled": "<p>Finally, press the button labelled:</p><p>Subscribe now</p><p>And you are done.</p>",
+        "Notes from the field": "<h2>Notes from the field</h2><video src='https://e.com/a.mp4'></video>",
+    }.items():
+        out = lxml.html.tostring(
+            extract(
+                "https://news.example/a", f"<html><body><article>{words}{tail}</article></body></html>", "", "page"
+            ).body,
+            encoding="unicode",
+        )
+        assert needle in out, needle
+    # A section holding only a picture is not empty: nothing is put back under it twice.
+    photos = (
+        "<h2>Photos</h2><figure><img src='https://example.com/a.jpg'></figure>"
+        + "<ul>"
+        + "".join(
+            f"<li><a href='https://x.org/{n}'>A long paper title number {n} on surveys</a></li>" for n in range(6)
+        )
+        + "</ul>"
+        + "<h2>Method</h2>"
+        + words
+    )
+    page = f"<html><body><article>{words}{photos}</article></body></html>"
+    out = lxml.html.tostring(extract("https://news.example/b", page, page, "page").body, encoding="unicode")
+    assert out.count("a.jpg") == 1

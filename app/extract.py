@@ -50,8 +50,8 @@ NOTE_MAX_CHARS = 4000
 # number as a link. That is a cross-reference to it, not a footnote. "Boston 1" and "see
 # Note 3" are footnotes.
 CROSS_REFERENCE = re.compile(
-    r"\b(fig(ure)?s?|tab(le)?s?|eq(uation)?s?|eqn|sec(tion)?s?|app(endix)?|chap(ter)?|alg(orithm)?|"
-    r"listing|theorem|thm|lemma|corollary|proposition|prop|definition|def)\.?\s*\(?$|§\s*$",
+    r"\b(fig(ure)?s?|tab(le)?s?|eq(uation)?s?|eqn|app(endix)?|chap(ter)?|alg(orithm)?|"
+    r"listing|theorem|thm|lemma|corollary|proposition|definition)\.?\s*\(?$|§\s*$",
     re.IGNORECASE,
 )
 NOTE_CHROME_WORDS = 8
@@ -95,13 +95,16 @@ FURNITURE_HEADING = re.compile(
     r"^(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
     r"replies|discussion|recommended|popular|trending|read next|up next|follow us|elsewhere|"
     r"advertisement|sponsored|support us)\W*$|"
-    r"\b(newsletter|subscribe|sign up|leave a (reply|comment)|post a comment|join the (discussion|"
+    r"\b(newsletter|subscribe to|sign up (for|to)|get the app|download (the|our) app|leave a (reply|comment)|post a comment|join the (discussion|"
     r"conversation)|about the authors?|more from|more (stories|posts|articles) (from|by|like)|you (may|"
     r"might) (also )?like|related (posts|stories|articles|reading|content|links|coverage)|share (this|"
     r"on)|\d+ (comments|responses|replies)|recommended (reading|for you|posts|stories|articles))\b"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
-NOTES_HEADING = re.compile(r"^(foot|end|side ?)?notes?\b|^(references?|sources|bibliography|citations|works cited)\b")
+NOTES_HEADING = re.compile(
+    r"^((foot|end|side ?)?notes?|references?|sources|bibliography|citations|works cited|"
+    r"notes (and|&) references|references (and|&) notes)\W*$"
+)
 LINK_LIST_SHARE = 0.9  # of a section's letters in links, as in a list of tags or share buttons
 LINK_LIST_WORDS = 1.25  # the most words such a list's links have on average: one, mostly
 
@@ -118,15 +121,18 @@ COOKIE_WALL = re.compile(
     re.IGNORECASE,
 )
 XML_DECLARATION = re.compile(r"^\s*<\?xml[^>]*\?>")
-# A call to subscribe to the publication itself, as publishers end their articles with it:
-# to its newsletter or its emails, or for free to its new posts, or a bare "Subscribe now".
-# Signing up for a rebate, a register or a project's mailing list is the article's news.
+# A call to subscribe to the publication itself, as publishers end their articles with it: to
+# "our" newsletter, mailing list or emails, or "sign up to receive" one. Signing up for a rebate through the city's
+# newsletter, people subscribing to newsletters, an author's "my newsletter": the article's own.
 PROMOTION = re.compile(
-    r"\b(sign up|sign-up|subscribe)\b[^.!?]{0,80}\bnewsletters?\b|\bnewsletters?\b[^.!?]{0,40}\b(sign up|"
-    r"subscribe)\b|\b(sign up|subscribe)\b[^.!?]{0,40}\b(our|my)\b[^.!?]{0,30}\b(mailing list|emails?|"
-    r"inbox)\b|\bsubscribe for free\b|^(sign up|subscribe)( now| today| here)?\W*$",
+    r"\b(sign up|sign-up|subscribe)\b[^.!?]{0,60}\bour\b[^.!?]{0,40}\b(newsletters?|mailing list|emails?|"
+    r"inbox)\b|\bour\b[^.!?]{0,30}\bnewsletters?\b[^.!?]{0,40}\b(sign up|subscribe)\b|"
+    r"\b(sign up|subscribe) to receive\b[^.!?]{0,60}\bnewsletters?\b",
     re.IGNORECASE,
 )
+# A bare "Subscribe now", only as the article's very last line (elsewhere it may be a label the
+# article talks about).
+PROMOTION_BARE = re.compile(r"^(sign up|subscribe)( now| today| here)?\W*$", re.IGNORECASE)
 # What a promotion says around its call ("Power up with unlimited access to WIRED.").
 PROMOTION_PITCH = re.compile(r"\bsubscri(ber|ption)s?\b|\bunlimited access\b", re.IGNORECASE)
 PROMOTION_MAX_WORDS = 30  # a promotion is no longer than this
@@ -605,6 +611,16 @@ def _empty_section(heading: lxml.html.HtmlElement) -> bool:
     return True
 
 
+def _pictures_already(el: lxml.html.HtmlElement, body: lxml.html.HtmlElement) -> bool:
+    """Whether a block is only pictures the article already has (compared by file name, as the
+    article's addresses are made absolute and the page's may not be)."""
+    if el.text_content().strip():
+        return False
+    names = {(img.get("src") or "").rsplit("/", 1)[-1] for img in el.iter("img")}
+    have = {(img.get("src") or "").rsplit("/", 1)[-1] for img in body.iter("img")}
+    return bool(names) and names <= have
+
+
 def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back what readability removed from under a heading it kept.
 
@@ -661,6 +677,8 @@ def _refill_sections(body: lxml.html.HtmlElement, page_html: str) -> None:
             continue
         anchor = heading
         for el in section:
+            if _pictures_already(el, body):
+                continue  # a picture the article kept under the heading: not twice
             copied = copy.deepcopy(el)
             copied.tail = None
             anchor.addnext(copied)
@@ -693,24 +711,28 @@ def _drop_trailing_promotions(body: lxml.html.HtmlElement) -> None:
     ]
     if len(leaves) < 2:
         return
-    for last in reversed(leaves[-PROMOTION_LOOKBACK:]):
+    for back, last in enumerate(reversed(leaves[-PROMOTION_LOOKBACK:])):
         text = " ".join(last.text_content().split())
         if _words(text) > PROMOTION_STOP_WORDS:
             return  # the article's own text: anything before it is too
-        if _promotion(text) and not PAYWALL.search(text):
+        if _promotion(text, final=back == 0) and not PAYWALL.search(text):
             while last.getparent() is not body and _norm(last.getparent().text_content()) == _norm(text):
                 last = last.getparent()  # wrappers that hold only this line
             last.drop_tree()
 
 
-def _promotion(text: str) -> bool:
+def _promotion(text: str, final: bool = False) -> bool:
     """Whether a paragraph is a call to subscribe and little else: the call, and the pitch
-    for a subscription around it."""
+    for a subscription around it. `final`: it is the article's last line."""
     words = _words(text)
     sentences = re.split(r"(?<=[.!?])\s+", text)
-    if words > PROMOTION_MAX_WORDS or not any(PROMOTION.search(sentence) for sentence in sentences):
+
+    def asks(sentence: str) -> bool:
+        return bool(PROMOTION.search(sentence) or (final and PROMOTION_BARE.search(sentence)))
+
+    if words > PROMOTION_MAX_WORDS or not any(asks(sentence) for sentence in sentences):
         return False
-    asking = sum(_words(s) for s in sentences if PROMOTION.search(s) or PROMOTION_PITCH.search(s))
+    asking = sum(_words(s) for s in sentences if asks(s) or PROMOTION_PITCH.search(s))
     return asking >= PROMOTION_SHARE * words
 
 
