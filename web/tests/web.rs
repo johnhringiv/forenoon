@@ -2434,6 +2434,18 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     let review: String = sqlx::query_scalar("SELECT problem FROM extraction_reviews").fetch_one(pool).await.unwrap();
     assert_eq!(review, "reader: broken or incomplete");
 
+    // A note from a tap page left open after the rating was cleared elsewhere: logged with its
+    // words, kept nowhere else.
+    db::clear_rating(pool, "john", "a1").await.unwrap();
+    kindle.post(&site, &note_to, &[("note", "Saw it elsewhere")]).await;
+    assert!(db::get_rating(pool, "john", "a1").await.unwrap().is_none());
+    let last: (String, String) = sqlx::query_as("SELECT signal, detail FROM feedback_events ORDER BY id DESC LIMIT 1")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(last, ("note".to_owned(), "Saw it elsewhere".to_owned()));
+    kindle.get(&site, &link("r5")).await;
+
     // Expired, forged and malformed links change nothing.
     let expired = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "r1", 1000))).await;
     assert!(expired.status == StatusCode::BAD_REQUEST && expired.text.contains("This link has expired."));

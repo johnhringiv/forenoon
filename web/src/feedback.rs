@@ -183,10 +183,11 @@ async fn answer(state: AppState, Client(client): Client, token: String, note: Op
     let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
     let rating = match (&claim.tap, note) {
         (Tap::Note, Some(note)) => {
-            // As on the web pages: an unchanged note is not logged again. Then a redirect to
-            // the link's own page, so that a reload of it posts nothing a second time.
+            // As on the web pages: an unchanged note is not logged again, and one with no
+            // rating to go with it is logged and kept nowhere else. Then a redirect to the
+            // link's own page, so that a reload of it posts nothing a second time.
             let kept = db::get_rating(pool, &claim.user, &claim.article).await?;
-            if kept.is_some_and(|kept| kept.note != clean_note(&note)) {
+            if kept.map(|kept| kept.note).unwrap_or_default() != clean_note(&note) {
                 db::record_note(pool, &claim.user, &claim.article, &note, SOURCE).await?;
             }
             return Ok(Redirect::to(&format!("/f/{token}")).into_response());
