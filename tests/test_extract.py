@@ -2686,3 +2686,36 @@ def test_a_block_holding_the_caption_and_more_is_not_a_repeat():
     figure = '<figure><img src="https://i.example/c.png"><div><p>Agents write a lot of code, and they say so at length here.</p></div><figcaption>Agents write a lot of code</figcaption></figure>'
     body = extract_module.sanitize(lxml.html.fragment_fromstring(figure, create_parent="div"), "https://news.example/")
     assert "they say so at length" in body.text_content()
+
+
+def test_a_figure_readability_changed_does_not_take_a_dropped_neighbours_picture():
+    url = "https://news.example/2026/story"
+    paras = [
+        f"<p>Paragraph {i} of the story, long enough to be most of the page's words, and on and on.</p>"
+        for i in range(9)
+    ]
+    cases = (
+        (  # the real figure's credit is partly in a box readability drops; a sponsor's has the rest
+            '<div class="sponsor"><figure><div><img src="https://ads.example/WRONG.jpg"></div><figcaption>Photograph: Getty Images</figcaption></figure></div>',
+            '<figure><div><img src="https://news.example/REAL.jpg"></div><figcaption>Photograph: Getty Images<span class="extra"> / Reuters</span></figcaption></figure>',
+        ),
+        (  # the real figure's caption is dropped; a wordless promo beside it
+            '<div class="popup"><figure><div><img src="https://ads.example/WRONG.jpg"></div></figure></div>',
+            '<figure><div><img src="https://news.example/REAL.jpg"></div><figcaption class="figure-footer">The real photo, credited.</figcaption></figure>',
+        ),
+    )
+    for ad, real in cases:
+        for first, second in ((ad, real), (real, ad)):
+            page = (
+                f"<html><body><article>{''.join(paras[:4])}{first}{second}{''.join(paras[4:])}</article></body></html>"
+            )
+            body = extract_module.extract(url, page, "", "page").body
+            assert "WRONG" not in lxml.html.tostring(body, encoding="unicode")
+
+
+def test_a_page_figure_of_more_pictures_than_are_looked_at_gives_none():
+    many = "".join(
+        f'<div><img src="https://i.example/{n}.jpg"></div>' for n in range(extract_module.RESTORE_MAX_SCANNED + 1)
+    )
+    figure = lxml.html.fromstring(f"<figure>{many}<figcaption>C.</figcaption></figure>")
+    assert extract_module._shown_pictures(figure, "https://news.example/story") == []

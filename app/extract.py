@@ -1517,7 +1517,8 @@ VIDEO_LINK = re.compile(
 )
 PICTURE_FILE = re.compile(r"\.(jpe?g|png|gif|webp|avif|svg)$", re.IGNORECASE)
 PHOTO_PAGE = re.compile(r"/(attachments?|media|images?|photos?|gallery|galleries)(/|$)", re.IGNORECASE)
-RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
+RESTORE_MIN_SIZE = 48
+RESTORE_MAX_SCANNED = 64  # pictures in one page figure looked at, at most (the corpus has 60)  # pixels; a picture this small (by its own width or height) is an icon
 HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
 )
@@ -1585,7 +1586,8 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
             in_body.setdefault(_figure_key(figure), []).append(figure)
     have = {_picture_name(_join(url, _picture_address(img))) for img in body.iter("img")}
     marks = _once(body) & _once(page)  # the article's paragraphs, each found once on the page
-    places, page_places = _places(body, marks), _places(page, marks)
+    counted = {f for figures in on_page.values() for f in figures}
+    places, page_places = _places(body, marks), _places(page, marks, counted)
 
     for figure in bare:
         key = _figure_key(figure)
@@ -1594,8 +1596,10 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
             continue
         source = sources[targets.index(figure)]
         here, there = places[figure], page_places[source]
-        same = any(a == b != "" for a, b in zip(here, there))
-        if not same and (len(targets) > 1 or here != there):
+        sides = [(a == b != "", ra == rb) for a, b, ra, rb in zip(here[:2], there[:2], here[2:], there[2:])]
+        if any(mark and not run for mark, run in sides):
+            continue  # another figure between that paragraph and this one: one side lost or changed it
+        if not any(mark for mark, _ in sides) and (len(targets) > 1 or here != there):
             continue  # not between the same paragraphs of the article: the pairing is off
         caption = figure.find("figcaption")
         for name, picture in _shown_pictures(source, url, region):
@@ -1618,27 +1622,32 @@ def _once(root: lxml.html.HtmlElement) -> set[str]:
     return {key for key, n in counts.items() if n == 1}
 
 
-def _places(root: lxml.html.HtmlElement, marks: set[str]) -> dict[lxml.html.HtmlElement, tuple[str, str]]:
+def _places(
+    root: lxml.html.HtmlElement, marks: set[str], counted: set[lxml.html.HtmlElement] | None = None
+) -> dict[lxml.html.HtmlElement, tuple[str, str, tuple[str, ...], tuple[str, ...]]]:
     """Each top-level figure's nearest paragraphs before and after it among `marks` ("" for
-    none), read in one pass."""
+    none), and the keys of the figures (those `counted`, else all) from each of them to it."""
     order: list[lxml.html.HtmlElement | str] = []
     for el in root.iter("p", "figure"):
         if next(el.iterancestors("figure"), None) is not None:
             continue
         if el.tag == "figure":
-            order.append(el)
+            if counted is None or el in counted:
+                order.append(el)
         elif (key := _text_key(el)) in marks:
             order.append(key)
-    before: dict[lxml.html.HtmlElement, str] = {}
-    after: dict[lxml.html.HtmlElement, str] = {}
-    for items, found in ((order, before), (reversed(order), after)):
-        last = ""
+    keys = {el: _figure_key(el) for el in order if not isinstance(el, str)}
+    before: dict[lxml.html.HtmlElement, tuple[str, tuple[str, ...]]] = {}
+    after: dict[lxml.html.HtmlElement, tuple[str, tuple[str, ...]]] = {}
+    for items, found in ((order, before), (order[::-1], after)):
+        last, run = "", []
         for item in items:
             if isinstance(item, str):
-                last = item
+                last, run = item, []
             else:
-                found[item] = last
-    return {figure: (before[figure], after[figure]) for figure in before}
+                run.append(keys[item])
+                found[item] = (last, tuple(run))
+    return {f: (before[f][0], after[f][0], before[f][1], after[f][1]) for f in before}
 
 
 def _elsewhere(el: lxml.html.HtmlElement, most: float) -> bool:
@@ -1653,6 +1662,9 @@ def _elsewhere(el: lxml.html.HtmlElement, most: float) -> bool:
     return _words(el.text_content()) < most
 
 
+REGION_BLOCKS = ("p", "div", "section", "li", "ul", "ol", "blockquote")
+
+
 def _article_region(page: lxml.html.HtmlElement, body: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
     """The page's box holding the article's first and last paragraphs, found by their words."""
     paragraphs = [key for key in (_text_key(p) for p in body.iter("p")) if len(key) >= 40]
@@ -1660,7 +1672,7 @@ def _article_region(page: lxml.html.HtmlElement, body: lxml.html.HtmlElement) ->
         return None
     first = last = None
     for p in page.iter("p", "div", "li", "blockquote", "section"):
-        if p.tag != "p" and any(isinstance(c.tag, str) and c.tag in ("p", "div", "section") for c in p):
+        if p.tag != "p" and any(isinstance(c.tag, str) and c.tag in REGION_BLOCKS for c in p):
             continue  # a box of blocks: no need to read all its words
         key = _text_key(p)
         if key == paragraphs[0] and first is None:
@@ -1699,6 +1711,8 @@ def _shown_pictures(
         return []  # the whole figure is a share button or a video's link
     if figure.xpath(".//video | .//audio | .//iframe | .//embed | .//object"):
         return []
+    if len(figure.xpath(".//img")) > RESTORE_MAX_SCANNED:
+        return []  # a widget, not a figure's picture; and each <img> costs a walk up the boxes
     if any(
         isinstance(el.tag, str)
         and PLAYER_NAME_PICTURE.search(
