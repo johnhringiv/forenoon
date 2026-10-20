@@ -476,7 +476,8 @@ would load anything from outside the file is taken out: entities and DTDs are no
 links to pictures other than embedded PNG, JPEG, GIF or WebP, stylesheet imports, scripts
 and embedded HTML are removed, and relative addresses resolve to an empty folder. One of more
 than 50,000 elements is not drawn. Each is drawn in a process of its own, limited to 1 GiB of
-memory, 10 seconds of processing and 15 seconds in all, as a hostile SVG can ask the renderer
+memory, 30 seconds of processing and 45 seconds in all, with none of the pipeline's
+environment (its keys), as a hostile SVG can ask the renderer
 for more memory than the machine has, crash it, or keep it busy for good; one that fails is
 dropped like a picture that cannot be decoded. A picture
 a line of text high (96 pixels or less as drawn: an equation) does not count toward the 40,

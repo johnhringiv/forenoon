@@ -35,8 +35,8 @@ SVG_MIN_DIMENSION = 6
 # for more memory than the machine has, crash it, or keep it busy for good (a huge pattern
 # tile, thousands of chained clip paths, a filter of a hundred thousand octaves).
 SVG_MEMORY = 1024 * 1024 * 1024  # bytes of address space
-SVG_CPU_SECONDS = 10
-SVG_WAIT = 15.0  # seconds, start to finish
+SVG_CPU_SECONDS = 30  # the largest real drawing takes 2 s here and may take four times that on a NAS
+SVG_WAIT = 45.0  # seconds, start to finish
 SVG_MAX_ELEMENTS = 50_000  # more is no figure; and each one costs the renderer
 SVG_WORKER = """
 import json, resource, sys
@@ -57,9 +57,6 @@ SVG_ADDRESS = re.compile(
 # Embedded pictures an SVG may show: raster only, as an embedded SVG could point outside again.
 SVG_EMBEDDED = ("data:image/png", "data:image/jpeg", "data:image/jpg", "data:image/gif", "data:image/webp")
 SVG_DEFAULT_SIZE = 300  # CSS pixels, for an SVG that gives no size of its own
-SVG_HEAD = re.compile(
-    rb"^(\xef\xbb\xbf)?\s*(<\?xml[^>]*>\s*)?(<!--.*?-->\s*|<!DOCTYPE[^>]*>\s*)*<svg[\s>]", re.DOTALL | re.IGNORECASE
-)
 SVG_UNITS = {
     "": 1.0,
     "px": 1.0,
@@ -71,7 +68,9 @@ SVG_UNITS = {
     "em": 16.0,
     "ex": 8.0,
 }
-SVG_LENGTH = re.compile(r"^\s*([0-9]*\.?[0-9]+(?:e[-+]?[0-9]+)?)\s*([a-z]*)\s*$", re.IGNORECASE)
+SVG_LENGTH = re.compile(r"^\s*((?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[-+]?[0-9]+)?)\s*([a-z]*)\s*$", re.IGNORECASE)
+SVG_NUMBER = re.compile(r"-?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[-+]?[0-9]+)?", re.IGNORECASE)
+SVG_SIZE_CHARS = 200  # of a width, height or viewBox: a longer one is no size
 
 
 @dataclass(frozen=True)
@@ -90,7 +89,29 @@ def _load(src: str, fetcher: Fetcher) -> bytes:
     return fetcher.get(src, max_bytes=MAX_IMAGE_BYTES).content
 
 
+def _is_svg(raw: bytes) -> bool:
+    """Whether a file is an SVG: <svg first, after a BOM, an XML declaration, comments and a
+    DOCTYPE (read by finding their ends, as a pattern could take forever on a hostile file)."""
+    at, head = 0, raw[:4096]
+    if head.startswith(b"\xef\xbb\xbf"):
+        at = 3
+    while True:
+        while at < len(head) and head[at : at + 1].isspace():
+            at += 1
+        for start, end in ((b"<?", b"?>"), (b"<!--", b"-->"), (b"<!DOCTYPE", b">"), (b"<!doctype", b">")):
+            if head.startswith(start, at):
+                close = head.find(end, at + len(start))
+                if close < 0:
+                    return False
+                at = close + len(end)
+                break
+        else:
+            return head.startswith(b"<svg", at) and head[at + 4 : at + 5] in (b" ", b"\t", b"\n", b"\r", b">", b"/")
+
+
 def _svg_length(value: str | None) -> float | None:
+    if len(value or "") > SVG_SIZE_CHARS:
+        return None
     found = SVG_LENGTH.match(value or "")
     if not found or found.group(2).lower() not in SVG_UNITS:
         return None  # a percentage, or no length: the page's layout decides it
@@ -100,7 +121,7 @@ def _svg_length(value: str | None) -> float | None:
 def _svg_size(root: etree._Element) -> tuple[float, float]:
     """An SVG's size on the page in CSS pixels: its width and height, else its viewBox's."""
     width, height = _svg_length(root.get("width")), _svg_length(root.get("height"))
-    box = [float(n) for n in re.findall(r"-?[0-9]*\.?[0-9]+(?:e[-+]?[0-9]+)?", root.get("viewBox") or "")]
+    box = [float(n) for n in SVG_NUMBER.findall((root.get("viewBox") or "")[:SVG_SIZE_CHARS])]
     ratio = box[2] / box[3] if len(box) == 4 and box[2] > 0 and box[3] > 0 else None
     if width and height:
         return width, height
@@ -175,6 +196,7 @@ def _svg_png(raw: bytes, cfg: Images) -> bytes | None:
                 capture_output=True,
                 timeout=SVG_WAIT,
                 cwd=nowhere,
+                env={},  # nothing of ours, the keys least of all, for the renderer to see
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -186,7 +208,7 @@ def _svg_png(raw: bytes, cfg: Images) -> bytes | None:
 
 def _convert(raw: bytes, cfg: Images) -> bytes | None:
     """Return JPEG bytes, or None for images too small to be content."""
-    drawn = bool(SVG_HEAD.match(raw[:4096]))
+    drawn = _is_svg(raw)
     if drawn:
         raw = _svg_png(raw, cfg)
         if raw is None:

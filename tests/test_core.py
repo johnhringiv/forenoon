@@ -728,3 +728,23 @@ def test_an_svg_that_would_exhaust_the_renderer_is_only_a_picture_that_would_not
       </defs><rect width="100" height="100" fill="url(#p)"/></svg>"""
     with _pytest.raises(ValueError):
         _convert(tile, Images())
+
+
+def test_a_hostile_svg_header_or_size_is_read_at_once():
+    import time as _time
+
+    from app.config import Images
+    from app.images import _is_svg, _svg_length, _svg_size
+
+    assert _is_svg(
+        b'\xef\xbb\xbf<?xml version="1.0"?>\n<!-- by dvisvgm --><!DOCTYPE svg PUBLIC "x" "y">\n<svg width="1">'
+    )
+    assert not _is_svg(b"<html><svg></svg></html>") and not _is_svg(b"\x89PNG\r\n")
+    started = _time.monotonic()
+    assert not _is_svg(b"<!---->" * 40 + b"<p/>")  # forty comments: a pattern would try 2**40 ways
+    assert _svg_length("1" * 200_000 + "!") is None
+    root = __import__("lxml.etree", fromlist=["x"]).fromstring(f'<svg viewBox="{"1 " * 100_000}"/>'.encode())
+    _svg_size(root)
+    assert _time.monotonic() - started < 1
+    assert round(_svg_length("405.6pt"), 6) == 540.8 and _svg_length(".5in") == 48
+    del Images
