@@ -351,20 +351,25 @@ All fetched content is treated as untrusted.
   link targets, image sources and alt text, table spans and list start numbers. Links and
   images must be absolute `http(s)` (or `mailto:` / embedded image data). Top-level headings
   become second-level, invalid nesting is repaired, and containers left empty are removed.
-  A `<picture>` keeps its own image behind its `<source>` alternatives (or takes theirs when
-  it has none), and a 1×1 embedded image held in a picture's place until a script loads it
-  counts as no picture. A figure that kept its caption but lost its picture (one in a box of
-  its own, a lightbox button or an embed's fallback) gets the pictures of the page's figure
-  with the same caption (the words a reader sees) back; figures sharing a caption are paired
-  in order, when the page has as many as the article outside its sidebars and boxes of other
-  stories, and figures with no words likewise among those within the article's own text. Only pictures the book would show come back: not one in a
-  button, `<noscript>` or anything else removed, nor in a figure with a player or embed; not
-  a hidden one, an icon, logo, share button or one 48 pixels or smaller, an embedded one, a
-  second size of the same photo, or a figure's of more than 8 (a widget's grid); and none
-  into a figure holding a table, code or a quote. A caption a
-  figure also shows over its picture (an overlay, a lightbox's text) appears once. A badge
-  linking to the site's page on Google News (asking readers to pick it as a preferred source)
-  is removed.
+  A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
+  the image has no address on the web (none, or an embedded stand-in). An embedded 1×1 GIF or
+  PNG anywhere counts as no picture: it holds a picture's place until a script loads it.
+- **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
+  can keep its caption and lose its photo (a box of its own, a lightbox button). After
+  readability, such a figure gets back the pictures of the page's figure with the same caption
+  (the words a reader sees); nothing is taken out. The page's figures counted are those within
+  the box holding the article's first and last paragraphs when it is found, figures with no
+  words only then; otherwise those outside sidebars, footers and boxes of other stories.
+  Figures sharing a caption are paired in order, only when the page has as many as the
+  article. Only pictures the book would show come back: none for a video's figure (a player
+  or embed, a player drawn by script, a picture that is or links to a video site's) or a
+  figure of more than 8 (a widget's grid), and not a picture in anything else removed (a
+  button, `<noscript>`), in a figure within the figure or a card for another story, a hidden
+  one, an icon, logo or share button, one of 48 pixels or less, an embedded one or a second
+  size of the same photo. None goes into a figure holding a table, code or a quote. A caption
+  a figure also shows over its picture (an overlay, a lightbox's text) appears once.
+- **Preferred-source badge.** A picture linking to the site's page on Google News (asking
+  readers to pick it as a preferred source) is removed.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
   extracted body (a standfirst in the page header), it is added in italics at the top.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt
