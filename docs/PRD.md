@@ -660,7 +660,8 @@ A reader's interests are their own words and are never changed by the pipeline. 
 it keeps a second text of its own: a few plain statements of what the reader's ratings show.
 
 - **When.** After a delivery, at most once a week per reader, and only when the reader has
-  at least 10 ratings and at least 5 new ones since the last time. One model call.
+  at least 10 ratings and at least 5 new ones since the last time; a note written or changed
+  counts as new. One model call.
 - **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
   with each article's length, why it was picked and the reader's own note. Titles are
   untrusted and are given only as material.
@@ -807,9 +808,9 @@ database with the pipeline.
 - **Ratings can be changed there**: set or change the 1 to 5 rating, write or change the
   note, or clear the rating; pressing the rating already given records nothing. Changes are
   logged like taps, with `web` as their source. "Add a note" beside the rating opens the note's
-  box, one line until written in, then room for a few; a saved note is shown as a quotation
-  with Edit beside it, which opens the box in place. Save is off until the words differ from
-  what is kept.
+  box; a saved note is shown as a quotation with Edit beside it, which opens the box in place
+  with the note in it. Cancel closes the box and forgets what was typed. Save is off until the
+  words differ from what is kept.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything
   delivered to them, and everything the model weighed for them and passed over (section 7g).
   A row shows the source, the title linked to the original, the summary when there is one,

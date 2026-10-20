@@ -2402,11 +2402,14 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert!(page.text.contains(r#"<b class="on">2</b>"#) && page.text.contains(">Change it:<"), "{}", page.text);
     assert_eq!(page.text.matches("href=\"/f/").count(), 4 + 1, "the other ratings, the report");
 
-    // The note: kept, shown back in the box, and opening its link only shows the page.
+    // The note: kept and shown back in the box on the link's own page, which the post sends the
+    // browser to, so a reload posts nothing again; posting the same words logs nothing more.
     let noted = kindle.post(&site, &note_to, &[("note", "Padded to twice its length")]).await;
-    assert!(noted.status == StatusCode::OK && noted.text.contains(r#"value="Padded to twice its length""#));
+    assert!(noted.status == StatusCode::SEE_OTHER && noted.location == note_to, "{}", noted.text);
+    kindle.post(&site, &note_to, &[("note", " Padded to  twice its length ")]).await;
     let opened = kindle.get(&site, &note_to).await;
     assert!(opened.status == StatusCode::OK && opened.text.contains("Rated 2 of 5."));
+    assert!(opened.text.contains(r#"value="Padded to twice its length""#), "{}", opened.text);
     // Only the note link takes a note.
     assert_eq!(kindle.post(&site, &link("r3"), &[("note", "x")]).await.status, StatusCode::BAD_REQUEST);
     // A new rating keeps the note. A link from a book sent before October 2026 still rates.

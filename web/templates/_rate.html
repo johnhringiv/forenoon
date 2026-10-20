@@ -13,7 +13,7 @@
 {% if !demo && !card.unrated %}<button class="clear" name="clear" value="1" title="Forget this rating">Clear</button>{% endif %}
 {% if demo %}</div>{% else %}</form>{% endif %}
 {% if !card.unrated %}{% if demo %}{% if !card.note.is_empty() %}<p class="note has"><q class="said">{{ card.note }}</q></p>
-{% endif %}{% else %}<details class="note{% if !card.note.is_empty() %} has{% endif %}"><summary>{% if !card.note.is_empty() %}<q class="said">{{ card.note }}</q> {% endif %}<span class="edit"></span></summary>
+{% endif %}{% else %}<details class="note{% if !card.note.is_empty() %} has{% endif %}"><summary>{% if !card.note.is_empty() %}<q class="said">{{ card.note }}</q> {% endif %}<span class="edit"><span class="add">Add a note</span><span class="change">Edit</span><span class="cancel">Cancel</span></span></summary>
 <form class="note" method="post" action="/rate">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
 <textarea name="note" rows="1" maxlength="200" placeholder="Anything the picker should know? (optional)" aria-label="Note">{{ card.note }}</textarea><button>Save</button>

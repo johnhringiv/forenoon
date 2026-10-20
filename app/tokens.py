@@ -17,8 +17,9 @@ RATINGS = (1, 2, 3, 4, 5)
 #   note     the reader's note, sent with its text from the tap page or the web pages
 #   problem  "This article came out broken or incomplete": a report to whoever runs the
 #            install, about the delivery. It is not a rating.
-# The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
-# not in SIGNALS; anything replaying feedback_events must handle it.
+# The web pages also log "clear" when a rating is removed, and an install from before October
+# 2026 holds "done" (finished, from the web pages). Neither is a link signal, so neither is in
+# SIGNALS; anything replaying feedback_events must handle both.
 LINK_SIGNALS = tuple(f"r{n}" for n in RATINGS)
 OLDER_LINKS = tuple(f"f{n}" for n in RATINGS)
 NOTE = "note"

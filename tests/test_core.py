@@ -286,16 +286,19 @@ def test_the_latest_rating_wins_and_the_note_stays_with_it():
         assert len(store.feedback_rows()) == len(case["taps"]), "every tap is logged"
 
 
-def test_ratings_from_before_notes_are_brought_forward(tmp_path):
+@pytest.mark.parametrize("with_reasons", [True, False])
+def test_ratings_from_before_notes_are_brought_forward(tmp_path, with_reasons):
+    # Two shapes from before: with the reasons list (October 2026) and, older, without it.
     import sqlite3
 
     from app.store import Rating, Store
 
     path = tmp_path / "old.sqlite3"
     db = sqlite3.connect(path)
+    reason = " reason TEXT NOT NULL DEFAULT ''," if with_reasons else ""
     db.execute(
         "CREATE TABLE ratings (user_id TEXT NOT NULL, article_id TEXT NOT NULL, rating INTEGER,"
-        " finished INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',"
+        f" finished INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,{reason}"
         " PRIMARY KEY (user_id, article_id))"
     )
     old = [
@@ -306,7 +309,10 @@ def test_ratings_from_before_notes_are_brought_forward(tmp_path):
         ("one-kindle", 1, 0, "thin"),
         ("only-finished", None, 1, ""),
     ]
-    db.executemany("INSERT INTO ratings VALUES ('john', ?, ?, ?, 'x', ?)", old)
+    if with_reasons:
+        db.executemany("INSERT INTO ratings VALUES ('john', ?, ?, ?, 'x', ?)", old)
+    else:
+        db.executemany("INSERT INTO ratings VALUES ('john', ?, ?, ?, 'x')", [row[:3] for row in old])
     db.execute(
         "CREATE TABLE feedback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,"
         " article_id TEXT NOT NULL, signal TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)"
@@ -320,12 +326,16 @@ def test_ratings_from_before_notes_are_brought_forward(tmp_path):
     got = {row[0]: store.get_rating("john", row[0]) for row in old}
     # The finished flag goes, and a row that had nothing else with it; a reason from the old
     # list becomes a note in its own words.
+
+    def noted(words):
+        return words if with_reasons else ""
+
     assert got == {
         "five": Rating(5),
-        "four-liked": Rating(4, "More on this topic; Liked the depth"),
+        "four-liked": Rating(4, noted("More on this topic; Liked the depth")),
         "three-web": Rating(3),
-        "two-topic": Rating(2, "Not interested in the topic"),
-        "one-kindle": Rating(1, "Too thin, nothing in it"),
+        "two-topic": Rating(2, noted("Not interested in the topic")),
+        "one-kindle": Rating(1, noted("Too thin, nothing in it")),
         "only-finished": None,
     }
     columns = {row["name"] for row in store.db.execute("PRAGMA table_info(ratings)")}

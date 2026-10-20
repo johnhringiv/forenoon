@@ -11,6 +11,7 @@ use axum::{
     Form,
     extract::{Path, State},
     http::StatusCode,
+    response::{IntoResponse, Redirect},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
@@ -20,7 +21,7 @@ use sha2::Sha256;
 use crate::{
     db::{self, Rating},
     pages::{AppState, Client, Page, html},
-    ratings::Signal,
+    ratings::{Signal, clean_note},
 };
 
 const VERSION: &str = "1";
@@ -181,7 +182,15 @@ async fn answer(state: AppState, Client(client): Client, token: String, note: Op
     }
     let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
     let rating = match (&claim.tap, note) {
-        (Tap::Note, Some(note)) => db::record_note(pool, &claim.user, &claim.article, &note, SOURCE).await?,
+        (Tap::Note, Some(note)) => {
+            // As on the web pages: an unchanged note is not logged again. Then a redirect to
+            // the link's own page, so that a reload of it posts nothing a second time.
+            let kept = db::get_rating(pool, &claim.user, &claim.article).await?;
+            if kept.is_some_and(|kept| kept.note != clean_note(&note)) {
+                db::record_note(pool, &claim.user, &claim.article, &note, SOURCE).await?;
+            }
+            return Ok(Redirect::to(&format!("/f/{token}")).into_response());
+        }
         (Tap::Note, None) => db::get_rating(pool, &claim.user, &claim.article).await?,
         (_, Some(_)) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", ""),
         (Tap::Problem, None) => {
