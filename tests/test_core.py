@@ -748,3 +748,16 @@ def test_a_hostile_svg_header_or_size_is_read_at_once():
     assert _time.monotonic() - started < 1
     assert round(_svg_length("405.6pt"), 6) == 540.8 and _svg_length(".5in") == 48
     del Images
+
+
+def test_an_svg_with_an_absurd_size_is_a_picture_that_would_not_draw():
+    import pytest as _pytest
+
+    from app.config import Images
+    from app.images import _convert
+
+    for box in ('width="100" viewBox="0 0 1e300 1e-300"', 'viewBox="0 0 1e999 10"', 'width="0" height="10"'):
+        with _pytest.raises(ValueError):
+            _convert(
+                f'<svg xmlns="http://www.w3.org/2000/svg" {box}><rect width="9" height="9"/></svg>'.encode(), Images()
+            )

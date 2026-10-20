@@ -3083,3 +3083,13 @@ def test_a_status_badge_is_not_a_picture():
     )
     body = extract_module.sanitize(root, "https://github.com/o/r")
     assert [i.get("src") for i in body.iter("img")] == ["https://g.example/diagram.svg"]
+
+
+def test_nested_objects_give_one_picture_with_a_short_alt():
+    words = "word " * 10_000
+    root = lxml.html.fromstring(
+        "<div>" + '<object data="https://x.example/a.svg">' * 50 + words + "</object>" * 50 + "</div>"
+    )
+    extract_module._object_pictures(root)
+    (img,) = root.iter("img")
+    assert len(img.get("alt")) <= extract_module.ALT_CHARS

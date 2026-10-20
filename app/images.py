@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -115,13 +116,15 @@ def _svg_length(value: str | None) -> float | None:
     found = SVG_LENGTH.match(value or "")
     if not found or found.group(2).lower() not in SVG_UNITS:
         return None  # a percentage, or no length: the page's layout decides it
-    return float(found.group(1)) * SVG_UNITS[found.group(2).lower()]
+    length = float(found.group(1)) * SVG_UNITS[found.group(2).lower()]
+    return length if math.isfinite(length) and length > 0 else None
 
 
 def _svg_size(root: etree._Element) -> tuple[float, float]:
     """An SVG's size on the page in CSS pixels: its width and height, else its viewBox's."""
     width, height = _svg_length(root.get("width")), _svg_length(root.get("height"))
     box = [float(n) for n in SVG_NUMBER.findall((root.get("viewBox") or "")[:SVG_SIZE_CHARS])]
+    box = box if all(math.isfinite(n) for n in box) else []
     ratio = box[2] / box[3] if len(box) == 4 and box[2] > 0 and box[3] > 0 else None
     if width and height:
         return width, height
@@ -168,6 +171,8 @@ def _svg_png(raw: bytes, cfg: Images) -> bytes | None:
         if name == "style" and el.text:
             el.text = re.sub(r"@import[^;]*;?", "", el.text)
     width, height = _svg_size(root)
+    if not all(math.isfinite(n) and n > 0 for n in (width, height)):
+        raise ValueError("SVG has no size it can be drawn at")
     if max(width, height) < SVG_MIN_DIMENSION:
         return None
     scale = min(SVG_ZOOM, cfg.max_width / width, cfg.max_height / height)
@@ -257,7 +262,7 @@ def embed_images(body: lxml.html.HtmlElement, fetcher: Fetcher, cfg: Images) -> 
                 fetched += 1
                 try:
                     data = _convert(_load(src, fetcher), cfg)
-                except (FetchError, OSError, ValueError, Image.DecompressionBombError):
+                except (FetchError, OSError, ValueError, ArithmeticError, Image.DecompressionBombError):
                     data = None
                     dropped += 1
                 glyph = bool(data) and _glyph(data)

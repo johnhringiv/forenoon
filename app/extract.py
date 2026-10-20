@@ -66,7 +66,10 @@ PLAYER_EMBED = re.compile(
     r"brightcove\.net|jwplayer\.com|google\.com/maps)/",
     re.IGNORECASE,
 )
-DRAWN_MIN_ELEMENTS = 20  # of an inline <svg>, for a drawing (a chart, a diagram), not an icon
+DRAWN_MIN_ELEMENTS = 20
+NAMES_CHARS = 500  # of a box's names read for what it is; a page can make them megabytes
+URL_CHARS = 2048  # of an embedded page's address read for whose it is
+ALT_CHARS = 300  # of an object's text kept as its picture's alt text, as sanitize keeps  # of an inline <svg>, for a drawing (a chart, a diagram), not an icon
 UNSETTABLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")  # refused by lxml when set again
 UNSETTABLE_REF = re.compile(r"&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?")  # a character written as a reference
 PLACEHOLDER_MAX_CHARS = 200  # of a data: address, enough to read its image's header
@@ -404,6 +407,11 @@ def _interactive(figure: lxml.html.HtmlElement) -> bool:
     return not figure.xpath(WIDGET_KEPT) and bool(figure.xpath(WIDGET_MARKERS))
 
 
+def _letters(el: lxml.html.HtmlElement):
+    for text in el.itertext():
+        yield from text
+
+
 def _drawn(figure: lxml.html.HtmlElement) -> bool:
     """Whether a figure is a drawing the book would lose: an inline SVG of some size (a chart,
     a diagram) or an embedded page that is not a video (a chart from Flourish, a demo), with no
@@ -411,9 +419,12 @@ def _drawn(figure: lxml.html.HtmlElement) -> bool:
     if figure.xpath(WIDGET_KEPT.replace(" | .//iframe", "")):
         return False
     names = (el for el in (figure, *figure.iterdescendants()) if isinstance(el.tag, str))
-    if any(PLAYER_NAME_PICTURE.search(" ".join([el.tag, _names(el), el.get("data-component") or ""])) for el in names):
+    if any(
+        PLAYER_NAME_PICTURE.search(" ".join([el.tag, _names(el), el.get("data-component") or ""])[:NAMES_CHARS])
+        for el in names
+    ):
         return False
-    frames = [(f.get("src") or f.get("data-src") or "").strip() for f in figure.iter("iframe")]
+    frames = [(f.get("src") or f.get("data-src") or "").strip()[:URL_CHARS] for f in figure.iter("iframe")]
     if frames:
         return all(src and not VIDEO_LINK.match(src) and not PLAYER_EMBED.match(src) for src in frames)
     return any(len(svg.xpath(".//*")) >= DRAWN_MIN_ELEMENTS for svg in figure.iter("svg"))
@@ -430,7 +441,8 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         if not any(ancestor.tag in ("noscript", "template") for ancestor in figure.iterancestors())
     ]
     for number, figure in enumerate(figures):
-        drawn = not _interactive(figure) and _drawn(figure)
+        # A figure holding figures is not the drawing: the innermost is (and each is read once).
+        drawn = figure.find(".//figure") is None and not _interactive(figure) and _drawn(figure)
         if not drawn and not _interactive(figure):
             continue
         holder = lxml.html.Element("p")
@@ -447,13 +459,19 @@ def _unwrap_lightboxes(root: lxml.html.HtmlElement) -> None:
     """Take a picture out of a button that only enlarges it (Nautilus's "Enlarge image"): the
     book drops buttons, as they also hold a video's poster behind its play button. Only a
     button named for enlarging, holding pictures and no words, not in or named for a player."""
-    for button in list(root.iter("button")):
-        if button.find(".//img") is None or "".join(button.itertext()).strip():
+    buttons = [b for b in root.iter("button") if b.find(".//img") is not None]
+    if not buttons:
+        return
+    players = {  # each box's names read once, however many buttons it holds
+        el for el in root.iter() if isinstance(el.tag, str) and PLAYER_NAME_PICTURE.search(_names(el)[:NAMES_CHARS])
+    }
+    for button in buttons:
+        if "".join(button.itertext()).strip():
             continue
-        names = " ".join([button.get("aria-label") or "", button.get("title") or "", _names(button)])
+        names = " ".join([button.get("aria-label") or "", button.get("title") or "", _names(button)])[:NAMES_CHARS]
         if not ENLARGE.search(names) or NOT_ENLARGE.search(names):
             continue
-        if any(PLAYER_NAME_PICTURE.search(_names(a)) for a in button.iterancestors() if isinstance(a.tag, str)):
+        if any(a in players for a in button.iterancestors()):
             continue
         button.drop_tag()
 
@@ -462,6 +480,8 @@ def _object_pictures(root: lxml.html.HtmlElement) -> None:
     """Make an <object> that shows a picture file (an SVG chart, arXiv's figures, an equation)
     an <img> of it, as the book drops objects: its own fallback <img> when it holds one."""
     for obj in list(root.iter("object")):
+        if any(a.tag == "object" for a in obj.iterancestors()):
+            continue  # inside an object: its fallback, which goes with it
         data = (obj.get("data") or "").strip()
         kind = (obj.get("type") or "").strip().lower()
         if not data or not (kind.startswith("image/") or (not kind and OBJECT_PICTURE.search(data))):
@@ -470,8 +490,10 @@ def _object_pictures(root: lxml.html.HtmlElement) -> None:
         img = copy.deepcopy(fallback) if fallback is not None else lxml.html.Element("img")
         if fallback is None or not _image_src(img):
             img.set("src", data)
-        if not img.get("alt") and " ".join(obj.text_content().split()):
-            img.set("alt", " ".join(obj.text_content().split()))
+        if not img.get("alt"):
+            words = " ".join("".join(itertools.islice(_letters(obj), ALT_CHARS)).split())
+            if words:
+                img.set("alt", words)
         for name in ("width", "height"):
             if obj.get(name) and not img.get(name):
                 img.set(name, obj.get(name))
