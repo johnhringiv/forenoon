@@ -1970,7 +1970,7 @@ def test_restored_pictures_are_only_the_figures_own_shown_once():
         '<figure><div><img src="https://i.example/p.jpg?width=445"></div>'
         '<dialog><img src="https://i.example/p.jpg?width=2000"></dialog>'
         '<button><img src="https://i.example/poster.jpg"></button>'
-        '<div aria-hidden="true"><img src="https://i.example/thumb.jpg"></div>'
+        '<div style="display: none"><img src="https://i.example/thumb.jpg"></div>'
         '<img src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E"><img src="https://i.example/p.jpg?width=900">'
         "<figcaption>Photograph: Reuters</figcaption></figure>"
     )
@@ -1986,10 +1986,11 @@ def test_restored_pictures_are_only_the_figures_own_shown_once():
 
 def test_restore_reads_the_words_shown_and_leaves_out_icons_posters_and_hidden_boxes():
     restore = extract_module._restore_figure_pictures
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
 
     def run(article_figure, page):
         body = lxml.html.fromstring(f"<div>{article_figure}</div>")
-        restore(body, f"<html><body>{page}</body></html>")
+        restore(body, f"<html><body><article>{text}{page}</article></body></html>")
         return [img.get("src") for img in body.iter("img")]
 
     bare = "<figure><figcaption>Photograph: AP</figcaption></figure>"
@@ -2020,3 +2021,35 @@ def test_restore_reads_the_words_shown_and_leaves_out_icons_posters_and_hidden_b
         "https://x.example/_next/image?url=%2Fb.jpg&w=640"
     )
     assert name("https://i.example/p.jpg?width=445&dpr=1") == name("https://i.example/p.jpg?width=2000")
+
+
+def test_a_players_fallback_text_goes_with_it_and_real_photos_are_not_taken_for_icons():
+    amp = '<div><p>Before.</p><amp-video width="640"><source src="https://v.example/a.mp4"><div fallback><p>Your browser does not support video.</p></div></amp-video><p>After.</p></div>'
+    assert extract_module.sanitize(lxml.html.fromstring(amp), "https://news.example/").text_content() == "Before.After."
+    restore = extract_module._restore_figure_pictures
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+
+    def run(article, page, body_class=""):
+        body = lxml.html.fromstring(f"<div>{article}</div>")
+        restore(body, f'<html><body class="{body_class}"><article>{text}{page}</article></body></html>')
+        return [img.get("src") for img in body.iter("img")]
+
+    bare = "<figure><figcaption>The iconic Cray-1.</figcaption></figure>"
+    for img, body_class in (
+        ('<img src="https://i.example/cray.jpg" alt="The iconic Cray-1">', ""),
+        ('<img src="https://i.example/silicon-wafer.jpg">', "has-sidebar"),
+        ('<div class="hidden lg:block"><img src="https://i.example/wide.jpg"></div>', ""),
+        ('<div aria-hidden="true"><img src="https://i.example/chart.png"></div>', ""),
+    ):
+        page = f"<figure><div>{img}</div><figcaption>The iconic Cray-1.</figcaption></figure>"
+        assert len(run(bare, page, body_class)) == 1, img
+    # A figure with no words is matched only inside the article's own text, not a header's ad.
+    first, last = (
+        f"<p>{'The opening paragraph of the article, with enough words. ' * 2}</p>",
+        f"<p>{'The closing paragraph of the article, with enough words. ' * 2}</p>",
+    )
+    ad = '<header><figure><div><img src="https://ads.example/deal.jpg"></div></figure></header>'
+    article_page = f'<article>{first}<figure><div><img src="https://i.example/real.jpg"></div></figure>{last}</article>'
+    body = lxml.html.fromstring(f"<div>{first}<figure></figure>{last}</div>")
+    restore(body, f"<html><body>{ad}{article_page}</body></html>")
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/real.jpg"]

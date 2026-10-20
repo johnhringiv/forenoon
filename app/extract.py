@@ -1310,8 +1310,12 @@ def _unmark(root: lxml.html.HtmlElement) -> None:
 def _unnest_empty(root: lxml.html.HtmlElement) -> None:
     """Take out what lxml's parser put inside a <source> or <track>: it does not know they are
     empty, so it nests what follows them there, a <picture>'s own <img> among it. Written out
-    again, the emptied tag is closed and parses as it should."""
+    again, the emptied tag is closed and parses as it should. Only in a <picture>: in a player
+    (<amp-video>, <video-js>) what follows is the fallback text, which goes with the player."""
     for el in list(root.iter("source", "track")):
+        holder = next((a for a in el.iterancestors() if a.tag not in ("source", "track")), None)
+        if holder is None or holder.tag != "picture":
+            continue
         children, text, tail = list(el), el.text or "", el.tail or ""
         el.text = None
         if children:
@@ -1477,7 +1481,15 @@ def _caption_key(el: lxml.html.HtmlElement) -> str:
 
 
 RESTORE_MAX_PICTURES = 8  # more in one figure is a widget's grid or tabs, not its picture
-ELSEWHERE = re.compile(r"related|recommend|sidebar|\brail\b|more-(stories|from)|trending|popular|promo", re.IGNORECASE)
+# Whole words of a class, id or file name (not "iconic" or "silicon").
+FURNITURE_PICTURE = re.compile(
+    r"(?<![a-z])(logos?|avatars?|icons?|badges?|sprites?|gravatar|emoji)(?![a-z])", re.IGNORECASE
+)
+ELSEWHERE = re.compile(
+    r"(?<![a-z])(related|recommended|recommendations|sidebar|rail|more-stories|more-from|trending|popular|promo)(?![a-z])",
+    re.IGNORECASE,
+)
+RESPONSIVE_SHOWN = re.compile(r"\w+:(block|flex|grid|inline|inline-block|table)\b")
 RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
 HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
@@ -1494,7 +1506,11 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
     those in a sidebar or a box of other stories; so are figures with no words at all. Only pictures the book would show are
     taken (see _shown_pictures), and none for a figure holding a table, code or a quote."""
     bare = [
-        f for f in body.iter("figure") if f.find(".//img") is None and not f.xpath(".//table | .//pre | .//blockquote")
+        f
+        for f in body.iter("figure")
+        if f.find(".//img") is None
+        and next(f.iterancestors("figure"), None) is None
+        and not f.xpath(".//table | .//pre | .//blockquote")
     ]
     if not bare:
         return
@@ -1503,16 +1519,22 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
     except (etree.ParserError, ValueError):
         return
     _unnest_empty(page)
+    region = _article_region(page, body)
+    most = 0.5 * _words(page.text_content())
     on_page: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in page.iter("figure"):
         if next(figure.iterancestors("figure"), None) is not None:
             continue
-        if any(a.tag in ("aside", "nav", "footer") or ELSEWHERE.search(_names(a)) for a in figure.iterancestors()):
+        if any(_elsewhere(a, most) for a in figure.iterancestors()):
             continue
-        on_page.setdefault(_figure_key(figure), []).append(figure)
+        key = _figure_key(figure)
+        if not key and (region is None or region not in figure.iterancestors()):
+            continue  # a figure with no words is matched only within the article's own text
+        on_page.setdefault(key, []).append(figure)
     in_body: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in body.iter("figure"):
-        in_body.setdefault(_figure_key(figure), []).append(figure)
+        if next(figure.iterancestors("figure"), None) is None:
+            in_body.setdefault(_figure_key(figure), []).append(figure)
     have = {_picture_name(_image_src(img)) for img in body.iter("img")}
     for figure in bare:
         key = _figure_key(figure)
@@ -1534,6 +1556,35 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
                 picture.tail, figure.text = figure.text, None
 
 
+def _elsewhere(el: lxml.html.HtmlElement, most: float) -> bool:
+    """Whether a box on the page holds other things than the article: a sidebar, a footer, a
+    box of other stories. Not the page itself, nor a box holding most of its words (a body
+    classed "has-sidebar")."""
+    if el.tag in ("html", "body"):
+        return False
+    if el.tag not in ("aside", "nav", "footer") and not ELSEWHERE.search(_names(el)):
+        return False
+    return _words(el.text_content()) < most
+
+
+def _article_region(page: lxml.html.HtmlElement, body: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The page's box holding the article's first and last paragraphs, found by their words."""
+    paragraphs = [key for key in (_caption_key(p) for p in body.iter("p")) if len(key) >= 40]
+    if not paragraphs:
+        return None
+    first = last = None
+    for p in page.iter("p"):
+        key = _caption_key(p)
+        if key == paragraphs[0] and first is None:
+            first = p
+        if key == paragraphs[-1]:
+            last = p
+    if first is None or last is None:
+        return None
+    above = {last, *last.iterancestors()}
+    return next((a for a in (first, *first.iterancestors()) if a in above), None)
+
+
 def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.HtmlElement]]:
     """A page figure's pictures as the book would show them, each once, as copies: (its
     address's name, the <img>, or the <picture> around it with only that <img>). None for a
@@ -1549,7 +1600,8 @@ def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.
         boxes = boxes[: boxes.index(figure)] if figure in boxes else boxes
         if any(el.tag in DROP or el.tag == "figcaption" or _hidden(el) for el in boxes):
             continue
-        if any(NOT_A_PICTURE.search(" ".join(el.get(n) or "" for n in ("class", "id", "src", "alt"))) for el in boxes):
+        names = [el.get("class") or "" for el in boxes] + [el.get("id") or "" for el in boxes]
+        if any(FURNITURE_PICTURE.search(name) for name in [*names, urlsplit(_image_src(img)).path.rsplit("/", 1)[-1]]):
             continue
         if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in boxes):
             continue
@@ -1603,12 +1655,14 @@ def _picture_name(address: str) -> str:
 
 
 def _hidden(el: lxml.html.HtmlElement) -> bool:
+    """Whether a box is hidden from every reader. Not aria-hidden (a chart drawn twice, once
+    for screen readers) or opacity (a lazy picture fades in), and not a class that is hidden
+    only on small screens ("hidden lg:block")."""
     style = (el.get("style") or "").replace(" ", "").lower()
-    if el.get("hidden") is not None or el.get("aria-hidden") == "true" or HIDDEN_CLASS.search(el.get("class") or ""):
+    names = el.get("class") or ""
+    if el.get("hidden") is not None or "display:none" in style or "visibility:hidden" in style:
         return True
-    return any(rule in style for rule in ("display:none", "visibility:hidden", "opacity:0;")) or style.endswith(
-        "opacity:0"
-    )
+    return bool(HIDDEN_CLASS.search(names)) and not RESPONSIVE_SHOWN.search(names)
 
 
 def _figure_key(figure: lxml.html.HtmlElement) -> str:

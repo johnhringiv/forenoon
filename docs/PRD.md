@@ -355,9 +355,9 @@ All fetched content is treated as untrusted.
   it has none), and a 1×1 embedded image held in a picture's place until a script loads it
   counts as no picture. A figure that kept its caption but lost its picture (one in a box of
   its own, a lightbox button or an embed's fallback) gets the pictures of the page's figure
-  with the same caption (the words a reader sees) back; figures sharing a caption, or with
-  none, are paired in order, when the page has as many as the article outside its sidebars
-  and boxes of other stories. Only pictures the book would show come back: not one in a
+  with the same caption (the words a reader sees) back; figures sharing a caption are paired
+  in order, when the page has as many as the article outside its sidebars and boxes of other
+  stories, and figures with no words likewise among those within the article's own text. Only pictures the book would show come back: not one in a
   button, `<noscript>` or anything else removed, nor in a figure with a player or embed; not
   a hidden one, an icon, logo, share button or one 48 pixels or smaller, an embedded one, a
   second size of the same photo, or a figure's of more than 8 (a widget's grid); and none

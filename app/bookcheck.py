@@ -726,6 +726,7 @@ class _Article:
         the page's. The page's own HTML (`from_page`) has its lazy images' addresses found and
         its h1 made an h2, as the extractor does."""
         fragment = _fragment(html)
+        extract._unnest_empty(fragment)  # a page's <picture> as lxml read it: its <img> inside a <source>
         within: list[lxml.html.HtmlElement] = []
         for el in fragment.iter():
             if not isinstance(el.tag, str):

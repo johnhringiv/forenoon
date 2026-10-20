@@ -871,3 +871,13 @@ def test_a_pictures_sources_bring_no_unchecked_address_into_the_book():
     blocks = article.clean(html)
     assert not any(block.xpath("descendant-or-self::img") for block in blocks)
     assert "evil.example" not in "".join(lxml.html.tostring(b, encoding="unicode") for b in blocks)
+
+
+def test_a_page_copy_keeps_a_pictures_photo_behind_a_blank_pixel():
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    photo = "https://news.example/photo.jpg"
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images={photo})
+    html = f'<figure><picture><source srcset="{photo} 1x"><img src="{pixel}"></picture><figcaption>Cap words</figcaption></figure>'
+    page_copy = lxml.html.tostring(lxml.html.fragment_fromstring(html), encoding="unicode")  # as lxml reads the page
+    blocks = article.clean(page_copy, from_page=True)
+    assert [img.get("src") for b in blocks for img in b.iter("img")] == [photo]
