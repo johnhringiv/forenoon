@@ -42,7 +42,8 @@ PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", 
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
-UNSETTABLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+UNSETTABLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")  # refused by lxml when set again
+UNSETTABLE_REF = re.compile(r"&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?")  # a character written as a reference
 PLACEHOLDER_MAX_CHARS = 200  # of a data: address, enough to read its image's header
 
 # Structure that pages express only through class names and in-page links. It is rebuilt
@@ -293,10 +294,19 @@ def _blank_pixel(src: str) -> bool:
     return max(size) <= 1
 
 
-def _readable_address(address: str) -> str:
-    """An address, or "" when it holds a control character: lxml escapes those only in src and
-    href when it writes a page out, and refuses to set an attribute holding one."""
-    return "" if UNSETTABLE.search(address) else address
+def settable(html: str) -> str:
+    """The markup with each character lxml refuses to set on an element, written or as a
+    reference ("&#12;"), read as the space it shows as: a form feed in a paragraph or a
+    kernel source's <pre>. Moving such text (or setting an address holding one) raises."""
+
+    def ref(m: re.Match) -> str:
+        digits = (m.group(1) or m.group(2)).lstrip("0") or "0"
+        if len(digits) > 7:  # past any character, and Python's limit on reading long numbers
+            return m.group(0)
+        code = int(digits, 16 if m.group(1) else 10)
+        return " " if code <= 0x10FFFF and UNSETTABLE.match(chr(code)) else m.group(0)
+
+    return UNSETTABLE_REF.sub(ref, UNSETTABLE.sub(" ", html))
 
 
 def _image_src(el: lxml.html.HtmlElement) -> str:
@@ -310,7 +320,7 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
         # own commas are part of it); none in a blank or "," srcset.
         found = srcset_urls(el.get("srcset"))
         src = next((part for part in reversed(found) if not part.lower().startswith("data:")), "")
-    return _readable_address(src)
+    return src
 
 
 def _classes(el: lxml.html.HtmlElement) -> set[str]:
@@ -1679,8 +1689,8 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         if len(found) + len(cards) > RESTORE_MAX_PICTURES:
             return []
     # A picture linking to another of the site's pages, beside one that does not, is a card for
-    # that story; alone, it is the figure's photo linked to its own page (an attachment page).
-    return list((found or cards).items())
+    # that story; the only picture, it is the figure's photo linked to its own (attachment) page.
+    return list((found or (cards if len(cards) == 1 else {})).items())
 
 
 def _story_link(url: str, href: str, address: str) -> bool:
@@ -1709,7 +1719,7 @@ def _picture_address(img: lxml.html.HtmlElement) -> str:
         for name in ("srcset", "data-srcset"):
             urls = [url for url in srcset_urls(source.get(name) or "") if not url.lower().startswith("data:")]
             if urls:
-                return _readable_address(urls[-1])
+                return urls[-1]
     return address
 
 
@@ -2668,10 +2678,8 @@ def extract(
     fetch_error: str = "",
 ) -> Extracted:
     """Pick the best body from the page and the feed entry, sanitise it, and judge it."""
-    # A control character lxml would refuse to set back on an element it moves (a form feed in
-    # a paragraph), read as the space it shows as.
-    page_html = UNSETTABLE.sub(" ", page_html) if page_html else page_html
-    feed_html = UNSETTABLE.sub(" ", feed_html or "")
+    page_html = settable(page_html) if page_html else page_html
+    feed_html = settable(feed_html or "")
     candidates: dict[str, lxml.html.HtmlElement] = {}
     reference = 0
     title = author = image = description = ""

@@ -354,9 +354,9 @@ All fetched content is treated as untrusted.
   A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
   the image has no address on the web (none, or an embedded stand-in): the last address of the
   first source that has one (`srcset`, else `data-srcset`). An embedded 1×1 GIF or PNG as an
-  image's `src` counts as no picture: it holds a picture's place until a script loads it. An
-  address holding a control character is none, and a control character in the page's or feed's
-  text is read as a space. A caption a figure also shows over its picture (an overlay, a lightbox's
+  image's `src` counts as no picture: it holds a picture's place until a script loads it. A
+  control character in the page or the feed (a form feed in a kernel source's code), written
+  or as a reference, is read as a space; the book check reads the page the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
   text) appears once.
 - **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
   can keep its caption and lose its photo (a box of its own, a lightbox button). After

@@ -12,6 +12,7 @@ import lxml.html
 import pytest
 
 from app import archive, bookcheck, sessions
+from app import extract as extract_module
 from app.config import Config, Llm, Source, User
 from app.extract import Extracted
 from app.sources import Item
@@ -893,3 +894,11 @@ def test_an_unreadable_address_on_the_page_is_no_picture_not_an_error():
         f'<picture><source srcset="http://[x/a.jpg 1x"><img src="{pixel}"></picture><p>Words.</p>', from_page=True
     )
     assert not any(b.xpath("descendant-or-self::img") for b in blocks)
+
+
+def test_the_page_copies_come_from_the_page_as_the_extractor_reads_it():
+    page = '<html><body><article><pre><code>int x;\x0c\nint y;&#12;</code></pre><figure><picture><source srcset="https://news.example/a.jpg">\x0c<img src="https://news.example/b.jpg"></picture><figcaption>C.</figcaption></figure></article></body></html>'
+    cleaned = extract_module.settable(page)
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=cleaned)
+    for block in article.clean(cleaned, from_page=True):
+        assert not extract_module.UNSETTABLE.search(lxml.html.tostring(block, encoding="unicode"))

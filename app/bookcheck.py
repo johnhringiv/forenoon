@@ -637,7 +637,7 @@ class _Article:
             used.append(n)
             return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
-        html = SURROGATE.sub("", CONTROL.sub("", html))  # refused by lxml, or the end of its reading
+        html = SURROGATE.sub("", extract.settable(html))  # refused by lxml, or the end of its reading
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
         root = _fragment(RUN_ON.sub(r"\1 ", html))
@@ -1162,7 +1162,7 @@ class Checker:
             self._skip("with no saved page")
             return None
         try:
-            outcome = self._run(item, result, saved["page_html"], list(keep))
+            outcome = self._run(item, result, extract.settable(saved["page_html"]), list(keep))
         except Exception as exc:  # hostile pages and a model's HTML: whatever happens, the delivery goes on
             log.exception("book check of %s failed", item.url)
             outcome = Outcome("error", f"the check failed: {type(exc).__name__}: {exc}"[:MAX_SUMMARY])
