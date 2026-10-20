@@ -1480,13 +1480,17 @@ def _caption_key(el: lxml.html.HtmlElement) -> str:
     return "".join(el.text_content().split()).translate(QUOTES)
 
 
+RESTORE_MAX_PICTURES = 8  # more in one figure is a widget's grid or tabs, not its picture
+
+
 def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back the pictures of a figure readability kept only the words of. It takes a box
-    holding nothing but a picture for empty, so a photo in a box of its own (the Guardian's,
-    a lightbox button's, an embed's fallback) went and its caption stayed. The page's figure
-    with the same caption gives them back, before the caption; nothing is taken out. Figures
-    that share a caption ("Photograph: …") are paired in order, when there are as many of
-    them on the page as in the article."""
+    holding nothing but a picture for empty, so a photo in a box of its own (the Guardian's)
+    went and its caption stayed. The page's figure with the same caption gives them back,
+    before the caption; nothing is taken out. Figures that share a caption ("Photograph: …")
+    are paired in order, only when the page has as many of them as the article. Pictures the
+    book would not show are not taken: one in a button, player, <noscript> or anything else
+    removed, a hidden one, an embedded one, and a figure's beyond a few."""
     bare = [f for f in body.iter("figure") if f.find(".//img") is None and _figure_key(f)]
     if not bare:
         return
@@ -1496,32 +1500,72 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
         return
     on_page: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in page.iter("figure"):
-        if figure.find(".//img") is not None and next(figure.iterancestors("figure"), None) is None:
+        if next(figure.iterancestors("figure"), None) is None:
             on_page.setdefault(_figure_key(figure), []).append(figure)
     in_body: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in body.iter("figure"):
         in_body.setdefault(_figure_key(figure), []).append(figure)
-    have = {_image_src(img) for img in body.iter("img")}
+    have = {_picture_name(_image_src(img)) for img in body.iter("img")}
     for figure in bare:
         key = _figure_key(figure)
         sources, targets = on_page.get(key, []), in_body[key]
         if len(sources) != len(targets):
             continue
-        source = sources[targets.index(figure)]
+        pictures = _shown_pictures(sources[targets.index(figure)])
+        if not pictures or len(pictures) > RESTORE_MAX_PICTURES:
+            continue
         caption = figure.find("figcaption")
-        for img in source.iter("img"):
-            src = _image_src(img)
-            inside = img.getparent() is not None and img.getparent().tag == "picture"
-            if next(img.iterancestors("figcaption"), None) is not None or (src in have and (src or not inside)):
+        for name, picture in pictures:
+            if name in have:
                 continue
-            have.add(src)
-            picture = copy.deepcopy(img.getparent() if inside else img)
+            have.add(name)
+            picture = copy.deepcopy(picture)
             picture.tail = None
             if caption is not None:
                 caption.addprevious(picture)
             else:
                 figure.insert(0, picture)
                 picture.tail, figure.text = figure.text, None
+
+
+def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.HtmlElement]]:
+    """A page figure's pictures as the book would show them, each once: (its address's name,
+    the <img>, or the <picture> around it)."""
+    found: list[tuple[str, lxml.html.HtmlElement]] = []
+    for img in figure.iter("img"):
+        boxes = [img, *list(img.iterancestors())]
+        boxes = boxes[: boxes.index(figure)] if figure in boxes else boxes
+        if any(el.tag in DROP or el.tag == "figcaption" or _hidden(el) for el in boxes):
+            continue
+        inside = img.getparent() is not None and img.getparent().tag == "picture"
+        address = _image_src(img)
+        if not address and inside:
+            address = next(
+                (
+                    url
+                    for s in img.getparent().iter("source")
+                    for url in srcset_urls(s.get("srcset") or "")
+                    if not url.lower().startswith("data:")
+                ),
+                "",
+            )
+        if not address or address.lower().startswith("data:"):
+            continue
+        name = _picture_name(address)
+        if name not in {n for n, _ in found}:
+            found.append((name, img.getparent() if inside else img))
+    return found
+
+
+def _picture_name(address: str) -> str:
+    """An image's address without its query: two sizes of one photo are one picture."""
+    parts = urlsplit(address.strip())
+    return (parts.netloc + parts.path) if parts.path else address
+
+
+def _hidden(el: lxml.html.HtmlElement) -> bool:
+    style = (el.get("style") or "").replace(" ", "").lower()
+    return el.get("hidden") is not None or el.get("aria-hidden") == "true" or "display:none" in style
 
 
 def _figure_key(figure: lxml.html.HtmlElement) -> str:

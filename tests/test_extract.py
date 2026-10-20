@@ -1950,3 +1950,35 @@ def test_a_figure_left_with_its_caption_gets_its_pictures_back_from_the_page():
     body = lxml.html.fromstring("<div><figure><div>Photograph: J. B.</div></figure></div>")
     extract_module._restore_figure_pictures(body, f"<html><body>{other}{other.replace('x.jpg', 'y.jpg')}</body></html>")
     assert not body.xpath("//img")
+
+
+def test_restored_pictures_are_only_the_figures_own_shown_once():
+    restore = extract_module._restore_figure_pictures
+
+    def run(article_figure, page_figures):
+        body = lxml.html.fromstring(f"<div>{article_figure}</div>")
+        restore(body, f"<html><body>{page_figures}</body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    bare = "<figure><figcaption>Photograph: Reuters</figcaption></figure>"
+    # The article's figure was a video; a related story's picture shares its credit.
+    video = '<figure><iframe src="https://www.youtube.com/embed/x"></iframe><figcaption>Photograph: Reuters</figcaption></figure>'
+    rail = '<aside><figure><img src="https://i.example/rail.jpg"><figcaption>Photograph: Reuters</figcaption></figure></aside>'
+    assert run(bare, video + rail) == []
+    # A lightbox's large copy, a poster in a play button, a hidden strip, an overlay drawn in place.
+    one = (
+        '<figure><div><img src="https://i.example/p.jpg?width=445"></div>'
+        '<dialog><img src="https://i.example/p.jpg?width=2000"></dialog>'
+        '<button><img src="https://i.example/poster.jpg"></button>'
+        '<div aria-hidden="true"><img src="https://i.example/thumb.jpg"></div>'
+        '<img src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E"><img src="https://i.example/p.jpg?width=900">'
+        "<figcaption>Photograph: Reuters</figcaption></figure>"
+    )
+    assert run(bare, one) == ["https://i.example/p.jpg?width=445"]
+    # A widget's grid of pictures is not a figure's picture.
+    grid = (
+        "<figure>"
+        + "".join(f'<img src="https://i.example/{n}.jpg">' for n in range(12))
+        + "<figcaption>Photograph: Reuters</figcaption></figure>"
+    )
+    assert run(bare, grid) == []

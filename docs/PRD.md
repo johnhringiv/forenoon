@@ -356,7 +356,9 @@ All fetched content is treated as untrusted.
   counts as no picture. A figure that kept its caption but lost its picture (one in a box of
   its own, a lightbox button or an embed's fallback) gets the pictures of the page's figure
   with the same caption back; figures sharing a caption are paired in order, when the page
-  has as many as the article. A caption a
+  has as many as the article. Only pictures the book would show come back: not one in a
+  button, a player or `<noscript>`, a hidden or embedded one, a second size of the same
+  photo, or a figure's of more than 8 (a widget's grid). A caption a
   figure also shows over its picture (an overlay, a lightbox's text) appears once. A badge
   linking to the site's page on Google News (asking readers to pick it as a preferred source)
   is removed.
