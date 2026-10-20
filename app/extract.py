@@ -1636,6 +1636,7 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
     ):
         return []
     found: dict[str, lxml.html.HtmlElement] = {}
+    cards: dict[str, lxml.html.HtmlElement] = {}
     for img in figure.iter("img"):
         boxes = [img, *img.iterancestors()]
         boxes = boxes[: boxes.index(figure)]
@@ -1658,14 +1659,13 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         sizes = [img.get(n, "").strip() for n in ("width", "height")]
         if any(size.isascii() and size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
             continue
-        if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes):
-            continue  # a picture linking to another of the site's pages: a card for that story
+        linked = any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes)
         parent = img.getparent()
         inside = parent is not None and parent.tag == "picture"
         if inside and any(el.tag == "img" for el in img.itersiblings()):
             continue  # a blurred stand-in before the photo: the picture's last <img> is it
         name = _picture_name(_join(url, address))
-        if name in found:
+        if name in found or name in cards:
             continue
         if inside:  # its sources and this <img>, and nothing else (no "Loading image" label)
             picture = lxml.html.Element("picture")
@@ -1675,10 +1675,12 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         else:
             picture = copy.deepcopy(img)
         picture.tail = None
-        found[name] = picture
-        if len(found) > RESTORE_MAX_PICTURES:
+        (cards if linked else found)[name] = picture
+        if len(found) + len(cards) > RESTORE_MAX_PICTURES:
             return []
-    return list(found.items())
+    # A picture linking to another of the site's pages, beside one that does not, is a card for
+    # that story; alone, it is the figure's photo linked to its own page (an attachment page).
+    return list((found or cards).items())
 
 
 def _story_link(url: str, href: str, address: str) -> bool:
@@ -1692,7 +1694,8 @@ def _story_link(url: str, href: str, address: str) -> bool:
     except ValueError:
         return False
     picture_file = re.search(r"\.(jpe?g|png|gif|webp|avif|svg)$", there.path, re.IGNORECASE)
-    return there.netloc == here.netloc and not picture_file and there.path.rstrip("/") != here.path.rstrip("/")
+    same_site = there.netloc.removeprefix("www.") == here.netloc.removeprefix("www.")
+    return same_site and not picture_file and there.path.rstrip("/") != here.path.rstrip("/")
 
 
 def _picture_address(img: lxml.html.HtmlElement) -> str:
@@ -2665,6 +2668,10 @@ def extract(
     fetch_error: str = "",
 ) -> Extracted:
     """Pick the best body from the page and the feed entry, sanitise it, and judge it."""
+    # A control character lxml would refuse to set back on an element it moves (a form feed in
+    # a paragraph), read as the space it shows as.
+    page_html = UNSETTABLE.sub(" ", page_html) if page_html else page_html
+    feed_html = UNSETTABLE.sub(" ", feed_html or "")
     candidates: dict[str, lxml.html.HtmlElement] = {}
     reference = 0
     title = author = image = description = ""

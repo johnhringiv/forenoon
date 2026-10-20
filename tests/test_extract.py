@@ -2243,3 +2243,75 @@ def test_a_restore_that_raises_leaves_the_article_as_it_was(monkeypatch):
     )
     page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}<figure><figcaption>C.</figcaption></figure></article></body></html>"
     assert "Paragraph 7" in extract_module.extract("https://news.example/story", page, "", "page").body.text_content()
+
+
+def test_each_restore_rule_on_its_own_case():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/2026/story")
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+
+    def run(article, page):
+        body = lxml.html.fromstring(f"<div>{text}{article}</div>")
+        restore(body, f"<html><body><article>{text}{page}</article></body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    bare = "<figure><figcaption>Two.</figcaption></figure>"
+    # A figure's own caption, not a gallery photo's that comes first.
+    gallery = '<figure><div><img src="https://i.example/main.jpg"></div><figure><div><img src="https://i.example/1.jpg"></div><figcaption>Sub 1</figcaption></figure><figcaption>Two.</figcaption></figure>'
+    assert run(bare, gallery) == ["https://i.example/main.jpg"], "own-caption"
+    # A box of other stories inside the article's box.
+    side = '<div class="related"><figure><div><img src="https://i.example/rel.jpg"></div><figcaption>Two.</figcaption></figure></div>'
+    assert run(bare, side) == [], "region-inner"
+    # A link to the picture itself on the site: a full size, another file, the article's page.
+    lb = '<figure><div><a href="https://news.example/up/big.jpg"><img src="https://news.example/up/big-640x480.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, lb) == ["https://news.example/up/big-640x480.jpg"], "story-link-samepic"
+    lb2 = '<figure><div><a href="https://news.example/up/full.jpg"><img src="https://news.example/up/p.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, lb2) == ["https://news.example/up/p.jpg"], "story-link-picfile"
+    own = '<figure><div><a href="https://news.example/2026/story?photo=2"><img src="https://news.example/up/p.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, own) == ["https://news.example/up/p.jpg"], "story-link-samepage"
+    # Pictures go before the caption.
+    body = lxml.html.fromstring(f"<div>{text}{bare}</div>")
+    restore(
+        body,
+        f"<html><body><article>{text}<figure><div><img src='https://i.example/p.jpg'></div><figcaption>Two.</figcaption></figure></article></body></html>",
+    )
+    assert [c.tag for c in body.find(".//figure")] == ["img", "figcaption"], "insert-before-caption"
+    # A figure within a figure in the article gets none.
+    inner = "<figure><div>Outer words</div><figure><figcaption>Two.</figcaption></figure></figure>"
+    assert (
+        run(inner, '<figure><div><img src="https://i.example/p.jpg"></div><figcaption>Two.</figcaption></figure>') == []
+    ), "bare-inner"
+    # Not a picture in a caption or an aside inside the figure.
+    capimg = '<figure><div><img src="https://i.example/p.jpg"></div><figcaption>Two.<img src="https://i.example/c.jpg"></figcaption></figure>'
+    assert run(bare, capimg) == ["https://i.example/p.jpg"], "figcaption-box"
+    asideimg = '<figure><div><img src="https://i.example/p.jpg"></div><aside><img src="https://i.example/a.jpg"></aside><figcaption>Two.</figcaption></figure>'
+    assert run(bare, asideimg) == ["https://i.example/p.jpg"], "aside-box"
+    # A card named as other stories, with no link.
+    named = '<figure><div><img src="https://i.example/p.jpg"></div><div class="related-stories"><img src="https://i.example/t.jpg"></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, named) == ["https://i.example/p.jpg"], "card-elsewhere"
+    # A figure with two captions: neither words' copy is taken for an overlay.
+    twice = '<div><figure><img src="https://i.example/c.png"><div>Same words.</div><figcaption>Same words.</figcaption><figcaption>Other.</figcaption></figure></div>'
+    out = extract_module.sanitize(lxml.html.fromstring(twice), "https://news.example/")
+    assert out.text_content().count("Same words.") == 2, "repcap-one"
+    # The figure's only photo, linked to its own attachment or media page, is its photo; beside
+    # another, unlinked one, a picture linking to the site's other pages is a card.
+    for href in (
+        "/2026/10/photo-name/",
+        "/?attachment_id=123",
+        "/image/full/12345",
+        "https://www.news.example/media/1",
+    ):
+        alone = f'<figure><div><a href="{href}"><img src="https://news.example/up/p.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+        assert run(bare, alone) == ["https://news.example/up/p.jpg"], href
+    card = '<figure><div><img src="https://i.example/p.jpg"></div><div><a href="https://www.news.example/2026/other"><img src="https://i.example/t.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, card) == ["https://i.example/p.jpg"]
+
+
+def test_a_control_character_in_the_text_is_a_space_not_an_error():
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands and the\x0clong dispute.</p>" for i in range(8)
+    )
+    figure = '<figure><picture><source srcset="https://i.example/a.jpg">Loading\x0c<img src="https://i.example/a-small.jpg"></picture><figcaption>C.</figcaption></figure>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{figure}</article></body></html>"
+    for mode, feed in (("page", ""), ("feed", f"<div>{paras}</div>")):
+        body = extract_module.extract("https://news.example/story", page, feed, mode).body
+        assert "the long dispute" in body.text_content()
