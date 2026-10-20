@@ -2804,3 +2804,163 @@ def test_a_run_of_figures_is_numbered_not_stored():
     places = extract_module._places(root, {"One.", "Two."}, runs)
     assert all(isinstance(run, int) for place in places.values() for run in place[2:])
     assert len({place[2] for place in places.values()}) == 3
+
+
+STORY = "https://news.example/2026/story"
+
+
+def _boxed_story(*middle: str) -> str:
+    """A page whose article is split into boxes of paragraphs with other boxes between them."""
+    text = [
+        f'<div class="text"><p>Paragraph {i} of the story, telling what happened at some length to the reader.</p></div>'
+        for i in range(6)
+    ]
+    parts = [text[0], text[1], *(m + t for m, t in zip(middle, text[2:])), *text[2 + len(middle) :]]
+    return f"<html><head><title>T</title></head><body><article><h1>T</h1>{''.join(parts)}</article></body></html>"
+
+
+def _photo(n: int, caption: str = "") -> str:
+    caption = (
+        f'<figcaption><span class="visually-hidden">Image caption, </span>{caption}</figcaption>' if caption else ""
+    )
+    return f'<div class="wrapper"><figure><img src="https://i.example/{n}.jpg" alt="Photo {n}">{caption}</figure></div>'
+
+
+def test_a_figure_readability_dropped_whole_comes_back_between_its_paragraphs():
+    page = _boxed_story(_photo(1, "The harbour at dawn"), _photo(2))
+    body = lxml.html.fromstring(
+        "<div>"
+        + "".join(
+            f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+        )
+        + "</div>"
+    )
+    extract_module._restore_dropped_figures(body, page, STORY)
+    blocks = [el.tag if el.tag == "figure" else el.text_content()[:11] for el in body]
+    assert blocks == [
+        "Paragraph 0",
+        "Paragraph 1",
+        "figure",
+        "Paragraph 2",
+        "figure",
+        "Paragraph 3",
+        "Paragraph 4",
+        "Paragraph 5",
+    ]
+    first, second = body.findall("figure")
+    assert first.find("img").get("src") == "https://i.example/1.jpg"
+    assert first.find("figcaption").text_content() == "The harbour at dawn"  # not "Image caption, "
+    assert second.find("figcaption") is None
+    # Whole, through extract: readability's copy keeps the paragraphs and drops the photos.
+    body = extract_module.extract(STORY, page, "", "page").body
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/1.jpg", "https://i.example/2.jpg"]
+
+
+def test_a_dropped_figure_comes_back_only_where_the_article_kept_both_paragraphs_around_it():
+    paragraphs = [
+        f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+    ]
+    body = "<div>" + "".join(paragraphs) + "</div>"
+    # A box readability dropped with words of its own beside the picture: a card for another story.
+    card = '<div class="card"><figure><img src="https://i.example/c.jpg"></figure><p>The other story, told in a teaser long enough to count.</p></div>'
+    root = lxml.html.fromstring(body)
+    extract_module._restore_dropped_figures(root, _boxed_story(card), STORY)
+    assert root.find(".//img") is None
+    # A paragraph dropped in a box of its own (a video's description) leaves the photo beside it.
+    alone = '<div class="video"><p>A description of the video, long enough to count as a paragraph.</p></div>'
+    root = lxml.html.fromstring(body)
+    extract_module._restore_dropped_figures(root, _boxed_story(alone + _photo(1)), STORY)
+    assert root.find(".//img") is not None
+    # Before the first paragraph or after the last: a lead photo, a related story.
+    page = (
+        _boxed_story().replace("<h1>T</h1>", "<h1>T</h1>" + _photo(7)).replace("</article>", _photo(8) + "</article>")
+    )
+    body = lxml.html.fromstring("<div>" + "".join(paragraphs) + "</div>")
+    extract_module._restore_dropped_figures(body, page, STORY)
+    assert body.find(".//img") is None
+
+
+def test_a_dropped_figure_is_not_furniture_nor_one_the_article_has():
+    paragraphs = "".join(
+        f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+    )
+
+    def run(*middle: str, body: str = paragraphs) -> list[str]:
+        root = lxml.html.fromstring(f"<div>{body}</div>")
+        extract_module._restore_dropped_figures(root, _boxed_story(*middle), STORY)
+        return [img.get("src") for img in root.iter("img")]
+
+    related = '<div class="related-stories"><figure><img src="https://i.example/r.jpg"><figcaption>Read next</figcaption></figure></div>'
+    assert run(related) == []
+    # The article kept this figure: the dropped one goes after it, in the page's order.
+    kept = paragraphs.replace(
+        "</p><p>Paragraph 2", '</p><figure><img src="https://i.example/1.jpg"></figure><p>Paragraph 2'
+    )
+    assert run(_photo(1) + _photo(2), body=kept) == ["https://i.example/1.jpg", "https://i.example/2.jpg"]
+    # Its caption is already the article's: the picture comes back without it.
+    said = paragraphs.replace("</p><p>Paragraph 2", "</p><p>The harbour at dawn</p><p>Paragraph 2")
+    root = lxml.html.fromstring(f"<div>{said}</div>")
+    extract_module._restore_dropped_figures(root, _boxed_story(_photo(1, "The harbour at dawn")), STORY)
+    assert root.find(".//img") is not None and root.find(".//figcaption") is None
+
+
+def test_a_stack_of_photos_gives_its_first():
+    paragraphs = "".join(
+        f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+    )
+    slides = "".join(
+        f'<div aria-roledescription="slide"><figure><img src="https://i.example/s{n}.jpg"><figcaption>Slide {n}</figcaption></figure></div>'
+        for n in range(4)
+    )
+    carousel = f'<div class="carousel">{slides}</div>'
+    root = lxml.html.fromstring(f"<div>{paragraphs}</div>")
+    extract_module._restore_dropped_figures(root, _boxed_story(carousel), STORY)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/s0.jpg"]
+    assert root.find(".//figcaption").text_content() == "Slide 0"
+    # Several photos in one figure, paged through: the first; a grid of them shown at once: all.
+    swiper = (
+        '<figure><div class="swiper">'
+        + "".join(f'<div class="swiper-slide"><img src="https://i.example/w{n}.jpg"></div>' for n in range(3))
+        + "</div></figure>"
+    )
+    assert [name for name, _ in extract_module._shown_pictures(lxml.html.fromstring(swiper), STORY)] == [
+        "i.example/w0.jpg"
+    ]
+    grid = swiper.replace("swiper", "gallery")
+    assert len(extract_module._shown_pictures(lxml.html.fromstring(grid), STORY)) == 3
+
+
+def test_a_graphic_drawn_per_screen_width_gives_its_widest_copy():
+    figure = lxml.html.fromstring(
+        '<figure><div class="ai2html">'
+        '<div class="g-artboard" data-min-width="0" data-max-width="599"><img src="https://i.example/map-small.jpg"></div>'
+        '<div class="g-artboard" data-min-width="600"><img src="https://i.example/map-large.jpg"></div>'
+        "</div></figure>"
+    )
+    assert [name for name, _ in extract_module._shown_pictures(figure, STORY)] == ["i.example/map-large.jpg"]
+
+
+def test_a_dropped_picture_goes_into_the_caption_the_article_kept_without_its_credit():
+    paragraphs = "".join(
+        f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+    )
+    photo = (
+        '<figure><img src="https://i.example/1.jpg"><figcaption><div><p>Two clusters of galaxies collide.</p></div>'
+        "<div><p>NASA</p></div></figcaption></figure>"
+    )
+    # Readability kept the caption, without the credit and further on, and dropped the picture.
+    kept = paragraphs.replace(
+        "</p><p>Paragraph 4",
+        "</p><figure><figcaption>Two clusters of galaxies collide.</figcaption></figure><p>Paragraph 4",
+    )
+    root = lxml.html.fromstring(f"<div>{kept}</div>")
+    extract_module._restore_dropped_figures(root, _boxed_story(photo), STORY)
+    figures = root.findall(".//figure")
+    assert len(figures) == 1 and figures[0].find("img").get("src") == "https://i.example/1.jpg"
+    # Two figures sharing a credit: the article's figure that has its picture is not the other's.
+    shared = '<figure><img src="https://i.example/{n}.jpg"><figcaption>Credit: via the affidavit</figcaption></figure>'
+    kept = paragraphs.replace("</p><p>Paragraph 4", "</p>" + shared.format(n=0) + "<p>Paragraph 4")
+    root = lxml.html.fromstring(f"<div>{kept}</div>")
+    page = _boxed_story(shared.format(n=1), "", shared.format(n=0))
+    extract_module._restore_dropped_figures(root, page, STORY)
+    assert sorted(img.get("src") for img in root.iter("img")) == ["https://i.example/0.jpg", "https://i.example/1.jpg"]

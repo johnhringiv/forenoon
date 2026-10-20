@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import itertools
 import re
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit
@@ -1523,6 +1524,15 @@ HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
 )
 SIZED_NAME = re.compile(r"-\d{2,5}x\d{2,5}(\.\w+)$")
+# A box of pictures shown one at a time, paged through with next and previous: the book shows its
+# first. Not "gallery" or "lightbox": a grid of pictures shown at once, a picture that enlarges.
+STACK_NAME = re.compile(
+    r"(?<![a-z])(carousel|slider|slideshow|swiper|slick|glide|splide|flickity)(?![a-z])", re.IGNORECASE
+)
+STACK_ROLES = {"carousel", "slide"}  # aria-roledescription
+ARTBOARD = "g-artboard"  # ai2html's: one copy of a graphic per screen width
+CAPTION_MATCH_LETTERS = 20  # of a caption, to be found within another
+DROPPED_PARAGRAPH_LETTERS = 40  # a paragraph this long the article lacks: it dropped more than a figure there
 SIZE_QUERY = {"w", "width", "h", "height", "q", "quality", "dpr", "fit", "crop", "auto", "format", "fm", "s", "resize"}
 
 
@@ -1625,6 +1635,175 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
                 figure.insert(n, picture)
         if pictures and caption is None:
             pictures[-1].tail, figure.text = figure.text, None
+
+
+def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: str) -> None:
+    """Put back the figures readability dropped whole from between paragraphs it kept. It
+    scores boxes by their text, so a photo in a box of its own between two boxes of the
+    article's paragraphs (the BBC's, the New York Times') goes, caption and all. Each of the
+    page's figures within the article's box (see _article_region) goes back between the same
+    two paragraphs, each of which the article and the page have once, and only when the
+    article has those two paragraphs one after the other (it dropped nothing else between
+    them), in the page's order among the figures it kept there. Not a figure in a box of other
+    stories or furniture within the article's box, nor one whose caption the article already
+    has; only the pictures the book would show (see _shown_pictures) that the article lacks,
+    with the figure's own caption. Of a stack of photos paged through (a carousel), only the
+    first."""
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    # As readability's copy has them: absolute, against the page's <base> when it has one.
+    page.make_links_absolute(url, resolve_base_href=True, handle_failures="ignore")
+    _unnest_empty(page)
+    _unnest_empty(body)
+    region = _article_region(page, body)
+    if region is None:
+        return
+    marks = _once(body) & _once(page)
+    if len(marks) < 2:
+        return
+    # The article in order: its marked paragraphs, and between them the figures and pictures it has.
+    order: list[str] = []
+    anchors: dict[str, lxml.html.HtmlElement] = {}
+    kept: dict[str, list[lxml.html.HtmlElement]] = {}  # the figures between a mark and the next
+    for el in body.iter("p", "figure"):
+        if next(el.iterancestors("figure"), None) is not None:
+            continue
+        if el.tag == "p":
+            if (key := _text_key(el)) in marks:
+                order.append(key)
+                anchors[key] = el
+        elif order:
+            kept.setdefault(order[-1], []).append(el)
+    following = dict(itertools.pairwise(order))
+    have = {_picture_name(_join(url, _picture_address(img))) for img in body.iter("img")}
+    said = {_text_key(el) for el in body.iter(*BLOCK, "p", "figcaption", "li")} - {""}
+    captioned = [  # figures readability kept the caption of and not the picture
+        (f, k)
+        for f in body.iter("figure")
+        if f.find(".//img") is None and len(k := _figure_key(f)) >= CAPTION_MATCH_LETTERS
+    ]
+    half = 0.5 * _words(_visible_text(page))
+    elsewhere: dict[lxml.html.HtmlElement, bool] = {}
+    stacks: set[lxml.html.HtmlElement] = set()  # those a figure was taken from
+
+    def own_boxes(figure: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
+        boxes = list(figure.iterancestors())
+        return boxes[: boxes.index(region)] if region in boxes else boxes
+
+    gaps: list[tuple[str, list[lxml.html.HtmlElement]]] = []
+    last: str | None = None
+    between: list[lxml.html.HtmlElement] = []
+    dropped: list[lxml.html.HtmlElement] = []  # paragraphs between the two the article lacks
+    for el in region.iter("p", "figure"):
+        if next(el.iterancestors("figure"), None) is not None:
+            continue
+        if el.tag == "figure":
+            between.append(el)
+        elif (key := _text_key(el)) in marks:
+            if between and last is not None and following.get(last) == key:
+                # Not a figure in a box readability dropped with text of its own (a card for
+                # another story): one holding such a paragraph and none the article kept.
+                alone = [f for f in between if not any(_dropped_with(f, p, marks) for p in dropped)]
+                if alone:
+                    gaps.append((last, alone))  # the article has these two side by side
+            last, between, dropped = key, [], []
+        elif len(key) >= DROPPED_PARAGRAPH_LETTERS and key not in said:
+            dropped.append(el)
+
+    for key, figures in gaps:
+        if not any(_shown_pictures(f, url, region) for f in figures):
+            continue
+        anchor = anchors[key]
+        while anchor.getparent() is not None and anchor.getparent().tag not in (
+            "div",
+            "section",
+            "article",
+            "main",
+            "body",
+        ):
+            anchor = anchor.getparent()
+        present = kept.get(key, [])
+        for figure in figures:
+            pictures = _shown_pictures(figure, url, region)
+            names = {name for name, _ in pictures}
+            twin = next(
+                (
+                    f
+                    for f in present
+                    if (_figure_key(f) and _figure_key(f) == _figure_key(figure))
+                    or names & {_picture_name(_join(url, _picture_address(i))) for i in f.iter("img")}
+                ),
+                None,
+            )
+            if twin is not None:
+                anchor = twin  # the article kept this one: the next goes after it
+                continue
+            same = _same_caption(figure, captioned)
+            if same is not None:
+                # The article kept its caption elsewhere (readability's copy, lacking a credit
+                # line): its pictures go there, when it has none and the pictures are not had.
+                captioned = [(f, k) for f, k in captioned if f is not same]
+                if not any(name in have for name in names):
+                    have.update(names)
+                    caption = _own_caption(same)
+                    for _, picture in pictures:
+                        if caption is not None:
+                            caption.addprevious(picture)
+                        else:
+                            same.append(picture)
+                continue
+            boxes = own_boxes(figure)
+            if any(_unlikely(b) for b in (figure, *boxes)):
+                continue
+            if any(elsewhere.setdefault(b, _elsewhere(b, half)) for b in boxes):
+                continue
+            stack = next((b for b in reversed(boxes) if _stack(b)), None)  # the carousel, not its slide
+            if stack is not None:
+                if stack in stacks:
+                    continue  # a later photo of a stack the book shows the first of
+                pictures = pictures[:1]
+            pictures = [(name, picture) for name, picture in pictures if name not in have]
+            if not pictures:
+                continue
+            if stack is not None:
+                stacks.add(stack)
+            caption = _own_caption(figure)
+            restored = lxml.html.Element("figure")
+            for name, picture in pictures:
+                have.add(name)
+                restored.append(picture)
+            if caption is not None:
+                piece = copy.deepcopy(caption)
+                piece.tail = None
+                for el in [el for el in piece.iterdescendants() if isinstance(el.tag, str) and _hidden(el)]:
+                    el.drop_tree()  # "Image caption, ", there for screen readers only
+                if (words := _text_key(piece)) and words not in said:
+                    restored.append(piece)
+                    said.add(words)
+            restored.tail = anchor.tail
+            anchor.tail = None
+            anchor.addnext(restored)
+            anchor = restored
+
+
+def _same_caption(
+    figure: lxml.html.HtmlElement, captioned: list[tuple[lxml.html.HtmlElement, str]]
+) -> lxml.html.HtmlElement | None:
+    """The article's figure with this page figure's caption, or with all of it but a credit line
+    (one caption's words holding the other's)."""
+    key = _figure_key(figure)
+    if len(key) < CAPTION_MATCH_LETTERS:
+        return None
+    return next((f for f, k in captioned if k in key or key in k), None)
+
+
+def _dropped_with(figure: lxml.html.HtmlElement, p: lxml.html.HtmlElement, marks: set[str]) -> bool:
+    """Whether a figure and a paragraph share a box holding none of the article's paragraphs."""
+    above = set(figure.iterancestors())
+    shared = next((a for a in p.iterancestors() if a in above), None)
+    return shared is not None and not any(_text_key(q) in marks for q in shared.iter("p"))
 
 
 def _once(root: lxml.html.HtmlElement) -> set[str]:
@@ -1740,9 +1919,14 @@ def _shown_pictures(
         return []  # the figure itself is hidden, or named as a card for another story or an icon
     found: dict[str, lxml.html.HtmlElement] = {}
     cards = 0  # pictures linking to other stories: not taken, but a figure of many is a widget
+    # A graphic drawn once per screen width (ai2html's artboards, one shown at a time): the widest.
+    boards = [el for el in figure.iter() if isinstance(el.tag, str) and ARTBOARD in _classes(el)]
+    widest = max(boards, key=_min_width, default=None)
     for img in figure.iter("img"):
         boxes = [img, *img.iterancestors()]
         boxes = boxes[: boxes.index(figure)]
+        if widest is not None and any(b in boards and b is not widest for b in boxes):
+            continue
         if any(el.tag in DROP or el.tag in ("figcaption", "figure", "aside") or _hidden(el) for el in boxes):
             continue
         address = _picture_address(img)
@@ -1788,7 +1972,22 @@ def _shown_pictures(
         found[name] = picture
         if len(found) > RESTORE_MAX_PICTURES:
             return []
+    if len(found) > 1 and any(_stack(el) for el in (*above, figure, *figure.iterdescendants())):
+        return list(found.items())[:1]  # a stack of photos paged through: its first
     return list(found.items())
+
+
+def _min_width(el: lxml.html.HtmlElement) -> int:
+    width = (el.get("data-min-width") or "").strip()
+    return int(width) if width.isascii() and width.isdigit() else 0
+
+
+def _stack(el: lxml.html.HtmlElement) -> bool:
+    """Whether a box shows its pictures one at a time (a carousel, a slideshow)."""
+    if not isinstance(el.tag, str):
+        return False
+    role = (el.get("aria-roledescription") or "").strip().lower()
+    return role in STACK_ROLES or bool(STACK_NAME.search(" ".join(t for t in _names(el).split() if ":" not in t)))
 
 
 def _story_link(url: str, href: str, address: str) -> bool:
@@ -2802,6 +3001,7 @@ def extract(
             _drop_dangling_pitch(page, page_html, url)
             try:
                 _restore_figure_pictures(page, page_html, url)
+                _restore_dropped_figures(page, page_html, url)
             except Exception:  # noqa: BLE001, S110 - hostile markup; the article goes without the pictures
                 pass
             candidates["page"] = sanitize(page, url, marked=True)
