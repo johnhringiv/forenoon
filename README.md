@@ -22,7 +22,7 @@ day's choices.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="web/site/images/newsstand-dark.webp">
-  <img src="web/site/images/newsstand-light.webp" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and rating buttons">
+  <img src="web/site/images/newsstand-light.webp" alt="The Newsstand: the day's issue as cards, with stories grouped, the model's reason for each pick, and 1 to 5 rating buttons">
 </picture>
 
 ## What it does
@@ -30,8 +30,8 @@ day's choices.
 - **Chooses by reading, not by headline.** Every candidate is ranked from its title and
   opening; the best 40 are then read in full before the day is chosen, so a teaser with a
   good title loses to an article with something in it.
-- **Learns from you.** Say "not for me", "not good", "worth it" or "more like this" from the
-  Kindle or the web pages, with an optional note in your own words, or that you skipped it. Describe your interests in your own words and change them whenever you like.
+- **Learns from you.** Rate 1 to 5 from the Kindle or the web pages, with an optional note in
+  your own words. Describe your interests in your own words and change them whenever you like.
 - **Stories, not links.** A short post that only points at an article is replaced by the
   article. Several reports of one event share one place in the day.
 - **Your subscriptions.** Publications you pay for come in through their feeds; the articles

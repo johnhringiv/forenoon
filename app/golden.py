@@ -78,7 +78,7 @@ Jun 22 11:41:18 workstation mount[87790]: SSHFS version 3.7.1 executing &lt;-oSe
 <figure><img src="{transparent}" alt="Diagram on a transparent background"/>
 <figcaption>Black diagram on a transparent background: should show on white.</figcaption>
 </figure>
-<p>Final paragraph. The rating links follow: four verdicts in one row.</p>
+<p>Final paragraph. The rating links follow: one row of five.</p>
 <script>alert("must not appear")</script>
 """
 

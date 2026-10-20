@@ -2,14 +2,13 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Forenoon</title>
-{#- Opened from a link in a book, in the Kindle's browser: one plain page, black on white. Each
-    pick-one group is listed whole, the reader's own choice filled in black. -#}
+{#- Opened from a link in a book, in the Kindle's browser: one plain page, black on white. The
+    row of 1 to 5 is listed whole, the reader's own choice filled in black. -#}
 <style>body{font-family:serif;font-size:1.6em;margin:2em 1em;text-align:center;color:#000;
 background:#fff}p.small{font-size:.7em}.group{margin-top:1.8em;font-size:.8em}
 .group h2{font-size:1em;font-weight:normal;margin:0 0 .3em}
-div.pick a,div.pick b{display:block;border:1px solid #000;padding:.3em .5em;margin:.4em auto;max-width:16em;
-color:#000;text-decoration:none;font-weight:normal}
-div.pick .on{background:#000;color:#fff;font-weight:bold}
+p.rate a,p.rate b{display:inline-block;border:1px solid #000;padding:0 .5em;margin:0 .1em;color:#000;
+text-decoration:none;font-weight:bold}p.rate .on{background:#000;color:#fff}
 p.report{margin-top:2.5em}
 form input{display:block;box-sizing:border-box;width:100%;max-width:16em;margin:.4em auto;padding:.3em;
 font:inherit;border:1px solid #000}form button{font:inherit;border:1px solid #000;background:#fff;
@@ -19,13 +18,10 @@ padding:.2em .8em}</style></head>
 <form class="group" method="post" action="/f/{{ note_to }}"><h2><label for="note">Anything the picker should know? (optional)</label></h2>
 <input type="text" id="note" name="note" maxlength="200" value="{{ note }}"><button>Save note</button></form>
 {%- endif %}
-{%- if !verdicts.is_empty() %}
-<div class="group"><h2>How was it?</h2><div class="pick">
-{%- for pick in verdicts %}{% if pick.on %}<b class="on">{{ pick.label }}</b>{% else %}<a href="/f/{{ pick.token }}">{{ pick.label }}</a>{% endif %}{% endfor -%}
-</div></div>
-<div class="group"><h2>How far did you get?</h2><div class="pick">
-{%- for pick in progress %}{% if pick.on %}<b class="on">{{ pick.label }}</b>{% else %}<a href="/f/{{ pick.token }}">{{ pick.label }}</a>{% endif %}{% endfor -%}
-</div></div>
+{%- if !stars.is_empty() %}
+<div class="group"><h2>Change it:</h2><p class="rate">
+{%- for star in stars %}{% if !loop.first %} {% endif %}{% if star.on %}<b class="on">{{ star.n }}</b>{% else %}<a href="/f/{{ star.token }}">{{ star.n }}</a>{% endif %}{% endfor -%}
+</p><p class="small">1: not for me. 5: more like this.</p></div>
 <p class="small report"><a href="/f/{{ report }}">This article came out broken or incomplete</a></p>
 {%- endif %}
 </body></html>

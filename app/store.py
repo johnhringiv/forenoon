@@ -15,7 +15,7 @@ from pathlib import Path
 from . import models
 from .config import Source, User
 from .llm import LlmError, Unreachable
-from .tokens import KEEP, NOTE, PROBLEM, clean_note, meaning
+from .tokens import NOTE, PROBLEM, clean_note, meaning
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -52,8 +52,7 @@ CREATE TABLE IF NOT EXISTS feedback_events (
 CREATE TABLE IF NOT EXISTS ratings (
     user_id TEXT NOT NULL,
     article_id TEXT NOT NULL,
-    verdict TEXT CHECK (verdict IN ('not-for-me', 'not-good', 'worth-it', 'more')),
-    progress TEXT CHECK (progress IN ('finished', 'partway', 'skipped')),
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
     updated_at TEXT NOT NULL,
     note TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)
@@ -150,14 +149,13 @@ class ArticleRow:
 
 @dataclass(frozen=True)
 class Rating:
-    verdict: str | None  # a key of tokens.VERDICTS; None when none was given
-    progress: str | None  # finished, partway or skipped; None when not known
+    rating: int  # 1 to 5
     note: str = ""  # the reader's own words about it, when they gave any
 
 
-# The reasons once chosen from a list, in the words a note keeps them in. "Not interested in the
-# topic" is left out: the verdict "not for me" says it.
+# The reasons once chosen from a list, in the words a note keeps them in.
 OLD_REASONS = {
+    "topic": "Not interested in the topic",
     "thin": "Too thin, nothing in it",
     "known": "Already knew this",
     "long": "Too long",
@@ -183,11 +181,11 @@ class Store:
         """Add columns introduced after a database was first created."""
         have = {row["name"] for row in self.db.execute("PRAGMA table_info(articles)")}
         rated = {row["name"] for row in self.db.execute("PRAGMA table_info(ratings)")}
-        if "rating" in rated:
+        if "finished" in rated:
             if "reason" not in rated:
                 with self.db:
                     self.db.execute("ALTER TABLE ratings ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
-            self._ratings_to_verdicts()
+            self._ratings_without_finished()
         if "detail" not in {row["name"] for row in self.db.execute("PRAGMA table_info(feedback_events)")}:
             with self.db:
                 self.db.execute("ALTER TABLE feedback_events ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
@@ -209,37 +207,23 @@ class Store:
                 with self.db:
                     self.db.execute(f"ALTER TABLE articles ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
-    def _ratings_to_verdicts(self) -> None:
-        """Bring 1-to-5 ratings forward to verdicts and progress (October 2026).
+    def _ratings_without_finished(self) -> None:
+        """Bring ratings from before notes forward (October 2026).
 
-        5, and 4 with a reason (only what was liked fits a 4), become "more"; 4 "worth it". A 3
-        with no reason has no verdict: 3 was used as a mild negative, so it is not made a
-        positive. 1 to 3 with a reason say which: the topic is "not for me", the rest
-        "not good"; a 1 or 2 with no reason is "not good", which says less about the subject.
-        A reason, chosen from a list then, becomes a note in its own words ("Too long").
-
-        Only the book's "didn't finish" row said that the reader stopped partway: the web pages
-        recorded a rating as not finished without asking, so a rating from there is "not
-        known". What is left with neither verdict nor progress is dropped. Every tap, with its
-        1 to 5, stays in feedback_events.
+        The finished flag goes, and with it a row that had nothing else ("finished" alone, from
+        the web pages). A reason, chosen from a list then, becomes a note in its own words ("Too
+        long"). Every tap, with its finished flag, stays in feedback_events.
         """
         start = SCHEMA.index("CREATE TABLE IF NOT EXISTS ratings (")
         create = SCHEMA[start : SCHEMA.index(");", start) + 2]
         self.db.execute("BEGIN")  # one transaction, the table changes with it
         try:
-            self.db.execute("ALTER TABLE ratings RENAME TO ratings_1to5")
+            self.db.execute("ALTER TABLE ratings RENAME TO ratings_finished")
             self.db.execute(create)
             self.db.execute(
-                "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, note)"
-                " SELECT * FROM (SELECT user_id, article_id,"
-                " CASE WHEN rating IS NULL THEN NULL"
-                "  WHEN rating = 5 OR (rating = 4 AND reason != '') THEN 'more'"
-                "  WHEN rating = 4 THEN 'worth-it' WHEN rating = 3 AND reason = '' THEN NULL"
-                "  WHEN reason = 'topic' THEN 'not-for-me' ELSE 'not-good' END AS verdict,"
-                " CASE WHEN finished THEN 'finished' WHEN EXISTS (SELECT 1 FROM feedback_events e"
-                "  WHERE e.user_id = o.user_id AND e.article_id = o.article_id AND e.source = 'kindle-footer'"
-                "  AND e.signal IN ('r1', 'r2', 'r3', 'r4', 'r5')) THEN 'partway' END AS progress,"
-                " updated_at, reason FROM ratings_1to5 o) WHERE verdict IS NOT NULL OR progress IS NOT NULL"
+                "INSERT INTO ratings (user_id, article_id, rating, updated_at, note)"
+                " SELECT user_id, article_id, rating, updated_at, reason FROM ratings_finished"
+                " WHERE rating BETWEEN 1 AND 5"
             )
             for row in self.db.execute("SELECT user_id, article_id, note FROM ratings WHERE note != ''").fetchall():
                 words = [OLD_REASONS[key] for key in row["note"].split(",") if key in OLD_REASONS]
@@ -247,7 +231,7 @@ class Store:
                     "UPDATE ratings SET note = ? WHERE user_id = ? AND article_id = ?",
                     ("; ".join(words), row["user_id"], row["article_id"]),
                 )
-            self.db.execute("DROP TABLE ratings_1to5")
+            self.db.execute("DROP TABLE ratings_finished")
             self.db.commit()
         except BaseException:
             self.db.rollback()
@@ -477,7 +461,7 @@ class Store:
         if not self._has_table("add_requests"):
             return []
         return self.db.execute(
-            "SELECT id, user_id, url, action, verdict FROM add_requests WHERE status = 'queued' ORDER BY id"
+            "SELECT id, user_id, url, action, rating FROM add_requests WHERE status = 'queued' ORDER BY id"
         ).fetchall()
 
     def finish_add(self, request_id: int, status: str, article_id: str = "", error: str = "") -> None:
@@ -716,11 +700,17 @@ class Store:
         )
 
     def has_had(self, user_id: str, article_id: str) -> bool:
-        """Delivered to this reader, or already rated or marked read by them: not to be sent."""
+        """Delivered to this reader, rated by them, or a link they kept as read: not to be sent."""
+        kept = (
+            " UNION ALL SELECT 1 FROM add_requests WHERE user_id = ?1 AND article_id = ?2"
+            " AND action = 'keep' AND status = 'done'"
+            if self._has_table("add_requests")
+            else ""
+        )
         return (
             self.db.execute(
                 "SELECT 1 FROM deliveries WHERE user_id = ?1 AND article_id = ?2"
-                " UNION ALL SELECT 1 FROM ratings WHERE user_id = ?1 AND article_id = ?2 LIMIT 1",
+                f" UNION ALL SELECT 1 FROM ratings WHERE user_id = ?1 AND article_id = ?2{kept} LIMIT 1",
                 (user_id, article_id),
             ).fetchone()
             is not None
@@ -785,59 +775,38 @@ class Store:
     def record_feedback(
         self, user_id: str, article_id: str, signal: str, source: str, when: str | None = None
     ) -> Rating | None:
-        """Log the tap and apply it: the latest tap decides the stored verdict and progress.
+        """Log the tap and apply it: the latest rating wins, and the note stays with it.
 
-        A note stays until it is changed or the rating cleared. A verdict on a skipped article
-        makes its progress not known. A problem report is logged, and noted in the extraction
-        log for whoever runs the install; it leaves the rating as it was.
+        A problem report is logged, and noted in the extraction log for whoever runs the
+        install; it leaves the rating as it was.
         """
+        if signal == NOTE:
+            raise ValueError("a note is recorded with its text: record_note")
         when = when or now_iso()
-        log = (
-            "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, article_id, signal, source, when),
-        )
+        rating = meaning(signal)
+        with self.db:
+            self.db.execute(
+                "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, article_id, signal, source, when),
+            )
+            if rating is not None:
+                self.db.execute(
+                    "INSERT INTO ratings (user_id, article_id, rating, updated_at) VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(user_id, article_id) DO UPDATE SET"
+                    " rating = excluded.rating, updated_at = excluded.updated_at",
+                    (user_id, article_id, rating, when),
+                )
         if signal == PROBLEM:
-            with self.db:
-                self.db.execute(*log)
             self.record_review(article_id, "bad", "reader: broken or incomplete", "reader")
-            return self.get_rating(user_id, article_id)
-        self.db.execute("BEGIN IMMEDIATE")  # read and write as one, against a web tap meanwhile
-        try:
-            self.db.execute(*log)
-            self._apply(user_id, article_id, signal, when)
-            self.db.commit()
-        except BaseException:
-            self.db.rollback()
-            raise
         return self.get_rating(user_id, article_id)
-
-    def _apply(self, user_id: str, article_id: str, signal: str, when: str) -> None:
-        """Apply one signal to the stored rating, inside the caller's transaction."""
-        verdict, progress = meaning(signal)
-        was = self.get_rating(user_id, article_id)
-        before = was or Rating(None, None)
-        if verdict is KEEP:
-            verdict = before.verdict
-        if progress is KEEP:
-            progress = None if verdict and before.progress == "skipped" else before.progress
-        if was is None and not (verdict or progress):
-            return
-        self.db.execute(
-            "INSERT INTO ratings (user_id, article_id, verdict, progress, updated_at, note)"
-            " VALUES (?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(user_id, article_id) DO UPDATE SET verdict = excluded.verdict,"
-            " progress = excluded.progress, updated_at = excluded.updated_at",
-            (user_id, article_id, verdict, progress, when, before.note),
-        )
 
     def record_note(
         self, user_id: str, article_id: str, text: str, source: str, when: str | None = None
     ) -> Rating | None:
         """Log the reader's note and keep it on the rating; an empty one removes it. A note on
-        an article with nothing else recorded is logged and kept nowhere else."""
+        an article with no rating is logged and kept nowhere else."""
         when, note = when or now_iso(), clean_note(text)
-        self.db.execute("BEGIN IMMEDIATE")
-        try:
+        with self.db:
             self.db.execute(
                 "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at, detail)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
@@ -847,18 +816,13 @@ class Store:
                 "UPDATE ratings SET note = ?, updated_at = ? WHERE user_id = ? AND article_id = ?",
                 (note, when, user_id, article_id),
             )
-            self.db.commit()
-        except BaseException:
-            self.db.rollback()
-            raise
         return self.get_rating(user_id, article_id)
 
     def get_rating(self, user_id: str, article_id: str) -> Rating | None:
         row = self.db.execute(
-            "SELECT verdict, progress, note FROM ratings WHERE user_id = ? AND article_id = ?",
-            (user_id, article_id),
+            "SELECT rating, note FROM ratings WHERE user_id = ? AND article_id = ?", (user_id, article_id)
         ).fetchone()
-        return Rating(row["verdict"], row["progress"], row["note"]) if row else None
+        return Rating(row["rating"], row["note"]) if row else None
 
     def feedback_rows(self) -> list[sqlite3.Row]:
         """Every tap, oldest first."""
@@ -871,7 +835,7 @@ class Store:
     def rating_rows(self, user_id: str | None = None, latest: int | None = None) -> list[sqlite3.Row]:
         """The current rating per user and article, oldest first; optionally one user's latest."""
         rows = self.db.execute(
-            "SELECT r.updated_at, r.user_id, r.verdict, r.progress, r.note, r.article_id,"
+            "SELECT r.updated_at, r.user_id, r.rating, r.note, r.article_id,"
             " COALESCE(a.title, '') AS title, COALESCE(a.source, '') AS article_source,"
             " COALESCE(a.word_count, 0) AS word_count, COALESCE(s.reason, '') AS picked_because"
             " FROM ratings r LEFT JOIN articles a ON a.id = r.article_id"

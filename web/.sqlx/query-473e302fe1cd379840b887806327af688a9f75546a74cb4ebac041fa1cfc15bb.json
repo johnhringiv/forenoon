@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.id AS \"id!\", a.url, a.source, a.title, a.author, a.word_count, a.description, a.image_url,\n           d.delivered_at AS \"delivered_at?\",\n           (SELECT m.requested_at FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id\n                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS \"added_at?: String\",\n           (SELECT m.action FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id\n                     AND m.status = 'done' ORDER BY m.id DESC LIMIT 1) AS \"added_for?: String\",\n           COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) AS \"at!: String\",\n           COALESCE(s.score, x.score) AS \"score?: f64\",\n           COALESCE(NULLIF(s.reason, ''), x.reason, '') AS \"said!: String\",\n           COALESCE(x.read, 0) AS \"read!: bool\", COALESCE(x.lasting, '') AS \"lasting!: String\",\n           s.policy AS \"policy?\", r.rating AS \"rating?: i64\", COALESCE(r.note, '') AS \"note!: String\",\n           COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t\n                     WHERE t.article_id = a.id), '') AS \"routes!: String\"\n           FROM articles a\n           LEFT JOIN deliveries d ON d.article_id = a.id AND d.user_id = ?1\n           LEFT JOIN assessments x ON x.article_id = a.id AND x.user_id = ?1\n           LEFT JOIN selections s ON s.article_id = a.id AND s.user_id = ?1\n           LEFT JOIN ratings r ON r.article_id = a.id AND r.user_id = ?1\n           WHERE (d.article_id IS NOT NULL OR x.article_id IS NOT NULL OR EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'))\n           AND CASE ?2 WHEN 'all' THEN 1 WHEN 'delivered' THEN d.article_id IS NOT NULL\n               WHEN 'near' THEN d.article_id IS NULL AND COALESCE(x.read, 0)\n               WHEN 'added' THEN EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done')\n               ELSE d.article_id IS NOT NULL OR COALESCE(x.read, 0) OR EXISTS (SELECT 1 FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done') END\n           AND (?3 = '' OR instr(lower(a.title), lower(?3)) > 0)\n           AND (?4 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.via = ?4))\n           AND (?5 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.route = ?5))\n           AND CASE ?6 WHEN 'rated' THEN r.rating IS NOT NULL WHEN 'unrated' THEN r.rating IS NULL\n               WHEN 'high' THEN COALESCE(r.rating >= 4, 0) WHEN 'low' THEN COALESCE(r.rating <= 2, 0) ELSE 1 END\n           AND CASE ?7 WHEN 'years' THEN COALESCE(x.lasting = 'years', 0)\n               WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END\n           AND (?8 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) >= ?8)\n           AND (?9 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) <= ?9)\n\n           ORDER BY CASE ?10 WHEN 'score' THEN -COALESCE(s.score, x.score, -1)\n               WHEN 'rating' THEN -COALESCE(r.rating, 0) WHEN 'length' THEN -a.word_count ELSE 0 END,\n               COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen) DESC, a.id\n           LIMIT ?11 OFFSET ?12",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "source",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "author",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "word_count",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "description",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_url",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "delivered_at?",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_at?: String",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "added_for?: String",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "at!: String",
+        "ordinal": 11,
+        "type_info": "Null"
+      },
+      {
+        "name": "score?: f64",
+        "ordinal": 12,
+        "type_info": "Null"
+      },
+      {
+        "name": "said!: String",
+        "ordinal": 13,
+        "type_info": "Null"
+      },
+      {
+        "name": "read!: bool",
+        "ordinal": 14,
+        "type_info": "Null"
+      },
+      {
+        "name": "lasting!: String",
+        "ordinal": 15,
+        "type_info": "Null"
+      },
+      {
+        "name": "policy?",
+        "ordinal": 16,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating?: i64",
+        "ordinal": 17,
+        "type_info": "Integer"
+      },
+      {
+        "name": "note!: String",
+        "ordinal": 18,
+        "type_info": "Null"
+      },
+      {
+        "name": "routes!: String",
+        "ordinal": 19,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "473e302fe1cd379840b887806327af688a9f75546a74cb4ebac041fa1cfc15bb"
+}

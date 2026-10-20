@@ -8,35 +8,23 @@ import hmac
 import time
 from dataclasses import dataclass
 
-# A rating is two facts: what the article was worth (the verdict) and how far the reader got
-# (the progress). Either can be given without the other.
-VERDICTS = {
-    "not-for-me": "Not for me",
-    "not-good": "Not good",
-    "worth-it": "Worth it",
-    "more": "More like this",
-}
-PROGRESS = {"finished": "finished", "partway": "stopped partway", "skipped": "skipped"}
+RATINGS = (1, 2, 3, 4, 5)
 # Signals, the same words in links, on the web pages and in the event log:
-#   <verdict>         sets the verdict; progress stays as it was (skipped becomes not known)
-#   end-<verdict>     the links at an article's end: the verdict, and finished
-#   finished, partway progress only
-#   skip              skipped: drops the verdict
-#   note              the reader's note, sent with its text from the tap page or the web pages
+#   r<n>     rated n: the links at an article's end, and the web pages
+#   f<n>     rated n too. Books sent before October 2026 had a second row of links, for an
+#            article that was finished; finished is no longer kept, the rating is. Answered
+#            while those books' links last, never put in a new book.
+#   note     the reader's note, sent with its text from the tap page or the web pages
+#   problem  "This article came out broken or incomplete": a report to whoever runs the
+#            install, about the delivery. It is not a rating.
 # The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
 # not in SIGNALS; anything replaying feedback_events must handle it.
-END_SIGNALS = tuple(f"end-{verdict}" for verdict in VERDICTS)
-SKIP = "skip"
-# The links in a book, one set per article: the verdicts at its end, "Stopped partway" for a
-# reader who did not get there, and "Skip this one" at its start.
-LINK_SIGNALS = (*END_SIGNALS, "partway", SKIP)
-# The reader's own words about an article, given with a rating: one short line, optional.
+LINK_SIGNALS = tuple(f"r{n}" for n in RATINGS)
+OLDER_LINKS = tuple(f"f{n}" for n in RATINGS)
 NOTE = "note"
 MAX_NOTE = 200
-# "This article came out broken or incomplete": a report to whoever runs the install, about the
-# delivery. It is not a rating.
 PROBLEM = "problem"
-SIGNALS = (*VERDICTS, *END_SIGNALS, "finished", "partway", SKIP, NOTE, PROBLEM)
+SIGNALS = (*LINK_SIGNALS, *OLDER_LINKS, NOTE, PROBLEM)
 
 
 def clean_note(text: str) -> str:
@@ -44,29 +32,16 @@ def clean_note(text: str) -> str:
     return " ".join(text.split())[:MAX_NOTE].strip()
 
 
-_VERSION = "1"
-
-
-# Leave as it was: what `meaning` returns for a fact a signal does not set.
-KEEP = object()
-
-
-def meaning(signal: str) -> tuple[object, object]:
-    """(verdict, progress) a signal sets: a value, None to clear it, or KEEP.
-
-    A verdict on a skipped article makes its progress not known; the caller sees to that, as it
-    depends on what is stored."""
-    if signal in VERDICTS:
-        return signal, KEEP
-    if signal in END_SIGNALS:
-        return signal.removeprefix("end-"), "finished"
-    if signal in ("finished", "partway"):
-        return KEEP, signal
-    if signal == SKIP:
-        return None, "skipped"
+def meaning(signal: str) -> int | None:
+    """The rating a signal gives; None for one that changes no rating (a note, a report)."""
+    if signal in LINK_SIGNALS or signal in OLDER_LINKS:
+        return int(signal[1])
     if signal in (NOTE, PROBLEM):
-        return KEEP, KEEP  # a note or a problem report changes neither
+        return None
     raise ValueError(f"unknown signal: {signal}")
+
+
+_VERSION = "1"
 
 
 class TokenError(ValueError):

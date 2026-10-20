@@ -1,20 +1,22 @@
-{#- The verdicts as one joined pick-one control; under it, how far the reader got as a quiet line of
-    text choices, and Clear. Once there is a verdict, a box for a short note. On a demo host the same
+{#- The rating as one joined row of 1 to 5, the one given filled in, and Clear once there is one.
+    Once there is a rating, a note: "Add a note" on the same row opens its box, which grows when
+    written in; a saved note is shown as a quotation on a row of its own, its box behind Edit. The
+    box is a form of its own, so that saving the note presses no rating. On a demo host the same
     controls do nothing. -#}
+<div class="rating">
 {% if demo %}<div class="rate" title="In your own install these record your rating, and the ratings shape the next day's choices">
 {% else %}<form class="rate" method="post" action="/rate">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
-{% endif %}<div class="seg" role="group" aria-label="How was it?">
-{%- for choice in card.verdicts %}<button {% if demo %}type="button" class="inert"{% else %}name="verdict" value="{{ choice.key }}"{% endif %} aria-pressed="{{ choice.on }}">{{ choice.short }}</button>{% endfor -%}
+{% endif %}<div class="seg" role="group" aria-label="Rate it: 1 is not for me, 5 is more like this">
+{%- for star in card.stars %}<button {% if demo %}type="button" class="inert"{% else %}name="rating" value="{{ star.n }}"{% endif %} aria-pressed="{{ star.on }}">{{ star.n }}</button>{% endfor -%}
 </div>
-<div class="progress" role="group" aria-label="How far did you get?">
-{%- for choice in card.progress %}<button {% if demo %}type="button" class="inert"{% else %}name="progress" value="{{ choice.key }}"{% endif %} aria-pressed="{{ choice.on }}" title="{{ choice.label }}">{{ choice.short }}</button>{% endfor -%}
 {% if !demo && !card.unrated %}<button class="clear" name="clear" value="1" title="Forget this rating">Clear</button>{% endif %}
-</div>
 {% if demo %}</div>{% else %}</form>{% endif %}
-{#- Its own form, so that Enter in the box saves the note and presses no verdict. -#}
-{% if card.noting %}{% if demo %}<div class="note"><input type="text" disabled placeholder="Anything the picker should know? (optional)" value="{{ card.note }}" aria-label="Note"></div>
-{% else %}<form class="note" method="post" action="/rate">
+{% if !card.unrated %}{% if demo %}{% if !card.note.is_empty() %}<p class="note has"><q class="said">{{ card.note }}</q></p>
+{% endif %}{% else %}<details class="note{% if !card.note.is_empty() %} has{% endif %}"><summary>{% if !card.note.is_empty() %}<q class="said">{{ card.note }}</q> {% endif %}<span class="edit"></span></summary>
+<form class="note" method="post" action="/rate">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="article" value="{{ card.id }}"><input type="hidden" name="back" value="{{ back }}">
-<input type="text" name="note" maxlength="200" placeholder="Anything the picker should know? (optional)" value="{{ card.note }}" aria-label="Note"><button>Save</button>
-</form>{% endif %}{% endif %}
+<textarea name="note" rows="1" maxlength="200" placeholder="Anything the picker should know? (optional)" aria-label="Note">{{ card.note }}</textarea><button>Save</button>
+</form>
+</details>
+{% endif %}{% endif %}</div>

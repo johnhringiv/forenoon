@@ -13,10 +13,10 @@
 <div class="fields">
 <label class="wide">Add a link <input name="link" type="url" maxlength="2000" placeholder="https://example.com/an-article" required></label>
 <label>Then <select name="then"><option value="next">Put it in my next issue</option><option value="now">Send it to my Kindle now</option><option value="keep">Only keep it: I have read it</option></select></label>
-<label>Your verdict, if read <select name="verdict"><option value="">None</option><option value="not-for-me">Not for me</option><option value="not-good">Not good</option><option value="worth-it">Worth it</option><option value="more">More like this</option></select></label>
+<label>Your rating, if read <select name="rating"><option value="">None</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
 <button class="primary">Add</button>
 </div>
-<p class="hint">The page is fetched and kept like any article. In your next issue it goes first and takes one of the day's places. Kept as read, it is recorded as finished and never sent, and its verdict counts when choosing what to send you.</p>
+<p class="hint">The page is fetched and kept like any article. In your next issue it goes first and takes one of the day's places. Kept as read, it is never sent, and its rating counts when choosing what to send you.</p>
 {% for add in pending %}<p class="hint{% if add.failed %} failing{% endif %}">{{ add.url }}: {{ add.note }}</p>{% endfor %}
 {% if failed %}<p><button class="link" formaction="/archive/added/clear" formnovalidate>Clear the links that could not be added</button></p>{% endif %}
 </form>

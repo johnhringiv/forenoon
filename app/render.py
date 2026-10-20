@@ -20,7 +20,7 @@ from lxml import etree
 from .cover import cover_image
 from .emoji import emoji_font, wrap_emoji
 from .images import Asset
-from .tokens import SKIP, VERDICTS
+from .tokens import LINK_SIGNALS
 
 CSS = """\
 body { font-family: serif; line-height: 1.4; margin: 0 2%; }
@@ -49,9 +49,9 @@ td, th { border: 1px solid #000; padding: 0.2em 0.4em; vertical-align: top; text
 .card-site { font-size: 0.8em; }
 .feedback { margin-top: 2.5em; text-align: center; }
 .feedback p { margin: 0.6em 0; text-indent: 0; }
-.feedback .rate { margin: 0.6em 0 1.8em; font-size: 1.1em; line-height: 2.6; }
-.feedback .rate a { display: inline-block; border: 1px solid #000; padding: 0.1em 0.6em;
-  margin: 0 0.2em; font-weight: bold; text-decoration: none; white-space: nowrap; }
+.feedback .rate { margin: 0.6em 0 1.8em; font-size: 1.5em; line-height: 2; }
+.feedback .rate a { display: inline-block; border: 1px solid #000; padding: 0 0.55em;
+  margin: 0 0.15em; font-weight: bold; text-decoration: none; }
 .feedback .hint { font-size: 0.8em; }
 """
 
@@ -110,9 +110,6 @@ CONTAINER = """\
   </rootfiles>
 </container>
 """
-
-# The links at an article's end: a verdict, and finished, in one tap (section 7 of the PRD).
-VERDICT_LINKS = tuple((f"end-{key}", label) for key, label in VERDICTS.items())
 
 
 @dataclass
@@ -256,18 +253,16 @@ def _body_xhtml(body: lxml.html.HtmlElement) -> str:
 
 
 def _footer(feedback_links: dict[str, str]) -> str:
-    links = " ".join(
-        f"<a href={quoteattr(feedback_links[signal])}>{escape(label)}</a>"
-        for signal, label in VERDICT_LINKS
+    """The rating links at an article's end: one row of 1 to 5 (section 7 of the PRD)."""
+    links = "\u00a0".join(
+        f"<a href={quoteattr(feedback_links[signal])}>{signal[1]}</a>"
+        for signal in LINK_SIGNALS
         if signal in feedback_links
     )
     if not links:
         return ""
-    partway = ""
-    if "partway" in feedback_links:
-        stop = f"<a href={quoteattr(feedback_links['partway'])}>Stopped partway</a>"
-        partway = f'<p class="hint">Did not finish it? {stop}</p>'
-    return f'<hr class="rule"/><div class="feedback"><p>How was it?</p><p class="rate">{links}</p>{partway}</div>'
+    hint = '<p class="hint">1: not for me. 5: more like this.</p>'
+    return f'<hr class="rule"/><div class="feedback"><p>How was it?</p><p class="rate">{links}</p>{hint}</div>'
 
 
 def _content(article: Article, feedback_links: dict[str, str]) -> str:
@@ -282,8 +277,6 @@ def _content(article: Article, feedback_links: dict[str, str]) -> str:
     if article.added:
         why = '<p class="meta">Added by you</p>\n' + why
     talk = f" · <a href={quoteattr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
-    if SKIP in feedback_links:
-        talk += f" · <a href={quoteattr(feedback_links[SKIP])}>Skip this one</a>"
     if article.continues:
         why += f'<p class="meta">More on: {escape(article.continues)}</p>\n'
     if article.story:

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT d.delivered_at, d.story, a.id AS \"id!\", a.url, a.source, a.title, a.author, a.word_count,\n           a.image_url, a.description, s.policy AS \"policy?\", s.score AS \"score?: f64\",\n           s.reason AS \"picked?\", s.rank AS \"rank?: i64\", s.explore AS \"explore?: bool\",\n           r.verdict AS \"verdict?\", r.progress AS \"progress?\",\n           COALESCE(r.note, '') AS \"note!: String\", d.link_only AS \"link_only: bool\"\n           FROM deliveries d JOIN articles a ON a.id = d.article_id\n           LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id\n           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3\n           AND (?4 = '' OR EXISTS (\n               -- A story is shown whole when any of its articles matches, never in pieces.\n               SELECT 1 FROM deliveries d2\n               LEFT JOIN ratings r2 ON r2.user_id = d2.user_id AND r2.article_id = d2.article_id\n               WHERE d2.user_id = d.user_id AND d2.delivered_at = d.delivered_at\n               AND (d2.article_id = d.article_id OR (d.story != '' AND d2.story = d.story))\n               AND (?4 = 'rated') = (r2.updated_at IS NOT NULL)))\n           ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title",
+  "query": "SELECT d.delivered_at, d.story, a.id AS \"id!\", a.url, a.source, a.title, a.author, a.word_count,\n           a.image_url, a.description, s.policy AS \"policy?\", s.score AS \"score?: f64\",\n           s.reason AS \"picked?\", s.rank AS \"rank?: i64\", s.explore AS \"explore?: bool\",\n           r.rating AS \"rating?: i64\", COALESCE(r.note, '') AS \"note!: String\", d.link_only AS \"link_only: bool\"\n           FROM deliveries d JOIN articles a ON a.id = d.article_id\n           LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id\n           LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id\n           WHERE d.user_id = ?1 AND d.delivered_at BETWEEN ?2 AND ?3\n           AND (?4 = '' OR EXISTS (\n               -- A story is shown whole when any of its articles matches, never in pieces.\n               SELECT 1 FROM deliveries d2\n               LEFT JOIN ratings r2 ON r2.user_id = d2.user_id AND r2.article_id = d2.article_id\n               WHERE d2.user_id = d.user_id AND d2.delivered_at = d.delivered_at\n               AND (d2.article_id = d.article_id OR (d.story != '' AND d2.story = d.story))\n               AND (?4 = 'rated') = (r2.rating IS NOT NULL)))\n           ORDER BY d.delivered_at DESC, s.policy = 'pinned' DESC, s.rank IS NULL, s.rank, a.title",
   "describe": {
     "columns": [
       {
@@ -79,23 +79,18 @@
         "type_info": "Integer"
       },
       {
-        "name": "verdict?",
+        "name": "rating?: i64",
         "ordinal": 15,
-        "type_info": "Text"
-      },
-      {
-        "name": "progress?",
-        "ordinal": 16,
-        "type_info": "Text"
+        "type_info": "Integer"
       },
       {
         "name": "note!: String",
-        "ordinal": 17,
+        "ordinal": 16,
         "type_info": "Null"
       },
       {
         "name": "link_only: bool",
-        "ordinal": 18,
+        "ordinal": 17,
         "type_info": "Integer"
       }
     ],
@@ -118,11 +113,10 @@
       false,
       true,
       false,
-      true,
-      true,
+      false,
       null,
       false
     ]
   },
-  "hash": "c75fa949b062bda1d42f9d85b5c192a3ffb2c4d620afe9673081f65b4d40592f"
+  "hash": "14d623fd23d1b7d1547c572d4c1eabfe106ef0be240d13f59dcdb5738d2b947e"
 }

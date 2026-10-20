@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'",
+  "query": "SELECT COUNT(*) FROM pragma_table_info('ratings') WHERE name = 'note'",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "48f96803a572f1b92238fa461ec2aba644317de261e4df2c8b4f8d7ccc455c25"
+  "hash": "f1cb917b07790ed290977c42a449d72d988ee0b9149acb321f6351fdbfc96e10"
 }

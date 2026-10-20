@@ -3,7 +3,7 @@
 The web app only queues the link. Here the page is fetched like any article's (public
 addresses only, and with the reader's subscriber session when one is saved for that site),
 stored with the route `manual`, and then dealt with as the reader asked: kept as read with
-their verdict, sent now as a book of its own, or left to lead their next issue.
+their rating, sent now as a book of its own, or left to lead their next issue.
 
 The link and the page are untrusted, as every fetched page is.
 """
@@ -30,7 +30,7 @@ TURNED_AWAY = re.compile(r"\bHTTP 40[13]\b")  # how a refused page fetch is repo
 
 
 def add_one(
-    cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, verdict: str | None
+    cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, rating: int | None
 ) -> str:
     """Store the article behind a link for a reader. Returns its id; raises ValueError when it cannot."""
     url = without_tracking(url.strip())
@@ -57,9 +57,9 @@ def add_one(
         store.set_preview(item_id, result.image_url, result.description)
         thumbs.save(cfg.thumbs_dir, item_id, _pictures(result), fetcher)
     store.add_route(item_id, "manual", "")
-    if action == "keep":
-        # Read already: on record as finished, with the verdict when one was given.
-        store.record_feedback(user_id, item_id, f"end-{verdict}" if verdict else "finished", "web")
+    if action == "keep" and rating:
+        # Read already, and rated. Rated or not, the request on record keeps it from being sent.
+        store.record_feedback(user_id, item_id, f"r{rating}", "web")
     return item_id
 
 
@@ -72,7 +72,7 @@ def add_requested(cfg: Config, store: Store, fetcher: Fetcher) -> int:
             if request["user_id"] not in readers:
                 raise ValueError("no such reader")
             item_id = add_one(
-                cfg, store, fetcher, request["user_id"], request["url"], request["action"], request["verdict"]
+                cfg, store, fetcher, request["user_id"], request["url"], request["action"], request["rating"]
             )
         except Exception as exc:  # noqa: BLE001 - one bad link must not block the rest
             log.warning("add request %s failed: %s", request["id"], exc)

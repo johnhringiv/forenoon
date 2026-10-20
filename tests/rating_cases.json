@@ -1,22 +1,15 @@
 {
-  "_": "Taps in order and the rating they leave: [verdict, progress, note], or null for no rating. A tap \"note:<text>\" is a note sent with that text. Both programs apply the same rules; tests/test_core.py and web/src/db.rs check these.",
+  "_": "Taps in order and the rating they leave: [rating, note], or null for no rating. A tap \"note:<text>\" is a note sent with that text. Both programs apply the same rules; tests/test_core.py and web/tests/web.rs check these.",
   "cases": [
-    {"taps": ["end-not-good"], "then": ["not-good", "finished", ""]},
-    {"taps": ["end-not-good", "note:Padded to twice its length"], "then": ["not-good", "finished", "Padded to twice its length"]},
-    {"taps": ["end-not-good", "note:  one   line,\n trimmed  "], "then": ["not-good", "finished", "one line, trimmed"]},
-    {"taps": ["end-not-good", "note:Too thin", "note:"], "then": ["not-good", "finished", ""]},
-    {"taps": ["end-not-good", "note:Too thin", "more"], "then": ["more", "finished", "Too thin"]},
-    {"taps": ["more", "note:The diagrams made it"], "then": ["more", null, "The diagrams made it"]},
-    {"taps": ["end-more", "note:Loved it", "partway"], "then": ["more", "partway", "Loved it"]},
-    {"taps": ["end-worth-it", "skip"], "then": [null, "skipped", ""]},
-    {"taps": ["end-worth-it", "note:Kept", "skip"], "then": [null, "skipped", "Kept"]},
-    {"taps": ["skip", "not-for-me"], "then": ["not-for-me", null, ""]},
-    {"taps": ["skip", "finished"], "then": [null, "finished", ""]},
+    {"taps": ["r2"], "then": [2, ""]},
+    {"taps": ["r2", "note:Padded to twice its length"], "then": [2, "Padded to twice its length"]},
+    {"taps": ["r2", "note:  one   line,\n trimmed  "], "then": [2, "one line, trimmed"]},
+    {"taps": ["r2", "note:Too thin", "note:"], "then": [2, ""]},
+    {"taps": ["r2", "note:Too thin", "r5"], "then": [5, "Too thin"]},
+    {"taps": ["f4"], "then": [4, ""]},
+    {"taps": ["r4", "f1"], "then": [1, ""]},
     {"taps": ["note:Nothing to keep it on"], "then": null},
-    {"taps": ["note:Nothing to keep it on", "worth-it"], "then": ["worth-it", null, ""]},
-    {"taps": ["partway", "worth-it"], "then": ["worth-it", "partway", ""]},
-    {"taps": ["skip", "partway"], "then": [null, "partway", ""]},
-    {"taps": ["end-more", "skip", "finished"], "then": [null, "finished", ""]},
-    {"taps": ["partway", "not-good", "note:Lost me halfway"], "then": ["not-good", "partway", "Lost me halfway"]}
+    {"taps": ["note:Nothing to keep it on", "r4"], "then": [4, ""]},
+    {"taps": ["r3", "problem"], "then": [3, ""]}
   ]
 }

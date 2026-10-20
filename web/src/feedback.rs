@@ -20,7 +20,7 @@ use sha2::Sha256;
 use crate::{
     db::{self, Rating},
     pages::{AppState, Client, Page, html},
-    ratings::{self, Signal},
+    ratings::Signal,
 };
 
 const VERSION: &str = "1";
@@ -102,24 +102,6 @@ pub fn verify(secret: &[u8], token: &str, now: i64) -> Result<Claim, TokenError>
     Ok(Claim { user: user.to_owned(), article: article.to_owned(), tap, expires })
 }
 
-/// A link this install signed, for a rating from 1 to 5 (`f4`, `r2`) or "finished" (`done`):
-/// books sent before verdicts carry them. Only to say so; nothing is recorded.
-fn from_before_verdicts(secret: &[u8], token: &str) -> bool {
-    let Some((payload, signature)) = token.split_once('.') else { return false };
-    let (Ok(payload), Ok(signature)) = (URL_SAFE_NO_PAD.decode(payload), URL_SAFE_NO_PAD.decode(signature)) else {
-        return false;
-    };
-    if signature.len() != SIGNATURE_BYTES || mac(secret, &payload).verify_truncated_left(&signature).is_err() {
-        return false;
-    }
-    let payload = String::from_utf8_lossy(&payload);
-    let signal = payload.split('|').nth(3).unwrap_or_default();
-    let old = |kind: char| {
-        signal.len() == 2 && signal.starts_with(kind) && ('1'..='5').contains(&signal.chars().nth(1).unwrap())
-    };
-    old('f') || old('r') || signal == "done"
-}
-
 #[derive(Template)]
 #[template(path = "feedback.html")]
 struct FeedbackPage {
@@ -129,17 +111,16 @@ struct FeedbackPage {
     /// or nothing yet for a note to go with).
     note_to: String,
     note: String,
-    /// Every verdict and every progress, the reader's own marked; empty on an error page.
-    verdicts: Vec<Pick>,
-    progress: Vec<Pick>,
+    /// 1 to 5, the reader's own marked; empty on an error page.
+    stars: Vec<Star>,
     report: String,
 }
 
-/// One link on the tap page. The choice made is shown without a link: tapping it again would
+/// One link on the tap page. The rating given is shown without a link: tapping it again would
 /// change nothing.
-struct Pick {
+struct Star {
     token: String,
-    label: &'static str,
+    n: i64,
     on: bool,
 }
 
@@ -149,23 +130,17 @@ fn plain(status: StatusCode, message: &str, detail: &str) -> Page {
         detail: detail.to_owned(),
         note_to: String::new(),
         note: String::new(),
-        verdicts: Vec::new(),
-        progress: Vec::new(),
+        stars: Vec::new(),
         report: String::new(),
     };
     html(status, page)
 }
 
-/// "Worth it, finished." "Skipped."
-fn stated(rating: &Rating) -> String {
-    let (verdict, progress) = (rating.verdict.as_deref(), rating.progress.as_deref());
-    match (verdict.and_then(ratings::verdict_label), progress) {
-        (Some(verdict), Some("skipped")) | (Some(verdict), None) => format!("{verdict}."),
-        (Some(verdict), Some(progress)) => {
-            format!("{verdict}, {}.", ratings::progress_label(progress).unwrap_or_default().to_lowercase())
-        }
-        (None, Some(progress)) => format!("{}.", ratings::progress_label(progress).unwrap_or_default()),
-        (None, None) => "Nothing recorded.".to_owned(),
+/// "Rated 4 of 5."
+fn stated(rating: Option<&Rating>) -> String {
+    match rating {
+        Some(rating) => format!("Rated {} of 5.", rating.rating),
+        None => "Not rated.".to_owned(),
     }
 }
 
@@ -198,13 +173,6 @@ async fn answer(state: AppState, Client(client): Client, token: String, note: Op
     let claim = match verify(secret, &token, chrono::Utc::now().timestamp()) {
         Ok(claim) => claim,
         Err(TokenError::Expired) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", "This link has expired."),
-        Err(TokenError::Invalid) if from_before_verdicts(secret, &token) => {
-            return plain(
-                StatusCode::BAD_REQUEST,
-                "This book is from before ratings changed.",
-                "Its links no longer work: rate it on the web pages instead.",
-            );
-        }
         Err(TokenError::Invalid) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", ""),
     };
     let pool = &state.pool;
@@ -213,10 +181,8 @@ async fn answer(state: AppState, Client(client): Client, token: String, note: Op
     }
     let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
     let rating = match (&claim.tap, note) {
-        (Tap::Note, Some(note)) => {
-            db::record_note(pool, &claim.user, &claim.article, &note, SOURCE).await?.unwrap_or_default()
-        }
-        (Tap::Note, None) => db::get_rating(pool, &claim.user, &claim.article).await?.unwrap_or_default(),
+        (Tap::Note, Some(note)) => db::record_note(pool, &claim.user, &claim.article, &note, SOURCE).await?,
+        (Tap::Note, None) => db::get_rating(pool, &claim.user, &claim.article).await?,
         (_, Some(_)) => return plain(StatusCode::BAD_REQUEST, "Link not valid.", ""),
         (Tap::Problem, None) => {
             // Once per article, as on the web pages: the Kindle's browser may ask again on
@@ -226,33 +192,27 @@ async fn answer(state: AppState, Client(client): Client, token: String, note: Op
             }
             return plain(StatusCode::OK, "Reported. Thank you.", &title);
         }
-        (Tap::Rate(signal), None) => db::record_feedback(pool, &claim.user, &claim.article, signal, SOURCE).await?,
+        (Tap::Rate(signal), None) => {
+            Some(db::record_feedback(pool, &claim.user, &claim.article, signal, SOURCE).await?)
+        }
     };
-    let (verdict, progress) = (rating.verdict.as_deref(), rating.progress.as_deref());
     // Same reader, article and expiry as the link that was tapped.
     let sign = |signal: &str| make(secret, &claim.user, &claim.article, signal, claim.expires);
-    // Both pick-one groups in full, so the reader sees what they chose among what they could
-    // have. A verdict from here keeps progress as it is.
-    let verdicts = ratings::VERDICTS
-        .iter()
-        .map(|(key, label)| Pick { token: sign(key), label, on: verdict == Some(*key) })
+    // The whole row, so the reader sees what they chose among what they could have.
+    let stars = (1..=5)
+        .map(|n| Star {
+            token: sign(&Signal::Rated(n).to_string()),
+            n,
+            on: rating.as_ref().is_some_and(|r| r.rating == n),
+        })
         .collect();
-    let progress_picks = [
-        ("finished", "finished", "Finished"),
-        ("partway", "partway", "Stopped partway"),
-        ("skipped", "skip", "Skipped: did not read it"),
-    ]
-    .into_iter()
-    .map(|(key, signal, label)| Pick { token: sign(signal), label, on: progress == Some(key) })
-    .collect();
     let page = FeedbackPage {
-        message: stated(&rating),
+        message: stated(rating.as_ref()),
         detail: title,
         // A few words say why. Always offered, never required: the rating already counts.
-        note_to: if verdict.is_some() || !rating.note.is_empty() { sign(NOTE) } else { String::new() },
-        note: rating.note.clone(),
-        verdicts,
-        progress: progress_picks,
+        note_to: if rating.is_some() { sign(NOTE) } else { String::new() },
+        note: rating.map(|r| r.note).unwrap_or_default(),
+        stars,
         // A delivery fault goes to whoever runs the install; it is not part of the rating.
         report: sign(PROBLEM),
     };
@@ -268,42 +228,41 @@ mod tests {
     #[test]
     fn verifies_tokens_made_by_the_pipeline() {
         // Made by `app/tokens.py`; `tests/test_core.py` checks it makes the same strings.
-        let claim = verify(SECRET, "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ", 0).unwrap();
-        let rated = Tap::Rate(Signal::End("worth-it"));
+        let claim = verify(SECRET, "MXxqb2hufGExfHI0fDIwMDAwMDAwMDA.XnSG8SQXXgGPXPUYca5yyg", 0).unwrap();
+        let rated = Tap::Rate(Signal::Rated(4));
         assert_eq!(claim, Claim { user: "john".into(), article: "a1".into(), tap: rated, expires: 2_000_000_000 });
         let note = verify(SECRET, "MXxqb2hufGExfG5vdGV8MjAwMDAwMDAwMA.se5olUsJ9d_opk-0gCeA_g", 0).unwrap();
         assert_eq!(note.tap, Tap::Note);
         let problem = verify(SECRET, "MXxqb2hufGExfHByb2JsZW18MjAwMDAwMDAwMA.21UPHi4dtcYgvhV0QRpvjA", 0).unwrap();
         assert_eq!(problem.tap, Tap::Problem);
         assert_eq!(
-            make(SECRET, "john", "a1", "end-worth-it", 2_000_000_000),
-            "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ"
+            make(SECRET, "john", "a1", "r4", 2_000_000_000),
+            "MXxqb2hufGExfHI0fDIwMDAwMDAwMDA.XnSG8SQXXgGPXPUYca5yyg"
         );
+        // A book sent before October 2026, when the links came in two rows.
+        let older = verify(SECRET, "MXxqb2hufGExfGY0fDIwMDAwMDAwMDA.1VbsTqAK0ZRimXeA3yOaUg", 0).unwrap();
+        assert_eq!(older.tap, Tap::Rate(Signal::Finished(4)));
     }
 
     #[test]
     fn refuses_what_it_did_not_sign_and_what_has_expired() {
-        let token = make(SECRET, "john", "a1", "partway", 1000);
+        let token = make(SECRET, "john", "a1", "r2", 1000);
         assert!(verify(SECRET, &token, 1000).is_ok());
         assert_eq!(verify(SECRET, &token, 1001), Err(TokenError::Expired));
         assert_eq!(verify(b"another secret, also long enough", &token, 0), Err(TokenError::Invalid));
         let (payload, signature) = token.split_once('.').unwrap();
         // A signature cut short is refused, even though it is a prefix of the right one.
         assert_eq!(verify(SECRET, &format!("{payload}.{}", &signature[..8]), 0), Err(TokenError::Invalid));
-        let forged = URL_SAFE_NO_PAD.encode("1|john|a1|end-more|1000");
+        let forged = URL_SAFE_NO_PAD.encode("1|john|a1|r5|1000");
         assert_eq!(verify(SECRET, &format!("{forged}.{signature}"), 0), Err(TokenError::Invalid));
-        for signal in ["up", "done", "f4", "r2", "end-great", "why-broken", "why-topic", ""] {
+        for signal in ["up", "done", "f6", "r0", "x3", "end-more", "worth-it", "skip", "why-thin", "clear", ""] {
             assert_eq!(
                 verify(SECRET, &make(SECRET, "john", "a1", signal, 1000), 0),
                 Err(TokenError::Invalid),
                 "{signal}"
             );
         }
-        assert_eq!(verify(SECRET, &make(SECRET, "john|x", "a1", "skip", 1000), 0), Err(TokenError::Invalid));
+        assert_eq!(verify(SECRET, &make(SECRET, "john|x", "a1", "r1", 1000), 0), Err(TokenError::Invalid));
         assert_eq!(verify(SECRET, "garbage", 0), Err(TokenError::Invalid));
-        // Signed before verdicts: recognised only to say so.
-        assert!(from_before_verdicts(SECRET, &make(SECRET, "john", "a1", "f4", 1000)));
-        assert!(!from_before_verdicts(SECRET, &make(SECRET, "john", "a1", "end-more", 1000)));
-        assert!(!from_before_verdicts(b"another secret, also long enough", &make(SECRET, "john", "a1", "r2", 1000)));
     }
 }

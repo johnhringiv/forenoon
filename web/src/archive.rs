@@ -24,10 +24,9 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, RateChoice, Viewer, allowed, back_to, html, length,
-        local, progress_choices, reader, refused, send_outcome, shorten, verdict_choices, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, Star, Viewer, allowed, back_to, html, length, local,
+        reader, refused, send_outcome, shorten, stars, web_url,
     },
-    ratings,
 };
 
 const PER_PAGE: i64 = 50;
@@ -48,15 +47,8 @@ const ROUTE: [(&str, &str); 6] = [
     ("linked", "Linked from another article"),
     ("manual", "Added by hand"),
 ];
-const RATING: [(&str, &str); 7] = [
-    ("", "Any"),
-    ("rated", "Rated"),
-    ("unrated", "Not rated"),
-    ("liked", "Worth it or more"),
-    ("disliked", "Not for me or not good"),
-    ("finished", "Finished"),
-    ("skipped", "Skipped"),
-];
+const RATING: [(&str, &str); 5] =
+    [("", "Any"), ("rated", "Rated"), ("unrated", "Not rated"), ("high", "4 or 5"), ("low", "1 or 2")];
 const LASTING: [(&str, &str); 3] = [("", "Any"), ("months", "Months or longer"), ("years", "Years")];
 const SORT: [(&str, &str); 4] =
     [("", "Newest"), ("score", "Model's score"), ("rating", "Your rating"), ("length", "Longest")];
@@ -107,11 +99,9 @@ struct Row {
     said: Option<String>,
     facts: Vec<String>,
     unrated: bool,
-    verdicts: Vec<RateChoice>,
-    progress: Vec<RateChoice>,
-    /// The reader's note, and whether the box for one is shown.
+    stars: Vec<Star>,
+    /// The reader's note; the box for one is shown once there is a rating.
     note: String,
-    noting: bool,
     sendable: bool,
     sent: Option<String>,
     /// How the last "Fetch again" went, within the day; and whether it is still waiting.
@@ -218,8 +208,7 @@ fn row(found: Shelved, zone: Tz) -> Row {
     let kicker =
         [found.source.as_str(), author].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
     let day = |stamp: &str| local(stamp, zone).map_or(stamp.to_owned(), |at| at.format("%-d %B %Y").to_string());
-    let (verdict, progress) = (found.verdict.as_deref(), found.progress.as_deref());
-    let unrated = verdict.is_none() && progress.is_none();
+    let unrated = found.rating.is_none();
     let mut facts = Vec::new();
     let added = found.added_at.as_deref().zip(found.added_for.as_deref());
     facts.push(match (&found.delivered_at, found.policy.as_deref(), found.read) {
@@ -256,9 +245,7 @@ fn row(found: Shelved, zone: Tz) -> Row {
         said,
         facts,
         unrated,
-        verdicts: verdict_choices(verdict),
-        progress: progress_choices(progress),
-        noting: verdict.is_some() || !found.note.is_empty(),
+        stars: stars(found.rating),
         note: found.note,
         sendable: false,
         sent: None,
@@ -440,7 +427,7 @@ pub struct AddForm {
     link: String,
     /// next, now or keep.
     then: String,
-    verdict: Option<String>,
+    rating: Option<String>,
 }
 
 /// Add a link by hand. This only queues it: the pipeline fetches the page, as it does every
@@ -486,9 +473,10 @@ pub async fn add(
     if action != "keep" && user.kindle_addresses.trim().is_empty() {
         return refused(StatusCode::BAD_REQUEST, "Your account has no Kindle address; add one on your account page.");
     }
-    // A verdict belongs to something already read.
-    let verdict = form.verdict.as_deref().and_then(ratings::verdict_key).filter(|_| action == "keep");
-    if !db::queue_add(&state.pool, &user.id, &link, action, verdict).await? {
+    // A rating belongs to something already read.
+    let rating = form.rating.as_deref().and_then(|n| n.parse::<i64>().ok()).filter(|n| (1..=5).contains(n));
+    let rating = if action == "keep" { rating } else { None };
+    if !db::queue_add(&state.pool, &user.id, &link, action, rating).await? {
         return Ok(Redirect::to("/archive?show=added&error=many").into_response());
     }
     Ok(Redirect::to("/archive?show=added").into_response())

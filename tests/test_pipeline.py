@@ -123,8 +123,8 @@ def test_run_delivers_capped_pinned_first_and_is_idempotent(env):
     assert 'href="https://blog.example/post-1?utm_source=rss"' in article
     token = article.split("https://fb.example/f/")[1].split('"')[0]
     claim = verify_token(SECRET.encode(), token, now=NOW.timestamp())
-    assert (claim.user_id, claim.signal) == ("john", "skip")  # under the byline, first
-    assert article.count("https://fb.example/f/") == 6
+    assert (claim.user_id, claim.signal) == ("john", "r1")
+    assert article.count("https://fb.example/f/") == 5
     assert store.get_article(claim.article_id).title == "Post 1"
 
     # Same day: cap already used, nothing more goes out.
@@ -232,14 +232,13 @@ def test_issue_format_sends_one_book_with_contents_and_per_article_ratings(env):
     for chapter in ("a01", "a02"):
         page = epub.read(f"OEBPS/{chapter}.xhtml").decode()
         etree.fromstring(page.encode())
-        assert page.count("https://fb.example/f/") == 6 and 'href="contents.xhtml"' in page
+        assert page.count("https://fb.example/f/") == 5 and 'href="contents.xhtml"' in page
         token = page.split("https://fb.example/f/")[1].split('"')[0]
         seen.add(verify_token(SECRET.encode(), token, now=NOW.timestamp()).article_id)
         for src in re.findall(r'<img src="([^"]+)"', page):
             assert f"OEBPS/{src}" in names
     assert seen == set(report.delivered)
     assert all(store.is_delivered("john", article_id) for article_id in report.delivered)
-    assert "OEBPS/done.xhtml" not in names
 
 
 def test_alerts_report_failed_delivery_and_a_source_that_keeps_failing(env):
@@ -346,12 +345,8 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     cfg = _llm_cfg(cfg)
     user = cfg.users[0]
     store.upsert_article("old", "https://x.example/old", "Blog", "An old favourite", "", None)
-    store.record_feedback(user.id, "old", "end-more", "kindle-footer")
+    store.record_feedback(user.id, "old", "r5", "kindle-footer")
     store.record_note(user.id, "old", "The diagrams made it", "web")
-    store.upsert_article("passed", "https://x.example/passed", "Blog", "Passed over", "", None)
-    store.record_feedback(user.id, "passed", "skip", "kindle-footer")
-    store.upsert_article("half", "https://x.example/half", "Blog", "Half read", "", None)
-    store.record_feedback(user.id, "half", "partway", "kindle-footer")
 
     def scores(ids):
         # Reverse of the order given, plus entries that must be ignored.
@@ -368,11 +363,8 @@ def test_model_ranking_orders_delivery_and_records_why(env):
     assert report.model == cfg.llm.model and report.models == "", "no fallback was needed"
     system, prompt = backend.prompts[0]
     assert "untrusted" in system and "Compilers. Not watches." in prompt
-    assert '"title": "An old favourite"' in prompt and '"verdict": "more like this", "progress": "finished"' in prompt
+    assert '"title": "An old favourite"' in prompt and '"rating": 5' in prompt
     assert '"reader_said": "The diagrams made it"' in prompt  # the reader's own words
-    # A skip counts, lightly; progress with no verdict says too little and is left out.
-    assert '"title": "Passed over"' in prompt and '"progress": "skipped"' in prompt
-    assert '"title": "Half read"' not in prompt
     assert "<script" not in prompt  # abstracts are plain text
 
     rows = {r["article_id"]: r for r in store.selection_rows(user.id)}
@@ -1333,8 +1325,9 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     store.db.execute(
         "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses) VALUES ('john', 'John', 'x', 'x', 'john@kindle.com')"
     )
-    ask = "INSERT INTO add_requests (user_id, url, action, verdict, requested_at) VALUES (?, ?, ?, ?, 'x')"
-    store.db.execute(ask, ("john", "https://found.example/post-70?utm_source=share", "keep", "worth-it"))
+    ask = "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, 'x')"
+    store.db.execute(ask, ("john", "https://found.example/post-70?utm_source=share", "keep", 4))
+    store.db.execute(ask, ("john", "https://found.example/post-74", "keep", None))
     store.db.execute(ask, ("john", "https://found.example/post-71", "now", None))
     store.db.execute(ask, ("john", "https://found.example/post-72", "next", None))
     store.db.execute(ask, ("john", "https://found.example/missing", "next", None))
@@ -1342,23 +1335,24 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     store.db.execute(ask, ("stranger", "https://found.example/post-73", "next", None))
     store.db.execute(ask, ("john", "https://www.paywall.example/story", "next", None))
     store.db.commit()
-    assert add_requested(cfg, store, fetcher) == 3 and store.add_requests() == []
+    assert add_requested(cfg, store, fetcher) == 4 and store.add_requests() == []
     rows = store.db.execute("SELECT status, error, article_id FROM add_requests ORDER BY id").fetchall()
-    assert [r["status"] for r in rows] == ["done", "done", "done", "failed", "failed", "failed", "failed"]
-    assert "nothing could be read" in rows[3]["error"] and rows[4]["error"] == "not a web address"
-    assert rows[5]["error"] == "no such reader" and "Subscriber sessions" not in rows[3]["error"]
+    assert [r["status"] for r in rows] == ["done", "done", "done", "done", "failed", "failed", "failed", "failed"]
+    assert "nothing could be read" in rows[4]["error"] and rows[5]["error"] == "not a web address"
+    assert rows[6]["error"] == "no such reader" and "Subscriber sessions" not in rows[4]["error"]
     # Turned away, from a site with no session saved: the reader is told how to get past it.
-    assert "If you subscribe to paywall.example, save a session for it under Subscriber sessions" in rows[6]["error"]
-    kept, now_id, next_id = (r["article_id"] for r in rows[:3])
+    assert "If you subscribe to paywall.example, save a session for it under Subscriber sessions" in rows[7]["error"]
+    kept, unrated, now_id, next_id = (r["article_id"] for r in rows[:4])
 
     # Stored like any article, from its page, by the route "manual", without the tracking tag.
     article = store.get_article(kept)
     assert (article.url, article.source, article.status) == ("https://found.example/post-70", "found.example", "clean")
     assert article.word_count == 350 and store.routes(kept) == [("manual", "")]
     assert (cfg.pages_dir / f"{kept}.json.gz").exists()
-    # Kept as read: its verdict and finished, and so never delivered.
-    rating = store.get_rating("john", kept)
-    assert (rating.verdict, rating.progress) == ("worth-it", "finished") and store.has_had("john", kept)
+    # Kept as read: rated, and so never delivered. Kept without a rating, the request itself
+    # is the record that it was read.
+    assert store.get_rating("john", kept).rating == 4 and store.has_had("john", kept)
+    assert store.get_rating("john", unrated) is None and store.has_had("john", unrated)
 
     # Sent now: queued as a book of its own, built from the saved page.
     offline = Fetcher("test", store, min_host_interval=0, transport=httpx.MockTransport(lambda r: httpx.Response(500)))
@@ -1371,7 +1365,8 @@ def test_a_link_added_by_hand_is_kept_sent_now_or_leads_the_next_issue(env):
     sent.clear()
     issue = dataclasses.replace(cfg, format="issue")
     report = run(issue, store, fetcher, user, now=NOW, sender=lambda m, s: sent.extend(m))
-    assert report.delivered[0] == next_id and len(report.delivered) == 2 and kept not in report.delivered
+    assert report.delivered[0] == next_id and len(report.delivered) == 2
+    assert kept not in report.delivered and unrated not in report.delivered
     assert store.get_article(report.delivered[1]).title == "Post 9"
     # Marked as the reader's own in the book's contents and on its page; the other is not.
     book = zipfile.ZipFile(io.BytesIO(next(sent[0].iter_attachments()).get_content()))
@@ -1433,7 +1428,7 @@ def test_notes_on_a_readers_taste_are_rewritten_weekly_from_their_ratings_and_gi
 
     def rate(n: int, when: str) -> None:
         store.upsert_article(f"r{n}", f"https://blog.example/r{n}", "Blog", f"Rated {n}", "", None)
-        store.record_feedback("john", f"r{n}", "end-more", "kindle", when)
+        store.record_feedback("john", f"r{n}", "r5", "kindle", when)
 
     reader = store.readers()[0]
     start, day = "2026-03-10T00:00:00+00:00", timedelta(days=1)
@@ -1732,7 +1727,7 @@ def test_a_link_added_by_hand_uses_a_session_saved_since_the_scheduler_loaded(en
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
         store.db.executescript(migration.read_text())
     store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
-    ask = "INSERT INTO add_requests (user_id, url, action, verdict, requested_at) VALUES (?, ?, ?, ?, 'x')"
+    ask = "INSERT INTO add_requests (user_id, url, action, rating, requested_at) VALUES (?, ?, ?, ?, 'x')"
     store.db.execute(ask, ("john", "https://www.paywall.example/story", "next", None))
     # Saved on the Sources page after the scheduler read its settings, which had none.
     store.db.execute("INSERT INTO sessions (domain, created_at) VALUES ('paywall.example', 'x')")

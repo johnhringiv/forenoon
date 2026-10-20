@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO ratings (user_id, article_id, rating, updated_at) VALUES (?, ?, ?, ?)\n           ON CONFLICT(user_id, article_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at\n           RETURNING rating, note",
+  "describe": {
+    "columns": [
+      {
+        "name": "rating",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "note",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e9b98658e35d6764ce4a4e9ccc311f04963724aa67c4752c8cf4dba80d1701bc"
+}

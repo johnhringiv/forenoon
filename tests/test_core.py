@@ -24,9 +24,9 @@ def test_canonical_url_strips_noise():
 
 def test_token_round_trip_and_rejections():
     expires = int(time.time()) + 60
-    token = make_token(SECRET, "john", "abc", "end-worth-it", expires)
+    token = make_token(SECRET, "john", "abc", "r4", expires)
     claim = verify_token(SECRET, token)
-    assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "end-worth-it")
+    assert (claim.user_id, claim.article_id, claim.signal) == ("john", "abc", "r4")
     with pytest.raises(TokenError):
         verify_token(b"x" * 32, token)
     # A different signature: one ending in "AA" already would be left as it was (1 run in 256).
@@ -41,17 +41,23 @@ def test_token_round_trip_and_rejections():
         make_token(SECRET, "john", "abc", "delete-everything", expires)
     with pytest.raises(TokenError):  # reasons are a note now
         make_token(SECRET, "john", "abc", "why-thin", expires)
-    for signal in ("up", "down", "done", "f4", "r2", "clear"):  # not something a link carries
+    for signal in ("up", "down", "done", "r0", "r6", "end-more", "skip", "clear"):  # not something a link carries
         with pytest.raises(TokenError):
             make_token(SECRET, "john", "abc", signal, expires)
+    # Books sent before October 2026 had a second row of links, for an article that was finished.
+    assert verify_token(SECRET, make_token(SECRET, "john", "abc", "f4", expires)).signal == "f4"
 
 
 def test_tokens_are_the_ones_the_web_app_checks():
     # The same strings are verified in web/src/feedback.rs, which answers the links.
     secret = b"k" * 32
     assert (
-        make_token(secret, "john", "a1", "end-worth-it", 2_000_000_000)
-        == "MXxqb2hufGExfGVuZC13b3J0aC1pdHwyMDAwMDAwMDAw.r04sH-kavDSO49ow21hpzQ"
+        make_token(secret, "john", "a1", "r4", 2_000_000_000)
+        == "MXxqb2hufGExfHI0fDIwMDAwMDAwMDA.XnSG8SQXXgGPXPUYca5yyg"
+    )
+    assert (
+        make_token(secret, "john", "a1", "f4", 2_000_000_000)
+        == "MXxqb2hufGExfGY0fDIwMDAwMDAwMDA.1VbsTqAK0ZRimXeA3yOaUg"
     )
     assert (
         make_token(secret, "john", "a1", "note", 2_000_000_000)
@@ -101,8 +107,8 @@ def test_golden_epub_structure_is_stable_and_well_formed():
     article = zf.read("OEBPS/article.xhtml").decode()
     assert "alert(" not in article and '<pre><code><span class="ln i0">fn main(' in article
     assert 'src="images/img001.jpg"' in article and "OEBPS/images/img001.jpg" in zf.namelist()
-    assert article.count("/f/golden-") == 6
-    assert 'Did not finish it? <a href="https://feedback.example.com/f/golden-partway">' in article
+    assert article.count("/f/golden-") == 5
+    assert '<a href="https://feedback.example.com/f/golden-r1">1</a>' in article
     opf = zf.read("OEBPS/content.opf").decode()
     assert "<dc:title>FN 2026-01-02 · Forenoon · Golden rendering test</dc:title>" in opf
 
@@ -260,13 +266,13 @@ def test_each_readers_own_settings_start_from_the_installs_and_apply_to_their_ru
     assert not mine.llm.show_reasons and mine.llm.learn
 
 
-def test_a_rating_is_a_verdict_and_progress_and_the_latest_tap_wins():
+def test_the_latest_rating_wins_and_the_note_stays_with_it():
     import json
     from pathlib import Path
 
     from app.store import Rating, Store
 
-    # The same cases as the web app's (web/src/db.rs): one set of rules in both programs.
+    # The same cases as the web app's (web/tests/web.rs): one set of rules in both programs.
     cases = json.loads((Path(__file__).parent / "rating_cases.json").read_text())["cases"]
     for case in cases:
         store = Store(":memory:")
@@ -275,34 +281,12 @@ def test_a_rating_is_a_verdict_and_progress_and_the_latest_tap_wins():
                 store.record_note("john", "a1", signal.removeprefix("note:"), "kindle-footer")
             else:
                 store.record_feedback("john", "a1", signal, "kindle-footer")
-        want = case["then"] and Rating(case["then"][0], case["then"][1], case["then"][2])
+        want = case["then"] and Rating(case["then"][0], case["then"][1])
         assert store.get_rating("john", "a1") == want, case["taps"]
         assert len(store.feedback_rows()) == len(case["taps"]), "every tap is logged"
-    store = Store(":memory:")
-    store.record_feedback("john", "a1", "end-worth-it", "kindle-footer")
-    assert store.record_feedback("john", "a1", "problem", "kindle-footer") == Rating("worth-it", "finished")
 
 
-def test_skips_do_not_push_the_verdicts_out_of_what_the_model_sees():
-    from app.rank import rated_entries
-    from app.store import Store
-
-    store = Store(":memory:")
-    for n in range(3):
-        store.upsert_article(f"v{n}", f"https://x.example/v{n}", "Blog", f"Judged {n}", "", None)
-        store.record_feedback("john", f"v{n}", "end-worth-it", "kindle-footer", f"2026-10-01T0{n}:00:00+00:00")
-    for n in range(60):  # weeks of skips, all newer
-        store.upsert_article(f"s{n}", f"https://x.example/s{n}", "Blog", f"Skipped {n}", "", None)
-        store.record_feedback("john", f"s{n}", "skip", "kindle-footer", f"2026-10-10T00:{n:02d}:00+00:00")
-    store.upsert_article("p", "https://x.example/p", "Blog", "Progress only", "", None)
-    store.record_feedback("john", "p", "finished", "web", "2026-10-11T00:00:00+00:00")
-    entries = rated_entries(User(id="john", name="John", kindle_addresses=()), store, 40)
-    assert [e["title"] for e in entries if "verdict" in e] == ["Judged 0", "Judged 1", "Judged 2"]
-    assert sum(e.get("progress") == "skipped" for e in entries) == 15
-    assert "Progress only" not in [e["title"] for e in entries]
-
-
-def test_ratings_from_one_to_five_are_brought_forward(tmp_path):
+def test_ratings_from_before_notes_are_brought_forward(tmp_path):
     import sqlite3
 
     from app.store import Rating, Store
@@ -316,46 +300,41 @@ def test_ratings_from_one_to_five_are_brought_forward(tmp_path):
     )
     old = [
         ("five", 5, 1, ""),
-        ("four", 4, 1, ""),
-        ("four-liked", 4, 0, "depth"),
-        ("three", 3, 1, ""),
+        ("four-liked", 4, 0, "more-topic,depth"),
         ("three-web", 3, 0, ""),
-        ("three-long", 3, 0, "long"),
         ("two-topic", 2, 1, "topic"),
-        ("two-known", 2, 1, "known"),
-        ("one-kindle", 1, 0, ""),
+        ("one-kindle", 1, 0, "thin"),
         ("only-finished", None, 1, ""),
     ]
     db.executemany("INSERT INTO ratings VALUES ('john', ?, ?, ?, 'x', ?)", old)
-    # Only the book's "didn't finish" row said the reader stopped partway.
     db.execute(
         "CREATE TABLE feedback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,"
         " article_id TEXT NOT NULL, signal TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)"
     )
-    for article, signal, source in [("one-kindle", "r1", "kindle-footer"), ("four-liked", "r4", "web")]:
-        db.execute(
-            "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES ('john', ?, ?, ?, 'x')",
-            (article, signal, source),
-        )
+    db.execute(
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES ('john', 'five', 'f5', 'web', 'x')"
+    )
     db.commit()
     db.close()
     store = Store(path)
     got = {row[0]: store.get_rating("john", row[0]) for row in old}
+    # The finished flag goes, and a row that had nothing else with it; a reason from the old
+    # list becomes a note in its own words.
     assert got == {
-        "five": Rating("more", "finished"),
-        "four": Rating("worth-it", "finished"),
-        "four-liked": Rating("more", None, "Liked the depth"),
-        "three": Rating(None, "finished"),
-        "three-web": None,
-        "three-long": Rating("not-good", None, "Too long"),
-        "two-topic": Rating("not-for-me", "finished"),
-        "two-known": Rating("not-good", "finished", "Already knew this"),
-        "one-kindle": Rating("not-good", "partway"),
-        "only-finished": Rating(None, "finished"),
+        "five": Rating(5),
+        "four-liked": Rating(4, "More on this topic; Liked the depth"),
+        "three-web": Rating(3),
+        "two-topic": Rating(2, "Not interested in the topic"),
+        "one-kindle": Rating(1, "Too thin, nothing in it"),
+        "only-finished": None,
     }
-    assert "rating" not in {row["name"] for row in store.db.execute("PRAGMA table_info(ratings)")}
+    columns = {row["name"] for row in store.db.execute("PRAGMA table_info(ratings)")}
+    assert "finished" not in columns and "detail" in {
+        row["name"] for row in store.db.execute("PRAGMA table_info(feedback_events)")
+    }
+    assert [row["signal"] for row in store.feedback_rows()] == ["f5"], "the event log keeps every tap as it was"
     store.close()
-    assert Store(path).get_rating("john", "five") == Rating("more", "finished")  # once only
+    assert Store(path).get_rating("john", "five") == Rating(5)  # once only
 
 
 def test_sources_come_from_the_web_apps_sources_table(tmp_path):

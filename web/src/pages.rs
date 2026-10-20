@@ -239,10 +239,10 @@ pub fn secured(mut response: Response) -> Response {
     for (name, value) in [
         (
             header::CONTENT_SECURITY_POLICY,
-            // The one script allowed is the light/dark switch in base.html, by its hash; the test
+            // The one script allowed is base.html's (the light/dark switch and the note box), by its hash; the test
             // `pages_need_a_session_and_sign_in_is_limited` recomputes it from the page.
             "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
-             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; manifest-src 'self'; base-uri 'none'; \
+             script-src 'sha256-lr34GUiMkTjGJuwYIu9zFCbQP5QZKNay2CPB3URLS7U='; manifest-src 'self'; base-uri 'none'; \
              form-action 'self'; frame-ancestors 'none'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
@@ -714,32 +714,14 @@ struct Filter {
     current: bool,
 }
 
-/// One choice in a pick-one group: a verdict, or how far the reader got.
-pub(crate) struct RateChoice {
-    pub(crate) key: &'static str,
-    pub(crate) label: &'static str,
-    /// What the button says: "Partway" for "Stopped partway", under "How far did you get?".
-    pub(crate) short: &'static str,
+/// One of the five rating buttons, with whether it is the rating given.
+pub(crate) struct Star {
+    pub(crate) n: i64,
     pub(crate) on: bool,
 }
 
-pub(crate) fn verdict_choices(verdict: Option<&str>) -> Vec<RateChoice> {
-    ratings::VERDICTS
-        .iter()
-        .map(|(key, label)| RateChoice { key, label, short: label, on: verdict == Some(*key) })
-        .collect()
-}
-
-pub(crate) fn progress_choices(progress: Option<&str>) -> Vec<RateChoice> {
-    ratings::PROGRESS
-        .iter()
-        .map(|(key, label)| RateChoice {
-            key,
-            label,
-            short: if *key == "partway" { "Partway" } else { label },
-            on: progress == Some(*key),
-        })
-        .collect()
+pub(crate) fn stars(rating: Option<i64>) -> Vec<Star> {
+    (1..=5).map(|n| Star { n, on: rating == Some(n) }).collect()
 }
 
 /// "1,200 words, 5 min", or nothing for an article whose length is not known.
@@ -775,12 +757,9 @@ struct Card {
     tags: Vec<&'static str>,
     facts: Vec<String>,
     unrated: bool,
-    verdicts: Vec<RateChoice>,
-    progress: Vec<RateChoice>,
-    /// The reader's note, and whether the box for one is shown: once there is a verdict to go
-    /// with it, or a note already.
+    stars: Vec<Star>,
+    /// The reader's note; the box for one is shown once there is a rating to go with it.
     note: String,
-    noting: bool,
     /// Whether a "Send to Kindle" button is offered, and what became of the last request.
     sendable: bool,
     sent: Option<String>,
@@ -896,7 +875,6 @@ fn card(row: Delivered) -> Card {
         facts.push(format!("Score {score}{rank}"));
     }
     facts.extend(length(row.word_count));
-    let (verdict, progress) = (row.verdict.as_deref(), row.progress.as_deref());
     Card {
         link: web_url(&row.url),
         image: web_url(&row.image_url),
@@ -906,10 +884,8 @@ fn card(row: Delivered) -> Card {
         picked: row.picked.filter(|reason| !reason.is_empty()),
         tags,
         facts,
-        unrated: verdict.is_none() && progress.is_none(),
-        verdicts: verdict_choices(verdict),
-        progress: progress_choices(progress),
-        noting: verdict.is_some() || !row.note.is_empty(),
+        unrated: row.rating.is_none(),
+        stars: stars(row.rating),
         note: row.note,
         sendable: false,
         sent: None,
@@ -1062,8 +1038,7 @@ pub struct RateForm {
     csrf: String,
     article: String,
     back: Option<String>,
-    verdict: Option<String>,
-    progress: Option<String>,
+    rating: Option<String>,
     clear: Option<String>,
     note: Option<String>,
 }
@@ -1225,40 +1200,22 @@ pub async fn rate(
     if !db::pipeline_ready(pool).await? || !db::in_library(pool, &user.id, &form.article).await? {
         return refused(StatusCode::NOT_FOUND, "No such article.");
     }
-    let now = db::get_rating(pool, &user.id, &form.article).await?.unwrap_or_default();
-    // A verdict given here leaves progress as it was: these pages cannot tell how far the
-    // reader got.
+    let now = db::get_rating(pool, &user.id, &form.article).await?;
     if let Some(note) = form.note.as_deref() {
-        if ratings::clean_note(note) != now.note {
+        if ratings::clean_note(note) != now.map(|rating| rating.note).unwrap_or_default() {
             db::record_note(pool, &user.id, &form.article, note, "web").await?;
         }
-        return back_to(&form.back, &form.article);
-    }
-    let signal = if form.clear.is_some() {
-        None
-    } else if let Some(verdict) = form.verdict.as_deref().and_then(ratings::verdict_key) {
-        if now.verdict.as_deref() == Some(verdict) {
-            return back_to(&form.back, &form.article); // already so: nothing to record
-        }
-        Some(Signal::Verdict(verdict))
-    } else if let Some(progress) = form.progress.as_deref() {
-        if now.progress.as_deref() == Some(progress) {
-            return back_to(&form.back, &form.article);
-        }
-        match progress {
-            "finished" => Some(Signal::Finished),
-            "partway" => Some(Signal::Partway),
-            "skipped" => Some(Signal::Skip),
-            _ => return back_to(&form.back, &form.article),
-        }
-    } else {
-        return back_to(&form.back, &form.article);
-    };
-    match signal {
-        Some(signal) => {
-            db::record_feedback(pool, &user.id, &form.article, &signal, "web").await?;
-        }
-        None => db::clear_rating(pool, &user.id, &form.article).await?,
+    } else if form.clear.is_some() {
+        db::clear_rating(pool, &user.id, &form.article).await?;
+    } else if let Some(n) = form
+        .rating
+        .as_deref()
+        .and_then(|n| n.parse::<i64>().ok())
+        .filter(|n| (1..=5).contains(n))
+        // The rating already given is left alone: pressing it again records nothing.
+        .filter(|n| now.is_none_or(|rating| rating.rating != *n))
+    {
+        db::record_feedback(pool, &user.id, &form.article, &Signal::Rated(n), "web").await?;
     }
     back_to(&form.back, &form.article)
 }
