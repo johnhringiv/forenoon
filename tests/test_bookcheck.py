@@ -863,3 +863,11 @@ def test_the_start_is_one_the_end_phrase_follows():
     # Punctuation in a line of the model's own stays in it.
     article.insert(1, "<b>Note</b>: <i>see below</i>, <b>Tom</b> &amp; <b>Jerry</b>. copy:1")
     assert "Note: see below, Tom & Jerry." in article.body.text_content()
+
+
+def test_a_pictures_sources_bring_no_unchecked_address_into_the_book():
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    html = '<p>Text.</p><picture><source srcset="https://evil.example/track.gif"><img src="https://evil.example/x.gif"></picture>'
+    blocks = article.clean(html)
+    assert not any(block.xpath("descendant-or-self::img") for block in blocks)
+    assert "evil.example" not in "".join(lxml.html.tostring(b, encoding="unicode") for b in blocks)

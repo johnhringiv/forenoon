@@ -733,7 +733,7 @@ class _Article:
             for name in [name for name in el.attrib if name.startswith(extract.MARK)]:
                 del el.attrib[name]
             if el.tag == "img":
-                src = self._image(extract._image_src(el) if from_page else el.get("src") or "")
+                src = self._image(extract._picture_address(el) if from_page else el.get("src") or "")
                 el.attrib.clear() if not src else _keep_only(el, src)
             if from_page:
                 el.attrib.pop("id", None)  # the page's own ids are not the article's
@@ -747,6 +747,8 @@ class _Article:
                 _mark_internal(el)
         for el in within:
             el.drop_tag()
+        for el in list(fragment.iter("source")):
+            el.drop_tag()  # its addresses are checked by no one: an <img>'s is the one kept
         clean = extract.sanitize(fragment, self.url, marked=True)
         return _as_blocks(clean)
 

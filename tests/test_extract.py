@@ -1982,3 +1982,41 @@ def test_restored_pictures_are_only_the_figures_own_shown_once():
         + "<figcaption>Photograph: Reuters</figcaption></figure>"
     )
     assert run(bare, grid) == []
+
+
+def test_restore_reads_the_words_shown_and_leaves_out_icons_posters_and_hidden_boxes():
+    restore = extract_module._restore_figure_pictures
+
+    def run(article_figure, page):
+        body = lxml.html.fromstring(f"<div>{article_figure}</div>")
+        restore(body, f"<html><body>{page}</body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    bare = "<figure><figcaption>Photograph: AP</figcaption></figure>"
+    # The page's caption holds a script readability left out; a related story's has none.
+    own = '<figure><div><img src="https://i.example/own.jpg"></div><figcaption>Photograph: AP<script>var a=1</script></figcaption></figure>'
+    related = '<div class="related"><figure><img src="https://i.example/rel.jpg"><figcaption>Photograph: AP</figcaption></figure></div>'
+    assert run(bare, own + related) == ["https://i.example/own.jpg"]
+    assert run(bare, own.replace("own.jpg", "a.jpg") + f"<aside>{related}</aside>") == ["https://i.example/a.jpg"]
+    furniture = (
+        '<figure><div><img src="https://i.example/p.jpg"></div>'
+        '<span class="copy"><img src="/static/copy-icon.png"></span>'
+        '<a href="https://twitter.com/intent/tweet?u=x"><img src="https://i.example/share.png"></a>'
+        '<img src="https://i.example/dot.png" width="16" height="16">'
+        '<div class="sr-only"><img src="https://i.example/h1.jpg"></div>'
+        '<div style="visibility: hidden"><img src="https://i.example/h2.jpg"></div>'
+        "<figcaption>Photograph: AP</figcaption></figure>"
+    )
+    assert run(bare, furniture) == ["https://i.example/p.jpg"]
+    poster = '<figure><div class="poster"><img src="https://i.ytimg.com/vi/a/hq.jpg"></div><iframe src="https://www.youtube.com/embed/a"></iframe><figcaption>Photograph: AP</figcaption></figure>'
+    assert run(bare, poster) == []
+    # A picture with a blurred stand-in and its photo: the photo, once.
+    blur = '<figure><div><picture><source srcset="https://i.example/a.webp"><img class="blur" src="https://i.example/a-tiny.jpg"><img src="https://i.example/a.jpg"></picture></div><figcaption>Photograph: AP</figcaption></figure>'
+    assert run(bare, blur) == ["https://i.example/a.jpg"]
+    # Two photos that differ only in their query are two photos; two sizes of one are one.
+    name = extract_module._picture_name
+    assert name("https://x.example/photo.php?id=1") != name("https://x.example/photo.php?id=2")
+    assert name("https://x.example/_next/image?url=%2Fa.jpg&w=640") != name(
+        "https://x.example/_next/image?url=%2Fb.jpg&w=640"
+    )
+    assert name("https://i.example/p.jpg?width=445&dpr=1") == name("https://i.example/p.jpg?width=2000")

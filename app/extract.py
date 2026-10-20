@@ -10,7 +10,7 @@ import base64
 import copy
 import re
 from dataclasses import dataclass, field
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit
 
 import lxml.html
 import trafilatura
@@ -1327,14 +1327,10 @@ def _picture_fallbacks(root: lxml.html.HtmlElement) -> None:
     """Give a <picture>'s <img> that has no address of its own (or a blank pixel) the
     addresses its <source>s offer, before the sources go."""
     for img in root.iter("img"):
-        picture = img.getparent()
-        if picture is None or picture.tag != "picture" or _image_src(img):
-            continue
-        for source in picture.iter("source"):
-            srcset = source.get("srcset") or source.get("data-srcset") or ""
-            if any(not url.lower().startswith("data:") for url in srcset_urls(srcset)):
-                img.set("srcset", srcset)
-                break
+        if not _image_src(img):
+            address = _picture_address(img)
+            if address:
+                img.set("srcset", address)
 
 
 def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.HtmlElement | None]:
@@ -1481,6 +1477,12 @@ def _caption_key(el: lxml.html.HtmlElement) -> str:
 
 
 RESTORE_MAX_PICTURES = 8  # more in one figure is a widget's grid or tabs, not its picture
+ELSEWHERE = re.compile(r"related|recommend|sidebar|\brail\b|more-(stories|from)|trending|popular|promo", re.IGNORECASE)
+RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
+HIDDEN_CLASS = re.compile(
+    r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
+)
+SIZE_QUERY = {"w", "width", "h", "height", "q", "quality", "dpr", "fit", "crop", "auto", "format", "fm", "s", "resize"}
 
 
 def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> None:
@@ -1488,20 +1490,26 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
     holding nothing but a picture for empty, so a photo in a box of its own (the Guardian's)
     went and its caption stayed. The page's figure with the same caption gives them back,
     before the caption; nothing is taken out. Figures that share a caption ("Photograph: …")
-    are paired in order, only when the page has as many of them as the article. Pictures the
-    book would not show are not taken: one in a button, player, <noscript> or anything else
-    removed, a hidden one, an embedded one, and a figure's beyond a few."""
-    bare = [f for f in body.iter("figure") if f.find(".//img") is None and _figure_key(f)]
+    are paired in order, only when the page has as many of them as the article, not counting
+    those in a sidebar or a box of other stories; so are figures with no words at all. Only pictures the book would show are
+    taken (see _shown_pictures), and none for a figure holding a table, code or a quote."""
+    bare = [
+        f for f in body.iter("figure") if f.find(".//img") is None and not f.xpath(".//table | .//pre | .//blockquote")
+    ]
     if not bare:
         return
     try:
         page = lxml.html.fromstring(page_html)
     except (etree.ParserError, ValueError):
         return
+    _unnest_empty(page)
     on_page: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in page.iter("figure"):
-        if next(figure.iterancestors("figure"), None) is None:
-            on_page.setdefault(_figure_key(figure), []).append(figure)
+        if next(figure.iterancestors("figure"), None) is not None:
+            continue
+        if any(a.tag in ("aside", "nav", "footer") or ELSEWHERE.search(_names(a)) for a in figure.iterancestors()):
+            continue
+        on_page.setdefault(_figure_key(figure), []).append(figure)
     in_body: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in body.iter("figure"):
         in_body.setdefault(_figure_key(figure), []).append(figure)
@@ -1519,8 +1527,6 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
             if name in have:
                 continue
             have.add(name)
-            picture = copy.deepcopy(picture)
-            picture.tail = None
             if caption is not None:
                 caption.addprevious(picture)
             else:
@@ -1529,49 +1535,91 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
 
 
 def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.HtmlElement]]:
-    """A page figure's pictures as the book would show them, each once: (its address's name,
-    the <img>, or the <picture> around it)."""
+    """A page figure's pictures as the book would show them, each once, as copies: (its
+    address's name, the <img>, or the <picture> around it with only that <img>). None for a
+    figure holding a player or an embed (its pictures are the player's poster); left out, a
+    picture in anything the book removes (a button, <noscript>, a dialog), a hidden one, an
+    icon, logo or share button, and an embedded one."""
+    if figure.xpath(".//video | .//audio | .//iframe | .//embed | .//object"):
+        return []
     found: list[tuple[str, lxml.html.HtmlElement]] = []
+    taken: set[int] = set()
     for img in figure.iter("img"):
         boxes = [img, *list(img.iterancestors())]
         boxes = boxes[: boxes.index(figure)] if figure in boxes else boxes
         if any(el.tag in DROP or el.tag == "figcaption" or _hidden(el) for el in boxes):
             continue
-        inside = img.getparent() is not None and img.getparent().tag == "picture"
-        address = _image_src(img)
-        if not address and inside:
-            address = next(
-                (
-                    url
-                    for s in img.getparent().iter("source")
-                    for url in srcset_urls(s.get("srcset") or "")
-                    if not url.lower().startswith("data:")
-                ),
-                "",
-            )
+        if any(NOT_A_PICTURE.search(" ".join(el.get(n) or "" for n in ("class", "id", "src", "alt"))) for el in boxes):
+            continue
+        if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in boxes):
+            continue
+        sizes = [img.get(n, "").strip() for n in ("width", "height")]
+        if any(size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
+            continue
+        address = _picture_address(img)
         if not address or address.lower().startswith("data:"):
             continue
+        parent = img.getparent()
+        inside = parent is not None and parent.tag == "picture"
+        if inside and any(el.tag == "img" for el in img.itersiblings()):
+            continue  # a blurred stand-in before the photo: the picture's last <img> is it
+        holder = parent if inside else img
         name = _picture_name(address)
-        if name not in {n for n, _ in found}:
-            found.append((name, img.getparent() if inside else img))
+        if id(holder) in taken or name in {n for n, _ in found}:
+            continue
+        taken.add(id(holder))
+        picture = copy.deepcopy(holder)
+        picture.tail = None
+        if inside:
+            for other in [el for el in picture.iter("img")][:]:
+                if other.get("src") != img.get("src") or other.get("class") != img.get("class"):
+                    other.drop_tree()
+        found.append((name, picture))
     return found
 
 
+def _picture_address(img: lxml.html.HtmlElement) -> str:
+    """An image's address, or else the one its <picture>'s sources offer."""
+    address = _image_src(img)
+    parent = img.getparent()
+    if address or parent is None or parent.tag != "picture":
+        return address
+    for source in parent.iter("source"):
+        for name in ("srcset", "data-srcset"):
+            urls = [url for url in srcset_urls(source.get(name) or "") if not url.lower().startswith("data:")]
+            if urls:
+                return urls[-1]
+    return ""
+
+
 def _picture_name(address: str) -> str:
-    """An image's address without its query: two sizes of one photo are one picture."""
+    """An image's address without what only sizes it (?width=445&dpr=1): two sizes of one
+    photo are one picture, while a query that says which photo (?id=2, ?url=…) stays."""
     parts = urlsplit(address.strip())
-    return (parts.netloc + parts.path) if parts.path else address
+    if not parts.path:
+        return address
+    kept = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in SIZE_QUERY)
+    return parts.netloc + parts.path + ("?" + urlencode(kept) if kept else "")
 
 
 def _hidden(el: lxml.html.HtmlElement) -> bool:
     style = (el.get("style") or "").replace(" ", "").lower()
-    return el.get("hidden") is not None or el.get("aria-hidden") == "true" or "display:none" in style
+    if el.get("hidden") is not None or el.get("aria-hidden") == "true" or HIDDEN_CLASS.search(el.get("class") or ""):
+        return True
+    return any(rule in style for rule in ("display:none", "visibility:hidden", "opacity:0;")) or style.endswith(
+        "opacity:0"
+    )
 
 
 def _figure_key(figure: lxml.html.HtmlElement) -> str:
-    """What names a figure: its caption's words, else all its words."""
+    """What names a figure: its caption's words, else all its words; only the words a reader
+    sees (a script or a style inside is not one), as readability's copy keeps them."""
     caption = next(figure.iter("figcaption"), None)
-    return _caption_key(caption if caption is not None else figure)
+    shown = copy.deepcopy(caption if caption is not None else figure)
+    for el in list(shown.iter(*DROP)):
+        if el is not shown and el.getparent() is not None:
+            el.drop_tree()
+    return _caption_key(shown)
 
 
 def _drop_repeated_captions(root: lxml.html.HtmlElement) -> None:
