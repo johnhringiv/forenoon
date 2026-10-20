@@ -2053,3 +2053,40 @@ def test_a_players_fallback_text_goes_with_it_and_real_photos_are_not_taken_for_
     body = lxml.html.fromstring(f"<div>{first}<figure></figure>{last}</div>")
     restore(body, f"<html><body>{ad}{article_page}</body></html>")
     assert [img.get("src") for img in body.iter("img")] == ["https://i.example/real.jpg"]
+
+
+def test_restore_survives_odd_markup_and_keeps_to_the_article():
+    restore = extract_module._restore_figure_pictures
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    bare = "<figure><figcaption>Photograph: AP</figcaption></figure>"
+
+    def run(article, page, outside=""):
+        body = lxml.html.fromstring(f"<div>{text}{article}</div>")
+        restore(body, f"<html><body>{outside}<div class='layout with-sidebar'>{text}{page}</div></body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    for odd in (
+        '<img width="&#178;" src="https://i.example/h.jpg">',
+        '<img src="https://[CDN_HOST]/h.jpg">',
+        '<img src="http://[::1/x.jpg">',
+    ):
+        run(bare, f"<figure><div>{odd}</div><figcaption>Photograph: AP</figcaption></figure>")  # no exception
+    # The article's box is classed as having a sidebar; a hero outside it shares the credit.
+    hero = '<figure><div><img src="https://i.example/hero.jpg"></div><figcaption>Photograph: AP</figcaption></figure>'
+    own = '<figure><div><img src="https://i.example/own.jpg"></div><figcaption>Photograph: AP</figcaption></figure>'
+    assert run(bare, own, outside=hero) == ["https://i.example/own.jpg"]
+    # A player drawn by script: its poster is not the figure's picture.
+    for poster in (
+        '<div class="yt-facade"><img src="https://i.example/p.jpg"></div>',
+        '<a href="https://www.youtube.com/watch?v=abc"><img src="https://i.example/p.jpg"></a>',
+        '<img src="https://i.ytimg.com/vi/abc/hqdefault.jpg">',
+    ):
+        assert run(bare, f"<figure><div>{poster}</div><figcaption>Photograph: AP</figcaption></figure>") == [], poster
+    # A dark-mode copy and a WordPress size are the same picture as the one shown.
+    twins = '<figure><div><img class="dark:hidden" src="https://i.example/c.png"><img class="hidden dark:block" src="https://i.example/c-dark.png"><img src="https://i.example/c-640x480.png"></div><figcaption>Photograph: AP</figcaption></figure>'
+    assert run(bare, twins) == ["https://i.example/c.png"]
+    # An empty SVG standing in for a picture's photo gives way to the photo.
+    svg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800'%3E%3C/svg%3E"
+    picture = f'<figure><picture><source srcset="https://i.example/a.webp 1x, https://i.example/a2.webp 2x"><img src="{svg}"></picture><figcaption>C.</figcaption></figure>'
+    body = extract_module.sanitize(lxml.html.fragment_fromstring(picture, create_parent="div"), "https://news.example/")
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/a2.webp"]

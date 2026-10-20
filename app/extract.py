@@ -1331,10 +1331,11 @@ def _picture_fallbacks(root: lxml.html.HtmlElement) -> None:
     """Give a <picture>'s <img> that has no address of its own (or a blank pixel) the
     addresses its <source>s offer, before the sources go."""
     for img in root.iter("img"):
-        if not _image_src(img):
+        src = _image_src(img)
+        if not src or src.lower().startswith("data:"):
             address = _picture_address(img)
-            if address:
-                img.set("srcset", address)
+            if address and address != src:
+                img.set("src", address)
 
 
 def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.HtmlElement | None]:
@@ -1489,11 +1490,18 @@ ELSEWHERE = re.compile(
     r"(?<![a-z])(related|recommended|recommendations|sidebar|rail|more-stories|more-from|trending|popular|promo)(?![a-z])",
     re.IGNORECASE,
 )
-RESPONSIVE_SHOWN = re.compile(r"\w+:(block|flex|grid|inline|inline-block|table)\b")
+RESPONSIVE_SHOWN = re.compile(r"(?<![\w-])(sm|md|lg|xl|2xl):(block|flex|grid|inline|inline-block|table)\b")
+PLAYER_NAME_PICTURE = re.compile(
+    r"(?<![a-z])(video|player|youtube|vimeo|yt-facade|lite-youtube)(?![a-z])", re.IGNORECASE
+)
+VIDEO_LINK = re.compile(
+    r"^https?://([^/]*\.)?(youtube\.com|youtu\.be|vimeo\.com|ytimg\.com|vimeocdn\.com)/", re.IGNORECASE
+)
 RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
 HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
 )
+SIZED_NAME = re.compile(r"-\d{2,5}x\d{2,5}(\.\w+)$")
 SIZE_QUERY = {"w", "width", "h", "height", "q", "quality", "dpr", "fit", "crop", "auto", "format", "fm", "s", "resize"}
 
 
@@ -1502,9 +1510,10 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
     holding nothing but a picture for empty, so a photo in a box of its own (the Guardian's)
     went and its caption stayed. The page's figure with the same caption gives them back,
     before the caption; nothing is taken out. Figures that share a caption ("Photograph: …")
-    are paired in order, only when the page has as many of them as the article, not counting
-    those in a sidebar or a box of other stories; so are figures with no words at all. Only pictures the book would show are
-    taken (see _shown_pictures), and none for a figure holding a table, code or a quote."""
+    are paired in order, only when the page has as many of them as the article: those within
+    the box holding the article's text when it is found (and figures with no words only then),
+    else those outside sidebars and boxes of other stories. Only pictures the book would show
+    are taken (see _shown_pictures), and none for a figure holding a table, code or a quote."""
     bare = [
         f
         for f in body.iter("figure")
@@ -1521,16 +1530,25 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
     _unnest_empty(page)
     region = _article_region(page, body)
     most = 0.5 * _words(page.text_content())
+    elsewhere: dict[int, bool] = {}
+
+    def outside(figure: lxml.html.HtmlElement) -> bool:
+        if region is not None:
+            return region not in figure.iterancestors()
+        for box in figure.iterancestors():
+            if id(box) not in elsewhere:
+                elsewhere[id(box)] = _elsewhere(box, most)
+            if elsewhere[id(box)]:
+                return True
+        return False
+
     on_page: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in page.iter("figure"):
-        if next(figure.iterancestors("figure"), None) is not None:
-            continue
-        if any(_elsewhere(a, most) for a in figure.iterancestors()):
+        if next(figure.iterancestors("figure"), None) is not None or outside(figure):
             continue
         key = _figure_key(figure)
-        if not key and (region is None or region not in figure.iterancestors()):
-            continue  # a figure with no words is matched only within the article's own text
-        on_page.setdefault(key, []).append(figure)
+        if key or region is not None:  # a figure with no words only within the article's text
+            on_page.setdefault(key, []).append(figure)
     in_body: dict[str, list[lxml.html.HtmlElement]] = {}
     for figure in body.iter("figure"):
         if next(figure.iterancestors("figure"), None) is None:
@@ -1562,7 +1580,8 @@ def _elsewhere(el: lxml.html.HtmlElement, most: float) -> bool:
     classed "has-sidebar")."""
     if el.tag in ("html", "body"):
         return False
-    if el.tag not in ("aside", "nav", "footer") and not ELSEWHERE.search(_names(el)):
+    names = " ".join(t for t in _names(el).split() if ":" not in t and "[" not in t)  # not "xl:has(#rail)"
+    if el.tag not in ("aside", "nav", "footer") and not ELSEWHERE.search(names):
         return False
     return _words(el.text_content()) < most
 
@@ -1573,7 +1592,9 @@ def _article_region(page: lxml.html.HtmlElement, body: lxml.html.HtmlElement) ->
     if not paragraphs:
         return None
     first = last = None
-    for p in page.iter("p"):
+    for p in page.iter("p", "div", "li", "blockquote", "section"):
+        if p.tag != "p" and any(isinstance(c.tag, str) and c.tag in ("p", "div", "section") for c in p):
+            continue  # a box of blocks: only a block of words can be the article's paragraph
         key = _caption_key(p)
         if key == paragraphs[0] and first is None:
             first = p
@@ -1593,6 +1614,8 @@ def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.
     icon, logo or share button, and an embedded one."""
     if figure.xpath(".//video | .//audio | .//iframe | .//embed | .//object"):
         return []
+    if any(PLAYER_NAME_PICTURE.search(_names(el)) for el in (figure, *figure.iterdescendants())):
+        return []  # a player drawn by script, its poster standing in
     found: list[tuple[str, lxml.html.HtmlElement]] = []
     taken: set[int] = set()
     for img in figure.iter("img"):
@@ -1601,12 +1624,16 @@ def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.
         if any(el.tag in DROP or el.tag == "figcaption" or _hidden(el) for el in boxes):
             continue
         names = [el.get("class") or "" for el in boxes] + [el.get("id") or "" for el in boxes]
-        if any(FURNITURE_PICTURE.search(name) for name in [*names, urlsplit(_image_src(img)).path.rsplit("/", 1)[-1]]):
+        if any(FURNITURE_PICTURE.search(name) for name in [*names, _file_name(_image_src(img))]):
             continue
         if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in boxes):
             continue
+        if VIDEO_LINK.match(_image_src(img).strip()) or any(
+            a.tag == "a" and VIDEO_LINK.match((a.get("href") or "").strip()) for a in boxes
+        ):
+            return []  # a video's poster
         sizes = [img.get(n, "").strip() for n in ("width", "height")]
-        if any(size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
+        if any(size.isascii() and size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
             continue
         address = _picture_address(img)
         if not address or address.lower().startswith("data:"):
@@ -1631,27 +1658,39 @@ def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.
 
 
 def _picture_address(img: lxml.html.HtmlElement) -> str:
-    """An image's address, or else the one its <picture>'s sources offer."""
+    """An image's address, or else the one its <picture>'s sources offer: also in place of an
+    embedded stand-in (an empty SVG, a blank WebP) when they offer one on the web."""
     address = _image_src(img)
     parent = img.getparent()
-    if address or parent is None or parent.tag != "picture":
+    if (address and not address.lower().startswith("data:")) or parent is None or parent.tag != "picture":
         return address
     for source in parent.iter("source"):
         for name in ("srcset", "data-srcset"):
             urls = [url for url in srcset_urls(source.get(name) or "") if not url.lower().startswith("data:")]
             if urls:
                 return urls[-1]
-    return ""
+    return address
 
 
 def _picture_name(address: str) -> str:
     """An image's address without what only sizes it (?width=445&dpr=1): two sizes of one
     photo are one picture, while a query that says which photo (?id=2, ?url=…) stays."""
-    parts = urlsplit(address.strip())
+    try:
+        parts = urlsplit(address.strip())
+    except ValueError:  # "https://[CDN_HOST]/a.jpg", a template the page never filled in
+        return address
     if not parts.path:
         return address
     kept = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in SIZE_QUERY)
-    return parts.netloc + parts.path + ("?" + urlencode(kept) if kept else "")
+    path = SIZED_NAME.sub(r"\1", parts.path)  # WordPress's photo-640x480.jpg is photo.jpg
+    return parts.netloc + path + ("?" + urlencode(kept) if kept else "")
+
+
+def _file_name(address: str) -> str:
+    try:
+        return urlsplit(address.strip()).path.rsplit("/", 1)[-1]
+    except ValueError:
+        return ""
 
 
 def _hidden(el: lxml.html.HtmlElement) -> bool:
@@ -2599,7 +2638,10 @@ def extract(
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
             _drop_dangling_pitch(page, page_html, url)
-            _restore_figure_pictures(page, page_html)
+            try:
+                _restore_figure_pictures(page, page_html)
+            except Exception:  # noqa: BLE001, S110 - hostile markup; the article goes without the pictures
+                pass
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
