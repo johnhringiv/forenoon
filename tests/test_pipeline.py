@@ -1837,3 +1837,34 @@ def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, mon
         ("site-paper.example", "https://www.paper.example/grid", [0, 1], 2),
         ("", "https://down.example/grid", [0, 1], 2),
     ]
+
+
+def test_a_drawn_figure_gets_its_picture_with_no_note_or_the_note_alone(env, monkeypatch):
+    import types
+
+    import app.pipeline
+    from app import sessions
+    from app.extract import extract
+
+    cfg, _, _ = env
+    words = "<p>" + "Plain words about image formats and how long they take to encode. " * 12 + "</p>"
+    chart = "<figure><svg>" + "<rect/>" * 30 + "</svg><figcaption>Encode time</figcaption></figure>"
+    page = f"<html><body><article>{words}{chart}{words}{chart}{words}</article></body></html>"
+    picture = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(picture, "JPEG")
+    monkeypatch.setattr(
+        sessions, "figure_shots", lambda sessions_dir, session, url, figures, total: {0: picture.getvalue()}
+    )
+    for shots in ({0: picture.getvalue()}, {0: b"not a jpeg"}):
+        monkeypatch.setattr(sessions, "figure_shots", lambda sessions_dir, session, url, figures, total, s=shots: s)
+        result = extract("https://blog.example/avif", page, "", "page")
+        article, _ = app.pipeline._assemble(types.SimpleNamespace(url="https://blog.example/avif", id="x", title="AVIF",
+            site="", author="", published=None, discussion_url="", also=(), source=Source("Blog"),
+            sources=lambda: [Source("Blog")]), result, None, cfg)  # fmt: skip
+        out = etree.tostring(article.body, encoding="unicode")
+        note = 'See the figure on the <a href="https://blog.example/avif">original page</a>.'
+        assert "Interactive" not in out and "shot-" not in out and out.count("Encode time") == 2
+        if shots[0] == b"not a jpeg":  # no picture kept: each figure points to the page
+            assert "<img" not in out and out.count(note) == 2
+        else:  # the first is drawn, with no note under it; the second points to the page
+            assert out.count("<img") == 1 and out.count(note) == 1

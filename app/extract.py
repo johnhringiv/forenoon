@@ -43,6 +43,21 @@ PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", 
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
+# A file a page shows until a script loads the picture (Monochrome's image_placeholder.svg, the
+# BBC's grey-placeholder.png): not "lazy-import-cover.jpg".
+PLACEHOLDER_FILE = re.compile(
+    r"^((grey|gray|image|img|default|lazy)[-_]?)?(placeholder|blank|spacer|transparent|pixel|1x1)\.(png|gif|svg|jpe?g|webp)$",
+    re.IGNORECASE,
+)
+# A button that only enlarges its picture (a lightbox's), unlike a video's play button.
+ENLARGE = re.compile(
+    r"enlarge|zoom|expand|lightbox|full[ -]?screen|full[ -]?size|view (larger|image|full)", re.IGNORECASE
+)
+NOT_ENLARGE = re.compile(r"play|video|watch|peek|reveal|cover", re.IGNORECASE)
+# A status badge (a README's "build passing"), drawn by a badge service or a CI's badge.svg.
+BADGE = re.compile(r"//(img\.)?shields\.io/|//badgen\.net/|//badge\.fury\.io/|/badge\.svg(\?|$)", re.IGNORECASE)
+OBJECT_PICTURE = re.compile(r"\.(svg|png|jpe?g|gif|webp)(\?|#|$)", re.IGNORECASE)
+DRAWN_MIN_ELEMENTS = 20  # of an inline <svg>, for a drawing (a chart, a diagram), not an icon
 UNSETTABLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")  # refused by lxml when set again
 UNSETTABLE_REF = re.compile(r"&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?")  # a character written as a reference
 PLACEHOLDER_MAX_CHARS = 200  # of a data: address, enough to read its image's header
@@ -77,6 +92,7 @@ CALLOUT_MAX_WORDS = 400
 WIDGET_MARKERS = ".//input | .//select | .//textarea | .//fieldset | .//canvas | .//script"
 WIDGET_KEPT = ".//img | .//picture | .//video | .//audio | .//table | .//iframe | .//pre | .//code | .//blockquote"
 SHOT_ID = "shot-"  # the placeholder left for such a figure: the pipeline puts a picture of it here
+DRAWN = "drawn"  # in a shot's id: the figure is a drawing (SVG, an embedded chart), not a widget
 
 # A box beside the text that is mostly links is a teaser for other pages ("Recommended",
 # "You may like", a topic tag), not part of the article. Real notes and callouts carry a few
@@ -312,7 +328,7 @@ def settable(html: str) -> str:
 
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
-    if _blank_pixel(src):
+    if _blank_pixel(src) or PLACEHOLDER_FILE.match(_file_name(src)):
         src = ""  # held in place of a picture that a script loads
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
@@ -321,7 +337,22 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
         # own commas are part of it); none in a blank or "," srcset.
         found = srcset_urls(el.get("srcset"))
         src = next((part for part in reversed(found) if not part.lower().startswith("data:")), "")
+    if not src or (src.lower().startswith("data:") and _blank_pixel(src)):
+        src = _linked_picture(el) or src
     return src
+
+
+def _linked_picture(img: lxml.html.HtmlElement) -> str:
+    """The address of the link around a figure's picture that has none of its own (Yahoo's: a
+    blank pixel until a script loads the photo the link points to). Only a link holding
+    nothing else, to another site's address: its picture host, not a page of the article's."""
+    link = img.getparent()
+    if link is None or link.tag != "a" or next(img.iterancestors("figure"), None) is None:
+        return ""
+    if len(link) != 1 or (link.text or "").strip() or (img.tail or "").strip():
+        return ""
+    href = (link.get("href") or "").strip()
+    return href if href.lower().startswith(("http://", "https://")) else ""
 
 
 def _classes(el: lxml.html.HtmlElement) -> set[str]:
@@ -363,6 +394,21 @@ def _interactive(figure: lxml.html.HtmlElement) -> bool:
     return not figure.xpath(WIDGET_KEPT) and bool(figure.xpath(WIDGET_MARKERS))
 
 
+def _drawn(figure: lxml.html.HtmlElement) -> bool:
+    """Whether a figure is a drawing the book would lose: an inline SVG of some size (a chart,
+    a diagram) or an embedded page that is not a video (a chart from Flourish, a demo), with no
+    picture, video, table, code or quote of its own. Not a player's (its controls are SVG)."""
+    if figure.xpath(WIDGET_KEPT.replace(" | .//iframe", "")):
+        return False
+    names = (el for el in (figure, *figure.iterdescendants()) if isinstance(el.tag, str))
+    if any(PLAYER_NAME_PICTURE.search(" ".join([el.tag, _names(el), el.get("data-component") or ""])) for el in names):
+        return False
+    frames = [(f.get("src") or f.get("data-src") or "").strip() for f in figure.iter("iframe")]
+    if frames:
+        return all(src and not VIDEO_LINK.match(src) for src in frames)
+    return any(len(svg.xpath(".//*")) >= DRAWN_MIN_ELEMENTS for svg in figure.iter("svg"))
+
+
 def _mark_widgets(root: lxml.html.HtmlElement) -> None:
     """Put a placeholder first in each interactive figure, saying which of the page's figures
     it is (counted in document order as a browser with scripts counts them: not inside
@@ -374,16 +420,53 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         if not any(ancestor.tag in ("noscript", "template") for ancestor in figure.iterancestors())
     ]
     for number, figure in enumerate(figures):
-        if not _interactive(figure):
+        drawn = not _interactive(figure) and _drawn(figure)
+        if not drawn and not _interactive(figure):
             continue
         holder = lxml.html.Element("p")
-        holder.set(MARK, "shot")
+        holder.set(MARK, DRAWN if drawn else "shot")
         holder.set(MARK_N, str(number))
         holder.set(MARK_OF, str(len(figures)))
-        holder.text = "An interactive figure from the original page."
+        holder.text = "A figure from the original page." if drawn else "An interactive figure from the original page."
         holder.tail = figure.text
         figure.text = None
         figure.insert(0, holder)
+
+
+def _unwrap_lightboxes(root: lxml.html.HtmlElement) -> None:
+    """Take a picture out of a button that only enlarges it (Nautilus's "Enlarge image"): the
+    book drops buttons, as they also hold a video's poster behind its play button. Only a
+    button named for enlarging, holding pictures and no words, not in or named for a player."""
+    for button in list(root.iter("button")):
+        if button.find(".//img") is None or "".join(button.itertext()).strip():
+            continue
+        names = " ".join([button.get("aria-label") or "", button.get("title") or "", _names(button)])
+        if not ENLARGE.search(names) or NOT_ENLARGE.search(names):
+            continue
+        if any(PLAYER_NAME_PICTURE.search(_names(a)) for a in button.iterancestors() if isinstance(a.tag, str)):
+            continue
+        button.drop_tag()
+
+
+def _object_pictures(root: lxml.html.HtmlElement) -> None:
+    """Make an <object> that shows a picture file (an SVG chart, arXiv's figures, an equation)
+    an <img> of it, as the book drops objects: its own fallback <img> when it holds one."""
+    for obj in list(root.iter("object")):
+        data = (obj.get("data") or "").strip()
+        kind = (obj.get("type") or "").strip().lower()
+        if not data or not (kind.startswith("image/") or (not kind and OBJECT_PICTURE.search(data))):
+            continue
+        fallback = obj.find(".//img")
+        img = copy.deepcopy(fallback) if fallback is not None else lxml.html.Element("img")
+        if fallback is None or not _image_src(img):
+            img.set("src", data)
+        if not img.get("alt") and " ".join(obj.text_content().split()):
+            img.set("alt", " ".join(obj.text_content().split()))
+        for name in ("width", "height"):
+            if obj.get(name) and not img.get(name):
+                img.set(name, obj.get(name))
+        img.tail = obj.tail
+        obj.getparent().replace(obj, img)
 
 
 def _free_headings(root: lxml.html.HtmlElement) -> None:
@@ -1002,6 +1085,8 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     or class from the page reaches the book.
     """
     _unmark(root)
+    _unwrap_lightboxes(root)
+    _object_pictures(root)
     if whole_page:  # a feed's copy is not the page a browser would show
         _mark_widgets(root)
     # The page's own quotes only: before asides and callouts are made quotes below.
@@ -1414,8 +1499,8 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
             keep.update({"id": f"fn-{number}", "class": "footnote"})
         elif mark == "target":
             keep["id"] = f"sec-{number}"
-        elif mark == "shot" and tag == "p" and el.get(MARK_OF, "").isdigit():
-            keep["id"] = f"{SHOT_ID}{number}-{el.get(MARK_OF)}"
+        elif mark in ("shot", DRAWN) and tag == "p" and el.get(MARK_OF, "").isdigit():
+            keep["id"] = f"{SHOT_ID}{number}-{el.get(MARK_OF)}" + (f"-{DRAWN}" if mark == DRAWN else "")
         if tag == "a" and mark == "ref":
             keep.update({"href": f"#fn-{number}", "class": "noteref"})
             if el.get(MARK_FIRST):
@@ -1432,7 +1517,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
                 keep["src"] = src
             elif src:
                 src = _join(base_url, src)
-                if src.startswith(("http://", "https://")):
+                if src.startswith(("http://", "https://")) and not BADGE.search(src):
                     keep["src"] = src
             keep["alt"] = (el.get("alt") or "")[:300]
         for name in ATTRS.get(tag, ()):
@@ -1994,6 +2079,9 @@ def _shown_pictures(
                 el.tail = None
         else:
             picture = copy.deepcopy(img)
+        shown = picture if picture.tag == "img" else picture.find("img")
+        if _image_src(shown) != address:
+            shown.set("src", address)  # what only its place gave it (the link around it)
         picture.tail = None
         found[name] = picture
         if len(found) > RESTORE_MAX_PICTURES:

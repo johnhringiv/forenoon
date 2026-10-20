@@ -626,3 +626,88 @@ def test_generated_icons_match_the_mark():
     assert (root / "web/icons/icon.svg").read_text() == mark.svg_tile()
     # The share card is rendered from the landing page by tools/og_card.py, with a browser.
     assert Image.open(root / "web/icons/og.png").size == (1200, 630)
+
+
+def test_an_svg_is_drawn_at_twice_its_size_within_the_book_limits():
+    from PIL import Image
+
+    from app.config import Images
+    from app.images import _convert
+
+    chart = b'<svg xmlns="http://www.w3.org/2000/svg" width="300pt" height="150pt"><rect width="100%" height="100%" fill="black"/></svg>'
+    out = Image.open(io.BytesIO(_convert(chart, Images())))
+    assert out.size == (800, 400)  # 300pt is 400px
+    assert out.getpixel((10, 10)) < 20
+    # No size of its own but a viewBox; larger than the book takes: within its limits.
+    big = b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 1000"><circle cx="5" cy="5" r="4"/></svg>'
+    assert Image.open(io.BytesIO(_convert(big, Images()))).size == (1200, 400)
+    # An equation of a single letter is kept; a dot of a few pixels is not.
+    letter = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="8"><path d="M0 0h10v8z"/></svg>'
+    assert Image.open(io.BytesIO(_convert(letter, Images()))).size == (20, 16)
+    dot = b'<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><path d="M0 0h4v4z"/></svg>'
+    assert _convert(dot, Images()) is None
+
+
+def test_an_svg_reads_nothing_from_outside_itself(tmp_path, monkeypatch):
+    from app.config import Images
+    from app.images import _svg_png
+
+    secret = tmp_path / "secret.png"
+    secret.write_bytes(b"\x89PNG not really")
+    hostile = f"""<?xml version="1.0"?>
+<!DOCTYPE svg [<!ENTITY leak SYSTEM "file://{secret}">]>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="100">
+  <style>@import url("https://tracker.example/a.css"); rect {{ fill: red }}</style>
+  <image xlink:href="file://{secret}" width="10" height="10"/>
+  <image href="{secret}" width="10" height="10"/>
+  <foreignObject><div xmlns="http://www.w3.org/1999/xhtml">&leak;</div></foreignObject>
+  <script>alert(1)</script>
+  <text x="5" y="50">&leak;</text>
+</svg>""".encode()
+    seen = {}
+
+    def render(**kw):
+        seen.update(kw)
+        return b""
+
+    monkeypatch.setattr("app.images.resvg_py.svg_to_bytes", render)
+    _svg_png(hostile, Images())
+    svg = seen["svg_string"]
+    assert str(secret) not in svg and "tracker.example" not in svg
+    assert "<script" not in svg and "foreignObject" not in svg and "<image" in svg
+    assert seen["skip_system_fonts"] is True
+
+
+def test_a_broken_svg_is_an_error_the_images_step_counts():
+    import pytest as _pytest
+
+    from app.config import Images
+    from app.images import _convert
+
+    with _pytest.raises(ValueError):
+        _convert(b"<svg xmlns='http://www.w3.org/2000/svg'><unclosed></svg>", Images())
+
+
+def test_equations_do_not_use_up_an_articles_picture_budget():
+    import dataclasses as dc
+
+    import lxml.html as lh
+
+    from app.config import Images
+    from app.images import embed_images
+
+    equation = b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="12"><path d="M0 0h40v12z"/></svg>'
+    chart = b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><path d="M0 0h400v300z"/></svg>'
+
+    class Fetcher:
+        def get(self, url, max_bytes):
+            return type("R", (), {"content": equation if "eq" in url else chart})()
+
+    body = lh.fromstring(
+        "<div>"
+        + "".join(f'<img src="https://m.example/chart{n}.svg">' for n in range(3))
+        + "".join(f'<img src="https://m.example/eq{n}.svg">' for n in range(5))
+        + "</div>"
+    )
+    assets, dropped = embed_images(body, Fetcher(), dc.replace(Images(), max_count_per_article=2))
+    assert len(assets) == 7 and dropped == 1  # two charts and every equation; the third chart goes

@@ -28,7 +28,7 @@ from .deliver import (
     send,
 )
 from .discover import is_article, read_listing, site_host, site_source
-from .extract import SHOT_ID, Extracted, extract
+from .extract import DRAWN, SHOT_ID, Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
@@ -261,10 +261,12 @@ def _figure_shots(item: Item, result: Extracted, cfg: Config) -> list[tuple[lxml
     holders = result.body.xpath(f'.//p[starts-with(@id, "{SHOT_ID}")]')
     if not holders:
         return []
-    numbers, total = [], 0
+    numbers, total, drawn = [], 0, []
     for holder in holders:
-        number, _, total_text = holder.get("id").removeprefix(SHOT_ID).partition("-")
+        number, _, rest = holder.get("id").removeprefix(SHOT_ID).partition("-")
+        total_text, _, kind = rest.partition("-")
         numbers.append(int(number))
+        drawn.append(kind == DRAWN)
         total = int(total_text)
     room = min(MAX_FIGURE_SHOTS, cfg.images.max_count_per_article - len(result.body.xpath(".//img")))
     shots: dict[int, bytes] = {}
@@ -276,9 +278,10 @@ def _figure_shots(item: Item, result: Extracted, cfg: Config) -> list[tuple[lxml
             shots = sessions.figure_shots(cfg.sessions_dir, session, item.url, numbers[:room], total)
         except FetchError as exc:
             log.info("no pictures of interactive figures for %s: %s", item.url, exc)
-    for holder, number in zip(holders, numbers, strict=True):
+    for holder, number, still in zip(holders, numbers, drawn, strict=True):
         del holder.attrib["id"]
-        holder.text = "Interactive on the "
+        # A drawing's picture is the figure; without one, the reader is sent to the page for it.
+        holder.text = "See the figure on the " if still else "Interactive on the "
         link = lxml.html.Element("a", href=item.url)
         link.text = "original page"
         link.tail = "."
@@ -297,18 +300,31 @@ def _figure_shots(item: Item, result: Extracted, cfg: Config) -> list[tuple[lxml
             figure.remove(child)
         holder.tail = None
         picture = lxml.html.Element("img", src="data:image/jpeg;base64," + base64.b64encode(shots[number]).decode())
-        picture.set("alt", "An interactive figure, as the original page first shows it")
+        picture.set(
+            "alt",
+            "A figure, as the original page draws it"
+            if still
+            else "An interactive figure, as the original page first shows it",
+        )
         holder.addprevious(picture)
-        placed.append((picture, [holder, held_tail, held]))
+        if still:  # the picture says it all: the line comes back only should the picture go
+            holder.text, link.tail = None, None
+            holder.remove(link)
+        placed.append((picture, [holder, held_tail, held, link if still else None]))
     return placed
 
 
 def _restore_figures(placed: list[tuple[lxml.html.HtmlElement, list]]) -> None:
     """Put back what a figure held when its picture was not kept (it would not convert, or the
     article's picture budget ran out): its own text, rather than nothing."""
-    for picture, (holder, held_tail, held) in placed:
+    for picture, (holder, held_tail, held, line) in placed:
         if picture.getparent() is not None:
+            if line is not None and holder.getparent() is not None and not len(holder):
+                holder.drop_tree()  # a drawing's picture, kept: no line under it
             continue
+        if line is not None:
+            holder.text, line.tail = "See the figure on the ", "."
+            holder.append(line)
         holder.tail = held_tail
         figure = holder.getparent()
         for index, child, tail in held:  # in order, each back at its own place
@@ -334,12 +350,12 @@ def _assemble(
     if check is not None:
         # The pictures and their placeholders are followed into the edited article, so a
         # picture that is not kept still gives its figure its text back.
-        held = [el for picture, (holder, _, _) in placed for el in (picture, holder)]
+        held = [el for picture, (holder, *_) in placed for el in (picture, holder)]
         moved = getattr(check(item, result, held), "moved", None)
         if moved:
             placed = [
-                (moved[2 * n], [moved[2 * n + 1], held_tail, kept])
-                for n, (_, (_, held_tail, kept)) in enumerate(placed)
+                (moved[2 * n], [moved[2 * n + 1], held_tail, kept, line])
+                for n, (_, (_, held_tail, kept, line)) in enumerate(placed)
                 if moved[2 * n] is not None and moved[2 * n + 1] is not None
             ]
     assets, dropped = embed_images(result.body, fetcher, cfg.images)
