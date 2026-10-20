@@ -41,6 +41,7 @@ PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", 
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
+PLACEHOLDER_MAX_CHARS = 200  # a data: image this short is a blank pixel (a 1×1 GIF is about 70)
 
 # Structure that pages express only through class names and in-page links. It is rebuilt
 # from these before the allowlist removes every class and id (see _structure).
@@ -272,6 +273,8 @@ def srcset_urls(srcset: str) -> list[str]:
 
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
+    if src.startswith("data:") and len(src) <= PLACEHOLDER_MAX_CHARS:
+        src = ""  # a blank pixel held in place of a picture that a script loads
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
     if not src and el.get("srcset"):
@@ -517,6 +520,7 @@ def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
             box.drop_tag()
 
 
+PREFERRED_SOURCE_LINKS = ("google.com/preferences/source", "news.google.com/publications/")
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
 SKIP_TARGET_MAX_WORDS = 6
 
@@ -547,6 +551,13 @@ def _drop_page_notices(root: lxml.html.HtmlElement) -> None:
         asks = preferred and not quoted and _words(text) <= PROMPT_MAX_WORDS and PREFERRED_SOURCE.search(text)
         if notice or asks:
             el.drop_tree()
+    # The same request as a badge: a picture, and no words, linking to the site's Google page.
+    for a in list(root.iter("a")):
+        href = a.get("href") or ""
+        if a.getparent() is None or not any(place in href for place in PREFERRED_SOURCE_LINKS):
+            continue
+        if a.find(".//img") is not None and not a.text_content().strip():
+            a.drop_tree()
 
 
 def _drop_skip_targets(root: lxml.html.HtmlElement) -> None:
@@ -1276,12 +1287,29 @@ def _unmark(root: lxml.html.HtmlElement) -> None:
                 del el.attrib[name]
 
 
+def _unnest_empty(root: lxml.html.HtmlElement) -> None:
+    """Take out what lxml's parser put inside a <source> or <track>: it does not know they are
+    empty, so it nests what follows them there, a <picture>'s own <img> among it. Written out
+    again, the emptied tag is closed and parses as it should."""
+    for el in list(root.iter("source", "track")):
+        children, text, tail = list(el), el.text or "", el.tail or ""
+        el.text = None
+        if children:
+            children[-1].tail = (children[-1].tail or "") + tail
+            el.tail = text
+        else:
+            el.tail = text + tail
+        for child in reversed(children):
+            el.addnext(child)
+
+
 def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.HtmlElement | None]:
     """The markup with its structure rebuilt and its notes taken out, and those notes."""
     try:
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
+        _unnest_empty(root)
         notes = _structure(root, base_url, whole_page)
         return lxml.html.tostring(root, encoding="unicode"), notes
     except Exception:  # noqa: BLE001 - hostile input; the article is still delivered without this
@@ -1311,6 +1339,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
     for el in list(root.iter()):
         if not isinstance(el.tag, str):  # comments, processing instructions
             el.drop_tree()
+    _unnest_empty(root)
     if not marked:
         _unmark(root)
     for el in root.xpath(".//*[self::h1]"):
@@ -1365,6 +1394,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
     _link_cards(root)
     _fix_nesting(root)
     _prune_empty(root)
+    _drop_repeated_captions(root)
     for note in root.iter("div"):
         if note.get("class") == "footnote":
             note.tag = "aside"  # after the passes above, which know only the allowlist's blocks
@@ -1404,6 +1434,34 @@ def _link_cards(root: lxml.html.HtmlElement) -> None:
         site = etree.SubElement(box, "p")
         site.set("class", "card-site")
         site.text = urlsplit(link.get("href")).hostname or ""
+
+
+QUOTES = str.maketrans("\u2018\u2019\u201c\u201d", "''\"\"")
+
+
+def _caption_key(el: lxml.html.HtmlElement) -> str:
+    """A caption's words for comparing copies: no spaces (blocks run together without them),
+    and the page's two copies may differ in their quote marks."""
+    return "".join(el.text_content().split()).translate(QUOTES)
+
+
+def _drop_repeated_captions(root: lxml.html.HtmlElement) -> None:
+    """Drop the copy of a figure's caption that the page also shows over its picture (an
+    overlay, a lightbox's text): the same words twice in one figure, once as its caption."""
+    for figure in root.iter("figure"):
+        captions = figure.findall("figcaption")
+        if len(captions) != 1:
+            continue
+        caption = _caption_key(captions[0])
+        if not caption:
+            continue
+        for el in list(figure.iterdescendants("div", "p")):
+            if el.getparent() is None or next(el.iterancestors("figcaption"), None) is not None:
+                continue
+            if el.xpath(".//img | .//figcaption | .//figure"):
+                continue
+            if _caption_key(el) == caption:
+                el.drop_tree()
 
 
 def _prune_empty(root: lxml.html.HtmlElement) -> None:
@@ -1625,6 +1683,14 @@ class _Document(Document):
             if ul not in allowed and self._text_list(ul):
                 allowed[ul] = True
                 self._kept_lists.add(ul)
+        # A figure's own box around its picture: it has no text, so readability takes it as empty.
+        for div in self.tags(node, "div"):
+            if (
+                div not in allowed
+                and div.find(".//img") is not None
+                and next(div.iterancestors("figure"), None) is not None
+            ):
+                allowed[div] = True
         return allowed
 
     def get_link_density(self, elem):

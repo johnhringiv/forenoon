@@ -1842,3 +1842,62 @@ def test_an_image_with_an_empty_srcset_is_left_out_not_a_crash():
     for srcset in (",", "  ", "a.jpg 1x, "):
         img = lxml.html.fromstring(f'<img srcset="{srcset}">')
         assert extract_module._image_src(img) == ("a.jpg" if "a.jpg" in srcset else "")
+
+
+def test_a_pictures_image_after_its_sources_is_kept():
+    # lxml nests what follows a <source> inside it; the <img> must survive the <source> going.
+    sources = '<source srcset="https://i.example/a.jpg?w=1900 1x" media="(min-width: 1300px)"><source srcset="https://i.example/a.jpg?w=1300 1x">'
+    figure = f'<figure><div><picture>{sources}<img alt="A flag" src="https://i.example/a.jpg?w=480"></picture></div><figcaption>A flag flies.</figcaption></figure>'
+    body = extract_module.sanitize(lxml.html.fragment_fromstring(figure, create_parent="div"), "https://news.example/")
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/a.jpg?w=480"]
+    assert not body.xpath("//source") and body.xpath("//figure[.//img]/figcaption")
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands, the people there and the long dispute.</p>"
+        for i in range(8)
+    )
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{figure}{paras}</article></body></html>"
+    result = extract_module.extract("https://news.example/2026/story", page, "", "page")
+    assert result.body.xpath("//figure//img") and "A flag flies." in result.body.text_content()
+    # A player's sources still go with the player, fallback text and all.
+    video = '<div><video controls><source src="https://v.example/a.mp4"><track src="c.vtt">Your browser does not support video.</video><p>After.</p></div>'
+    body = extract_module.sanitize(lxml.html.fromstring(video), "https://news.example/")
+    assert body.text_content() == "After."
+
+
+def test_a_figures_picture_box_stays_and_its_caption_is_not_repeated():
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands, the people there and the long dispute.</p>"
+        for i in range(8)
+    )
+    # A picture in a box of its own inside the figure (readability takes the box as empty).
+    figure = '<figure><div class="media"><img alt="Hills" src="https://i.example/h.jpg"></div><figcaption>The hills above Stanley.</figcaption></figure>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{figure}{paras}</article></body></html>"
+    result = extract_module.extract("https://news.example/2026/story", page, "", "page")
+    assert result.body.xpath("//figure[.//img]/figcaption")
+    # The caption shown over the picture as well as under it: once.
+    overlay = '<figure><div><a href="https://i.example/c.png"><img alt="" src="https://i.example/c.png"></a><div><p>Agents write a lot of code’s worth.</p><p>Credit: <a href="https://x.example/r.pdf">Chen</a></p></div></div><figcaption><p>Agents write a lot of code&#39;s worth. Credit: <a href="https://x.example/r.pdf">Chen</a></p></figcaption></figure>'
+    body = extract_module.sanitize(lxml.html.fragment_fromstring(overlay, create_parent="div"), "https://news.example/")
+    assert (
+        body.text_content().count("Agents write") == 1 and body.xpath("//figure//img") and body.xpath("//figcaption//a")
+    )
+    # Not a caption: the same words outside the figure, or a figure with two captions.
+    twice = '<div><p>Agents write a lot of code.</p><figure><img src="https://i.example/c.png"><figcaption>Agents write a lot of code.</figcaption></figure></div>'
+    body = extract_module.sanitize(lxml.html.fromstring(twice), "https://news.example/")
+    assert body.text_content().count("Agents write") == 2
+
+
+def test_a_blank_pixel_is_no_picture_and_a_preferred_source_badge_goes():
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    assert extract_module._image_src(lxml.html.fromstring(f'<img src="{pixel}">')) == ""
+    lazy = f'<img src="{pixel}" data-src="https://i.example/a.jpg">'
+    assert extract_module._image_src(lxml.html.fromstring(lazy)) == "https://i.example/a.jpg"
+    drawn = "data:image/png;base64," + "A" * 400  # a real picture held in the page
+    assert extract_module._image_src(lxml.html.fromstring(f'<img src="{drawn}">')) == drawn
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the stores, the attack and what came after it.</p>"
+        for i in range(8)
+    )
+    badge = '<a href="https://news.google.com/publications/CAAqLAgKIiZD"><figure><div><img src="https://cdn.example/g.png" alt="Google Preferred Source"></div></figure></a>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{badge}<p>The last word on it.</p></article></body></html>"
+    result = extract_module.extract("https://news.example/2026/story", page, "", "page")
+    assert not result.body.xpath("//img") and "The last word" in result.body.text_content()

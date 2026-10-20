@@ -351,6 +351,12 @@ All fetched content is treated as untrusted.
   link targets, image sources and alt text, table spans and list start numbers. Links and
   images must be absolute `http(s)` (or `mailto:` / embedded image data). Top-level headings
   become second-level, invalid nesting is repaired, and containers left empty are removed.
+  A `<picture>` keeps its own image behind its `<source>` alternatives, and a figure keeps its
+  picture when the box around it has no words of its own; a blank pixel held in a picture's
+  place until a script loads it (a tiny embedded image) counts as no picture. A caption a
+  figure also shows over its picture (an overlay, a lightbox's text) appears once. A badge
+  linking to the site's page on Google News (asking readers to pick it as a preferred source)
+  is removed.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
   extracted body (a standfirst in the page header), it is added in italics at the top.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt
