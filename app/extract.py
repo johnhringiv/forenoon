@@ -1531,6 +1531,8 @@ STACK_NAME = re.compile(
 )
 STACK_ROLES = {"carousel", "slide"}  # aria-roledescription
 ARTBOARD = "g-artboard"  # ai2html's: one copy of a graphic per screen width
+CLONE_CLASSES = {"slick-cloned", "swiper-slide-duplicate"}  # a looping carousel's copies of slides
+RESTORE_DROPPED_MAX = 40  # pictures put back in one article: the most a book shows of it
 CAPTION_MATCH_LETTERS = 20  # of a caption, to be found within another
 DROPPED_PARAGRAPH_LETTERS = 40  # a paragraph this long the article lacks: it dropped more than a figure there
 SIZE_QUERY = {"w", "width", "h", "height", "q", "quality", "dpr", "fit", "crop", "auto", "format", "fm", "s", "resize"}
@@ -1660,17 +1662,17 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
     region = _article_region(page, body)
     if region is None:
         return
-    marks = _once(body) & _once(page)
+    marks = _once(body, MARK_BLOCKS) & _once(page, MARK_BLOCKS)
     if len(marks) < 2:
         return
-    # The article in order: its marked paragraphs, and between them the figures and pictures it has.
+    # The article in order: its marked paragraphs and headings, and the figures it has after each.
     order: list[str] = []
     anchors: dict[str, lxml.html.HtmlElement] = {}
     kept: dict[str, list[lxml.html.HtmlElement]] = {}  # the figures between a mark and the next
-    for el in body.iter("p", "figure"):
+    for el in body.iter(*MARK_BLOCKS, "figure"):
         if next(el.iterancestors("figure"), None) is not None:
             continue
-        if el.tag == "p":
+        if el.tag != "figure":
             if (key := _text_key(el)) in marks:
                 order.append(key)
                 anchors[key] = el
@@ -1684,9 +1686,18 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
         for f in body.iter("figure")
         if f.find(".//img") is None and len(k := _figure_key(f)) >= CAPTION_MATCH_LETTERS
     ]
-    half = 0.5 * _words(_visible_text(page))
+    half: float | None = None  # of the page's words, counted on first need
     elsewhere: dict[lxml.html.HtmlElement, bool] = {}
-    stacks: set[lxml.html.HtmlElement] = set()  # those a figure was taken from
+    stacks: set[lxml.html.HtmlElement] = set()  # those whose first photo was seen
+    added = 0
+
+    def other_stories(box: lxml.html.HtmlElement) -> bool:
+        nonlocal half
+        if box not in elsewhere:
+            if half is None:
+                half = 0.5 * _words(_visible_text(page))
+            elsewhere[box] = _elsewhere(box, half)
+        return elsewhere[box]
 
     def own_boxes(figure: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
         boxes = list(figure.iterancestors())
@@ -1696,20 +1707,20 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
     last: str | None = None
     between: list[lxml.html.HtmlElement] = []
     dropped: list[lxml.html.HtmlElement] = []  # paragraphs between the two the article lacks
-    for el in region.iter("p", "figure"):
-        if next(el.iterancestors("figure"), None) is not None:
-            continue
+    walk = [el for el in region.iter(*MARK_BLOCKS, "figure") if next(el.iterancestors("figure"), None) is None]
+    holders = {a for el in walk if el.tag != "figure" and _text_key(el) in marks for a in el.iterancestors()}
+    for el in walk:
         if el.tag == "figure":
             between.append(el)
         elif (key := _text_key(el)) in marks:
             if between and last is not None and following.get(last) == key:
                 # Not a figure in a box readability dropped with text of its own (a card for
                 # another story): one holding such a paragraph and none the article kept.
-                alone = [f for f in between if not any(_dropped_with(f, p, marks) for p in dropped)]
+                alone = [f for f in between if not any(_dropped_with(f, p, holders) for p in dropped)]
                 if alone:
                     gaps.append((last, alone))  # the article has these two side by side
             last, between, dropped = key, [], []
-        elif len(key) >= DROPPED_PARAGRAPH_LETTERS and key not in said:
+        elif el.tag == "p" and len(key) >= DROPPED_PARAGRAPH_LETTERS and key not in said:
             dropped.append(el)
 
     for key, figures in gaps:
@@ -1722,10 +1733,21 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
             "article",
             "main",
             "body",
+            "td",
+            "th",
         ):
             anchor = anchor.getparent()
         present = kept.get(key, [])
         for figure in figures:
+            if added >= RESTORE_DROPPED_MAX:
+                return
+            boxes = own_boxes(figure)
+            if any(_clone(b) for b in boxes if any(_stack(a) for a in b.iterancestors())):
+                continue  # a looping carousel's copy of a slide
+            stack = next((b for b in reversed(boxes) if _stack(b)), None)  # the carousel, not its slide
+            later = stack is not None and stack in stacks  # a photo of a stack after its first
+            if stack is not None:
+                stacks.add(stack)
             pictures = _shown_pictures(figure, url, region)
             names = {name for name, _ in pictures}
             twin = next(
@@ -1739,6 +1761,8 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
             )
             if twin is not None:
                 anchor = twin  # the article kept this one: the next goes after it
+                continue
+            if later:
                 continue
             same = _same_caption(figure, captioned)
             if same is not None:
@@ -1754,21 +1778,14 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
                         else:
                             same.append(picture)
                 continue
-            boxes = own_boxes(figure)
-            if any(_unlikely(b) for b in (figure, *boxes)):
+            if any(_unlikely(b) for b in (figure, *boxes)) or any(other_stories(b) for b in boxes):
                 continue
-            if any(elsewhere.setdefault(b, _elsewhere(b, half)) for b in boxes):
-                continue
-            stack = next((b for b in reversed(boxes) if _stack(b)), None)  # the carousel, not its slide
             if stack is not None:
-                if stack in stacks:
-                    continue  # a later photo of a stack the book shows the first of
                 pictures = pictures[:1]
             pictures = [(name, picture) for name, picture in pictures if name not in have]
             if not pictures:
                 continue
-            if stack is not None:
-                stacks.add(stack)
+            added += len(pictures)
             caption = _own_caption(figure)
             restored = lxml.html.Element("figure")
             for name, picture in pictures:
@@ -1799,17 +1816,21 @@ def _same_caption(
     return next((f for f, k in captioned if k in key or key in k), None)
 
 
-def _dropped_with(figure: lxml.html.HtmlElement, p: lxml.html.HtmlElement, marks: set[str]) -> bool:
-    """Whether a figure and a paragraph share a box holding none of the article's paragraphs."""
+def _dropped_with(figure: lxml.html.HtmlElement, p: lxml.html.HtmlElement, holders: set[lxml.html.HtmlElement]) -> bool:
+    """Whether a figure and a paragraph share a box holding none of the article's paragraphs
+    (`holders`: the boxes that hold one)."""
     above = set(figure.iterancestors())
     shared = next((a for a in p.iterancestors() if a in above), None)
-    return shared is not None and not any(_text_key(q) in marks for q in shared.iter("p"))
+    return shared is not None and shared not in holders
 
 
-def _once(root: lxml.html.HtmlElement) -> set[str]:
-    """The words of each paragraph outside figures that a tree has only once."""
+MARK_BLOCKS = ("p", "h2", "h3", "h4", "h5", "h6")
+
+
+def _once(root: lxml.html.HtmlElement, tags: tuple[str, ...] = ("p",)) -> set[str]:
+    """The words of each paragraph (or other block of `tags`) outside figures that a tree has only once."""
     counts: dict[str, int] = {}
-    for p in root.iter("p"):
+    for p in root.iter(*tags):
         if next(p.iterancestors("figure"), None) is None and (key := _text_key(p)):
             counts[key] = counts.get(key, 0) + 1
     return {key for key, n in counts.items() if n == 1}
@@ -1920,13 +1941,18 @@ def _shown_pictures(
     found: dict[str, lxml.html.HtmlElement] = {}
     cards = 0  # pictures linking to other stories: not taken, but a figure of many is a widget
     # A graphic drawn once per screen width (ai2html's artboards, one shown at a time): the widest.
+    # A graphic whose labels are text over the art (a map's place names) is lost without them.
     boards = [el for el in figure.iter() if isinstance(el.tag, str) and ARTBOARD in _classes(el)]
     widest = max(boards, key=_min_width, default=None)
+    labelled = widest is not None and bool(_text_key(widest))
+    stacked = any(_stack(el) for el in (*above, figure, *figure.iterdescendants()))
     for img in figure.iter("img"):
         boxes = [img, *img.iterancestors()]
         boxes = boxes[: boxes.index(figure)]
-        if widest is not None and any(b in boards and b is not widest for b in boxes):
+        if widest is not None and any(b in boards and (labelled or b is not widest) for b in boxes):
             continue
+        if stacked and any(_clone(b) for b in boxes):
+            continue  # a looping carousel's copy of a slide, before its first
         if any(el.tag in DROP or el.tag in ("figcaption", "figure", "aside") or _hidden(el) for el in boxes):
             continue
         address = _picture_address(img)
@@ -1972,9 +1998,14 @@ def _shown_pictures(
         found[name] = picture
         if len(found) > RESTORE_MAX_PICTURES:
             return []
-    if len(found) > 1 and any(_stack(el) for el in (*above, figure, *figure.iterdescendants())):
+    if len(found) > 1 and stacked:
         return list(found.items())[:1]  # a stack of photos paged through: its first
     return list(found.items())
+
+
+def _clone(el: lxml.html.HtmlElement) -> bool:
+    """Whether a slide of a stack is a copy a looping carousel adds (hidden from screen readers)."""
+    return bool(CLONE_CLASSES & _classes(el)) or (el.get("aria-hidden") or "").strip().lower() == "true"
 
 
 def _min_width(el: lxml.html.HtmlElement) -> int:

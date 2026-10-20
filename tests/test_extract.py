@@ -2964,3 +2964,44 @@ def test_a_dropped_picture_goes_into_the_caption_the_article_kept_without_its_cr
     page = _boxed_story(shared.format(n=1), "", shared.format(n=0))
     extract_module._restore_dropped_figures(root, page, STORY)
     assert sorted(img.get("src") for img in root.iter("img")) == ["https://i.example/0.jpg", "https://i.example/1.jpg"]
+
+
+def test_a_graphic_with_its_labels_drawn_as_text_over_it_gives_nothing():
+    figure = lxml.html.fromstring(
+        '<figure><div class="g-artboard" data-min-width="600"><img src="https://i.example/map.jpg">'
+        "<p>IRAQ</p><p>SAUDI ARABIA</p></div></figure>"
+    )
+    assert extract_module._shown_pictures(figure, STORY) == []
+
+
+def test_a_looping_carousel_gives_its_first_slide_not_a_copy_of_its_last():
+    paragraphs = "".join(
+        f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+    )
+    order = [(3, True), (1, False), (2, False), (3, False), (1, True)]
+    slides = "".join(
+        f'<div class="slick-slide{" slick-cloned" if clone else ""}" aria-hidden="{str(clone).lower()}">'
+        f'<figure><img src="https://i.example/s{n}.jpg"><figcaption>Slide {n}</figcaption></figure></div>'
+        for n, clone in order
+    )
+    root = lxml.html.fromstring(f"<div>{paragraphs}</div>")
+    extract_module._restore_dropped_figures(root, _boxed_story(f'<div class="slick-slider">{slides}</div>'), STORY)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/s1.jpg"]
+    # The article kept the first slide: the rest stay out.
+    s = '<figure><img src="https://i.example/s{n}.jpg"><figcaption>Slide {n}</figcaption></figure>'
+    kept = paragraphs.replace("</p><p>Paragraph 2", "</p>" + s.format(n=1) + "<p>Paragraph 2")
+    root = lxml.html.fromstring(f"<div>{kept}</div>")
+    carousel = '<div class="carousel">' + "".join(s.format(n=n) for n in (1, 2, 3)) + "</div>"
+    extract_module._restore_dropped_figures(root, _boxed_story(carousel), STORY)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/s1.jpg"]
+
+
+def test_a_dropped_figure_under_a_heading_stays_in_its_section():
+    paragraphs = [
+        f"<p>Paragraph {i} of the story, telling what happened at some length to the reader.</p>" for i in range(6)
+    ]
+    page = _boxed_story("<h2>The second part</h2>" + _photo(1))
+    body = "<div>" + "".join(paragraphs[:2]) + "<h2>The second part</h2>" + "".join(paragraphs[2:]) + "</div>"
+    root = lxml.html.fromstring(body)
+    extract_module._restore_dropped_figures(root, page, STORY)
+    assert [el.tag for el in root][1:4] == ["p", "h2", "figure"]
