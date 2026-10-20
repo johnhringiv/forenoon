@@ -467,16 +467,21 @@ than 48 pixels on a side (tracking pixels, icons) and any that cannot be fetched
 are dropped and counted in the report.
 
 An SVG is drawn with resvg at twice its size on the page (its width and height, else its
-viewBox), within the same 1200×1600, then converted like the rest; one under 6 pixels on
+viewBox, an icon's `0 0 24 24` being 24 pixels), within the same 1200×1600, then converted
+like the rest; one under 6 pixels on
 both sides is dropped, as an equation set as SVG can be one letter. Its text is set in Arimo
 and Tinos, which take the room Arial and Times New Roman do, so labels drawn for those fit
 their boxes, and code in JetBrains Mono NL; no system font is read. Before drawing, what
 would load anything from outside the file is taken out: entities and DTDs are not read,
 links to pictures other than embedded PNG, JPEG, GIF or WebP, stylesheet imports, scripts
-and embedded HTML are removed, and relative addresses resolve to an empty folder. A picture
+and embedded HTML are removed, and relative addresses resolve to an empty folder. One of more
+than 50,000 elements is not drawn. Each is drawn in a process of its own, limited to 1 GiB of
+memory, 10 seconds of processing and 15 seconds in all, as a hostile SVG can ask the renderer
+for more memory than the machine has, crash it, or keep it busy for good; one that fails is
+dropped like a picture that cannot be decoded. A picture
 a line of text high (96 pixels or less as drawn: an equation) does not count toward the 40,
 so a page of equations keeps them all; once the 40 are used, only SVG addresses are still
-fetched, and at most 200 pictures are fetched for one article.
+fetched, and at most 200 pictures are fetched for one article, in at most five minutes.
 
 ## 6. The book
 
@@ -757,8 +762,10 @@ Sonnet 5.5).
   chart, a slider comparing pictures), recognised by having controls, a canvas or a script,
   and no picture, player, table, code or quote of its own; and of drawn figures, which the
   book would lose: an inline SVG of 20 elements or more (a chart, a diagram) or an embedded
-  page that is not a video (a Flourish chart, a demo), with none of those either, and not a
-  player's (named so: its controls are SVG). A drawn figure's picture comes with no line
+  page that is not a video, a player or a post (Spotify, SoundCloud, a podcast host,
+  Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
+  either, and not a player's (named so: its controls are SVG). The room these pictures have in
+  the article's budget leaves out its SVG pictures, mostly equations. A drawn figure's picture comes with no line
   under it; without one, the line sends the reader to the original page for the figure. Without the scripts it is often
   only its labels run together, so extraction puts a placeholder first in it, numbered by
   the figure's place among the page's figures (not counting any in `<noscript>` or

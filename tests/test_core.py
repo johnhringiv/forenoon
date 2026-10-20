@@ -664,13 +664,16 @@ def test_an_svg_reads_nothing_from_outside_itself(tmp_path, monkeypatch):
   <script>alert(1)</script>
   <text x="5" y="50">&leak;</text>
 </svg>""".encode()
+    import json as _json
+    import subprocess as _subprocess
+
     seen = {}
 
-    def render(**kw):
-        seen.update(kw)
-        return b""
+    def run(args, input, **kw):
+        seen.update(_json.loads(input))
+        return _subprocess.CompletedProcess(args, 0, b"png", b"")
 
-    monkeypatch.setattr("app.images.resvg_py.svg_to_bytes", render)
+    monkeypatch.setattr("app.images.subprocess.run", run)
     _svg_png(hostile, Images())
     svg = seen["svg_string"]
     assert str(secret) not in svg and "tracker.example" not in svg
@@ -711,3 +714,17 @@ def test_equations_do_not_use_up_an_articles_picture_budget():
     )
     assets, dropped = embed_images(body, Fetcher(), dc.replace(Images(), max_count_per_article=2))
     assert len(assets) == 7 and dropped == 1  # two charts and every equation; the third chart goes
+
+
+def test_an_svg_that_would_exhaust_the_renderer_is_only_a_picture_that_would_not_draw():
+    import pytest as _pytest
+
+    from app.config import Images
+    from app.images import _convert
+
+    # A tile of 100,000 pixels square: the renderer asks for 160 GB and aborts its process.
+    tile = b"""<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs>
+      <pattern id="p" width="100000" height="100000" patternUnits="userSpaceOnUse"><rect width="5" height="5"/></pattern>
+      </defs><rect width="100" height="100" fill="url(#p)"/></svg>"""
+    with _pytest.raises(ValueError):
+        _convert(tile, Images())

@@ -57,6 +57,15 @@ NOT_ENLARGE = re.compile(r"play|video|watch|peek|reveal|cover", re.IGNORECASE)
 # A status badge (a README's "build passing"), drawn by a badge service or a CI's badge.svg.
 BADGE = re.compile(r"//(img\.)?shields\.io/|//badgen\.net/|//badge\.fury\.io/|/badge\.svg(\?|$)", re.IGNORECASE)
 OBJECT_PICTURE = re.compile(r"\.(svg|png|jpe?g|gif|webp)(\?|#|$)", re.IGNORECASE)
+# An embedded player or post, not a drawing: a picture of it shows only its frame.
+PLAYER_EMBED = re.compile(
+    r"^https?://([^/]*\.)?(spotify\.com|soundcloud\.com|podcasts\.apple\.com|embed\.music\.apple\.com|"
+    r"bandcamp\.com|instagram\.com|tiktok\.com|twitter\.com|x\.com|facebook\.com|threads\.net|"
+    r"bsky\.app|reddit\.com|redditmedia\.com|simplecast\.com|megaphone\.fm|libsyn\.com|buzzsprout\.com|"
+    r"podbean\.com|anchor\.fm|art19\.com|omny\.fm|dailymotion\.com|twitch\.tv|loom\.com|wistia\.(com|net)|"
+    r"brightcove\.net|jwplayer\.com|google\.com/maps)/",
+    re.IGNORECASE,
+)
 DRAWN_MIN_ELEMENTS = 20  # of an inline <svg>, for a drawing (a chart, a diagram), not an icon
 UNSETTABLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")  # refused by lxml when set again
 UNSETTABLE_REF = re.compile(r"&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?")  # a character written as a reference
@@ -344,8 +353,9 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
 
 def _linked_picture(img: lxml.html.HtmlElement) -> str:
     """The address of the link around a figure's picture that has none of its own (Yahoo's: a
-    blank pixel until a script loads the photo the link points to). Only a link holding
-    nothing else, to another site's address: its picture host, not a page of the article's."""
+    blank pixel until a script loads the photo the link points to). Only a web link holding
+    nothing else; should it lead to a page rather than a picture, the picture will not decode
+    and is dropped with the rest that do not."""
     link = img.getparent()
     if link is None or link.tag != "a" or next(img.iterancestors("figure"), None) is None:
         return ""
@@ -405,7 +415,7 @@ def _drawn(figure: lxml.html.HtmlElement) -> bool:
         return False
     frames = [(f.get("src") or f.get("data-src") or "").strip() for f in figure.iter("iframe")]
     if frames:
-        return all(src and not VIDEO_LINK.match(src) for src in frames)
+        return all(src and not VIDEO_LINK.match(src) and not PLAYER_EMBED.match(src) for src in frames)
     return any(len(svg.xpath(".//*")) >= DRAWN_MIN_ELEMENTS for svg in figure.iter("svg"))
 
 

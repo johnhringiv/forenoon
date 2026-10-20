@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import lxml.html
-import resvg_py
 from lxml import etree
 from PIL import Image
 
@@ -28,9 +31,26 @@ SVG_SERIF_FONT = "Tinos"
 SVG_CODE_FONT = "JetBrains Mono NL"
 # Smaller than a photo's least: an equation set as SVG can be a single letter ("x", 10 × 8).
 SVG_MIN_DIMENSION = 6
+# An SVG is drawn in a process of its own, within these, as a hostile one can ask the renderer
+# for more memory than the machine has, crash it, or keep it busy for good (a huge pattern
+# tile, thousands of chained clip paths, a filter of a hundred thousand octaves).
+SVG_MEMORY = 1024 * 1024 * 1024  # bytes of address space
+SVG_CPU_SECONDS = 10
+SVG_WAIT = 15.0  # seconds, start to finish
+SVG_MAX_ELEMENTS = 50_000  # more is no figure; and each one costs the renderer
+SVG_WORKER = """
+import json, resource, sys
+memory, cpu = int(sys.argv[1]), int(sys.argv[2])
+resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+import resvg_py
+sys.stdout.buffer.write(bytes(resvg_py.svg_to_bytes(**json.loads(sys.stdin.buffer.read()))))
+"""
 SVG_ZOOM = 2
 GLYPH_MAX_HEIGHT = 96  # pixels, as drawn: an equation of two lines at twice its size
 MAX_FETCHES_PER_ARTICLE = 200  # pictures fetched for one article, equations among them
+MAX_SECONDS_PER_ARTICLE = 300  # fetching and drawing one article's pictures; past it, no more
 SVG_ADDRESS = re.compile(
     r"\.svg(\?|#|$)|^data:image/svg", re.IGNORECASE
 )  # an SVG is drawn at twice its size on the page, for an e-ink screen's density
@@ -88,10 +108,10 @@ def _svg_size(root: etree._Element) -> tuple[float, float]:
         return width, width / ratio
     if height and ratio:
         return height * ratio, height
-    if ratio:
-        return (
-            (box[2], box[3]) if max(box[2], box[3]) >= MIN_DIMENSION else (SVG_DEFAULT_SIZE, SVG_DEFAULT_SIZE / ratio)
-        )
+    if ratio:  # its viewBox in pixels (an icon's "0 0 24 24" is 24), unless that is a unit square
+        if max(box[2], box[3]) >= SVG_MIN_DIMENSION:
+            return box[2], box[3]
+        return SVG_DEFAULT_SIZE, SVG_DEFAULT_SIZE / ratio
     return width or SVG_DEFAULT_SIZE, height or SVG_DEFAULT_SIZE
 
 
@@ -108,6 +128,8 @@ def _svg_png(raw: bytes, cfg: Images) -> bytes | None:
         raise ValueError("unreadable SVG") from exc
     if root is None or etree.QName(root).localname != "svg":
         raise ValueError("not an SVG")
+    if sum(1 for _ in root.iter()) > SVG_MAX_ELEMENTS:
+        raise ValueError("SVG too large to draw")
     for el in list(root.iter()):
         if el.tag is etree.Entity:  # an entity left unread: nothing for it to stand for
             if el.getparent() is not None:
@@ -136,22 +158,30 @@ def _svg_png(raw: bytes, cfg: Images) -> bytes | None:
     root.set("height", f"{max(1, round(height * scale))}")
     fonts = [str(f) for f in sorted(FONT_DIR.glob("*.ttf"))] if FONT_DIR.is_dir() else []
     with tempfile.TemporaryDirectory() as nowhere:  # relative addresses resolve to nothing
+        job = {
+            "svg_string": etree.tostring(root, encoding="unicode"),
+            "skip_system_fonts": True,
+            "font_files": fonts,
+            "font_family": SVG_SANS_FONT,
+            "sans_serif_family": SVG_SANS_FONT,
+            "serif_family": SVG_SERIF_FONT,
+            "monospace_family": SVG_CODE_FONT,
+            "resources_dir": nowhere,
+        }
         try:
-            png = resvg_py.svg_to_bytes(
-                svg_string=etree.tostring(root, encoding="unicode"),
-                skip_system_fonts=True,
-                font_files=fonts,
-                font_family=SVG_SANS_FONT,
-                sans_serif_family=SVG_SANS_FONT,
-                serif_family=SVG_SERIF_FONT,
-                monospace_family=SVG_CODE_FONT,
-                resources_dir=nowhere,
+            done = subprocess.run(  # our own interpreter and code; the SVG is data on stdin
+                [sys.executable, "-I", "-c", SVG_WORKER, str(SVG_MEMORY), str(SVG_CPU_SECONDS)],
+                input=json.dumps(job).encode(),
+                capture_output=True,
+                timeout=SVG_WAIT,
+                cwd=nowhere,
+                check=False,
             )
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except BaseException as exc:  # a panic in the renderer is a BaseException
-            raise ValueError("SVG would not draw") from exc
-    return bytes(png)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("SVG took too long to draw") from exc
+    if done.returncode != 0 or not done.stdout:
+        raise ValueError("SVG would not draw")
+    return done.stdout
 
 
 def _convert(raw: bytes, cfg: Images) -> bytes | None:
@@ -191,12 +221,17 @@ def embed_images(body: lxml.html.HtmlElement, fetcher: Fetcher, cfg: Images) -> 
     assets: list[Asset] = []
     by_src: dict[str, str | None] = {}
     total = dropped = pictures = fetched = 0
+    until = time.monotonic() + MAX_SECONDS_PER_ARTICLE
     for el in list(body.iter("img")):
         src = el.get("src", "")
         if src not in by_src:
             name = None
             # Past the budget, only what may be an equation: a photo would be dropped unseen.
-            if fetched < MAX_FETCHES_PER_ARTICLE and (pictures < cfg.max_count_per_article or SVG_ADDRESS.search(src)):
+            if (
+                fetched < MAX_FETCHES_PER_ARTICLE
+                and time.monotonic() < until
+                and (pictures < cfg.max_count_per_article or SVG_ADDRESS.search(src))
+            ):
                 fetched += 1
                 try:
                     data = _convert(_load(src, fetcher), cfg)

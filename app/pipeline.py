@@ -30,7 +30,7 @@ from .deliver import (
 from .discover import is_article, read_listing, site_host, site_source
 from .extract import DRAWN, SHOT_ID, Extracted, extract
 from .fetch import Fetcher, FetchError
-from .images import embed_images
+from .images import SVG_ADDRESS, embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
 from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
@@ -268,7 +268,9 @@ def _figure_shots(item: Item, result: Extracted, cfg: Config) -> list[tuple[lxml
         numbers.append(int(number))
         drawn.append(kind == DRAWN)
         total = int(total_text)
-    room = min(MAX_FIGURE_SHOTS, cfg.images.max_count_per_article - len(result.body.xpath(".//img")))
+    # Room within the article's picture budget, which SVGs (equations, mostly) do not fill.
+    photos = [img for img in result.body.iter("img") if not SVG_ADDRESS.search(img.get("src") or "")]
+    room = min(MAX_FIGURE_SHOTS, cfg.images.max_count_per_article - len(photos))
     shots: dict[int, bytes] = {}
     placed: list[tuple[lxml.html.HtmlElement, list]] = []
     if room > 0:
