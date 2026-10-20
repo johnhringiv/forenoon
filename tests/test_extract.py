@@ -2719,3 +2719,88 @@ def test_a_page_figure_of_more_pictures_than_are_looked_at_gives_none():
     )
     figure = lxml.html.fromstring(f"<figure>{many}<figcaption>C.</figcaption></figure>")
     assert extract_module._shown_pictures(figure, "https://news.example/story") == []
+
+
+def test_round_18_restore_cases():
+    url = "https://news.example/2026/story"
+    paras = [
+        f"<p>Paragraph {i} of the story, long enough to be most of the page's words, and on and on.</p>"
+        for i in range(9)
+    ]
+    # A <source> in a wrapper inside the <picture> brings neither its label nor what lxml nested in it.
+    eight = "".join(paras[:8])
+    pic = '<picture><span><source srcset="https://i.example/a.webp">Loading image<img src="https://i.example/OTHER.jpg"></span><img src="https://i.example/h.jpg"></picture>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{eight}<figure><div class='media'>{pic}</div><figcaption>The hills above Stanley.</figcaption></figure>{eight}</article></body></html>"
+    html = lxml.html.tostring(extract_module.extract(url, page, "", "page").body, encoding="unicode")
+    assert "OTHER" not in html and "Loading image" not in html
+    # Pictures keep their order in a figure whose caption sits in a box.
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    body = lxml.html.fromstring(
+        f"<div>{text}<figure>Lead words<div><figcaption>Two photos.</figcaption></div></figure></div>"
+    )
+    fig = '<figure><div><img src="https://i.example/1.jpg"></div><div><img src="https://i.example/2.jpg"></div><div><figcaption>Two photos.</figcaption></div></figure>'
+    extract_module._restore_figure_pictures(body, f"<html><body><article>{text}{fig}</article></body></html>", url)
+    figure = body.find(".//figure")
+    assert [img.get("src") for img in figure.iter("img")] == ["https://i.example/1.jpg", "https://i.example/2.jpg"]
+    assert "Lead words" in figure.text_content()
+    # A sponsor's figure is no stand-in at the article's end or start, or when the real figure's box is named
+    # like other stories' (readability keeps it, the restore does not count it).
+    ad = '<div class="sponsor"><figure><div><img src="https://ads.example/WRONG.jpg"></div><figcaption>Photograph: Getty Images</figcaption></figure></div>'
+    real = '<figure><div><img src="https://news.example/REAL.jpg"></div><figcaption>Photograph: Getty Images<span class="extra"> / Reuters</span></figcaption></figure>'
+    plain = real.replace('<span class="extra"> / Reuters</span>', "")
+    pages = [
+        f"{''.join(paras)}{ad}{real}",
+        f"{real}{ad}{''.join(paras)}",
+        f"{''.join(paras)}{ad}{real}<p>Advertisement</p>",
+    ]
+    for box in ("rail-wrap", "trending", "recommended"):
+        pages.append(
+            f"{''.join(paras[:4])}{ad}<div class='{box}'>{plain}{paras[4]}{paras[5]}</div>{''.join(paras[6:])}"
+        )
+        pages.append(f"{''.join(paras[:4])}<div class='{box}'>{paras[4]}{plain}</div>{ad}{''.join(paras[5:])}")
+    for article in pages:
+        body = extract_module.extract(url, f"<html><body><article>{article}</article></body></html>", "", "page").body
+        assert "WRONG" not in lxml.html.tostring(body, encoding="unicode"), article[-200:]
+    # A picture marked small by its height alone is an icon.
+    fig = lxml.html.fromstring(
+        '<figure><div><img src="https://i.example/photo.png"></div><div><img height="16" src="https://i.example/strip.png"></div><figcaption>C.</figcaption></figure>'
+    )
+    assert [name for name, _ in extract_module._shown_pictures(fig, url)] == ["i.example/photo.png"]
+
+
+def test_huge_runs_of_figures_and_nested_boxes_stay_quick():
+    url = "https://news.example/2026/story"
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands, the people there and the long dispute.</p>"
+        for i in range(8)
+    )
+    lead = '<figure><div class="media"><img src="https://i.example/h.jpg"></div><figcaption>The hills above Stanley.</figcaption></figure>'
+    gallery = "".join(
+        f'<figure><img src="https://i.example/t{i}.jpg"><figcaption>Thumb {i}</figcaption></figure>'
+        for i in range(10000)
+    )
+    started = time.monotonic()
+    extract_module.extract(
+        url,
+        f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{lead}{paras}{gallery}</article></body></html>",
+        "",
+        "page",
+    )
+    assert time.monotonic() - started < 20
+    deep = "<div>" * 200 + "<blockquote><p>" + "Words of a quote, " * 20 + "</p></blockquote>" + "</div>" * 200
+    page = lxml.html.fromstring(f"<html><body>{deep * 50}</body></html>")
+    body = lxml.html.fromstring(f"<div>{paras}</div>")
+    started = time.monotonic()
+    extract_module._article_region(page, body)
+    assert time.monotonic() - started < 5
+
+
+def test_a_run_of_figures_is_numbered_not_stored():
+    # Each figure's place holds a number for the run of figures before it, not the run itself:
+    # stored, a gallery of 20,000 figures between two paragraphs took 6 GB.
+    figures = "".join(f"<figure><figcaption>Thumb {i}</figcaption></figure>" for i in range(3))
+    root = lxml.html.fromstring(f"<div><p>One.</p>{figures}<p>Two.</p></div>")
+    runs: dict = {}
+    places = extract_module._places(root, {"One.", "Two."}, runs)
+    assert all(isinstance(run, int) for place in places.values() for run in place[2:])
+    assert len({place[2] for place in places.values()}) == 3

@@ -366,18 +366,20 @@ All fetched content is treated as untrusted.
   none); nothing is taken out. A figure within a figure gets none, nor gives any. The page is
   read as extraction has rebuilt it (an `<aside>` the article keeps as a quote is no longer a
   sidebar). The page's figures counted are those within the box holding the article's first
-  and last paragraphs (of 40 characters or more) when it is found, figures with no words only then; otherwise anywhere.
+  and last paragraphs (of 40 letters or more, spaces not counted) when it is found, figures with no words only then; otherwise anywhere.
   Either way not those in a sidebar, footer or box of other stories (one holding half the
   page's words is the article's, whatever its name). Figures sharing a caption are paired in
   order, only when the page has as many as the article, and a pair only when the two sit
   next to the same paragraph of the article, before or after (one outside figures that the
-  article and the page each have once), with the same figures between that paragraph and
-  them on both sides; or, the only figure with its caption on each side, beside no such
-  paragraph on either.
+  article and the page each have once); and on each side where the two have the same
+  neighbour (that paragraph, or the article's start or end) the same figures must stand
+  between it and them. The only figure with its caption on each side may pair beside no such
+  paragraph on either. An article figure inside a box readability kept that is named as one
+  of other stories gets none (its page figure is not counted).
   Only pictures the book would show come back. None for a video's figure (a player or embed,
   a player drawn by script, a picture that is or links to a video site's) or a figure of more
-  than 8 pictures (a widget's grid, cards for other stories counted; more than 64 are not
-  looked at). Not a picture in
+  than 8 pictures (a widget's grid, cards for other stories counted; one of more than 64
+  gives none). Not a picture in
   anything else removed (a button, `<noscript>`), in a caption, an `<aside>`, a figure within
   the figure, or a card for another story (named so, or linking to another of the site's
   pages, or to another post where the article's address names its post in the query; a link

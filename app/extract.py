@@ -1517,8 +1517,8 @@ VIDEO_LINK = re.compile(
 )
 PICTURE_FILE = re.compile(r"\.(jpe?g|png|gif|webp|avif|svg)$", re.IGNORECASE)
 PHOTO_PAGE = re.compile(r"/(attachments?|media|images?|photos?|gallery|galleries)(/|$)", re.IGNORECASE)
-RESTORE_MIN_SIZE = 48
-RESTORE_MAX_SCANNED = 64  # pictures in one page figure looked at, at most (the corpus has 60)  # pixels; a picture this small (by its own width or height) is an icon
+RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
+RESTORE_MAX_SCANNED = 64  # pictures in one page figure; with more it gives none (the corpus has 60)
 HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
 )
@@ -1587,30 +1587,44 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
     have = {_picture_name(_join(url, _picture_address(img))) for img in body.iter("img")}
     marks = _once(body) & _once(page)  # the article's paragraphs, each found once on the page
     counted = {f for figures in on_page.values() for f in figures}
-    places, page_places = _places(body, marks), _places(page, marks, counted)
+    runs: dict = {}
+    places, page_places = _places(body, marks, runs), _places(page, marks, runs, counted)
+    position = {key: {f: n for n, f in enumerate(fs)} for key, fs in in_body.items()}
 
+    most = 0.5 * _words(body.text_content())
+    kept_elsewhere: dict[lxml.html.HtmlElement, bool] = {}
     for figure in bare:
+        for box in figure.iterancestors():
+            if box not in kept_elsewhere:
+                kept_elsewhere[box] = _elsewhere(box, most)
+        if any(kept_elsewhere[box] for box in figure.iterancestors()):
+            continue  # readability kept a box of other stories around it: its own figure was not counted
         key = _figure_key(figure)
         sources, targets = on_page.get(key, []), in_body[key]
         if len(sources) != len(targets):
             continue
-        source = sources[targets.index(figure)]
+        source = sources[position[key][figure]]
         here, there = places[figure], page_places[source]
-        sides = [(a == b != "", ra == rb) for a, b, ra, rb in zip(here[:2], there[:2], here[2:], there[2:])]
-        if any(mark and not run for mark, run in sides):
+        # Per side: the same paragraph, or both at the article's start or end; whether that is a
+        # paragraph; and whether the same figures stand between it and the pair.
+        sides = [(a == b, a != "", ra == rb) for a, b, ra, rb in zip(here[:2], there[:2], here[2:], there[2:])]
+        if any(same and not run for same, _, run in sides):
             continue  # another figure between that paragraph and this one: one side lost or changed it
-        if not any(mark for mark, _ in sides) and (len(targets) > 1 or here != there):
+        if not any(same and mark for same, mark, _ in sides) and (len(targets) > 1 or here != there):
             continue  # not between the same paragraphs of the article: the pairing is off
         caption = figure.find("figcaption")
+        pictures = []
         for name, picture in _shown_pictures(source, url, region):
-            if name in have:
-                continue
-            have.add(name)
+            if name not in have:
+                have.add(name)
+                pictures.append(picture)
+        for n, picture in enumerate(pictures):
             if caption is not None:
                 caption.addprevious(picture)
             else:
-                figure.insert(0, picture)
-                picture.tail, figure.text = figure.text, None
+                figure.insert(n, picture)
+        if pictures and caption is None:
+            pictures[-1].tail, figure.text = figure.text, None
 
 
 def _once(root: lxml.html.HtmlElement) -> set[str]:
@@ -1623,8 +1637,8 @@ def _once(root: lxml.html.HtmlElement) -> set[str]:
 
 
 def _places(
-    root: lxml.html.HtmlElement, marks: set[str], counted: set[lxml.html.HtmlElement] | None = None
-) -> dict[lxml.html.HtmlElement, tuple[str, str, tuple[str, ...], tuple[str, ...]]]:
+    root: lxml.html.HtmlElement, marks: set[str], runs: dict, counted: set[lxml.html.HtmlElement] | None = None
+) -> dict[lxml.html.HtmlElement, tuple[str, str, int, int]]:
     """Each top-level figure's nearest paragraphs before and after it among `marks` ("" for
     none), and the keys of the figures (those `counted`, else all) from each of them to it."""
     order: list[lxml.html.HtmlElement | str] = []
@@ -1637,16 +1651,16 @@ def _places(
         elif (key := _text_key(el)) in marks:
             order.append(key)
     keys = {el: _figure_key(el) for el in order if not isinstance(el, str)}
-    before: dict[lxml.html.HtmlElement, tuple[str, tuple[str, ...]]] = {}
-    after: dict[lxml.html.HtmlElement, tuple[str, tuple[str, ...]]] = {}
+    before: dict[lxml.html.HtmlElement, tuple[str, int]] = {}
+    after: dict[lxml.html.HtmlElement, tuple[str, int]] = {}
     for items, found in ((order, before), (order[::-1], after)):
-        last, run = "", []
+        last, run = "", 0
         for item in items:
             if isinstance(item, str):
-                last, run = item, []
+                last, run = item, 0
             else:
-                run.append(keys[item])
-                found[item] = (last, tuple(run))
+                run = runs.setdefault((run, keys[item]), len(runs) + 1)
+                found[item] = (last, run)
     return {f: (before[f][0], after[f][0], before[f][1], after[f][1]) for f in before}
 
 
@@ -1764,7 +1778,8 @@ def _shown_pictures(
             continue
         if inside:  # its sources and this <img>, and nothing else (no "Loading image" label)
             picture = lxml.html.Element("picture")
-            picture.extend(copy.deepcopy(el) for el in [*parent.iter("source"), img])
+            picture.extend(lxml.html.Element("source", dict(el.attrib)) for el in parent.findall("source"))
+            picture.append(copy.deepcopy(img))
             for el in picture:
                 el.tail = None
         else:
@@ -1804,7 +1819,7 @@ def _picture_address(img: lxml.html.HtmlElement) -> str:
     parent = img.getparent()
     if (address and not address.lower().startswith("data:")) or parent is None or parent.tag != "picture":
         return address
-    for source in parent.iter("source"):
+    for source in parent.findall("source"):  # a browser reads only the picture's own
         for name in ("srcset", "data-srcset"):
             urls = [url for url in srcset_urls(source.get(name) or "") if not url.lower().startswith("data:")]
             if urls:
