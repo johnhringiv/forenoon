@@ -353,7 +353,7 @@ All fetched content is treated as untrusted.
   become second-level, invalid nesting is repaired, and containers left empty are removed.
   A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
   the image has no address on the web (none, or an embedded stand-in): the last address of the
-  first source that has one (`srcset`, else `data-srcset`). An embedded 1×1 GIF or PNG as an
+  first source that has one (`srcset`, else `data-srcset`). An embedded (base64) 1×1 GIF or PNG as an
   image's `src` counts as no picture: it holds a picture's place until a script loads it. A
   character lxml refuses to set again (a control character such as a form feed in a kernel
   source's code, or U+FFFE/U+FFFF), written or as a reference, is read as a space in the page
@@ -378,7 +378,7 @@ All fetched content is treated as untrusted.
   photo, or one the article already shows. In a `<picture>` holding a blurred stand-in and
   the photo, only its last image is taken, with its sources. A page figure that is itself
   hidden, or named as a card for other stories or an icon, gives none, and the boxes around it
-  (up to the article's own box) count as its own: a player, a hidden box, a link to a video, a
+  (up to the article's own box, or the page's body when that is not found) count as its own: a player, a hidden box, a link to a video, a
   share link or a link to another story there means none. None goes into a figure
   holding a table, code or a quote.
 - **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page

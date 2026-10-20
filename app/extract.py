@@ -1549,19 +1549,21 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
     _unnest_empty(page)
     _unnest_empty(body)  # as sanitize will: so a <picture>'s <img> is seen as the picture's
     region = _article_region(page, body)
-    most: list[float] = []  # half the page's words, counted only when the region is not found
+    half: float | None = None  # of the page's words, counted on first need
     elsewhere: dict[lxml.html.HtmlElement, bool] = {}
 
     def outside(figure: lxml.html.HtmlElement) -> bool:
+        nonlocal half
         boxes = list(figure.iterancestors())
         if region is not None:
             if region not in boxes:
                 return True
             boxes = boxes[: boxes.index(region)]  # and a box of other stories within the article
-        most[:] = most or [0.5 * _words(_visible_text(page))]
+        if half is None:
+            half = 0.5 * _words(_visible_text(page))
         for box in boxes:
             if box not in elsewhere:
-                elsewhere[box] = _elsewhere(box, most[0])
+                elsewhere[box] = _elsewhere(box, half)
             if elsewhere[box]:
                 return True
         return False
@@ -1646,6 +1648,11 @@ def _shown_pictures(
         above.append(box)
     if any(a.tag in DROP or _hidden(a) for a in above):
         return []
+    if any(
+        a.tag == "a" and (SHARE_LINK.search(a.get("href") or "") or VIDEO_LINK.match((a.get("href") or "").strip()))
+        for a in above
+    ):
+        return []  # the whole figure is a share button or a video's link
     if figure.xpath(".//video | .//audio | .//iframe | .//embed | .//object"):
         return []
     if any(
@@ -1674,10 +1681,10 @@ def _shown_pictures(
             continue
         if any(ELSEWHERE.search(name) for name in names):
             continue  # a card for another story, inside the figure
-        if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in [*boxes, *above]):
+        if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in boxes):
             continue
         if VIDEO_LINK.match(address.strip()) or any(
-            a.tag == "a" and VIDEO_LINK.match((a.get("href") or "").strip()) for a in [*boxes, *above]
+            a.tag == "a" and VIDEO_LINK.match((a.get("href") or "").strip()) for a in boxes
         ):
             return []
         sizes = [img.get(n, "").strip() for n in ("width", "height")]

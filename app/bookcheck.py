@@ -637,7 +637,7 @@ class _Article:
             used.append(n)
             return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
-        html = SURROGATE.sub("", extract.settable(html))  # refused by lxml, or the end of its reading
+        html = extract.settable(SURROGATE.sub("", html))  # in this order: taking one out can make a reference
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
         root = _fragment(RUN_ON.sub(r"\1 ", html))

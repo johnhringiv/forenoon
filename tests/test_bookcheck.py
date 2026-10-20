@@ -911,3 +911,8 @@ def test_a_players_fallback_text_stays_out_of_the_models_html_and_page_copies():
         for from_page in (False, True):
             text = "".join(b.text_content() for b in article.clean(html, from_page=from_page))
             assert text == "Before.After.", (player, from_page)
+
+
+def test_taking_out_a_surrogate_cannot_make_a_reference_lxml_refuses():
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    article._html("<p>Text &\udfff#xC; more.</p>")  # no exception
