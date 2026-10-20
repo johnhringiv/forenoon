@@ -756,8 +756,11 @@ def test_an_svg_with_an_absurd_size_is_a_picture_that_would_not_draw():
     from app.config import Images
     from app.images import _convert
 
-    for box in ('width="100" viewBox="0 0 1e300 1e-300"', 'viewBox="0 0 1e999 10"', 'width="0" height="10"'):
-        with _pytest.raises(ValueError):
-            _convert(
-                f'<svg xmlns="http://www.w3.org/2000/svg" {box}><rect width="9" height="9"/></svg>'.encode(), Images()
-            )
+    def svg(size: str) -> bytes:
+        return f'<svg xmlns="http://www.w3.org/2000/svg" {size}><rect width="9" height="9"/></svg>'.encode()
+
+    with _pytest.raises(ValueError):  # its height comes to nothing
+        _convert(svg('width="100" viewBox="0 0 1e300 1e-300"'), Images())
+    # A length or viewBox past what a number holds, or of nothing, is no size: the default is.
+    for size in ('viewBox="0 0 1e999 10"', 'width="0" height="10"'):
+        assert _convert(svg(size), Images())
