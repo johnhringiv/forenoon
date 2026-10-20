@@ -363,23 +363,26 @@ All fetched content is treated as untrusted.
   can keep its caption and lose its photo (a box of its own, a lightbox button). After
   readability, such a figure gets back the pictures of the page's figure with the same caption
   (the words a reader sees, its own and not a figure's within it; all its words when it has
-  none); nothing is taken out. A figure within a figure gets none, nor gives any. The page's figures counted are those within
-  the box holding the article's first and last paragraphs when it is found, figures with no
-  words only then; otherwise anywhere. Either way not those in a sidebar, footer or box of other
-  stories (one holding half the page's words is the article's, whatever its name).
-  Figures sharing a caption are paired in order, only when the page has as many as the
-  article. Only pictures the book would show come back: none for a video's figure (a player
-  or embed, a player drawn by script, a picture that is or links to a video site's) or a
-  figure of more than 8 (a widget's grid), and not a picture in anything else removed (a
-  button, `<noscript>`), in a caption, an `<aside>`, a figure within the figure or a card for
-  another story (named so, or linking to another of the site's pages, unless it is the
-  figure's only picture: then it is the photo linked to its own page), a hidden one, an icon,
-  logo or share button, one of 48 pixels or less, an embedded one, a second size of the same
-  photo, or one the article already shows. In a `<picture>` holding a blurred stand-in and
-  the photo, only its last image is taken, with its sources. A page figure that is itself
-  hidden, or named as a card for other stories or an icon, gives none, and the boxes around it
-  (up to the article's own box, or the page's body when that is not found) count as its own: a player, a hidden box, a link to a video, a
-  share link or a link to another story there means none. None goes into a figure
+  none); nothing is taken out. A figure within a figure gets none, nor gives any. The page is
+  read as extraction has rebuilt it (an `<aside>` the article keeps as a quote is no longer a
+  sidebar). The page's figures counted are those within the box holding the article's first
+  and last paragraphs when it is found, figures with no words only then; otherwise anywhere.
+  Either way not those in a sidebar, footer or box of other stories (one holding half the
+  page's words is the article's, whatever its name). Figures sharing a caption are paired in
+  order, only when the page has as many as the article.
+  Only pictures the book would show come back. None for a video's figure (a player or embed,
+  a player drawn by script, a picture that is or links to a video site's) or a figure of more
+  than 8 pictures (a widget's grid, cards for other stories counted). Not a picture in
+  anything else removed (a button, `<noscript>`), in a caption, an `<aside>`, a figure within
+  the figure, or a card for another story (named so, or linking to another of the site's
+  pages; a link to the photo's own attachment, media or gallery page, or to one under the
+  article's address, is the photo's); nor a hidden one, an icon, logo or share button, one of
+  48 pixels or less, an embedded one, a second size of the same photo, or one the article
+  already shows. In a `<picture>` holding a blurred stand-in and the photo, only its last
+  image is taken, with its sources. A page figure that is itself hidden, or named as a card for
+  other stories or an icon, gives none; so does one inside anything the book removes, a
+  player, a hidden box, a link to a video, a share link or a link to another story, up to the
+  article's own box (or the page's body when that is not found). None goes into a figure
   holding a table, code or a quote.
 - **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
   or a Google News publication page (asking readers to pick the site as a source), is removed.

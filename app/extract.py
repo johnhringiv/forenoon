@@ -1515,6 +1515,7 @@ PLAYER_NAME_PICTURE = re.compile(
 VIDEO_LINK = re.compile(
     r"^https?://([^/]*\.)?(youtube\.com|youtu\.be|vimeo\.com|ytimg\.com|vimeocdn\.com)/", re.IGNORECASE
 )
+PHOTO_PAGE = re.compile(r"/(attachments?|media|images?|photos?|gallery|galleries)(/|$)", re.IGNORECASE)
 RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
 HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
@@ -1667,7 +1668,7 @@ def _shown_pictures(
     if _hidden(figure) or FURNITURE_PICTURE.search(own) or ELSEWHERE.search(own):
         return []  # the figure itself is hidden, or named as a card for another story or an icon
     found: dict[str, lxml.html.HtmlElement] = {}
-    cards: dict[str, lxml.html.HtmlElement] = {}
+    cards = 0  # pictures linking to other stories: not taken, but a figure of many is a widget
     for img in figure.iter("img"):
         boxes = [img, *img.iterancestors()]
         boxes = boxes[: boxes.index(figure)]
@@ -1692,13 +1693,17 @@ def _shown_pictures(
             continue
         if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in above):
             continue  # the whole figure links to another story: a card for it
-        linked = any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes)
+        if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes):
+            cards += 1  # a card for another of the site's stories
+            if len(found) + cards > RESTORE_MAX_PICTURES:
+                return []
+            continue
         parent = img.getparent()
         inside = parent is not None and parent.tag == "picture"
         if inside and any(el.tag == "img" for el in img.itersiblings()):
             continue  # a blurred stand-in before the photo: the picture's last <img> is it
         name = _picture_name(_join(url, address))
-        if name in found or name in cards:
+        if name in found:
             continue
         if inside:  # its sources and this <img>, and nothing else (no "Loading image" label)
             picture = lxml.html.Element("picture")
@@ -1708,17 +1713,16 @@ def _shown_pictures(
         else:
             picture = copy.deepcopy(img)
         picture.tail = None
-        (cards if linked else found)[name] = picture
-        if len(found) + len(cards) > RESTORE_MAX_PICTURES:
+        found[name] = picture
+        if len(found) > RESTORE_MAX_PICTURES:
             return []
-    # A picture linking to another of the site's pages, beside one that does not, is a card for
-    # that story; the only picture, it is the figure's photo linked to its own (attachment) page.
-    return list((found or (cards if len(cards) == 1 else {})).items())
+    return list(found.items())
 
 
 def _story_link(url: str, href: str, address: str) -> bool:
-    """Whether a link around a picture goes to another page of the site rather than to the
-    picture itself (a lightbox's full size)."""
+    """Whether a link around a picture goes to another page of the site: not to the picture
+    itself (a lightbox's full size, another picture file) nor to the photo's own page (an
+    attachment, media or gallery page, or one under the article's own address)."""
     target = _join(url, href.strip())
     if not target or _picture_name(target) == _picture_name(_join(url, address)):
         return False
@@ -1728,7 +1732,11 @@ def _story_link(url: str, href: str, address: str) -> bool:
         return False
     picture_file = re.search(r"\.(jpe?g|png|gif|webp|avif|svg)$", there.path, re.IGNORECASE)
     same_site = there.netloc.removeprefix("www.") == here.netloc.removeprefix("www.")
-    return same_site and not picture_file and there.path.rstrip("/") != here.path.rstrip("/")
+    if not same_site or picture_file:
+        return False
+    page, article = there.path.rstrip("/"), here.path.rstrip("/")
+    photo_page = "attachment_id" in there.query or PHOTO_PAGE.search(page) or page.startswith(article + "/")
+    return page != article and not photo_page
 
 
 def _picture_address(img: lxml.html.HtmlElement) -> str:

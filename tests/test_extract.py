@@ -2292,10 +2292,10 @@ def test_each_restore_rule_on_its_own_case():
     twice = '<div><figure><img src="https://i.example/c.png"><div>Same words.</div><figcaption>Same words.</figcaption><figcaption>Other.</figcaption></figure></div>'
     out = extract_module.sanitize(lxml.html.fromstring(twice), "https://news.example/")
     assert out.text_content().count("Same words.") == 2, "repcap-one"
-    # The figure's only photo, linked to its own attachment or media page, is its photo; beside
-    # another, unlinked one, a picture linking to the site's other pages is a card.
+    # A photo linked to its own attachment, media or gallery page (or one under the article's)
+    # is the figure's photo; a picture linking to another of the site's pages is a card.
     for href in (
-        "/2026/10/photo-name/",
+        "/2026/story/photo-2",
         "/?attachment_id=123",
         "/image/full/12345",
         "https://www.news.example/media/1",
@@ -2485,3 +2485,70 @@ def test_a_whole_document_feed_body_lxml_cannot_read_is_no_candidate_not_an_erro
 def test_a_one_pixel_png_is_no_picture():
     png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
     assert extract_module._image_src(lxml.html.fromstring(f'<img src="{png}">')) == ""
+
+
+def test_each_name_and_link_that_marks_a_figure_as_not_its_own_photo():
+    url = "https://news.example/2026/10/story/"
+    restore = functools.partial(extract_module._restore_figure_pictures, url=url)
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    bare = "<figure><figcaption>Two.</figcaption></figure>"
+
+    def run(page_figure, article=bare):
+        body = lxml.html.fromstring(f"<div>{text}{article}</div>")
+        restore(body, f"<html><body><article>{text}{page_figure}</article></body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    def figure(attrs="", inner='<img src="https://i.example/p.jpg">', around=("", "")):
+        return f"{around[0]}<figure {attrs}><div>{inner}</div><figcaption>Two.</figcaption></figure>{around[1]}"
+
+    assert run(figure()) == ["https://i.example/p.jpg"]  # the control: these all give it back
+    # A figure (or a box in it) named as a player, a card for other stories, an icon or hidden.
+    names = (
+        "video-player", "VideoPlayer_root", "jwplayer", "yt-facade", "lite-facade", "vimeo-embed", "youtube-block",
+        "recommended", "right-rail", "more-stories", "trending", "promo",
+        "site-logo", "author-avatar", "badge", "sprite", "gravatar", "emoji", "share-icon",
+        "screen-reader-text", "d-none", "invisible", "sr-only",
+    )  # fmt: skip
+    for name in names:
+        assert run(figure(f'class="{name}"')) == [], name
+        assert run(figure(inner=f'<div class="{name}"><img src="https://i.example/p.jpg"></div>')) == [], name
+    assert run(figure('id="related-1"')) == [] and run(figure('data-testid="video-block"')) == []
+    # A picture that is a video's, or links to one; an embed; a picture of 48 pixels.
+    for inner in (
+        '<img src="https://i.ytimg.com/vi/a/hq.jpg">',
+        '<a href="https://youtu.be/abc"><img src="https://i.example/p.jpg"></a>',
+        '<img src="https://i.vimeocdn.com/video/1.jpg">',
+        '<img src="https://i.example/p.jpg"><object data="https://v.example/clip.swf"></object>',
+        '<img src="https://i.example/p.jpg" width="48">',
+    ):
+        assert run(figure(inner=inner)) == [], inner
+    assert run(figure(inner='<img src="https://i.example/p.jpg" width="49">')) == ["https://i.example/p.jpg"]
+    # Around the figure: anything the book removes, or a sidebar tag with no name.
+    for around in (("<footer>", "</footer>"), ("<label>", "</label>"), ("<aside>", "</aside>"), ("<nav>", "</nav>")):
+        assert run(figure(around=around)) == [], around
+    # A lone picture linking to another of the site's stories is a card, caption or none.
+    card = '<a href="https://news.example/2026/09/other-story/"><img src="https://news.example/up/card.jpg"></a>'
+    assert run(figure(inner=card)) == []
+    assert run(f'<figure class="wp-block-image"><div>{card}</div></figure>', "<figure></figure>") == []
+
+
+def test_restore_pairs_only_top_level_figures_and_adds_a_photo_once():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/story")
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+
+    def run(article, page):
+        body = lxml.html.fromstring(f"<div>{text}{article}</div>")
+        restore(body, f"<html><body><article>{text}{page}</article></body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    def ap(src):
+        return f'<figure><div><img src="https://i.example/{src}"></div><figcaption>Photograph: AP</figcaption></figure>'
+
+    # The article kept B's caption and a gallery whose inner figure shares it; A was dropped.
+    gallery = '<figure><figure><img src="https://i.example/g.jpg"><figcaption>Photograph: AP</figcaption></figure><figcaption>Gallery.</figcaption></figure>'
+    bare = "<figure><figcaption>Photograph: AP</figcaption></figure>"
+    assert "https://i.example/A.jpg" not in run(bare + gallery, ap("A.jpg") + ap("B.jpg") + gallery)
+    # Two figures whose page figures hold two sizes of one photo: it comes back once.
+    one = "<figure><figcaption>One.</figcaption></figure><figure><figcaption>Two.</figcaption></figure>"
+    sizes = '<figure><div><img src="https://i.example/p.jpg"></div><figcaption>One.</figcaption></figure><figure><div><img src="https://i.example/p.jpg?w=300"></div><figcaption>Two.</figcaption></figure>'
+    assert run(one, sizes) == ["https://i.example/p.jpg"]
