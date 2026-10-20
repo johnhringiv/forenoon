@@ -387,11 +387,39 @@ All fetched content is treated as untrusted.
   article's address, is the photo's); nor a hidden one, an icon, logo or share button, one of
   48 pixels or less, an embedded one, a second size of the same photo, or one the article
   already shows. In a `<picture>` holding a blurred stand-in and the photo, only its last
-  image is taken, with its sources. A page figure that is itself hidden, or named as a card for
+  image is taken, with its sources. Of a graphic drawn once per screen width (ai2html's
+  artboards, one shown at a time), only the widest copy is taken, and none when its labels
+  are text drawn over the picture (a map's place names), which the book would lose. A page figure that is itself hidden, or named as a card for
   other stories or an icon, gives none; so does one inside anything the book removes, a
   player, a hidden box, a link to a video, a share link or a link to another story, up to the
   article's own box (or the page's body when that is not found). None goes into a figure
   holding a table, code or a quote.
+- **Dropped figures.** Readability scores boxes by their text, so a photo in a box of its own
+  between two boxes of the article's paragraphs (the BBC's, the New York Times') can go whole,
+  caption and all. After it, each figure of the page within the box holding the article's
+  first and last paragraphs goes back between the same two paragraphs (each of which the
+  article and the page have once), but only where the article has those two paragraphs one
+  after the other; among the figures it kept there, in the page's order. Not a figure that
+  shares a box with a paragraph the article lacks and none it has (a card for another story
+  readability dropped whole), nor one that, or a box around which within the article's box,
+  is named as furniture, comments or other stories. It comes back with the pictures the book
+  would show (as for figure pictures above) that the article lacks, and its own caption
+  without text hidden from sight (the BBC's "Image caption, "), unless the article already
+  has those words. When the article kept the figure's caption without its picture somewhere
+  else (readability's copy can lack a credit line, so one caption's words holding the other's
+  counts), the pictures go into that figure instead. A figure before the article's first
+  paragraph or after its last (a lead photo, related stories) is not taken. The headings the
+  article and the page have once count as such neighbours too, so a photo under a heading
+  stays in its section. At most 40 pictures come back to one article.
+- **Stacks of photos.** A carousel or slideshow shows one photo at a time; the book shows its
+  first, with its caption, and skips the rest. A stack is a box named carousel, slider,
+  slideshow, swiper, slick, glide, splide or flickity, or marked
+  `aria-roledescription="carousel"` or `"slide"`. A gallery or lightbox (a grid of photos
+  shown at once, a photo that enlarges) is not a stack. The copies of slides a looping
+  carousel adds (`slick-cloned`, `swiper-slide-duplicate`, or hidden from screen readers) are
+  never its first. Once a stack's first photo is seen (put back, or already in the article),
+  the rest stay out. This holds for figure pictures and
+  dropped figures alike.
 - **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
   or a Google News publication page (asking readers to pick the site as a source), is removed.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
