@@ -1492,8 +1492,8 @@ ELSEWHERE = re.compile(
 )
 RESPONSIVE_SHOWN = re.compile(r"(?<![\w-])(sm|md|lg|xl|2xl):(block|flex|grid|inline|inline-block|table)\b")
 PLAYER_NAME_PICTURE = re.compile(
-    r"(?<![a-z])(video|player|youtube|vimeo|yt-facade|lite-youtube)(?![a-z])", re.IGNORECASE
-)
+    r"video|player|youtube|vimeo|(?<![a-z])yt-|facade", re.IGNORECASE
+)  # inside names too: jwplayer, VideoPlayer_root
 VIDEO_LINK = re.compile(
     r"^https?://([^/]*\.)?(youtube\.com|youtu\.be|vimeo\.com|ytimg\.com|vimeocdn\.com)/", re.IGNORECASE
 )
@@ -1530,15 +1530,15 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> Non
     _unnest_empty(page)
     region = _article_region(page, body)
     most = 0.5 * _words(page.text_content())
-    elsewhere: dict[int, bool] = {}
+    elsewhere: dict[lxml.html.HtmlElement, bool] = {}  # by element: an id() is reused once it is freed
 
     def outside(figure: lxml.html.HtmlElement) -> bool:
         if region is not None:
             return region not in figure.iterancestors()
         for box in figure.iterancestors():
-            if id(box) not in elsewhere:
-                elsewhere[id(box)] = _elsewhere(box, most)
-            if elsewhere[id(box)]:
+            if box not in elsewhere:
+                elsewhere[box] = _elsewhere(box, most)
+            if elsewhere[box]:
                 return True
         return False
 
@@ -1614,10 +1614,16 @@ def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.
     icon, logo or share button, and an embedded one."""
     if figure.xpath(".//video | .//audio | .//iframe | .//embed | .//object"):
         return []
-    if any(PLAYER_NAME_PICTURE.search(_names(el)) for el in (figure, *figure.iterdescendants())):
+    if any(
+        isinstance(el.tag, str)
+        and PLAYER_NAME_PICTURE.search(
+            " ".join([el.tag, _names(el), el.get("data-component") or "", el.get("data-testid") or ""])
+        )
+        for el in (figure, *figure.iterdescendants())
+    ):
         return []  # a player drawn by script, its poster standing in
     found: list[tuple[str, lxml.html.HtmlElement]] = []
-    taken: set[int] = set()
+    taken: list[lxml.html.HtmlElement] = []  # the elements, not their id()s, which are reused once freed
     for img in figure.iter("img"):
         boxes = [img, *list(img.iterancestors())]
         boxes = boxes[: boxes.index(figure)] if figure in boxes else boxes
@@ -1644,9 +1650,9 @@ def _shown_pictures(figure: lxml.html.HtmlElement) -> list[tuple[str, lxml.html.
             continue  # a blurred stand-in before the photo: the picture's last <img> is it
         holder = parent if inside else img
         name = _picture_name(address)
-        if id(holder) in taken or name in {n for n, _ in found}:
+        if any(holder is h for h in taken) or name in {n for n, _ in found}:
             continue
-        taken.add(id(holder))
+        taken.append(holder)
         picture = copy.deepcopy(holder)
         picture.tail = None
         if inside:

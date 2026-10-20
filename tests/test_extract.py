@@ -2090,3 +2090,26 @@ def test_restore_survives_odd_markup_and_keeps_to_the_article():
     picture = f'<figure><picture><source srcset="https://i.example/a.webp 1x, https://i.example/a2.webp 2x"><img src="{svg}"></picture><figcaption>C.</figcaption></figure>'
     body = extract_module.sanitize(lxml.html.fragment_fromstring(picture, create_parent="div"), "https://news.example/")
     assert [img.get("src") for img in body.iter("img")] == ["https://i.example/a2.webp"]
+
+
+def test_restore_is_the_same_every_run_and_knows_more_players():
+    restore = extract_module._restore_figure_pictures
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    bare = "<figure><figcaption>Watch: the launch. Video: Reuters</figcaption></figure>"
+
+    def run(inner):
+        body = lxml.html.fromstring(f"<div>{text}{bare}</div>")
+        page = f"<html><body><article>{text}<figure><div class='media'>{inner}</div><figcaption>Watch: the launch. Video: Reuters</figcaption></figure></article></body></html>"
+        restore(body, page)
+        return [img.get("src") for img in body.iter("img")]
+
+    for player in (
+        '<div class="VideoPlayer_root__x1"><img src="https://i.example/poster.jpg"></div>',
+        '<div class="jwplayer jw-reset"><img src="https://i.example/poster.jpg"></div>',
+        '<div data-component="video-player"><img src="https://i.example/poster.jpg"></div>',
+        '<video-player><img src="https://i.example/poster.jpg"></video-player>',
+    ):
+        assert run(player) == [], player
+    # Many pictures, each in a box of its own: the same result on every run (none: over the cap).
+    grid = "".join(f'<div><img src="https://i.example/{n}.jpg"></div>' for n in range(14))
+    assert {tuple(run(grid)) for _ in range(5)} == {()}

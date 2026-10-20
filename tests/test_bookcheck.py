@@ -881,3 +881,15 @@ def test_a_page_copy_keeps_a_pictures_photo_behind_a_blank_pixel():
     page_copy = lxml.html.tostring(lxml.html.fragment_fromstring(html), encoding="unicode")  # as lxml reads the page
     blocks = article.clean(page_copy, from_page=True)
     assert [img.get("src") for b in blocks for img in b.iter("img")] == [photo]
+
+
+def test_an_unreadable_address_on_the_page_is_no_picture_not_an_error():
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    assert bookcheck._page_images(
+        '<html><body><img src="http://[::1/x.jpg"><img src="https://news.example/a.jpg"></body></html>', URL
+    ) == {"https://news.example/a.jpg"}
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    blocks = article.clean(
+        f'<picture><source srcset="http://[x/a.jpg 1x"><img src="{pixel}"></picture><p>Words.</p>', from_page=True
+    )
+    assert not any(b.xpath("descendant-or-self::img") for b in blocks)

@@ -759,7 +759,7 @@ class _Article:
         src = src.strip()
         if src.startswith("picture:") and src[8:].isdigit() and 1 <= int(src[8:]) <= len(self.pictures):
             return self.pictures[int(src[8:]) - 1]
-        absolute = urljoin(self.url, src)
+        absolute = extract._join(self.url, src)
         if absolute.startswith(("http://", "https://")) and absolute in self.page_images | self._own_images():
             return absolute
         return ""
@@ -1077,13 +1077,13 @@ def _page_images(page_html: str, url: str) -> set[str]:
     for el in root.iter("img", "source"):
         for name in ("src", *extract.LAZY_SRC):
             if el.get(name):
-                found.add(urljoin(url, el.get(name).strip()))
+                found.add(extract._join(url, el.get(name).strip()))
         for name in ("srcset", "data-srcset"):
             for address in extract.srcset_urls(el.get(name) or ""):
-                found.add(urljoin(url, address))
+                found.add(extract._join(url, address))
     for meta in root.xpath('//meta[@property="og:image" or @name="twitter:image"]'):
         if meta.get("content"):
-            found.add(urljoin(url, meta.get("content").strip()))
+            found.add(extract._join(url, meta.get("content").strip()))
     return {src for src in found if src.startswith(("http://", "https://"))}
 
 
