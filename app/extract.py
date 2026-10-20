@@ -1645,6 +1645,9 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         for el in (figure, *figure.iterdescendants())
     ):
         return []
+    own = " ".join(figure.get(name) or "" for name in ("class", "id"))
+    if _hidden(figure) or FURNITURE_PICTURE.search(own) or ELSEWHERE.search(own):
+        return []  # the figure itself is hidden, or named as a card for another story or an icon
     found: dict[str, lxml.html.HtmlElement] = {}
     cards: dict[str, lxml.html.HtmlElement] = {}
     for img in figure.iter("img"):

@@ -355,8 +355,9 @@ All fetched content is treated as untrusted.
   the image has no address on the web (none, or an embedded stand-in): the last address of the
   first source that has one (`srcset`, else `data-srcset`). An embedded 1×1 GIF or PNG as an
   image's `src` counts as no picture: it holds a picture's place until a script loads it. A
-  control character in the page or the feed (a form feed in a kernel source's code), written
-  or as a reference, is read as a space; the book check reads the page the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
+  character lxml refuses to set again (a control character such as a form feed in a kernel
+  source's code, or U+FFFE/U+FFFF), written or as a reference, is read as a space in the page
+  and the feed; the book check reads the page, and the model's HTML, the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
   text) appears once.
 - **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
   can keep its caption and lose its photo (a box of its own, a lightbox button). After
@@ -371,14 +372,15 @@ All fetched content is treated as untrusted.
   or embed, a player drawn by script, a picture that is or links to a video site's) or a
   figure of more than 8 (a widget's grid), and not a picture in anything else removed (a
   button, `<noscript>`), in a caption, an `<aside>`, a figure within the figure or a card for
-  another story (named so, or linking to another of the site's pages beside an unlinked
-  picture: alone, it is the photo linked to its own page), a hidden one, an icon,
+  another story (named so, or linking to another of the site's pages, unless it is the
+  figure's only picture: then it is the photo linked to its own page), a hidden one, an icon,
   logo or share button, one of 48 pixels or less, an embedded one, a second size of the same
   photo, or one the article already shows. In a `<picture>` holding a blurred stand-in and
-  the photo, only its last image is taken, with its sources. None goes into a figure holding a
-  table, code or a quote.
-- **Preferred-source badge.** A picture linking to the site's page on Google News (asking
-  readers to pick it as a preferred source) is removed.
+  the photo, only its last image is taken, with its sources. A page figure that is itself
+  hidden, or named as a card for other stories or an icon, gives none. None goes into a figure
+  holding a table, code or a quote.
+- **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
+  or a Google News publication page (asking readers to pick the site as a source), is removed.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
   extracted body (a standfirst in the page header), it is added in italics at the top.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt

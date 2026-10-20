@@ -2400,3 +2400,45 @@ def test_the_preferred_source_badge_goes_and_a_link_with_words_stays():
         )
         body = extract_module.extract("https://news.example/2026/story", page, "", "page").body
         assert not body.xpath("//img") and "our page on Google News" in body.text_content(), href
+
+
+def test_a_figure_named_or_hidden_as_furniture_gets_nothing_and_odd_references_stay_safe():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/2026/story")
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    bare = "<figure><figcaption>Two.</figcaption></figure>"
+    for attrs in (
+        'class="related-story"',
+        'class="promo"',
+        'class="author-avatar"',
+        "hidden",
+        'class="sr-only"',
+        'id="related-1"',
+    ):
+        body = lxml.html.fromstring(f"<div>{text}{bare}</div>")
+        restore(
+            body,
+            f'<html><body><article>{text}<figure {attrs}><div><img src="https://i.example/x.jpg"></div><figcaption>Two.</figcaption></figure></article></body></html>',
+        )
+        assert not body.xpath("//img"), attrs
+    # A placeholder <source> before the real one: the real one is the picture.
+    svg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E"
+    picture = f'<figure><picture><source srcset="{svg}"><source srcset="https://i.example/real.jpg"><img src="{svg}"></picture><figcaption>C.</figcaption></figure>'
+    body = extract_module.sanitize(lxml.html.fragment_fromstring(picture, create_parent="div"), "https://news.example/")
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/real.jpg"]
+    # References that only a careful reading makes safe.
+    odd = ("&#" + "1" * 5000 + ";", "&#9999999;", "&#X0C;", "&#x000000000C;")
+    assert extract_module.settable("".join(odd)) == odd[0] + odd[1] + "  "
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands and the long dispute.</p>" for i in range(8)
+    )
+    for ref in odd:
+        figure = f'<figure><picture><source srcset="https://i.example/a.jpg">Loading{ref}<img src="https://i.example/b.jpg"></picture><figcaption>C.</figcaption></figure>'
+        page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{figure}<p>Ends {ref} here.</p></article></body></html>"
+        extract_module.extract("https://news.example/story", page, "", "page")  # no exception
+    # A link to Google News with a picture and words of its own is not the badge.
+    with_words = '<p><a href="https://news.google.com/publications/CAAq"><img src="https://i.example/shot.png"> Our page on Google News</a></p>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{with_words}</article></body></html>"
+    assert (
+        "Our page on Google News"
+        in extract_module.extract("https://news.example/story", page, "", "page").body.text_content()
+    )
