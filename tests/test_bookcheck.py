@@ -902,3 +902,12 @@ def test_the_page_copies_come_from_the_page_as_the_extractor_reads_it():
     article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=cleaned)
     for block in article.clean(cleaned, from_page=True):
         assert not extract_module.UNSETTABLE.search(lxml.html.tostring(block, encoding="unicode"))
+
+
+def test_a_players_fallback_text_stays_out_of_the_models_html_and_page_copies():
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    for player in ("amp-video", "video-js"):
+        html = f'<p>Before.</p><{player} width="640"><source src="https://v.example/a.mp4">Your browser does not support video.</{player}><p>After.</p>'
+        for from_page in (False, True):
+            text = "".join(b.text_content() for b in article.clean(html, from_page=from_page))
+            assert text == "Before.After.", (player, from_page)

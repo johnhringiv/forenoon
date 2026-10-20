@@ -362,8 +362,8 @@ All fetched content is treated as untrusted.
 - **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
   can keep its caption and lose its photo (a box of its own, a lightbox button). After
   readability, such a figure gets back the pictures of the page's figure with the same caption
-  (the words a reader sees, its own and not a figure's within it); nothing is taken out. A
-  figure within a figure in the article gets none. The page's figures counted are those within
+  (the words a reader sees, its own and not a figure's within it; all its words when it has
+  none); nothing is taken out. A figure within a figure gets none, nor gives any. The page's figures counted are those within
   the box holding the article's first and last paragraphs when it is found, figures with no
   words only then; otherwise anywhere. Either way not those in a sidebar, footer or box of other
   stories (one holding half the page's words is the article's, whatever its name).
@@ -377,7 +377,9 @@ All fetched content is treated as untrusted.
   logo or share button, one of 48 pixels or less, an embedded one, a second size of the same
   photo, or one the article already shows. In a `<picture>` holding a blurred stand-in and
   the photo, only its last image is taken, with its sources. A page figure that is itself
-  hidden, or named as a card for other stories or an icon, gives none. None goes into a figure
+  hidden, or named as a card for other stories or an icon, gives none, and the boxes around it
+  (up to the article's own box) count as its own: a player, a hidden box, a link to a video, a
+  share link or a link to another story there means none. None goes into a figure
   holding a table, code or a quote.
 - **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
   or a Google News publication page (asking readers to pick the site as a source), is removed.

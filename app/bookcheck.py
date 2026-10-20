@@ -73,7 +73,7 @@ COPY_RAW_CHARS = 400_000  # the most of the page's own HTML it reads for one cop
 COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/=])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
-CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # in a page's text, refused by lxml when set again
+CONTROL = extract.UNSETTABLE  # in a page's text, refused by lxml when set again
 SURROGATE = re.compile(r"[\ud800-\udfff]")
 TOOL_NAME = re.compile(r"(?<![/=])copy:\d")  # the tool's own syntax left in the text, not a link's
 COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name a copy
@@ -749,7 +749,7 @@ class _Article:
         for el in within:
             el.drop_tag()
         for el in list(fragment.iter("source")):
-            el.drop_tag()  # its addresses are checked by no one: an <img>'s is the one kept
+            el.drop_tree()  # its addresses are checked by no one; a picture's <img> is out of it already
         clean = extract.sanitize(fragment, self.url, marked=True)
         return _as_blocks(clean)
 

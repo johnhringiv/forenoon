@@ -2442,3 +2442,46 @@ def test_a_figure_named_or_hidden_as_furniture_gets_nothing_and_odd_references_s
         "Our page on Google News"
         in extract_module.extract("https://news.example/story", page, "", "page").body.text_content()
     )
+
+
+def test_the_boxes_around_a_page_figure_count_as_its_own():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/2026/story")
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    bare = "<figure><figcaption>Watch: the launch.</figcaption></figure>"
+    figure = '<figure><div class="media"><img src="https://i.example/x.jpg">Loading image</div><figcaption>Watch: the launch.</figcaption></figure>'
+
+    def run(open_, close):
+        body = lxml.html.fromstring(f"<div>{text}{bare}</div>")
+        restore(body, f"<html><body><form><article>{text}{open_}{figure}{close}</article></form></body></html>")
+        return body
+
+    for wrap in (
+        '<div class="video-player">',
+        '<div data-component="video-block">',
+        '<a href="https://www.youtube.com/watch?v=abc">',
+        '<a href="/2026/other-story">',
+        '<a href="https://twitter.com/intent/tweet?u=x">',
+        '<div class="visually-hidden">',
+    ):
+        tag = wrap[1 : wrap.index(" ")]
+        assert not run(wrap, f"</{tag}>").xpath("//img"), wrap
+    # Outside the article's own box, the page's wrapper (an ASP.NET <form>) is not the figure's;
+    # and a plain <img>'s copy brings no label after it.
+    body = run("<div>", "</div>")
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/x.jpg"]
+    assert "Loading image" not in body.text_content()
+
+
+def test_a_whole_document_feed_body_lxml_cannot_read_is_no_candidate_not_an_error():
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands and the long dispute.</p>" for i in range(8)
+    )
+    feed = f"<html><head><title>T\udfff</title></head><body>{paras}</body></html>"
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}</article></body></html>"
+    for mode in ("feed", "auto"):
+        extract_module.extract("https://news.example/story", page, feed, mode)  # no exception
+
+
+def test_a_one_pixel_png_is_no_picture():
+    png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    assert extract_module._image_src(lxml.html.fromstring(f'<img src="{png}">')) == ""

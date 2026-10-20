@@ -234,7 +234,7 @@ def _parse_fragment(html: str) -> lxml.html.HtmlElement | None:
         return None
     try:
         return lxml.html.fragment_fromstring(html, create_parent="div")
-    except (etree.ParserError, ValueError):
+    except (etree.ParserError, ValueError, AssertionError):  # lxml asserts on some broken documents
         return None
 
 
@@ -1584,7 +1584,7 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
         if len(sources) != len(targets):
             continue
         caption = figure.find("figcaption")
-        for name, picture in _shown_pictures(sources[targets.index(figure)], url):
+        for name, picture in _shown_pictures(sources[targets.index(figure)], url, region):
             if name in have:
                 continue
             have.add(name)
@@ -1627,14 +1627,25 @@ def _article_region(page: lxml.html.HtmlElement, body: lxml.html.HtmlElement) ->
     return next((a for a in (first, *first.iterancestors()) if a in above), None)
 
 
-def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, lxml.html.HtmlElement]]:
+def _shown_pictures(
+    figure: lxml.html.HtmlElement, url: str, region: lxml.html.HtmlElement | None = None
+) -> list[tuple[str, lxml.html.HtmlElement]]:
     """A page figure's own pictures as the book would show them, each once, as copies: (its
     address's name, the <img>, or the <picture> around it with only that <img>). No pictures
     for a figure of a video (a player or embed in it, a player drawn by script, a picture that
     is or links to a video site's: they are the video's poster), nor for one of more than a
     few (a widget's grid). Left out: a picture in anything the book removes (a button,
     <noscript>, a dialog), in a figure within the figure, in a card for another story, a
-    hidden one, an icon, logo or share button, a small one, and an embedded one."""
+    hidden one, an icon, logo or share button, a small one, and an embedded one. The boxes
+    around the figure (up to the article's own box, or the page's body) count as its own: a
+    player, a hidden box, a link to a video, a share link or a link to another story there."""
+    above = []
+    for box in figure.iterancestors():
+        if box is region or box.tag in ("html", "body"):
+            break
+        above.append(box)
+    if any(a.tag in DROP or _hidden(a) for a in above):
+        return []
     if figure.xpath(".//video | .//audio | .//iframe | .//embed | .//object"):
         return []
     if any(
@@ -1642,7 +1653,7 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         and PLAYER_NAME_PICTURE.search(
             " ".join([el.tag, _names(el), el.get("data-component") or "", el.get("data-testid") or ""])
         )
-        for el in (figure, *figure.iterdescendants())
+        for el in (*above, figure, *figure.iterdescendants())
     ):
         return []
     own = " ".join(figure.get(name) or "" for name in ("class", "id"))
@@ -1663,15 +1674,17 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
             continue
         if any(ELSEWHERE.search(name) for name in names):
             continue  # a card for another story, inside the figure
-        if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in boxes):
+        if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in [*boxes, *above]):
             continue
         if VIDEO_LINK.match(address.strip()) or any(
-            a.tag == "a" and VIDEO_LINK.match((a.get("href") or "").strip()) for a in boxes
+            a.tag == "a" and VIDEO_LINK.match((a.get("href") or "").strip()) for a in [*boxes, *above]
         ):
             return []
         sizes = [img.get(n, "").strip() for n in ("width", "height")]
         if any(size.isascii() and size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
             continue
+        if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in above):
+            continue  # the whole figure links to another story: a card for it
         linked = any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes)
         parent = img.getparent()
         inside = parent is not None and parent.tag == "picture"
