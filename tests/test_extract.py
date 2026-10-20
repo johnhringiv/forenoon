@@ -1901,3 +1901,52 @@ def test_a_blank_pixel_is_no_picture_and_a_preferred_source_badge_goes():
     page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{badge}<p>The last word on it.</p></article></body></html>"
     result = extract_module.extract("https://news.example/2026/story", page, "", "page")
     assert not result.body.xpath("//img") and "The last word" in result.body.text_content()
+
+
+def test_figure_pictures_cost_no_text_and_bring_in_no_cards():
+    long = "".join(
+        f"<p>Paragraph {i} of the essay, with commas, clauses, asides, and more, says what it means at length.</p>"
+        for i in range(10)
+    )
+    slides = "".join(f'<div class="slide"><img src="https://i.example/{n}.jpg"></div>' for n in range(6))
+    section = f'<div class="section"><p>A short lead to the gallery.</p><p>And a second line.</p><figure>{slides}<figcaption>Six views of the same umbrella.</figcaption></figure></div>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{long}{section}{long}</article></body></html>"
+    text = extract_module.extract("https://blog.example/post", page, "", "page").body.text_content()
+    assert "A short lead to the gallery." in text and "Six views of the same umbrella." in text
+    body = extract_module.extract("https://blog.example/post", page, "", "page").body
+    assert len(body.xpath("//figure//img")) == 6
+    card = '<figure><div><img src="https://i.example/main.jpg"></div><div class="related-stories"><a href="/other"><img src="https://i.example/t.jpg"></a><a href="/other">Read more: another story entirely</a></div><figcaption>The main picture.</figcaption></figure>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{long}{card}{long}</article></body></html>"
+    body = extract_module.extract("https://blog.example/post", page, "", "page").body
+    assert "Read more" not in body.text_content() and "The main picture." in body.text_content()
+
+
+def test_small_embedded_images_stay_and_a_pictures_source_stands_in_for_a_pixel():
+    swatch = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12'%3E%3Crect width='12' height='12' fill='red'/%3E%3C/svg%3E"
+    icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AYRmAQAm"
+    for src in (swatch, icon):
+        assert extract_module._image_src(lxml.html.fromstring(f'<img src="{src}">')) == src
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    picture = f'<figure><picture><source srcset="https://i.example/a.webp 1x, https://i.example/a2.webp 2x"><img src="{pixel}" alt="A"></picture><figcaption>C.</figcaption></figure>'
+    body = extract_module.sanitize(lxml.html.fragment_fromstring(picture, create_parent="div"), "https://news.example/")
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/a2.webp"]
+
+
+def test_a_figure_left_with_its_caption_gets_its_pictures_back_from_the_page():
+    paras = "".join(
+        f"<p>Paragraph {i} of the review runs on about the projector, the room and the price of it all.</p>"
+        for i in range(8)
+    )
+    credit = '<figure><div class="box"><span><img src="https://i.example/{n}.jpg" alt="View {n}"></span></div><div class="caption"><span>Photograph: J. B.</span></div></figure>'
+    figures = "".join(credit.format(n=n) + paras[:200] for n in range(3))
+    page = (
+        f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{figures}{paras}</article></body></html>"
+    )
+    body = extract_module.extract("https://news.example/review", page, "", "page").body
+    assert [img.get("alt") for img in body.iter("img")] == ["View 0", "View 1", "View 2"]
+    assert body.text_content().count("Photograph: J. B.") == 3
+    # A caption the page has on more figures than the article kept: which is which is unknown.
+    other = '<figure><div class="box"><img src="https://i.example/x.jpg"></div><div class="caption"><span>Photograph: J. B.</span></div></figure>'
+    body = lxml.html.fromstring("<div><figure><div>Photograph: J. B.</div></figure></div>")
+    extract_module._restore_figure_pictures(body, f"<html><body>{other}{other.replace('x.jpg', 'y.jpg')}</body></html>")
+    assert not body.xpath("//img")

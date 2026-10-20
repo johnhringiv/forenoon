@@ -6,6 +6,7 @@ anything not named below is unwrapped (text kept) or dropped (text removed).
 
 from __future__ import annotations
 
+import base64
 import copy
 import re
 from dataclasses import dataclass, field
@@ -41,7 +42,7 @@ PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", 
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
-PLACEHOLDER_MAX_CHARS = 200  # a data: image this short is a blank pixel (a 1×1 GIF is about 70)
+PLACEHOLDER_MAX_CHARS = 200  # of a data: address, enough to read its image's header
 
 # Structure that pages express only through class names and in-page links. It is rebuilt
 # from these before the allowlist removes every class and id (see _structure).
@@ -271,10 +272,29 @@ def srcset_urls(srcset: str) -> list[str]:
     return urls
 
 
+def _blank_pixel(src: str) -> bool:
+    """Whether an embedded image is a single pixel (a GIF or PNG of 1×1), read from its header."""
+    head, sep, data = src[:PLACEHOLDER_MAX_CHARS].partition(",")
+    if not sep or not head.lower().startswith("data:image/") or not head.lower().endswith(";base64"):
+        return False
+    data = data[:32]
+    try:
+        raw = base64.b64decode(data + "=" * (-len(data) % 4))
+    except ValueError:
+        return False
+    if raw[:6] in (b"GIF87a", b"GIF89a") and len(raw) >= 10:
+        size = (int.from_bytes(raw[6:8], "little"), int.from_bytes(raw[8:10], "little"))
+    elif raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) >= 24:
+        size = (int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big"))
+    else:
+        return False
+    return max(size) <= 1
+
+
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
-    if src.startswith("data:") and len(src) <= PLACEHOLDER_MAX_CHARS:
-        src = ""  # a blank pixel held in place of a picture that a script loads
+    if _blank_pixel(src):
+        src = ""  # held in place of a picture that a script loads
     if not src or (src.startswith("data:") and any(el.get(a) for a in LAZY_SRC)):
         src = next((el.get(a).strip() for a in LAZY_SRC if el.get(a)), src)
     if not src and el.get("srcset"):
@@ -1303,6 +1323,20 @@ def _unnest_empty(root: lxml.html.HtmlElement) -> None:
             el.addnext(child)
 
 
+def _picture_fallbacks(root: lxml.html.HtmlElement) -> None:
+    """Give a <picture>'s <img> that has no address of its own (or a blank pixel) the
+    addresses its <source>s offer, before the sources go."""
+    for img in root.iter("img"):
+        picture = img.getparent()
+        if picture is None or picture.tag != "picture" or _image_src(img):
+            continue
+        for source in picture.iter("source"):
+            srcset = source.get("srcset") or source.get("data-srcset") or ""
+            if any(not url.lower().startswith("data:") for url in srcset_urls(srcset)):
+                img.set("srcset", srcset)
+                break
+
+
 def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.HtmlElement | None]:
     """The markup with its structure rebuilt and its notes taken out, and those notes."""
     try:
@@ -1340,6 +1374,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
         if not isinstance(el.tag, str):  # comments, processing instructions
             el.drop_tree()
     _unnest_empty(root)
+    _picture_fallbacks(root)
     if not marked:
         _unmark(root)
     for el in root.xpath(".//*[self::h1]"):
@@ -1443,6 +1478,56 @@ def _caption_key(el: lxml.html.HtmlElement) -> str:
     """A caption's words for comparing copies: no spaces (blocks run together without them),
     and the page's two copies may differ in their quote marks."""
     return "".join(el.text_content().split()).translate(QUOTES)
+
+
+def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str) -> None:
+    """Put back the pictures of a figure readability kept only the words of. It takes a box
+    holding nothing but a picture for empty, so a photo in a box of its own (the Guardian's,
+    a lightbox button's, an embed's fallback) went and its caption stayed. The page's figure
+    with the same caption gives them back, before the caption; nothing is taken out. Figures
+    that share a caption ("Photograph: …") are paired in order, when there are as many of
+    them on the page as in the article."""
+    bare = [f for f in body.iter("figure") if f.find(".//img") is None and _figure_key(f)]
+    if not bare:
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    on_page: dict[str, list[lxml.html.HtmlElement]] = {}
+    for figure in page.iter("figure"):
+        if figure.find(".//img") is not None and next(figure.iterancestors("figure"), None) is None:
+            on_page.setdefault(_figure_key(figure), []).append(figure)
+    in_body: dict[str, list[lxml.html.HtmlElement]] = {}
+    for figure in body.iter("figure"):
+        in_body.setdefault(_figure_key(figure), []).append(figure)
+    have = {_image_src(img) for img in body.iter("img")}
+    for figure in bare:
+        key = _figure_key(figure)
+        sources, targets = on_page.get(key, []), in_body[key]
+        if len(sources) != len(targets):
+            continue
+        source = sources[targets.index(figure)]
+        caption = figure.find("figcaption")
+        for img in source.iter("img"):
+            src = _image_src(img)
+            inside = img.getparent() is not None and img.getparent().tag == "picture"
+            if next(img.iterancestors("figcaption"), None) is not None or (src in have and (src or not inside)):
+                continue
+            have.add(src)
+            picture = copy.deepcopy(img.getparent() if inside else img)
+            picture.tail = None
+            if caption is not None:
+                caption.addprevious(picture)
+            else:
+                figure.insert(0, picture)
+                picture.tail, figure.text = figure.text, None
+
+
+def _figure_key(figure: lxml.html.HtmlElement) -> str:
+    """What names a figure: its caption's words, else all its words."""
+    caption = next(figure.iter("figcaption"), None)
+    return _caption_key(caption if caption is not None else figure)
 
 
 def _drop_repeated_captions(root: lxml.html.HtmlElement) -> None:
@@ -1683,14 +1768,6 @@ class _Document(Document):
             if ul not in allowed and self._text_list(ul):
                 allowed[ul] = True
                 self._kept_lists.add(ul)
-        # A figure's own box around its picture: it has no text, so readability takes it as empty.
-        for div in self.tags(node, "div"):
-            if (
-                div not in allowed
-                and div.find(".//img") is not None
-                and next(div.iterancestors("figure"), None) is not None
-            ):
-                allowed[div] = True
         return allowed
 
     def get_link_density(self, elem):
@@ -2376,6 +2453,7 @@ def extract(
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
             _drop_dangling_pitch(page, page_html, url)
+            _restore_figure_pictures(page, page_html)
             candidates["page"] = sanitize(page, url, marked=True)
         reference = _reference_words(page_html)
         title, author, image, description = page_metadata(page_html)
