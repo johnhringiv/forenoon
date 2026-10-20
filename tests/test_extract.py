@@ -2142,3 +2142,104 @@ def test_restored_pictures_are_named_by_their_full_address_and_stay_out_of_inner
     # A gallery's own figures keep their pictures to themselves.
     gallery = '<figure><figure><div><img src="https://i.example/1.jpg"></div><figcaption>Sub 1</figcaption></figure><figcaption>Two.</figcaption></figure>'
     assert run(bare, gallery) == []
+
+
+def test_a_control_character_in_a_pictures_address_is_no_picture_not_an_error():
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands, the people there and the dispute.</p>"
+        for i in range(8)
+    )
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    for figure in (
+        '<figure><picture><source srcset="https://a.example/\x0bb.jpg 1x"><img src=""></picture><figcaption>C.</figcaption></figure>',
+        f'<figure><picture><source data-srcset="https://a.example/\x0bb.jpg 1x"><img src="{pixel}"></picture><figcaption>C.</figcaption></figure>',
+        '<figure><div><img data-src="https://a.example/\x01b.jpg"></div><figcaption>C.</figcaption></figure>',
+        '<p><img srcset="https://a.example/\x0bb.jpg 1x"></p>',
+    ):
+        page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{figure}{paras}</article></body></html>"
+        body = extract_module.extract("https://news.example/2026/story", page, "", "page").body
+        assert not any("\x0b" in (img.get("src") or "") or "\x01" in (img.get("src") or "") for img in body.iter("img"))
+
+
+def test_restore_reads_a_pictures_own_address_and_leaves_story_links_and_labels():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/2026/story")
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    svg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E"
+    bare = "<figure><figcaption>Two.</figcaption></figure>"
+
+    def run(article, page):
+        body = lxml.html.fromstring(f"<div>{text}{article}</div>")
+        restore(body, f"<html><body><article>{text}{page}</article></body></html>")
+        return [img.get("src") or img.getparent().find("source").get("srcset") for img in body.iter("img")]
+
+    def picture(srcset):
+        return f'<figure><div><picture><source srcset="{srcset}"><img src="{svg}"></picture><span>Loading image</span></div><figcaption>Two.</figcaption></figure>'
+
+    # A video's poster and a logo behind a stand-in, by the address the picture would show.
+    assert run(bare, picture("https://i.ytimg.com/vi/abc/hqdefault.webp")) == []
+    assert run(bare, picture("https://i.example/site-logo.png")) == []
+    # The picture's copy is its sources and its <img>: no label beside them.
+    body = lxml.html.fromstring(f"<div>{text}{bare}</div>")
+    restore(body, f"<html><body><article>{text}{picture('https://i.example/a.jpg')}</article></body></html>")
+    assert "Loading image" not in body.text_content() and body.xpath("//figure/picture/source")
+    # A photo the article already shows through its <source> is not added again.
+    shown = f'<figure><picture><source srcset="https://i.example/a.jpg"><img src="{svg}"></picture><figcaption>One.</figcaption></figure>'
+    assert len(run(shown + bare, picture("https://i.example/a.jpg"))) == 1
+    # An unclassed card linking to another of the site's stories, beside the figure's photo.
+    card = '<figure><div><img src="https://i.example/main.jpg"></div><div><a href="/2026/other-story"><img src="https://i.example/t.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, card) == ["https://i.example/main.jpg"]
+    # A lightbox link to the photo itself is the photo.
+    lightbox = '<figure><div><a href="https://i.example/big.jpg"><img src="https://i.example/big-640x480.jpg"></a></div><figcaption>Two.</figcaption></figure>'
+    assert run(bare, lightbox) == ["https://i.example/big-640x480.jpg"]
+
+
+def test_restore_rules_each_hold_on_their_own():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/story")
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    photo = '<figure><div><img src="https://i.example/p.jpg"></div><figcaption>Two.</figcaption></figure>'
+
+    def run(article, page, region=True):
+        body = lxml.html.fromstring(f"<div>{text if region else ''}{article}</div>")
+        restore(
+            body, page if page.startswith("<html") else f"<html><body><article>{text}{page}</article></body></html>"
+        )
+        return [img.get("src") for img in body.iter("img")]
+
+    bare = "<figure><figcaption>Two.</figcaption></figure>"
+    # A figure with a player or an embed: its picture is the poster.
+    for player in ("<iframe src='https://player.example/v'></iframe>", "<video src='v.mp4'></video>"):
+        assert run(bare, photo.replace("</div>", f"</div>{player}")) == [], player
+    # A gallery's own figure keeps its picture, even with no caption of its own.
+    gallery = (
+        '<figure><figure><div><img src="https://i.example/1.jpg"></div></figure><figcaption>Two.</figcaption></figure>'
+    )
+    assert run(bare, gallery) == []
+    # The article's own picture, made absolute, is the page's relative one.
+    have = '<figure><img src="https://news.example/p.jpg"><figcaption>One.</figcaption></figure>'
+    assert run(have + bare, photo.replace("https://i.example/p.jpg", "/p.jpg")) == ["https://news.example/p.jpg"]
+    # Nothing into a figure holding a table, code or a quote.
+    for held in ("<table><tr><td>1</td></tr></table>", "<pre>x = 1</pre>", "<blockquote>Said.</blockquote>"):
+        assert run(f"<figure>{held}<figcaption>Two.</figcaption></figure>", photo) == [], held
+    # No article box found: figures with no words are not matched, and a sidebar's are not counted
+    # unless the box holds most of the page (a wrapper classed "with-sidebar").
+    words = "<p>" + "Many words of the article itself, " * 40 + "</p>"
+    loose = '<figure><div><img src="https://i.example/w.jpg"></div></figure>'
+    assert run("<figure></figure>", f"<html><body>{loose}</body></html>", region=False) == []
+    side = f'<div class="sidebar">{photo.replace("p.jpg", "s.jpg")}</div>'
+    assert run(bare, f"<html><body>{words}{side}{photo}</body></html>", region=False) == ["https://i.example/p.jpg"]
+    wrap = f'<div class="content-with-sidebar">{words}{photo}</div>'
+    assert run(bare, f"<html><body>{wrap}</body></html>", region=False) == ["https://i.example/p.jpg"]
+    tailwind = f'<div class="xl:group-[:has(#right-rail)]/article:gap-x-12">{photo}</div>'
+    assert run(bare, f"<html><body>{words}{tailwind}</body></html>", region=False) == ["https://i.example/p.jpg"]
+
+
+def test_a_restore_that_raises_leaves_the_article_as_it_was(monkeypatch):
+    def broken(*args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(extract_module, "_restore_figure_pictures", broken)
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the islands and the long dispute.</p>" for i in range(8)
+    )
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}<figure><figcaption>C.</figcaption></figure></article></body></html>"
+    assert "Paragraph 7" in extract_module.extract("https://news.example/story", page, "", "page").body.text_content()

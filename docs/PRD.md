@@ -352,21 +352,25 @@ All fetched content is treated as untrusted.
   images must be absolute `http(s)` (or `mailto:` / embedded image data). Top-level headings
   become second-level, invalid nesting is repaired, and containers left empty are removed.
   A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
-  the image has no address on the web (none, or an embedded stand-in). An embedded 1×1 GIF or
-  PNG anywhere counts as no picture: it holds a picture's place until a script loads it.
+  the image has no address on the web (none, or an embedded stand-in): the last address of the
+  first source that has one. An embedded 1×1 GIF or PNG anywhere counts as no picture: it holds
+  a picture's place until a script loads it. An address holding a control character is none.
 - **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
   can keep its caption and lose its photo (a box of its own, a lightbox button). After
   readability, such a figure gets back the pictures of the page's figure with the same caption
-  (the words a reader sees); nothing is taken out. The page's figures counted are those within
+  (the words a reader sees, its own and not a figure's within it); nothing is taken out. A
+  figure within a figure in the article gets none. The page's figures counted are those within
   the box holding the article's first and last paragraphs when it is found, figures with no
   words only then; otherwise those outside sidebars, footers and boxes of other stories.
   Figures sharing a caption are paired in order, only when the page has as many as the
   article. Only pictures the book would show come back: none for a video's figure (a player
   or embed, a player drawn by script, a picture that is or links to a video site's) or a
   figure of more than 8 (a widget's grid), and not a picture in anything else removed (a
-  button, `<noscript>`), in a figure within the figure or a card for another story, a hidden
-  one, an icon, logo or share button, one of 48 pixels or less, an embedded one or a second
-  size of the same photo. None goes into a figure holding a table, code or a quote. A caption
+  button, `<noscript>`), in a caption, an `<aside>`, a figure within the figure or a card for
+  another story (named so, or linking to another of the site's pages), a hidden one, an icon,
+  logo or share button, one of 48 pixels or less, an embedded one, a second size of the same
+  photo, or one the article already shows. In a `<picture>` holding a blurred stand-in and
+  the photo, only its last image is taken, with its sources. None goes into a figure holding a table, code or a quote. A caption
   a figure also shows over its picture (an overlay, a lightbox's text) appears once.
 - **Preferred-source badge.** A picture linking to the site's page on Google News (asking
   readers to pick it as a preferred source) is removed.

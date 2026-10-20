@@ -42,6 +42,7 @@ PRUNABLE = ("p", "div", "figure", "figcaption", "blockquote", "li", "ul", "ol", 
 PHRASING_ONLY = INLINE | {"p", "pre", "h2", "h3", "h4", "h5", "h6"}
 ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("start",)}
 LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
+UNSETTABLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 PLACEHOLDER_MAX_CHARS = 200  # of a data: address, enough to read its image's header
 
 # Structure that pages express only through class names and in-page links. It is rebuilt
@@ -292,6 +293,12 @@ def _blank_pixel(src: str) -> bool:
     return max(size) <= 1
 
 
+def _readable_address(address: str) -> str:
+    """An address, or "" when it holds a control character: lxml escapes those only in src and
+    href when it writes a page out, and refuses to set an attribute holding one."""
+    return "" if UNSETTABLE.search(address) else address
+
+
 def _image_src(el: lxml.html.HtmlElement) -> str:
     src = (el.get("src") or "").strip()
     if _blank_pixel(src):
@@ -303,7 +310,7 @@ def _image_src(el: lxml.html.HtmlElement) -> str:
         # own commas are part of it); none in a blank or "," srcset.
         found = srcset_urls(el.get("srcset"))
         src = next((part for part in reversed(found) if not part.lower().startswith("data:")), "")
-    return src
+    return _readable_address(src)
 
 
 def _classes(el: lxml.html.HtmlElement) -> set[str]:
@@ -1530,15 +1537,19 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
     except (etree.ParserError, ValueError):
         return
     _unnest_empty(page)
+    _unnest_empty(body)  # as sanitize will: so a <picture>'s <img> is seen as the picture's
     region = _article_region(page, body)
     most: list[float] = []  # half the page's words, counted only when the region is not found
     elsewhere: dict[lxml.html.HtmlElement, bool] = {}
 
     def outside(figure: lxml.html.HtmlElement) -> bool:
+        boxes = list(figure.iterancestors())
         if region is not None:
-            return region not in figure.iterancestors()
+            if region not in boxes:
+                return True
+            boxes = boxes[: boxes.index(region)]  # and a box of other stories within the article
         most[:] = most or [0.5 * _words(_visible_text(page))]
-        for box in figure.iterancestors():
+        for box in boxes:
             if box not in elsewhere:
                 elsewhere[box] = _elsewhere(box, most[0])
             if elsewhere[box]:
@@ -1556,7 +1567,7 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
     for figure in body.iter("figure"):
         if next(figure.iterancestors("figure"), None) is None:
             in_body.setdefault(_figure_key(figure), []).append(figure)
-    have = {_picture_name(_join(url, _image_src(img))) for img in body.iter("img")}
+    have = {_picture_name(_join(url, _picture_address(img))) for img in body.iter("img")}
     for figure in bare:
         key = _figure_key(figure)
         sources, targets = on_page.get(key, []), in_body[key]
@@ -1594,7 +1605,7 @@ def _article_region(page: lxml.html.HtmlElement, body: lxml.html.HtmlElement) ->
     first = last = None
     for p in page.iter("p", "div", "li", "blockquote", "section"):
         if p.tag != "p" and any(isinstance(c.tag, str) and c.tag in ("p", "div", "section") for c in p):
-            continue  # a box of blocks: only a block of words can be the article's paragraph
+            continue  # a box of blocks: no need to read all its words
         key = _text_key(p)
         if key == paragraphs[0] and first is None:
             first = p
@@ -1630,23 +1641,25 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         boxes = boxes[: boxes.index(figure)]
         if any(el.tag in DROP or el.tag in ("figcaption", "figure", "aside") or _hidden(el) for el in boxes):
             continue
+        address = _picture_address(img)
+        if not address or address.lower().startswith("data:"):
+            continue
         names = [el.get("class") or "" for el in boxes] + [el.get("id") or "" for el in boxes]
-        if any(FURNITURE_PICTURE.search(name) for name in [*names, _file_name(_image_src(img))]):
+        if any(FURNITURE_PICTURE.search(name) for name in [*names, _file_name(address)]):
             continue
         if any(ELSEWHERE.search(name) for name in names):
             continue  # a card for another story, inside the figure
         if any(a.tag == "a" and SHARE_LINK.search(a.get("href") or "") for a in boxes):
             continue
-        if VIDEO_LINK.match(_image_src(img).strip()) or any(
+        if VIDEO_LINK.match(address.strip()) or any(
             a.tag == "a" and VIDEO_LINK.match((a.get("href") or "").strip()) for a in boxes
         ):
             return []
         sizes = [img.get(n, "").strip() for n in ("width", "height")]
         if any(size.isascii() and size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
             continue
-        address = _picture_address(img)
-        if not address or address.lower().startswith("data:"):
-            continue
+        if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes):
+            continue  # a picture linking to another of the site's pages: a card for that story
         parent = img.getparent()
         inside = parent is not None and parent.tag == "picture"
         if inside and any(el.tag == "img" for el in img.itersiblings()):
@@ -1654,12 +1667,11 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         name = _picture_name(_join(url, address))
         if name in found:
             continue
-        if inside:
-            picture = copy.deepcopy(parent)
-            chosen = list(parent.iter("img")).index(img)
-            for n, other in enumerate(list(picture.iter("img"))):
-                if n != chosen:
-                    other.drop_tree()
+        if inside:  # its sources and this <img>, and nothing else (no "Loading image" label)
+            picture = lxml.html.Element("picture")
+            picture.extend(copy.deepcopy(el) for el in [*parent.iter("source"), img])
+            for el in picture:
+                el.tail = None
         else:
             picture = copy.deepcopy(img)
         picture.tail = None
@@ -1667,6 +1679,20 @@ def _shown_pictures(figure: lxml.html.HtmlElement, url: str) -> list[tuple[str, 
         if len(found) > RESTORE_MAX_PICTURES:
             return []
     return list(found.items())
+
+
+def _story_link(url: str, href: str, address: str) -> bool:
+    """Whether a link around a picture goes to another page of the site rather than to the
+    picture itself (a lightbox's full size)."""
+    target = _join(url, href.strip())
+    if not target or _picture_name(target) == _picture_name(_join(url, address)):
+        return False
+    try:
+        there, here = urlsplit(target), urlsplit(url)
+    except ValueError:
+        return False
+    picture_file = re.search(r"\.(jpe?g|png|gif|webp|avif|svg)$", there.path, re.IGNORECASE)
+    return there.netloc == here.netloc and not picture_file and there.path.rstrip("/") != here.path.rstrip("/")
 
 
 def _picture_address(img: lxml.html.HtmlElement) -> str:
@@ -1680,7 +1706,7 @@ def _picture_address(img: lxml.html.HtmlElement) -> str:
         for name in ("srcset", "data-srcset"):
             urls = [url for url in srcset_urls(source.get(name) or "") if not url.lower().startswith("data:")]
             if urls:
-                return urls[-1]
+                return _readable_address(urls[-1])
     return address
 
 
@@ -1716,10 +1742,15 @@ def _hidden(el: lxml.html.HtmlElement) -> bool:
     return bool(HIDDEN_CLASS.search(names)) and not RESPONSIVE_SHOWN.search(names)
 
 
+def _own_caption(figure: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """A figure's own caption, not one of a figure within it (a gallery's photo)."""
+    return next((c for c in figure.iter("figcaption") if next(c.iterancestors("figure")) is figure), None)
+
+
 def _figure_key(figure: lxml.html.HtmlElement) -> str:
     """What names a figure: its caption's words, else all its words; only the words a reader
     sees (a script or a style inside is not one), as readability's copy keeps them."""
-    caption = next(figure.iter("figcaption"), None)
+    caption = _own_caption(figure)
     shown = copy.deepcopy(caption if caption is not None else figure)
     for el in list(shown.iter(*DROP)):
         if el is not shown and el.getparent() is not None:
