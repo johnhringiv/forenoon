@@ -12,6 +12,7 @@ import lxml.html
 import pytest
 
 from app import archive, bookcheck, sessions
+from app import extract as extract_module
 from app.config import Config, Llm, Source, User
 from app.extract import Extracted
 from app.sources import Item
@@ -863,3 +864,55 @@ def test_the_start_is_one_the_end_phrase_follows():
     # Punctuation in a line of the model's own stays in it.
     article.insert(1, "<b>Note</b>: <i>see below</i>, <b>Tom</b> &amp; <b>Jerry</b>. copy:1")
     assert "Note: see below, Tom & Jerry." in article.body.text_content()
+
+
+def test_a_pictures_sources_bring_no_unchecked_address_into_the_book():
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    html = '<p>Text.</p><picture><source srcset="https://evil.example/track.gif"><img src="https://evil.example/x.gif"></picture>'
+    blocks = article.clean(html)
+    assert not any(block.xpath("descendant-or-self::img") for block in blocks)
+    assert "evil.example" not in "".join(lxml.html.tostring(b, encoding="unicode") for b in blocks)
+
+
+def test_a_page_copy_keeps_a_pictures_photo_behind_a_blank_pixel():
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    photo = "https://news.example/photo.jpg"
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images={photo})
+    html = f'<figure><picture><source srcset="{photo} 1x"><img src="{pixel}"></picture><figcaption>Cap words</figcaption></figure>'
+    page_copy = lxml.html.tostring(lxml.html.fragment_fromstring(html), encoding="unicode")  # as lxml reads the page
+    blocks = article.clean(page_copy, from_page=True)
+    assert [img.get("src") for b in blocks for img in b.iter("img")] == [photo]
+
+
+def test_an_unreadable_address_on_the_page_is_no_picture_not_an_error():
+    pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    assert bookcheck._page_images(
+        '<html><body><img src="http://[::1/x.jpg"><img src="https://news.example/a.jpg"></body></html>', URL
+    ) == {"https://news.example/a.jpg"}
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    blocks = article.clean(
+        f'<picture><source srcset="http://[x/a.jpg 1x"><img src="{pixel}"></picture><p>Words.</p>', from_page=True
+    )
+    assert not any(b.xpath("descendant-or-self::img") for b in blocks)
+
+
+def test_the_page_copies_come_from_the_page_as_the_extractor_reads_it():
+    page = '<html><body><article><pre><code>int x;\x0c\nint y;&#12;</code></pre><figure><picture><source srcset="https://news.example/a.jpg">\x0c<img src="https://news.example/b.jpg"></picture><figcaption>C.</figcaption></figure></article></body></html>'
+    cleaned = extract_module.settable(page)
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_html=cleaned)
+    for block in article.clean(cleaned, from_page=True):
+        assert not extract_module.UNSETTABLE.search(lxml.html.tostring(block, encoding="unicode"))
+
+
+def test_a_players_fallback_text_stays_out_of_the_models_html_and_page_copies():
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    for player in ("amp-video", "video-js"):
+        html = f'<p>Before.</p><{player} width="640"><source src="https://v.example/a.mp4">Your browser does not support video.</{player}><p>After.</p>'
+        for from_page in (False, True):
+            text = "".join(b.text_content() for b in article.clean(html, from_page=from_page))
+            assert text == "Before.After.", (player, from_page)
+
+
+def test_taking_out_a_surrogate_cannot_make_a_reference_lxml_refuses():
+    article = bookcheck._Article(lxml.html.fragment_fromstring("<div><p>x</p></div>"), URL, page_images=set())
+    article._html("<p>Text &\udfff#xC; more.</p>")  # no exception

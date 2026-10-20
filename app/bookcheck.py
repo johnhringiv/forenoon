@@ -73,7 +73,7 @@ COPY_RAW_CHARS = 400_000  # the most of the page's own HTML it reads for one cop
 COPY_SHOWN_CHARS = 6_000  # of a copy shown back to the model
 # A copy named in an edit's HTML, alone or as the whole of a paragraph ("<h2>Sponsors</h2><p>copy:2</p>").
 COPY_REF = re.compile(r"(<p>\s*)?(?<![\w/=])copy:(\d{1,3})(?![\w/])(\s*</p>)?")
-CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # in a page's text, refused by lxml when set again
+CONTROL = extract.UNSETTABLE  # in a page's text, refused by lxml when set again
 SURROGATE = re.compile(r"[\ud800-\udfff]")
 TOOL_NAME = re.compile(r"(?<![/=])copy:\d")  # the tool's own syntax left in the text, not a link's
 COPY_HINT = re.compile(r"copy\s*:\s*\d", re.IGNORECASE)  # an edit that may name a copy
@@ -637,7 +637,7 @@ class _Article:
             used.append(n)
             return _as_blocks(lxml.html.fragment_fromstring(self.copies[n - 1], create_parent="div"))
 
-        html = SURROGATE.sub("", CONTROL.sub("", html))  # refused by lxml, or the end of its reading
+        html = extract.settable(SURROGATE.sub("", html))  # in this order: taking one out can make a reference
         if ref := COPY_REF.fullmatch(html.strip()):
             return blocks_of(int(ref.group(2))), used
         root = _fragment(RUN_ON.sub(r"\1 ", html))
@@ -726,6 +726,7 @@ class _Article:
         the page's. The page's own HTML (`from_page`) has its lazy images' addresses found and
         its h1 made an h2, as the extractor does."""
         fragment = _fragment(html)
+        extract._unnest_empty(fragment)  # a page's <picture> as lxml read it: its <img> inside a <source>
         within: list[lxml.html.HtmlElement] = []
         for el in fragment.iter():
             if not isinstance(el.tag, str):
@@ -733,7 +734,7 @@ class _Article:
             for name in [name for name in el.attrib if name.startswith(extract.MARK)]:
                 del el.attrib[name]
             if el.tag == "img":
-                src = self._image(extract._image_src(el) if from_page else el.get("src") or "")
+                src = self._image(extract._picture_address(el) if from_page else el.get("src") or "")
                 el.attrib.clear() if not src else _keep_only(el, src)
             if from_page:
                 el.attrib.pop("id", None)  # the page's own ids are not the article's
@@ -747,6 +748,8 @@ class _Article:
                 _mark_internal(el)
         for el in within:
             el.drop_tag()
+        for el in list(fragment.iter("source")):
+            el.drop_tree()  # its addresses are checked by no one; a picture's <img> is out of it already
         clean = extract.sanitize(fragment, self.url, marked=True)
         return _as_blocks(clean)
 
@@ -756,7 +759,7 @@ class _Article:
         src = src.strip()
         if src.startswith("picture:") and src[8:].isdigit() and 1 <= int(src[8:]) <= len(self.pictures):
             return self.pictures[int(src[8:]) - 1]
-        absolute = urljoin(self.url, src)
+        absolute = extract._join(self.url, src)
         if absolute.startswith(("http://", "https://")) and absolute in self.page_images | self._own_images():
             return absolute
         return ""
@@ -1074,13 +1077,13 @@ def _page_images(page_html: str, url: str) -> set[str]:
     for el in root.iter("img", "source"):
         for name in ("src", *extract.LAZY_SRC):
             if el.get(name):
-                found.add(urljoin(url, el.get(name).strip()))
+                found.add(extract._join(url, el.get(name).strip()))
         for name in ("srcset", "data-srcset"):
             for address in extract.srcset_urls(el.get(name) or ""):
-                found.add(urljoin(url, address))
+                found.add(extract._join(url, address))
     for meta in root.xpath('//meta[@property="og:image" or @name="twitter:image"]'):
         if meta.get("content"):
-            found.add(urljoin(url, meta.get("content").strip()))
+            found.add(extract._join(url, meta.get("content").strip()))
     return {src for src in found if src.startswith(("http://", "https://"))}
 
 
@@ -1159,7 +1162,7 @@ class Checker:
             self._skip("with no saved page")
             return None
         try:
-            outcome = self._run(item, result, saved["page_html"], list(keep))
+            outcome = self._run(item, result, extract.settable(saved["page_html"]), list(keep))
         except Exception as exc:  # hostile pages and a model's HTML: whatever happens, the delivery goes on
             log.exception("book check of %s failed", item.url)
             outcome = Outcome("error", f"the check failed: {type(exc).__name__}: {exc}"[:MAX_SUMMARY])

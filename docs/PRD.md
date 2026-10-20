@@ -351,6 +351,49 @@ All fetched content is treated as untrusted.
   link targets, image sources and alt text, table spans and list start numbers. Links and
   images must be absolute `http(s)` (or `mailto:` / embedded image data). Top-level headings
   become second-level, invalid nesting is repaired, and containers left empty are removed.
+  A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
+  the image has no address on the web (none, or an embedded stand-in): the last address of the
+  first source that has one (`srcset`, else `data-srcset`). An embedded (base64) 1×1 GIF or PNG as an
+  image's `src` counts as no picture: it holds a picture's place until a script loads it. A
+  character lxml refuses to set again (a control character such as a form feed in a kernel
+  source's code, or U+FFFE/U+FFFF), written or as a reference, is read as a space in the page
+  and the feed; the book check reads the page, and the model's HTML, the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
+  text) appears once.
+- **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
+  can keep its caption and lose its photo (a box of its own, a lightbox button). After
+  readability, such a figure gets back the pictures of the page's figure with the same caption
+  (the words a reader sees, its own and not a figure's within it; all its words when it has
+  none); nothing is taken out. A figure within a figure gets none, nor gives any. The page is
+  read as extraction has rebuilt it (an `<aside>` the article keeps as a quote is no longer a
+  sidebar). The page's figures counted are those within the box holding the article's first
+  and last paragraphs (of 40 letters or more, spaces not counted) when it is found, figures with no words only then; otherwise anywhere.
+  Either way not those in a sidebar, footer or box of other stories (one holding half the
+  page's words is the article's, whatever its name). Figures sharing a caption are paired in
+  order, only when the page has as many as the article, and a pair only when the two sit
+  next to the same paragraph of the article, before or after (one outside figures that the
+  article and the page each have once); and on each side where the two have the same
+  neighbour (that paragraph, or the article's start or end) the same figures must stand
+  between it and them. The only figure with its caption on each side may pair beside no such
+  paragraph on either. An article figure inside a box readability kept that is named as one
+  of other stories gets none (its page figure is not counted).
+  Only pictures the book would show come back. None for a video's figure (a player or embed,
+  a player drawn by script, a picture that is or links to a video site's) or a figure of more
+  than 8 pictures (a widget's grid, cards for other stories counted; one of more than 64
+  gives none). Not a picture in
+  anything else removed (a button, `<noscript>`), in a caption, an `<aside>`, a figure within
+  the figure, or a card for another story (named so, or linking to another of the site's
+  pages, or to another post where the article's address names its post in the query; a link
+  to a picture file, to the photo's own attachment, media or gallery page, or to one under the
+  article's address, is the photo's); nor a hidden one, an icon, logo or share button, one of
+  48 pixels or less, an embedded one, a second size of the same photo, or one the article
+  already shows. In a `<picture>` holding a blurred stand-in and the photo, only its last
+  image is taken, with its sources. A page figure that is itself hidden, or named as a card for
+  other stories or an icon, gives none; so does one inside anything the book removes, a
+  player, a hidden box, a link to a video, a share link or a link to another story, up to the
+  article's own box (or the page's body when that is not found). None goes into a figure
+  holding a table, code or a quote.
+- **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
+  or a Google News publication page (asking readers to pick the site as a source), is removed.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
   extracted body (a standfirst in the page header), it is added in italics at the top.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt
