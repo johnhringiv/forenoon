@@ -369,14 +369,16 @@ All fetched content is treated as untrusted.
   and last paragraphs when it is found, figures with no words only then; otherwise anywhere.
   Either way not those in a sidebar, footer or box of other stories (one holding half the
   page's words is the article's, whatever its name). Figures sharing a caption are paired in
-  order, only when the page has as many as the article.
+  order, only when the page has as many as the article, and a pair only when the two sit
+  next to the same paragraph of the article (before or after).
   Only pictures the book would show come back. None for a video's figure (a player or embed,
   a player drawn by script, a picture that is or links to a video site's) or a figure of more
   than 8 pictures (a widget's grid, cards for other stories counted). Not a picture in
   anything else removed (a button, `<noscript>`), in a caption, an `<aside>`, a figure within
   the figure, or a card for another story (named so, or linking to another of the site's
-  pages; a link to the photo's own attachment, media or gallery page, or to one under the
-  article's address, is the photo's); nor a hidden one, an icon, logo or share button, one of
+  pages, or to another post where the article's address names its post in the query; a link
+  to the photo's own attachment, media or gallery page, or to one under the article's address,
+  is the photo's); nor a hidden one, an icon, logo or share button, one of
   48 pixels or less, an embedded one, a second size of the same photo, or one the article
   already shows. In a `<picture>` holding a blurred stand-in and the photo, only its last
   image is taken, with its sources. A page figure that is itself hidden, or named as a card for

@@ -1515,6 +1515,7 @@ PLAYER_NAME_PICTURE = re.compile(
 VIDEO_LINK = re.compile(
     r"^https?://([^/]*\.)?(youtube\.com|youtu\.be|vimeo\.com|ytimg\.com|vimeocdn\.com)/", re.IGNORECASE
 )
+PICTURE_FILE = re.compile(r"\.(jpe?g|png|gif|webp|avif|svg)$", re.IGNORECASE)
 PHOTO_PAGE = re.compile(r"/(attachments?|media|images?|photos?|gallery|galleries)(/|$)", re.IGNORECASE)
 RESTORE_MIN_SIZE = 48  # pixels; a picture this small (by its own width or height) is an icon
 HIDDEN_CLASS = re.compile(
@@ -1581,13 +1582,25 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
         if next(figure.iterancestors("figure"), None) is None:
             in_body.setdefault(_figure_key(figure), []).append(figure)
     have = {_picture_name(_join(url, _picture_address(img))) for img in body.iter("img")}
+    shared = {key for key in (_text_key(p) for p in body.iter("p")) if len(key) >= 40}
+
+    def place(figure: lxml.html.HtmlElement) -> tuple[str, str]:
+        """The article's paragraphs right before and right after a figure ("" for none)."""
+        before = next((k for k in map(_text_key, reversed(figure.xpath("preceding::p"))) if k in shared), "")
+        after = next((k for k in map(_text_key, figure.xpath("following::p")) if k in shared), "")
+        return before, after
+
     for figure in bare:
         key = _figure_key(figure)
         sources, targets = on_page.get(key, []), in_body[key]
         if len(sources) != len(targets):
             continue
+        source = sources[targets.index(figure)]
+        here, there = place(figure), place(source)
+        if here != there and not any(a == b != "" for a, b in zip(here, there)):
+            continue  # not between the same paragraphs of the article: the pairing is off
         caption = figure.find("figcaption")
-        for name, picture in _shown_pictures(sources[targets.index(figure)], url, region):
+        for name, picture in _shown_pictures(source, url, region):
             if name in have:
                 continue
             have.add(name)
@@ -1730,13 +1743,14 @@ def _story_link(url: str, href: str, address: str) -> bool:
         there, here = urlsplit(target), urlsplit(url)
     except ValueError:
         return False
-    picture_file = re.search(r"\.(jpe?g|png|gif|webp|avif|svg)$", there.path, re.IGNORECASE)
     same_site = there.netloc.removeprefix("www.") == here.netloc.removeprefix("www.")
-    if not same_site or picture_file:
+    if not same_site or PICTURE_FILE.search(there.path) or "attachment_id" in there.query:
         return False
     page, article = there.path.rstrip("/"), here.path.rstrip("/")
-    photo_page = "attachment_id" in there.query or PHOTO_PAGE.search(page) or page.startswith(article + "/")
-    return page != article and not photo_page
+    if page == article:  # another post only where the article's own query names it ("?p=42")
+        named = dict(parse_qsl(here.query))
+        return any(k in named and v != named[k] for k, v in parse_qsl(there.query))
+    return not (PHOTO_PAGE.search(page) or (article and page.startswith(article + "/")))
 
 
 def _picture_address(img: lxml.html.HtmlElement) -> str:

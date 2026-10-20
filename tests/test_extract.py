@@ -2552,3 +2552,86 @@ def test_restore_pairs_only_top_level_figures_and_adds_a_photo_once():
     one = "<figure><figcaption>One.</figcaption></figure><figure><figcaption>Two.</figcaption></figure>"
     sizes = '<figure><div><img src="https://i.example/p.jpg"></div><figcaption>One.</figcaption></figure><figure><div><img src="https://i.example/p.jpg?w=300"></div><figcaption>Two.</figcaption></figure>'
     assert run(one, sizes) == ["https://i.example/p.jpg"]
+
+
+def test_a_figure_is_paired_only_with_the_page_figure_in_its_own_place():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/story")
+    p = [
+        f"<p>Paragraph {i} of the story, long enough to be one the article shares with the page.</p>" for i in range(6)
+    ]
+    bare = "<figure><figcaption>Photograph: J. B.</figcaption></figure>"
+    body = lxml.html.fromstring(f"<div>{p[0]}{p[1]}{bare}{p[2]}{p[3]}{p[4]}{p[5]}</div>")
+    # X sits in a box of other stories on the page (so is not counted); a later Y shares its credit.
+    x = '<div class="trending"><figure><div><img src="https://i.example/X.jpg"></div><figcaption>Photograph: J. B.</figcaption></figure></div>'
+    y = '<figure><div><img src="https://i.example/Y-other.jpg"></div><figcaption>Photograph: J. B.</figcaption></figure>'
+    restore(body, f"<html><body><article>{p[0]}{p[1]}{x}{p[2]}{p[3]}{p[4]}{y}{p[5]}</article></body></html>")
+    assert not body.xpath("//img")
+
+
+def test_story_links_on_sites_addressed_by_query_or_root():
+    link = extract_module._story_link
+    assert link("https://news.example/?p=100", "/?p=42", "https://i.example/c.jpg")
+    assert link("https://news.example/review.php?id=5", "/review.php?id=6", "https://i.example/c.jpg")
+    assert link("https://news.example/", "/2026/other-story", "https://i.example/c.jpg")
+    assert not link("https://news.example/?p=100", "/?p=100&photo=2", "https://i.example/c.jpg")
+    assert not link("https://news.example/2026/story", "/2026/story?photo=2", "https://i.example/c.jpg")
+
+
+def test_restore_name_and_size_rules_each_hold():
+    name = extract_module._picture_name
+    for key in (
+        "w",
+        "width",
+        "h",
+        "height",
+        "q",
+        "quality",
+        "dpr",
+        "fit",
+        "crop",
+        "auto",
+        "format",
+        "fm",
+        "s",
+        "resize",
+        "W",
+        "Width",
+    ):
+        assert name(f"https://i.example/p.jpg?{key}=1") == name("https://i.example/p.jpg"), key
+    url = "https://news.example/2026/10/story/"
+    restore = functools.partial(extract_module._restore_figure_pictures, url=url)
+    text = "".join(f"<p>Paragraph {i} of the story, long enough to be most of the page's words.</p>" for i in range(6))
+    bare = "<figure><figcaption>Two.</figcaption></figure>"
+
+    def run(inner, figure_attrs=""):
+        body = lxml.html.fromstring(f"<div>{text}{bare}</div>")
+        page = f"<figure {figure_attrs}><div>{inner}</div><figcaption>Two.</figcaption></figure>"
+        restore(body, f"<html><body><article>{text}{page}</article></body></html>")
+        return [img.get("src") for img in body.iter("img")]
+
+    for named in ("recommendations", "more-from", "popular", "yt-player"):
+        assert run('<img src="https://i.example/p.jpg">', f'class="{named}"') == [], named
+    assert run('<img id="logo" src="https://i.example/p.jpg">') == []
+    # A picture linking to a video beside another: the figure is the video's, none of it.
+    assert (
+        run(
+            '<img src="https://i.example/p.jpg"><a href="https://www.youtube.com/watch?v=a"><img src="https://i.example/q.jpg"></a>'
+        )
+        == []
+    )
+    # A picture linking to another Google page is no preferred-source badge.
+    paras = "".join(
+        f"<p>Paragraph {i} of the story runs on about the stores and what came after it.</p>" for i in range(8)
+    )
+    other = '<p><a href="https://www.google.com/maps/place/x"><img src="https://i.example/map.png" alt="Map"></a></p>'
+    page = f"<html><head><title>T</title></head><body><article><h1>T</h1>{paras}{other}</article></body></html>"
+    assert extract_module.extract(url, page, "", "page").body.xpath("//img")
+
+
+def test_unwrapping_a_pictures_source_keeps_the_words_in_order():
+    root = lxml.html.fromstring(
+        '<div><picture><source srcset="a.jpg">one <img src="b.jpg"> two</source> three</picture></div>'
+    )
+    extract_module._unnest_empty(root)
+    assert " ".join(root.text_content().split()) == "one two three"
+    assert [el.tag for el in root.find("picture")] == ["source", "img"]
