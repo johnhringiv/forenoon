@@ -1533,8 +1533,10 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
     box holding the article's first and last paragraphs when it is found (figures with no words
     only then), else those outside sidebars, footers and boxes of other stories; figures that
     share a caption ("Photograph: …") are paired in order, only when the page has as many as
-    the article. Only pictures the book would show are taken (see _shown_pictures), and none
-    for a figure holding a table, code or a quote."""
+    the article, and a pair only when the two sit next to the same paragraph of the article
+    (one the article and the page each have once), or, the only figure with its caption on each
+    side, beside no such paragraph on either. Only pictures the book would show are taken (see
+    _shown_pictures), and none for a figure holding a table, code or a quote."""
     bare = [
         f
         for f in body.iter("figure")
@@ -1582,13 +1584,8 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
         if next(figure.iterancestors("figure"), None) is None:
             in_body.setdefault(_figure_key(figure), []).append(figure)
     have = {_picture_name(_join(url, _picture_address(img))) for img in body.iter("img")}
-    shared = {key for key in (_text_key(p) for p in body.iter("p")) if len(key) >= 40}
-
-    def place(figure: lxml.html.HtmlElement) -> tuple[str, str]:
-        """The article's paragraphs right before and right after a figure ("" for none)."""
-        before = next((k for k in map(_text_key, reversed(figure.xpath("preceding::p"))) if k in shared), "")
-        after = next((k for k in map(_text_key, figure.xpath("following::p")) if k in shared), "")
-        return before, after
+    marks = _once(body) & _once(page)  # the article's paragraphs, each found once on the page
+    places, page_places = _places(body, marks), _places(page, marks)
 
     for figure in bare:
         key = _figure_key(figure)
@@ -1596,8 +1593,9 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
         if len(sources) != len(targets):
             continue
         source = sources[targets.index(figure)]
-        here, there = place(figure), place(source)
-        if here != there and not any(a == b != "" for a, b in zip(here, there)):
+        here, there = places[figure], page_places[source]
+        same = any(a == b != "" for a, b in zip(here, there))
+        if not same and (len(targets) > 1 or here != there):
             continue  # not between the same paragraphs of the article: the pairing is off
         caption = figure.find("figcaption")
         for name, picture in _shown_pictures(source, url, region):
@@ -1609,6 +1607,38 @@ def _restore_figure_pictures(body: lxml.html.HtmlElement, page_html: str, url: s
             else:
                 figure.insert(0, picture)
                 picture.tail, figure.text = figure.text, None
+
+
+def _once(root: lxml.html.HtmlElement) -> set[str]:
+    """The words of each paragraph outside figures that a tree has only once."""
+    counts: dict[str, int] = {}
+    for p in root.iter("p"):
+        if next(p.iterancestors("figure"), None) is None and (key := _text_key(p)):
+            counts[key] = counts.get(key, 0) + 1
+    return {key for key, n in counts.items() if n == 1}
+
+
+def _places(root: lxml.html.HtmlElement, marks: set[str]) -> dict[lxml.html.HtmlElement, tuple[str, str]]:
+    """Each top-level figure's nearest paragraphs before and after it among `marks` ("" for
+    none), read in one pass."""
+    order: list[lxml.html.HtmlElement | str] = []
+    for el in root.iter("p", "figure"):
+        if next(el.iterancestors("figure"), None) is not None:
+            continue
+        if el.tag == "figure":
+            order.append(el)
+        elif (key := _text_key(el)) in marks:
+            order.append(key)
+    before: dict[lxml.html.HtmlElement, str] = {}
+    after: dict[lxml.html.HtmlElement, str] = {}
+    for items, found in ((order, before), (reversed(order), after)):
+        last = ""
+        for item in items:
+            if isinstance(item, str):
+                last = item
+            else:
+                found[item] = last
+    return {figure: (before[figure], after[figure]) for figure in before}
 
 
 def _elsewhere(el: lxml.html.HtmlElement, most: float) -> bool:

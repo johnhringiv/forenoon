@@ -1,4 +1,5 @@
 import functools
+import time
 
 import lxml.html
 from lxml import etree
@@ -2571,6 +2572,7 @@ def test_a_figure_is_paired_only_with_the_page_figure_in_its_own_place():
 def test_story_links_on_sites_addressed_by_query_or_root():
     link = extract_module._story_link
     assert link("https://news.example/?p=100", "/?p=42", "https://i.example/c.jpg")
+    assert link("https://news.example/?p=100", "/?p=42&ref=card", "https://i.example/c.jpg")
     assert link("https://news.example/review.php?id=5", "/review.php?id=6", "https://i.example/c.jpg")
     assert link("https://news.example/", "/2026/other-story", "https://i.example/c.jpg")
     assert not link("https://news.example/?p=100", "/?p=100&photo=2", "https://i.example/c.jpg")
@@ -2635,3 +2637,52 @@ def test_unwrapping_a_pictures_source_keeps_the_words_in_order():
     extract_module._unnest_empty(root)
     assert " ".join(root.text_content().split()) == "one two three"
     assert [el.tag for el in root.find("picture")] == ["source", "img"]
+
+
+def test_pairing_by_place_holds_on_short_paragraphs_repeats_and_huge_pages():
+    restore = functools.partial(extract_module._restore_figure_pictures, url="https://news.example/story")
+    cap = "Photograph: J. B."
+    bare = f"<figure><figcaption>{cap}</figcaption></figure>"
+    x = f'<div class="trending"><figure><div><img src="https://i.example/X.jpg"></div><figcaption>{cap}</figcaption></figure></div>'
+    y = f'<figure><div><img src="https://i.example/Y-other.jpg"></div><figcaption>{cap}</figcaption></figure>'
+    # Short paragraphs: no neighbour is long, but each is the article's once.
+    p = [f"<p>Short {i}.</p>" for i in range(6)]
+    body = lxml.html.fromstring(f"<div>{p[0]}{p[1]}{bare}{p[2]}{p[3]}{p[4]}{p[5]}</div>")
+    restore(body, f"<html><body><article>{''.join(p[:2])}{x}{''.join(p[2:5])}{y}{p[5]}</article></body></html>")
+    assert not body.xpath("//img")
+    # A repeated "Advertisement" after both figures, and only one neighbour differing.
+    long = [
+        f"<p>Paragraph {i} of the story, long enough to be one the article shares with the page.</p>" for i in range(4)
+    ]
+    ad = "<p>Advertisement</p>"
+    body = lxml.html.fromstring(f"<div>{long[0]}{bare}{ad}{long[1]}{long[2]}{long[3]}</div>")
+    restore(body, f"<html><body><article>{long[0]}{x}{ad}{long[1]}{long[2]}{y}{ad}{long[3]}</article></body></html>")
+    assert not body.xpath("//img")
+    # A caption repeated across figures is no paragraph of the article to stand beside.
+    long_cap = "Nato exercises in Estonia, 2025, photographed for the paper by its own staff © FT"
+    figs = [
+        f'<figure><div><img src="https://i.example/{n}.jpg"></div><figcaption><p>{long_cap}</p></figcaption></figure>'
+        for n in ("top", "mid", "bottom")
+    ]
+    article_bare = f"<figure><figcaption><p>{long_cap}</p></figcaption></figure>"
+    body = lxml.html.fromstring(
+        f"<div>{long[0]}{article_bare}{long[1]}{figs[1].replace('mid', 'kept')}{long[2]}{long[3]}</div>"
+    )
+    page = f"<html><body><article>{long[0]}<div class='popular'>{figs[0]}</div>{long[1]}{figs[1].replace('mid', 'kept')}{long[2]}{long[3]}<div class='widget'>{figs[2]}</div></article></body></html>"
+    restore(body, page)
+    assert "https://i.example/bottom.jpg" not in [img.get("src") for img in body.iter("img")]
+    # Thousands of figures sharing a caption: quick.
+    many = "".join(f"<p>Paragraph {i} with words of its own.</p>{bare}" for i in range(2000))
+    page_many = "".join(
+        f"<p>Paragraph {i} with words of its own.</p>{y.replace('Y-other', str(i))}" for i in range(2000)
+    )
+    body = lxml.html.fromstring(f"<div>{many}</div>")
+    started = time.monotonic()
+    restore(body, f"<html><body><article>{page_many}</article></body></html>")
+    assert time.monotonic() - started < 5
+
+
+def test_a_block_holding_the_caption_and_more_is_not_a_repeat():
+    figure = '<figure><img src="https://i.example/c.png"><div><p>Agents write a lot of code, and they say so at length here.</p></div><figcaption>Agents write a lot of code</figcaption></figure>'
+    body = extract_module.sanitize(lxml.html.fragment_fromstring(figure, create_parent="div"), "https://news.example/")
+    assert "they say so at length" in body.text_content()
