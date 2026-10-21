@@ -205,6 +205,24 @@ emoji the book uses (17 KB for 18 emoji). A test book showed on the Oasis (`app/
 - Symbols with a text form of their own (`© ™ ❤ → ★` without U+FE0F) are left to the
   reading font, which has them.
 
+### Math symbols render in the reading font (21 October 2026)
+
+Formulas reach the book as text (`app/formulas.py`), so their symbols must be in a font the
+device has. A test book (Oasis, Bookerly) showed each symbol the saved articles' formulas
+use, in the reading font beside an embedded Noto Sans Math:
+
+- **Every one renders in the reading font**, with no box or blank:
+  `− × · ± ∑ ∏ ∫ √ ∞ ∂ ∇ ∈ ∉ ⊂ ⊆ ∪ ∩ ≈ ≠ ≡ ≤ ≥ ≪ ∼ ∝ ⊤ ⊥ ⊙ ⊕ ‖ ′`,
+  `ℓ ℝ ℕ ℤ → ← ↔ ⇒ ⇔ ↦ … ⋯ ⟨ ⟩ ⌊ ⌋ ∀ ∃ ∅ ϵ ϕ`, and Greek, upright and italic. Arrows are drawn small, and `⌊ ⌋` look like `L` and `⅃`. So no
+  math font is embedded.
+- **Combining accents work**, and look better in the reading font than in Noto Sans Math:
+  `θ̂ x̂ x̃ ẋ ẍ`, and an overline (U+0305) over one letter or over each of several (`A̅B̅`). In
+  Noto Sans Math the overline lands beside the letter.
+- `<sub>` and `<sup>` render, nested too (`2` with `k−52` raised). A subscript and a
+  superscript on one letter sit one after the other, not stacked (`∑` then `i=1` then `M`).
+- A formula kept as TeX in `<code>` alone on its line is justified like the paragraph it is
+  in, so its spaces stretch (see code above). Such a formula is put in `<pre>`.
+
 ## Not yet checked on the device
 
 Found by scanning the three issues sent so far (12 to 14 October):

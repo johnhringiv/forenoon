@@ -124,16 +124,36 @@ def test_mathjax_2_script_is_read_and_its_drawing_dropped():
         ("k_{\\rm pow}", "<i>k</i><sub>pow</sub>"),
         ("\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}", "<i>a</i> = <i>b</i><br><i>c</i> = <i>d</i>"),
         ("1,000", "1,000"),
+        ("1{,}000", "1,000"),
+        ("a := b", "<i>a</i> := <i>b</i>"),
+        ("\\frac{1}{2}mv^2", "(1/2)<i>mv</i><sup>2</sup>"),
+        ("a\\frac{b}{c}", "<i>a</i>(<i>b</i>/<i>c</i>)"),
+        ("\\sqrt{2}x", "√(2)<i>x</i>"),
+        ("\\frac{x}{2\\mu}", "<i>x</i>/(2μ)"),
+        ("\\frac{(a+b)^2}{c}", "(<i>a</i>+<i>b</i>)<sup>2</sup>/<i>c</i>"),
+        ("\\frac{(a)+(b)}{c}", "((<i>a</i>)+(<i>b</i>))/<i>c</i>"),
+        ("\\overline{AB}", "<i>A\u0305B\u0305</i>"),
+        ("L_\\text{VLB}", "<i>L</i><sub>VLB</sub>"),
     ],
 )
 def test_tex_is_written_in_a_line(source, written):
     assert tex(source) == written
 
 
-@pytest.mark.parametrize("source", ["\\begin{cases} a & b \\end{cases}", "\\unknown{x}", "a^b^c", "{a", "x^"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        "\\begin{cases} a & b \\end{cases}",
+        "\\unknown{x}",
+        "a^b^c",
+        "{a",
+        "x^",
+        "\\overline{A \\cup B}",  # A̅ ∪ B̅ would be a different set
+    ],
+)
 def test_tex_that_does_not_read_in_a_line_is_refused(source):
     with pytest.raises(formulas.Unsupported):
-        formulas.tex_mathml(source)
+        formulas.mathml_html(formulas.tex_mathml(source))
 
 
 def test_hostile_formulas_stay_bounded():
@@ -156,3 +176,49 @@ def test_hostile_formulas_stay_bounded():
 def test_a_broken_formula_leaves_the_rest_of_the_page():
     out = body_html(page("<p>Odd $\\frac{a$ and <math><msup><mi>x</mi></msup></math> still here.</p>", MATHJAX))
     assert "still here." in out
+
+
+def test_latexml_scripts_on_nothing_attach_to_what_is_before():
+    math = (
+        "<math><mi>log</mi><msub><mrow></mrow><mn>2</mn></msub><mi>p</mi><mo>−</mo>"
+        "<mo>∑</mo><msub><mrow></mrow><mi>b</mi></msub><mi>p</mi><mo>𝑑</mo><mi>t</mi></math>"
+    )
+    out = body_html(page(f"<p>Then {math} here.</p>"))
+    assert "Then log<sub>2</sub> <i>p</i> − ∑<sub><i>b</i></sub><i>p</i>d<i>t</i> here." in out
+
+
+def test_a_formula_alone_in_its_box_is_kept_as_a_paragraph():
+    # Substack: each formula alone in div > div > span, with the inline delimiter; short, and
+    # the box would be dropped as page furniture.
+    box = '<div class="latex-rendered"><div><span style="display:block">\\(P = \\chi E\\)</span></div></div>'
+    out = body_html(page(f"<p>It is proportional to the field</p>{box}<p>where χ is small.</p>"))
+    assert "field</p><p><i>P</i> = χ<i>E</i></p><p>where" in out
+    out = body_html(page("<p>The objective is:</p><div>$$ L = M + C $$</div><p>where C is fixed.</p>", MATHJAX))
+    assert "<p><i>L</i> = <i>M</i> + <i>C</i></p>" in out
+
+
+def test_a_display_kept_as_tex_is_a_code_block():
+    out = body_html(page("<p>$$f = \\underbrace{a}_{b}$$</p>", MATHJAX))
+    assert "<pre><code>f = \\underbrace{a}_{b}</code></pre>" in out
+
+
+def test_katex_config_macros_with_quoted_names():
+    head = '<script src="katex.js"></script><script>renderMathInElement(document.body, {macros: {"\\\\RR": "\\\\mathbb{R}"}})</script>'
+    out = body_html(page("<p>A point \\(x \\in \\RR\\) here.</p>", head))
+    assert "<i>x</i> ∈ ℝ here." in out
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<p>$$\\newcommand{\\x}[1]{" + "#1" * 490 + "}$$</p><p>$$\\x{" + "a" * 200_000 + "}$$</p>",
+        "<p>" + "\\newcommand{\\q}{ " * 20_000 + "</p>",
+        "<p>" + "\\( x" * 50_000 + "</p>",
+        "<p>" + "$$ x" * 50_000 + "</p>",
+        "<p>" + "$x$ " * 50_000 + "</p>",
+    ],
+)
+def test_hostile_pages_stay_fast(body):
+    started = time.monotonic()
+    body_html(page(body, MATHJAX))
+    assert time.monotonic() - started < 10
