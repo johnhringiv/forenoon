@@ -20,6 +20,7 @@ import html
 import itertools
 import re
 import unicodedata
+import weakref
 from dataclasses import dataclass, field
 
 import lxml.html
@@ -44,7 +45,7 @@ class Tex:
     """How the page renders TeX in the browser: which delimiters, and its own macros."""
 
     single_dollar: bool = False
-    macros: dict[str, tuple[int, str]] = field(default_factory=dict)
+    macros: dict[str, tuple[int, str, str | None]] = field(default_factory=dict)  # count, body, optional
     converted: int = 0  # formulas written so far, against MAX_FORMULAS
 
 
@@ -119,6 +120,15 @@ BIG = set("∑∏∐∫∬∮⋃⋂⋁⋀") | {"lim", "limsup", "liminf", "max",
 INVISIBLE = {"\u2061", "\u2062", "\u2063", "\u2064", "\u200b"}
 OPENING = set("([{⟨⌊⌈|‖")
 DOUBLE_STRUCK = {"C": "ℂ", "H": "ℍ", "N": "ℕ", "P": "ℙ", "Q": "ℚ", "R": "ℝ", "Z": "ℤ"}
+
+
+# Characters KaTeX and MathJax write that the device test did not cover, as ones it did; the
+# spacing and invisible ones are dropped or made plain spaces.
+NORMAL = str.maketrans({
+    "∥": "‖", "∗": "*", "⟺": "⇔", "⟹": "⇒", "⟸": "⇐", "⟶": "→", "⟵": "←", "⟼": "↦",
+    "\u2063": None, "\u2062": None, "\u200b": None, "\u2060": None,
+    "\u2004": " ", "\u2005": " ", "\u2006": " ", "\u2008": " ", "\u2009": " ", "\u200a": None,
+})  # fmt: skip
 
 
 def _local(tag) -> str:
@@ -309,7 +319,10 @@ class _Writer:
 
     def term(self, kid, before, after, out: _Out, script: bool, depth: int) -> None:
         tag = _local(kid.tag)
-        if tag == "mfrac" and (_term(after) or _term(before, before=True)):
+        if tag == "mfrac" and before is not None and _local(before.tag) == "mn" and _numbers(kid) and not _term(after):
+            out.text(" ")  # a mixed number: 2 1/2
+            self.write(kid, out, script, depth + 1)
+        elif tag == "mfrac" and (_term(after) or _term(before, before=True)):
             out.text("(")  # (1/2)mv², not 1/2mv²
             self.write(kid, out, script, depth + 1)
             out.text(")")
@@ -326,11 +339,13 @@ class _Writer:
 
     def operator(self, node, before, after, out: _Out, script: bool) -> None:
         text = "".join(node.itertext()).strip()
-        if text in INVISIBLE or not text:
+        if text in INVISIBLE or not text or not text.translate(NORMAL).strip():
             if text == "\u2061" and after is not None and not _starts_with_fence(after):
                 out.text(" ")  # function application: "log n", but "log(n)"
             return
-        text = {"-": "−", "⋅": "·", "∣": " | "}.get(text, text).replace("\ufe0e", "").replace("\ufe0f", "")
+        spelled = {"-": "−", "⋅": "·", "∣": " | ", "∥": " ‖ "}  # ∣ and ∥ as relations: p(a | b), q ‖ p
+        text = spelled.get(text) or text.translate(NORMAL).strip() or text
+        text = text.replace("\ufe0e", "").replace("\ufe0f", "")
         text = "".join(_unmath(c)[0] for c in text)  # LaTeXML's differential d is 𝑑
         variant = node.get("mathvariant", "")
         if node.get("data-tight"):  # 1{,}000
@@ -365,7 +380,7 @@ class _Writer:
 
     def token(self, node, out: _Out) -> None:
         tag = _local(node.tag)
-        text = "".join(node.itertext())
+        text = "".join(node.itertext()).translate(NORMAL).replace("∣", "|")
         if tag == "mtext":
             text = text.replace("\u00a0", " ")
         else:
@@ -408,6 +423,10 @@ class _Writer:
         relation = _local(base.tag) == "mo" and base_text in RELATIONS and not script  # a →ᶠ b
         if _local(base.tag) == "mo":
             out.text(f" {base_text}" if relation else base_text)
+        elif _local(_unwrapped(base).tag) in ("mfrac", "msqrt", "mroot"):
+            out.text("(")  # (a/b)², not a/b²
+            self.write(base, out, True, depth + 1)
+            out.text(")")
         else:
             self.write(base, out, script, depth + 1)
         under = rest[0] if tag in ("msub", "msubsup", "munder", "munderover") else None
@@ -511,14 +530,18 @@ def _term(node, before: bool = False) -> bool:
         return False
     while _local(node.tag) in SCRIPTS and _kids(node):  # x², and ")²" where TeX puts the power
         node = _kids(node)[0]
-    if _local(node.tag) != "mo":
-        return True
     text = "".join(node.itertext()).strip()
+    if _local(node.tag) != "mo":
+        return text not in (".", ",", ";", ":", "|", "∣")  # KaTeX writes a closing full stop as <mi>
     if text in RELATIONS or text in BINARY or text in (",", ";", ".", ":", "!", "") or text in INVISIBLE:
         return False
     if before:
         return text not in OPENING and text not in BIG
     return text not in CLOSING or text in ("|", "‖")
+
+
+def _numbers(frac) -> bool:
+    return all(_local(_unwrapped(k).tag) == "mn" for k in _kids(frac))
 
 
 def _empty_base(node) -> bool:
@@ -603,12 +626,15 @@ def _clean(holder) -> None:
         sub.text = (sub.text or "").strip(" ") or None
         if len(sub):
             sub[-1].tail = (sub[-1].tail or "").rstrip(" ") or None
+    for sub in list(holder.iter("sub", "sup")):
+        if not len(sub) and not sub.text:  # x_{} writes nothing; never an empty element (docs/kindle-books.md)
+            sub.drop_tag()
     # A space before closing punctuation and after an opening bracket reads wrongly.
     for el in holder.iter():
         for name in ("text", "tail"):
             value = getattr(el, name)
             if value:
-                setattr(el, name, re.sub(r"([(\[]) | ([)\],.;])", r"\1\2", value))
+                setattr(el, name, re.sub(r"([(\[]) | ([)\],.])", r"\1\2", value))
 
 
 def mathml_html(node, lenient: bool = False):
@@ -870,6 +896,11 @@ class _Parser:
             return _el("mtext", text, mathvariant=variant)
         if name in ("operatorname", "operatorname*"):
             return _el("mi", self.text(self.group_text()), mathvariant="normal")
+        if name in ("binom", "dbinom", "tbinom"):
+            n, k = self.arg(), self.arg()
+            return _wrap(
+                "mrow", _el("mi", "C", mathvariant="normal"), _el("mo", "("), n, _el("mo", ","), k, _el("mo", ")")
+            )
         if name in ("frac", "dfrac", "tfrac", "cfrac"):
             return _wrap("mfrac", self.arg(), self.arg())
         if name == "sqrt":
@@ -960,7 +991,7 @@ def tex_mathml(tex: str) -> etree._Element:
     return _wrap("math", _Parser(tex).parse())
 
 
-def expand(tex: str, macros: dict[str, tuple[int, str]]) -> str:
+def expand(tex: str, macros: dict[str, tuple[int, str, str | None]]) -> str:
     """The page's own macros expanded, within fixed limits; raises Unsupported past them."""
     if len(tex) > MAX_TEX:
         raise Unsupported("too long")
@@ -975,7 +1006,7 @@ def expand(tex: str, macros: dict[str, tuple[int, str]]) -> str:
             name = m.group(1)
             if name not in macros:
                 return m.group(0)
-            count, body = macros[name]
+            count, body, optional = macros[name]
             changed = True
             if not count:
                 return body + (" " if body[-1:].isalpha() else "")
@@ -985,7 +1016,11 @@ def expand(tex: str, macros: dict[str, tuple[int, str]]) -> str:
                 if parser.peek() == "*":
                     parser.i += 1
                 parser.optional()
-            args = [parser.group_text() for _ in range(max(count, 1) if count == PAIRED else count)]
+            if optional is not None:  # \\newcommand{\\ev}[2][]{…}: #1 is optional, in brackets
+                given = parser.optional()
+                args = [optional if given is None else given] + [parser.group_text() for _ in range(count - 1)]
+            else:
+                args = [parser.group_text() for _ in range(max(count, 1) if count == PAIRED else count)]
             position = parser.i
             for n, value in enumerate(args, 1):
                 if body.count(f"#{n}") * len(value) > MAX_EXPANDED:
@@ -1057,8 +1092,12 @@ def tex_table(tex: str):
 # Finding formulas in a page
 
 RENDERER = re.compile(r"mathjax|katex|latex-rendered", re.IGNORECASE)
-SINGLE_DOLLAR = re.compile(r"""\[\s*\\?['"]\$\\?['"]\s*,\s*\\?['"]\$\\?['"]\s*\]|left\s*:\s*\\?['"]\$\\?['"]""")
-DEFINITION = re.compile(r"\\(?:re|provide)?newcommand\*?\s*(?:\{\s*)?\\([A-Za-z]+)\s*(?:\}\s*)?(?:\[(\d)\]\s*)?(?=\{)")
+SINGLE_DOLLAR = re.compile(
+    r"""mathjaxToggle|\[\s*\\?['"]\$\\?['"]\s*,\s*\\?['"]\$\\?['"]\s*\]|left\s*:\s*\\?['"]\$\\?['"]"""
+)
+DEFINITION = re.compile(
+    r"\\(?:re|provide)?newcommand\*?\s*(?:\{\s*)?\\([A-Za-z]+)\s*(?:\}\s*)?(?:\[(\d)\]\s*(?:\[([^\]]{0,200})\]\s*)?)?(?=\{)"
+)
 DEF = re.compile(r"\\def\s*\\([A-Za-z]+)\s*(?=\{)")
 PAIRED_DEFINITION = re.compile(r"\\DeclarePairedDelimiters?\s*\{\s*\\([A-Za-z]+)\s*\}\s*(?=\{)")
 OPERATOR_DEFINITION = re.compile(r"\\DeclareMathOperator\*?\s*\{\s*\\([A-Za-z]+)\s*\}\s*(?=\{)")
@@ -1092,14 +1131,16 @@ def page_tex(page_html: str) -> Tex | None:
                 continue
             count = int(m.group(2)) if pattern is DEFINITION and m.group(2) else 0
             count = PAIRED if pattern is PAIRED_DEFINITION else count
-            tex.macros[m.group(1)] = (count, f"\\operatorname{{{body}}}" if pattern is OPERATOR_DEFINITION else body)
+            optional = m.group(3) if pattern is DEFINITION and count else None
+            body = f"\\operatorname{{{body}}}" if pattern is OPERATOR_DEFINITION else body
+            tex.macros[m.group(1)] = (count, body, optional)
     for m in itertools.islice(CONFIG_MACROS.finditer(page_html), 20):
         block = page_html[m.end() : m.end() + 20000]
         for entry in CONFIG_MACRO.finditer(block[: _closing_brace(block)]):
             if len(tex.macros) >= MAX_MACROS:
                 break
             body = entry.group(3).replace("\\\\", "\\")
-            tex.macros.setdefault(entry.group(1), (int(entry.group(4) or 0), body))
+            tex.macros.setdefault(entry.group(1), (int(entry.group(4) or 0), body, None))
     return tex
 
 
@@ -1136,9 +1177,23 @@ def _replace(old, holder) -> None:
     if parent is None:
         return
     _mark(parent)
-    holder.tail = old.tail
-    parent.replace(old, holder)
-    holder.drop_tag()
+    # addprevious, not replace and drop_tag: those walk the parent's children for every formula.
+    text, children, tail = holder.text or "", list(holder), old.tail or ""
+    previous = old.getprevious()
+    if previous is not None:
+        previous.tail = (previous.tail or "") + text
+    else:
+        parent.text = (parent.text or "") + text
+    for child in children:
+        old.addprevious(child)
+    if children:
+        children[-1].tail = (children[-1].tail or "") + tail
+    elif previous is not None:
+        previous.tail = (previous.tail or "") + tail
+    else:
+        parent.text = (parent.text or "") + tail
+    old.tail = None
+    parent.remove(old)
 
 
 def _code(tex: str, display: bool = False):
@@ -1173,6 +1228,10 @@ def _formula_html(math, display: bool = False):
         pass
     tex = _tex_source(math)
     if tex:
+        try:  # KaTeX's aligned is a table in MathML, and lines of text from its TeX
+            return mathml_html(tex_mathml(tex))
+        except Exception:  # noqa: BLE001, S110 - unsupported or hostile: the TeX is shown instead
+            pass
         return _code(tex, display)
     return mathml_html(math, lenient=True)
 
@@ -1260,36 +1319,34 @@ def _mathjax2(script, tex: Tex | None) -> None:
 
 
 def _tex_html(source: str, tex: Tex, display: bool):
-    """A <span> for one formula's TeX: as text, or as its source in <code>; None for definitions."""
+    """A <span> for one formula's TeX: as text, or as its source in <code>; empty for definitions."""
     if len(source) > MAX_TEX:
         return _code(source, display)
-    stripped = DEFINITION.sub("", source)
-    if DEFINITION.search(source) or DEF.search(source):
-        rest = source
-        for pattern in (DEFINITION, DEF, OPERATOR_DEFINITION):
-            while m := pattern.search(rest):
-                parser = _Parser(rest)
-                parser.i = m.end()
-                try:
+    source = COMMENT.sub("", source)  # TeX's % comments, to the end of the line
+    for pattern in (DEFINITION, DEF, OPERATOR_DEFINITION, PAIRED_DEFINITION):
+        while m := pattern.search(source):  # the page's macros, read by page_tex; nothing to show
+            parser = _Parser(source)
+            parser.i = m.end()
+            try:
+                parser.group_text()
+                if pattern is PAIRED_DEFINITION:
                     parser.group_text()
-                except Unsupported:
-                    break
-                rest = rest[: m.start()] + rest[parser.i :]
-        if not rest.strip():
-            return lxml.html.Element("span")
-        source = stripped = rest
+            except Unsupported:
+                break
+            source = source[: m.start()] + source[parser.i :]
+    if not source.strip():
+        return lxml.html.Element("span")
     expanded = source.strip()
     try:
-        expanded = expand(stripped.strip(), tex.macros)  # the reader never sees the page's definitions
+        expanded = expand(expanded, tex.macros)  # the reader never sees the page's definitions
         return mathml_html(tex_mathml(expanded))
-    except Unsupported:
-        pass
-    except Exception:  # noqa: BLE001, S110 - hostile input; its source is shown instead
+    except Exception:  # noqa: BLE001, S110 - unsupported, or hostile input: its source is shown instead
         pass
     return _code(expanded, display)
 
 
 # Delimiters the renderers recognise: $$…$$, \[…\], \(…\), and $…$ where the page turns it on.
+COMMENT = re.compile(r"(?<!\\)%[^\n]*")
 DELIMITERS = (("$$", "$$", True), ("\\[", "\\]", True), ("\\(", "\\)", False))
 DOLLAR = re.compile(r"(?<![\\$])\$(?![\s$])((?:\\\$|[^$])+?)(?<![\s\\])\$(?![\d$])")
 PROSE = re.compile(r"(?<![\\{a-zA-Z])[a-zA-Z]{3,} +[a-zA-Z]{3,} +[a-zA-Z]{3,}")
@@ -1421,7 +1478,10 @@ def _paragraph(el, which: str, container) -> None:
     Picking the article splits such a run at its elements and loses the start; as plain TeX it
     had none. The run goes as far as the next block, as a browser shows it.
     """
-    if not any(_local(k.tag) not in PHRASING for k in _kids(container)):
+    mixed = _mixed.get(container)
+    if mixed is None:  # once per box: a box can hold thousands of formulas
+        mixed = _mixed[container] = any(_local(k.tag) not in PHRASING for k in _kids(container))
+    if not mixed:
         return  # the box is the paragraph
     para = lxml.html.Element("p")
     _mark(para)
@@ -1430,11 +1490,40 @@ def _paragraph(el, which: str, container) -> None:
         while len(el) and _local(el[0].tag) in PHRASING:
             para.append(el[0])
         el.insert(0, para)
-    else:
-        para.text, el.tail = el.tail, None
-        while el.getnext() is not None and _local(el.getnext().tag) in PHRASING:
-            para.append(el.getnext())
-        el.addnext(para)
+        return
+    # The run starts after the block before it: "As shown by <a>Euler</a>, \\(x\\)…" stays one.
+    start = el
+    while (
+        _local(start.tag) in PHRASING
+        and start.getprevious() is not None
+        and _local(start.getprevious().tag) in PHRASING
+    ):
+        start = start.getprevious()
+    if _local(start.tag) in PHRASING:
+        before = start.getprevious()
+        if before is None:
+            para.text, container.text = container.text, None
+        else:
+            para.text, before.tail = before.tail, None
+        start.addprevious(para)
+        stop = el.getnext()
+        node = para.getnext()
+        while node is not None and node is not stop:
+            following = node.getnext()
+            para.append(node)
+            node = following
+        while stop is not None and _local(stop.tag) in PHRASING:
+            following = stop.getnext()
+            para.append(stop)
+            stop = following
+        return
+    para.text, el.tail = el.tail, None
+    while el.getnext() is not None and _local(el.getnext().tag) in PHRASING:
+        para.append(el.getnext())
+    el.addnext(para)
+
+
+_mixed: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()  # box → holds blocks beside its text
 
 
 CONTAINERS = {"div", "section", "article", "main", "body", "blockquote", "figure", "aside", "dd", "td", "th", "li"}
@@ -1453,7 +1542,7 @@ def _own_block(el, source: str, tex: Tex) -> bool:
         parent = box.getparent()
         if parent is None or _local(box.tag) == "p" or (box.tail or "").strip():
             break
-        if (parent.text or "").strip() or len(_kids(parent)) > 1 or _local(parent.tag) not in ("div", "span", "p"):
+        if (parent.text or "").strip() or len(parent) > 1 or _local(parent.tag) not in ("div", "span", "p"):
             break
         box = parent
     if _local(box.tag) not in ("div", "p") or box.getparent() is None:

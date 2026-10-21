@@ -143,6 +143,10 @@ def test_mathjax_2_script_is_read_and_its_drawing_dropped():
         ("x \\in \\R", "<i>x</i> ∈ ℝ"),
         ("E = mc^2 \\tag{1}", "<i>E</i> = <i>mc</i><sup>2</sup> (1)"),
         ("a \\xrightarrow{f} b", "<i>a</i> →<sup><i>f</i></sup> <i>b</i>"),
+        ("\\frac{a}{b}^{2}", "(<i>a</i>/<i>b</i>)<sup>2</sup>"),
+        ("\\sqrt{x}^2", "(√<i>x</i>)<sup>2</sup>"),
+        ("2\\frac{1}{2}", "2 1/2"),
+        ("\\binom{n}{k}", "C(<i>n</i>, <i>k</i>)"),
     ],
 )
 def test_tex_is_written_in_a_line(source, written):
@@ -283,3 +287,53 @@ def test_a_short_box_with_a_formula_is_kept():
     assert "<p><i>x</i><sup>2</sup></p><p>where <i>x</i> is real.</p>" in out
     out = body_html(page('<div class="sidebar"><p>See \\(x\\) too.</p></div>', MATHJAX))
     assert "See" not in out  # a box the page names as furniture is not kept for its formula
+
+
+def test_katex_characters_become_ones_the_kindle_draws():
+    math = (
+        "<math><mi>∣</mi><mi>S</mi><mi>∣</mi><mo>=</mo><msup><mi>θ</mi><mo>∗</mo></msup>"
+        "<mo>⟺</mo><mi>cos</mi><mtext>\u2009\u2063</mtext><mi>x</mi></math>"
+    )
+    out = body_html(page(f"<p>Here {math} holds.</p>"))
+    assert "Here |<i>S</i>| = θ<sup>*</sup> ⇔ cos <i>x</i> holds." in out
+
+
+def test_arxiv_abstracts_turn_on_single_dollars():
+    head = '<script src="/static/browse/0.3.4/js/mathjaxToggle.min.js"></script>'
+    out = body_html(page("<p>We show an $O(n^2)$ bound with $\\epsilon$-error.</p>", head))
+    assert "an <i>O</i>(<i>n</i><sup>2</sup>) bound with ϵ-error." in out
+
+
+def test_rendered_aligned_reads_as_lines_from_its_tex():
+    tex = "\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}"
+    math = f'<math><semantics><mtable><mtr><mtd><mi>a</mi></mtd></mtr></mtable><annotation encoding="application/x-tex">{tex}</annotation></semantics></math>'
+    out = body_html(page(f"<p>So {math} here.</p>"))
+    assert "So <i>a</i> = <i>b</i><br><i>c</i> = <i>d</i> here." in out
+
+
+def test_macros_with_an_optional_argument_and_comments():
+    head = MATHJAX + "<div>$$\\newcommand{\\ev}[2][]{\\langle #2 \\rangle_{#1}}$$</div>"
+    out = body_html(page("<p>Take $\\ev{x} + \\ev[p]{y}$ and $$a = b % why$$ here.</p>", head))
+    assert "Take ⟨<i>x</i>⟩ + ⟨<i>y</i>⟩<sub><i>p</i></sub> and <i>a</i> = <i>b</i> here." in out
+
+
+def test_a_sentence_with_a_link_and_a_formula_stays_one_paragraph():
+    box = (
+        '<div class="post-body"><p>An opening paragraph of the post, long enough to be kept.</p>'
+        'As shown by <a href="https://example.com/euler">Euler</a> in his paper, the sum \\(\\sum 1/n^2\\) '
+        'equals a sixth of pi squared.<div class="separator"><img src="https://example.com/a.png"></div></div>'
+    )
+    out = body_html(page(box, MATHJAX))
+    assert (
+        '<p>As shown by <a href="https://example.com/euler">Euler</a> in his paper, the sum ∑ 1/<i>n</i><sup>2</sup> equals'
+        in out
+    )
+
+
+def test_many_formulas_in_one_paragraph_stay_fast():
+    started = time.monotonic()
+    root = lxml.html.fromstring("<div><p>" + "<math><mi>x</mi></math> and " * 40_000 + "</p></div>")
+    formulas.rewrite(root)
+    root = lxml.html.fromstring("<div>" + "<div>\\(x\\)</div>" * 40_000 + "</div>")
+    formulas.rewrite(root, formulas.Tex())
+    assert time.monotonic() - started < 10
