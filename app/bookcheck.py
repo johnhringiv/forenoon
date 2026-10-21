@@ -176,6 +176,11 @@ page shows as a bold paragraph, say), keeping the block's links and emphasis as 
 when the tools cannot find a passage page_find shows; then copy its text exactly.
 - Change only the blocks that are wrong. Never replace a block that is right, or rewrite many \
 blocks to fix one.
+- When the article is the site's feed entry (article_details "copy"), it is the author's \
+own text, but feeds often leave out what the page shows around it: pictures and their \
+captions, embedded posts, notes. Look for those on the page, and restore them when they are \
+the article's: of an embedded post, its author and text, without its counts of views, \
+replies, reposts or likes, its buttons or its "Read more".
 - Most articles are fine. When this one is, call finish with verdict "ok" at once, without \
 editing. Small differences in whitespace, punctuation or the page's own design are not \
 problems. A short post is fine when the page's post is short too.
@@ -1266,6 +1271,7 @@ class Checker:
             "source": item.source.name,
             "url": item.url,
             "words": result.word_count,
+            "copy": "the site's feed entry" if result.method == "feed" else "the web page",
             "page_view": "available" if viewable else "unavailable: the browser is not running",
         }
         return (
