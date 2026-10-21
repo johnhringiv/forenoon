@@ -80,16 +80,23 @@ what its own users configure and delivers only to the addresses its readers have
   failing, paused, pinned), both plain GET parameters; adding a feed or a session is a
   panel opened from a button, apart from the list.
   - **Built in**: front pages the pipeline knows how to read (Hacker News and Lobsters;
-    section 7b). They can only be switched on or off. The list comes from the pipeline: one
-    that a new version adds appears switched off, so an upgrade never changes what is
-    delivered by itself.
+    section 7b). An admin switches them on or off for the household. Each reader who follows
+    Lobsters chooses what of it they read: its front page, any of its tags, or both, ticked
+    in groups by the site's categories (a group with a tick in it is open); the row says
+    "Front page", "Front page and 3 tags" or "3 tags". A reader who never chose reads the
+    front page, and so does one whose every tag Lobsters has since dropped (shown ticked).
+    Saving with nothing ticked is refused: unfollowing is how to stop, and the choice is
+    kept for following again. The list
+    comes from the pipeline: one that a new version adds appears switched off, so an upgrade
+    never changes what is delivered by itself.
   - **Feeds**: RSS or Atom, by address.
 
   They live in the database. The pipeline reads each reader's at the start of their run; a
   reader who follows nothing gets nothing, and an alert says so. A feed has a name and:
   - pinned (by each reader for themselves): its articles are taken before all other
     sources, every one of them.
-  - places a day (default 2, 0 for no limit): the most of an issue it may take. For a pinned
+  - places a day (default 2; the field left empty for no limit, stored as 0, and a 0
+    typed means the same): the most of an issue it may take. For a pinned
     source, how many of its articles use the day's places; the rest are extra.
   - where the text comes from: the page, falling back to the feed (default); always the
     page; only the feed, in which case the article page is never fetched; or nowhere
@@ -140,7 +147,7 @@ what its own users configure and delivers only to the addresses its readers have
   only when it controls cost, depends on the deploy, or is a real choice; what used to be a
   switch for a later feature is now just how Forenoon works, described here.
 - **Each reader's own settings** are on their Reading page: one book a day or one per
-  article, the most articles on one broad subject (2; 0 for no limit), room for a surprise
+  article, the most articles on one broad subject (2; empty or 0 for no limit), room for a surprise
   (the exploration pick, on), the model's reason printed in the book (on), and notes kept
   from their ratings (on). Whether their Kindle has a colour screen (images and covers in
   colour; otherwise gray) and whether their daily issue is emailed to it (on) are on their
@@ -252,8 +259,8 @@ The whole process for one reader's day, in order. The sections named give the de
    model, which prefers it over an equal candidate but not over a better one.
 8. **Filling the day** (`daily_stories`, default 8). Candidates are taken in that order
    until the day's places are used, each subject to:
-   - **its source's places a day** (Sources page; 2 for a feed, none for a built-in source,
-     0 for no limit). An article carried by several sources counts against whichever has the
+   - **its source's places a day** (Sources page; 2 for a feed, none for a built-in source;
+     the field empty for no limit). An article carried by several sources counts against whichever has the
      most room and is passed over only when all of them have used theirs; links added by
      hand are not counted;
    - **being deliverable**: not judged "not the article" by the reading, under
@@ -693,8 +700,22 @@ own words ("Too long"). The event log keeps every tap as it was.
 
 - **Sources.** Each is switched on or off on the Sources page; both start on. Hacker News: the front page, plus stories from the last `max_age_days` with
   more than 40 points (not just the last day: a story that gets its votes a day late would
-  otherwise fall between two runs). Stories never seen before are taken first. Lobsters: the first three pages of its hottest list. Three requests per site per
-  run; if a further page fails, the rest are still used.
+  otherwise fall between two runs). Stories never seen before are taken first. Lobsters, for each
+  reader as they chose: the first three pages of its hottest list (the front page), and for
+  their tags one listing of all of them, two pages, newest first, with only the stories that
+  have at least 5 points (one with fewer is found on a later day, when it has them). Up to
+  five requests per site per reader's run; if the first fails the site is reported as
+  failing, and if a further one fails the rest are still used. The front page is read first,
+  then the tags, then the front page's further pages; the cap on candidates below keeps that
+  order among stories never seen before, and again among those seen on an earlier day.
+- **Lobsters tags.** The tags offered are the site's own subjects from its list of tags, read
+  once a run for the household: active tags, without the kinds of post (video, pdf, ask, show
+  and the like) or the site's news about itself. A list that cannot be read, or has fewer
+  than 20 tags, is not used and the last one is kept; the first is the list as it was when
+  this was built. A tag the site no longer lists is not asked for (Lobsters answers a listing
+  with an unknown tag as not found). The reader's Sources page shows it still ticked under "No
+  longer on Lobsters", and saving keeps it while it stays ticked, so a tag the site drops for
+  a while is read again when it comes back. Unticking it drops it.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
   anything already delivered or previously failed. At most `discovery.per_site` (100) per site.

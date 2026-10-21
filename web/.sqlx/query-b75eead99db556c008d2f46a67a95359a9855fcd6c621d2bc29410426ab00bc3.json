@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT builtin, section FROM builtin_sections WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "builtin",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "section",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b75eead99db556c008d2f46a67a95359a9855fcd6c621d2bc29410426ab00bc3"
+}

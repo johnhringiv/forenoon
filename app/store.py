@@ -397,6 +397,31 @@ class Store:
         followed = {row["builtin"] for row in rows}
         return tuple(key for key in sites if key in followed)
 
+    def builtin_sections(self, user_id: str) -> dict[str, tuple[str, ...]]:
+        """The parts of each built-in source this reader reads, by key, as they chose them on
+        the Sources page; a source missing from it is read by its front page."""
+        if not self._has_table("builtin_sections"):
+            return {}
+        # A Lobsters tag the site no longer has is left out: asked for, it fails the whole listing.
+        rows = self.db.execute(
+            "SELECT builtin, section FROM builtin_sections WHERE user_id = ?"
+            " AND (builtin != 'lobsters' OR section = 'front' OR section IN (SELECT tag FROM lobsters_tags))"
+            " ORDER BY builtin, section",
+            (user_id,),
+        )
+        sections: dict[str, tuple[str, ...]] = {}
+        for row in rows:
+            sections[row["builtin"]] = (*sections.get(row["builtin"], ()), row["section"])
+        return sections
+
+    def replace_lobsters_tags(self, tags: list[tuple[str, str, str]]) -> None:
+        """The Lobsters tags readers may choose, as the site lists them now."""
+        if not self._has_table("lobsters_tags"):
+            return  # the web app has not been upgraded yet
+        with self.db:
+            self.db.execute("DELETE FROM lobsters_tags")
+            self.db.executemany("INSERT INTO lobsters_tags (tag, category, description) VALUES (?, ?, ?)", tags)
+
     def builtin_daily_max(self) -> dict[str, int]:
         """The most of a day's places each built-in source may take, by key; 0 for no limit."""
         if not self._has_table("sources"):

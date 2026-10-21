@@ -484,7 +484,7 @@ async fn account_page_changes_the_profile_and_the_password() {
     assert!(reply.text.contains("Compilers.</textarea>") && reply.text.contains(r#"value="0""#), "shown as typed");
     // The rest of the form too, not the saved values: the reader loses nothing to one slip.
     assert!(reply.text.contains(r#"<option value="articles" selected>"#), "{}", reply.text);
-    assert!(reply.text.contains(r#"name="most_per_subject" type="number" min="0" max="20" value="4""#));
+    assert!(reply.text.contains(r#"name="most_per_subject" type="number" min="0" max="20" value="4" placeholder"#));
     assert!(
         reply.text.contains(r#"name="show_reasons" value="1" checked"#)
             && reply.text.contains(r#"name="explore" value="1">"#)
@@ -510,8 +510,18 @@ async fn account_page_changes_the_profile_and_the_password() {
     let reply = browser.post(&site, "/account/reading", &odd).await;
     assert!(
         reply.status == StatusCode::BAD_REQUEST
-            && reply.text.contains("Most on one subject must be a number from 0 to 20.")
+            && reply.text.contains("Most on one subject must be a number from 1 to 20, or empty for no limit.")
     );
+    // Left empty, no limit: kept as 0 and shown empty again; a 0 typed means the same.
+    for none in ["", "0"] {
+        odd[4] = ("most_per_subject", none);
+        assert_eq!(browser.post(&site, "/account/reading", &odd).await.location, "/reading?saved=reading");
+        assert_eq!(auth::find_user(&site.pool, "john").await.unwrap().unwrap().most_per_subject, 0);
+        let page = browser.get(&site, "/reading").await.text;
+        assert!(
+            page.contains(r#"name="most_per_subject" type="number" min="0" max="20" value="" placeholder="No limit""#)
+        );
+    }
     // Notes kept from ratings: on by default, the reader's to turn off.
     assert!(user.learn && page.contains(r#"name="learn" value="1" checked"#));
     assert_eq!(
@@ -1547,7 +1557,15 @@ async fn built_in_sources_are_only_switched_on_or_off() {
             .get(&site, "/sources")
             .await
             .text
-            .contains(r#"name="daily_max" type="number" step="1" min="0" max="50" value="4""#)
+            .contains(r#"name="daily_max" type="number" step="1" min="0" max="50" value="4" placeholder"#)
+    );
+    // Left empty, no limit: kept as 0, and shown empty.
+    let none = [("csrf", csrf.as_str()), ("enabled", "0"), ("daily_max", "")];
+    assert_eq!(admin.post(&site, &path, &none).await.location, "/sources?saved=saved");
+    assert_eq!(builtin(sources_of(&site, "john").await, "hackernews").daily_max, 0);
+    let page = admin.get(&site, "/sources").await.text;
+    assert!(
+        page.contains(r#"name="daily_max" type="number" step="1" min="0" max="50" value="" placeholder="No limit""#)
     );
     assert!(admin.get(&site, "/sources").await.text.contains(r#"<button name="enabled" value="1">Turn on</button>"#));
 
@@ -1564,6 +1582,97 @@ async fn built_in_sources_are_only_switched_on_or_off() {
     assert_eq!(mary.post(&site, &path, &[("csrf", &token), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
     assert_eq!(admin.post(&site, &path, &[("csrf", "wrong"), ("enabled", "1")]).await.status, StatusCode::FORBIDDEN);
     assert!(!builtin(sources_of(&site, "john").await, "hackernews").enabled);
+}
+
+#[tokio::test]
+async fn each_reader_chooses_the_front_page_and_tags_of_lobsters() {
+    let site = site(true).await;
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    let page = mary.get(&site, "/sources").await;
+    let csrf = page.csrf();
+    // Nothing chosen yet: the front page, as before there were tags.
+    assert!(page.text.contains(r#"<span class="tag">Front page</span>"#));
+    assert!(page.text.contains(r#"<input type="checkbox" name="section" value="front" checked>"#));
+    assert!(page.text.contains(r#"title="Rust programming"><input type="checkbox" name="section" value="rust">"#));
+    assert!(!page.text.contains(r#"value="video""#), "kinds of post are not offered as tags");
+    let sources = sources_of(&site, "mary").await;
+    let lobsters = sources.iter().find(|s| s.builtin == "lobsters").unwrap();
+    let hn = sources.iter().find(|s| s.builtin == "hackernews").unwrap();
+    let path = format!("/sources/{}/sections", lobsters.id);
+    sqlx::query("INSERT INTO builtin_sections (user_id, builtin, section) VALUES ('john', 'lobsters', 'go')")
+        .execute(&site.pool)
+        .await
+        .unwrap();
+
+    let form = [("csrf", csrf.as_str()), ("section", "rust"), ("section", "databases"), ("section", "nosuchtag")];
+    assert_eq!(mary.post(&site, &path, &form).await.location, "/sources?saved=sections");
+    let chosen = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT user_id || ':' || section FROM builtin_sections WHERE builtin = 'lobsters' ORDER BY 1",
+        )
+        .fetch_all(&site.pool)
+        .await
+        .unwrap()
+    };
+    let saved = ["john:go", "mary:databases", "mary:rust"];
+    assert_eq!(chosen().await, saved, "only tags Lobsters has; others' choices untouched");
+    let page = mary.get(&site, "/sources").await;
+    assert!(page.text.contains(r#"<span class="tag">2 tags</span>"#));
+    assert!(page.text.contains(r#"<input type="checkbox" name="section" value="front">"#));
+    assert!(page.text.contains(r#"<details class="tagset" open>"#), "a group with a ticked tag is open");
+
+    // A tag Lobsters drops stays ticked, under its own heading, and saving keeps it while it is
+    // ticked; it is read again when it comes back. A gone tag the reader never had is not saved.
+    let dropped: (String, String) =
+        sqlx::query_as("SELECT category, description FROM lobsters_tags WHERE tag = 'databases'")
+            .fetch_one(&site.pool)
+            .await
+            .unwrap();
+    sqlx::query("DELETE FROM lobsters_tags WHERE tag IN ('databases', 'python')").execute(&site.pool).await.unwrap();
+    let page = mary.get(&site, "/sources").await;
+    assert!(page.text.contains("No longer on Lobsters") && page.text.contains(r#"<span class="tag">1 tag</span>"#));
+    let form = [
+        ("csrf", csrf.as_str()),
+        ("section", "front"),
+        ("section", "rust"),
+        ("section", "databases"),
+        ("section", "python"),
+    ];
+    mary.post(&site, &path, &form).await;
+    assert_eq!(chosen().await, ["john:go", "mary:databases", "mary:front", "mary:rust"]);
+    sqlx::query("INSERT INTO lobsters_tags (tag, category, description) VALUES ('databases', ?, ?)")
+        .bind(&dropped.0)
+        .bind(&dropped.1)
+        .execute(&site.pool)
+        .await
+        .unwrap();
+    let page = mary.get(&site, "/sources").await;
+    assert!(
+        !page.text.contains("No longer on Lobsters")
+            && page.text.contains(r#"<span class="tag">Front page and 2 tags</span>"#)
+    );
+    // Unticked, it is dropped.
+    let form = [("csrf", csrf.as_str()), ("section", "front"), ("section", "rust")];
+    mary.post(&site, &path, &form).await;
+    assert_eq!(chosen().await, ["john:go", "mary:front", "mary:rust"]);
+
+    // Nothing ticked is refused: unfollowing is how a reader stops reading it.
+    let reply = mary.post(&site, &path, &[("csrf", &csrf)]).await;
+    assert!(reply.status == StatusCode::BAD_REQUEST && reply.text.contains("Tick the front page or a tag"));
+    let hn_path = format!("/sources/{}/sections", hn.id);
+    let form = [("csrf", csrf.as_str()), ("section", "rust")];
+    assert_eq!(mary.post(&site, &hn_path, &form).await.status, StatusCode::NOT_FOUND, "Hacker News has no tags");
+    assert_eq!(mary.post(&site, &path, &[("csrf", "wrong"), ("section", "go")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(chosen().await, ["john:go", "mary:front", "mary:rust"]);
+
+    // Every tag a reader chose gone: the front page is read, as the pipeline does, and shown so.
+    mary.post(&site, &path, &[("csrf", &csrf), ("section", "rust")]).await;
+    sqlx::query("DELETE FROM lobsters_tags WHERE tag = 'rust'").execute(&site.pool).await.unwrap();
+    let page = mary.get(&site, "/sources").await;
+    assert!(page.text.contains(r#"<span class="tag">Front page</span>"#));
+    assert!(page.text.contains(r#"<input type="checkbox" name="section" value="front" checked>"#));
+    assert!(page.text.contains("No longer on Lobsters"));
 }
 
 #[tokio::test]

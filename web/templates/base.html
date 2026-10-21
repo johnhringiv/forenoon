@@ -257,6 +257,14 @@ details.add form.source, details.row form.source { margin:0; border:0; border-ra
 .row > summary::-webkit-details-marker { display:none }
 details.row[open] > summary { border-bottom:1px solid var(--line) }
 details.row > form, details.row > div { padding:.8rem .9rem }
+/* A built-in's front page and tags: a group per category, open where something is ticked. */
+form.sections details.tagset { margin:.35rem 0; border-top:1px solid var(--line) }
+form.sections details.tagset > summary { padding:.45rem 0; font-size:.9rem; cursor:pointer }
+form.sections details.tagset .count { font-size:.8rem; color:var(--accent); margin-left:.4rem }
+form.sections .taglist { display:grid; grid-template-columns:repeat(auto-fill, minmax(8.5rem, 1fr)); gap:0 .8rem;
+  padding:0 0 .4rem }
+form.sections .taglist label.tick { padding-bottom:.25rem; font-size:.85rem }
+form.sections > .fields { margin-top:.6rem }
 .row.paused > summary, .row.paused > .summary { opacity:.6 }
 .row.unfollowed .name { color:var(--soft) }
 /* A feed this reader does not follow starts with a button to follow it, in place of its dot. */

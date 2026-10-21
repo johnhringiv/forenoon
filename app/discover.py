@@ -7,15 +7,19 @@ still decided by the ranker and fetched through the same extraction path as feed
 from __future__ import annotations
 
 import json
+import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from .config import Source
 from .fetch import Fetcher, FetchError
 from .sources import Item
 from .urls import article_id
+
+log = logging.getLogger("forenoon")
 
 MAX_LISTING_BYTES = 8 * 1024 * 1024
 MAX_TITLE_CHARS = 300
@@ -34,6 +38,8 @@ class Site:
     url: str  # the front page
     parse: Callable[[object], list[dict]]
     more: Callable[[datetime], list[str]]  # further listings since a time; one that fails is skipped
+    # The listings for some of its tags, newest first; None for a site read only by its front page.
+    tagged: Callable[[list[str]], list[str]] | None = None
 
 
 def _hackernews(data: object) -> list[dict]:
@@ -93,9 +99,54 @@ def _lobsters_more(since: datetime) -> list[str]:
     return [f"https://lobste.rs/page/{page}.json" for page in (2, 3)]
 
 
+def _lobsters_tagged(tags: list[str]) -> list[str]:
+    """One listing has every tag's stories. Two pages of 25 reach back about two weeks for a
+    few busy tags; the age limit drops what is older."""
+    path = ",".join(quote(tag, safe="") for tag in tags)
+    return [f"https://lobste.rs/t/{path}.json", f"https://lobste.rs/t/{path}/page/2.json"]
+
+
+FRONT = "front"  # the section that is a site's front page; any other is one of its tags
+TAG = re.compile(r"[a-z0-9+-]{1,30}")  # no dot: Rails reads one as a format
+# A tag's listing is newest first, not by votes: a story is a candidate once it has a few.
+# One still below this is found on a later day, when it has them.
+TAG_MIN_POINTS = 5
+LOBSTERS_TAGS = "https://lobste.rs/tags.json"
+# Not offered: kinds of post rather than subjects (video, pdf, ask...), and the site's own news.
+UNOFFERED_CATEGORIES = ("format", "lobsters")
+MIN_TAGS = 20  # fewer in the site's list than this is a broken answer, not a change of tags
+
+
+def lobsters_tags(fetcher: Fetcher) -> list[tuple[str, str, str]]:
+    """The tags Lobsters has now that a reader may choose, as (tag, category, description).
+
+    Raises FetchError when the list cannot be read or looks broken, so the last one is kept.
+    """
+    try:
+        data = json.loads(fetcher.get(LOBSTERS_TAGS, max_bytes=MAX_LISTING_BYTES).content)
+    except (ValueError, RecursionError) as exc:
+        raise FetchError("response is not a list of tags") from exc
+    tags = {}
+    for entry in data if isinstance(data, list) else []:
+        # Only what the site marks as retired or for moderators is left out: a field it stops
+        # sending must not empty the list.
+        if not isinstance(entry, dict) or entry.get("active") is False or entry.get("privileged") is True:
+            continue
+        tag, category, description = entry.get("tag"), entry.get("category"), entry.get("description")
+        if not isinstance(tag, str) or not TAG.fullmatch(tag) or tag == FRONT or not isinstance(category, str):
+            continue
+        if category in UNOFFERED_CATEGORIES:
+            continue
+        about = " ".join(description.split())[:200] if isinstance(description, str) else ""
+        tags[tag] = (tag, category[:40], about)
+    if len(tags) < MIN_TAGS:
+        raise FetchError(f"only {len(tags)} tags in the list")
+    return list(tags.values())
+
+
 SITES = {
     "hackernews": Site("Hacker News", f"{HN_API}?tags=front_page&hitsPerPage=30", _hackernews, _hackernews_more),
-    "lobsters": Site("Lobsters", "https://lobste.rs/hottest.json", _lobsters, _lobsters_more),
+    "lobsters": Site("Lobsters", "https://lobste.rs/hottest.json", _lobsters, _lobsters_more, _lobsters_tagged),
 }
 
 
@@ -144,26 +195,49 @@ def _summary(site: Site, story: dict, host: str) -> str:
     return text
 
 
-def read_listing(key: str, fetcher: Fetcher, since: datetime | None = None, source: Source | None = None) -> list[Item]:
-    """One site's front page and its further listings as candidate items, front page first.
+def listings(key: str, since: datetime, sections: tuple[str, ...] = ()) -> list[tuple[str, int]]:
+    """The listings a reader's sections of a site take, each with the points a story in it
+    needs. No sections, or a site without tags: its front page alone. The front page comes
+    first and the tags before its further pages, so the cap on a site's candidates, which
+    takes them in this order, cuts the stories the reader chose last."""
+    site = SITES[key]
+    tags = [s for s in dict.fromkeys(sections) if s != FRONT and TAG.fullmatch(s)] if site.tagged else []
+    tagged = [(url, TAG_MIN_POINTS) for url in site.tagged(tags)] if site.tagged and tags else []
+    if tags and FRONT not in sections:
+        return tagged
+    return [(site.url, 0), *tagged, *((url, 0) for url in site.more(since))]
+
+
+def read_listing(
+    key: str,
+    fetcher: Fetcher,
+    since: datetime | None = None,
+    source: Source | None = None,
+    sections: tuple[str, ...] = (),
+) -> list[Item]:
+    """One site's listings for a reader's `sections` (see `listings`) as candidate items.
 
     `since` is how far back the further listings look; by default one day. `source`, with its
     limit on the day's places, is what the items come from; by default the site's. Raises FetchError
-    when the front page cannot be read; a further listing that fails is skipped.
+    when the first listing cannot be read; a further one that fails is skipped.
     """
     site, source = SITES[key], source or site_source(key)
-    resp = fetcher.get(site.url, max_bytes=MAX_LISTING_BYTES)
+    (first, floor), *rest = listings(key, since or datetime.now(UTC) - timedelta(days=1), sections)
+    resp = fetcher.get(first, max_bytes=MAX_LISTING_BYTES)
     try:
-        stories = site.parse(json.loads(resp.content))
+        parsed = site.parse(json.loads(resp.content))
     except (ValueError, RecursionError) as exc:
         raise FetchError("response is not a listing") from exc
-    if not stories:
+    if not parsed:
         raise FetchError("listing is empty")
-    for url in site.more(since or datetime.now(UTC) - timedelta(days=1)):
+    stories = [story for story in parsed if _count(story.get("points")) >= floor]
+    for url, floor in rest:
         try:
-            stories += site.parse(json.loads(fetcher.get(url, max_bytes=MAX_LISTING_BYTES).content))
-        except (FetchError, ValueError, RecursionError):
+            parsed = site.parse(json.loads(fetcher.get(url, max_bytes=MAX_LISTING_BYTES).content))
+        except (FetchError, ValueError, RecursionError) as exc:
+            log.warning("%s: listing %s skipped: %s", site.name, url, exc)
             continue
+        stories += [story for story in parsed if _count(story.get("points")) >= floor]
     items: dict[str, Item] = {}
     for story in stories:
         url, title = story.get("url"), story.get("title")

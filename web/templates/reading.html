@@ -15,8 +15,8 @@
 <p class="hint">A target, not a hard limit. A story is one article, or a few on one subject.</p>
 <h2>How your issue is made</h2>
 <label>Send as <select name="format"><option value="issue"{% if issue %} selected{% endif %}>One book a day, with a contents page</option><option value="articles"{% if !issue %} selected{% endif %}>One book per article</option></select></label>
-<label>Most articles on one broad subject <input name="most_per_subject" type="number" min="0" max="20" value="{{ most_per_subject }}" required></label>
-<p class="hint">Security, AI, chips and so on, so that one busy subject does not fill the issue. A story counts once; 0 for no limit.</p>
+<label>Most articles on one broad subject <input name="most_per_subject" type="number" min="0" max="20" value="{{ most_per_subject }}" placeholder="No limit"></label>
+<p class="hint">Security, AI, chips and so on, so that one busy subject does not fill the issue. A story counts once; leave it empty for no limit.</p>
 <label class="tick"><input type="checkbox" name="explore" value="1"{% if explore %} checked{% endif %}> Leave room for a surprise</label>
 <p class="hint">The day's last place goes to something the model ranked lower. It shows you what you would otherwise never see, and how you rate it teaches the model whether it is underrating that kind of article.</p>
 <label class="tick"><input type="checkbox" name="show_reasons" value="1"{% if show_reasons %} checked{% endif %}> Print why each article was picked</label>

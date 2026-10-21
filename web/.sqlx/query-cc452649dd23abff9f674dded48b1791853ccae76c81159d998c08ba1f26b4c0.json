@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO builtin_sections (user_id, builtin, section) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "cc452649dd23abff9f674dded48b1791853ccae76c81159d998c08ba1f26b4c0"
+}
