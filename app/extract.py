@@ -767,10 +767,21 @@ def _join_lone_headings(root: lxml.html.HtmlElement) -> None:
         text = " ".join(heading.text_content().split())
         if not text or TRAILING_FURNITURE.match(_norm(text)) or _furniture_lead(heading):
             continue
+        # The boxes that hold the heading alone: no text or element beside it (checked by its
+        # neighbours, not by each box's whole text: a flat page has thousands of headings).
         box = heading
         for _ in range(LONE_HEADING_DEPTH):
             parent = box.getparent()
-            if parent is None or parent is root or " ".join(parent.text_content().split()) != text:
+            alone = (
+                parent is not None
+                and parent is not root
+                and parent.tag in ("div", "section")
+                and box.getprevious() is None
+                and box.getnext() is None
+                and not (parent.text or "").strip()
+                and not (box.tail or "").strip()
+            )
+            if not alone:
                 break
             box = parent
         if box is heading or box.xpath(MEDIA_XPATH):
@@ -778,26 +789,33 @@ def _join_lone_headings(root: lxml.html.HtmlElement) -> None:
         following = box.getnext()
         while following is not None and not isinstance(following.tag, str):
             following = following.getnext()
-        if following is None or following.tag in HEADINGS:
+        if following is None or following.tag not in ("div", "section"):
             continue
         first = next((el for el in following.iter("p") if el is not following), None)
         if first is None or _words(first.text_content()) < CONTINUATION_PARAGRAPH_WORDS:
             continue
-        opening = " ".join(following.text_content().split())
-        if not opening.startswith(" ".join(first.text_content().split())[:40]):
+        # Plain boxes between them, not a list item, quote, cell or aside the heading would enter.
+        between = []
+        for el in first.iterancestors():
+            if el is following:
+                break
+            between.append(el)
+        if len(between) >= LONE_HEADING_DEPTH or any(el.tag not in ("div", "section") for el in between):
             continue
-        if following not in list(first.iterancestors())[:LONE_HEADING_DEPTH]:
-            continue
-        before = []
-        for el in following.iter():
+        # The paragraph opens the box: no text, picture or question (a FAQ's <summary>) before it.
+        opens = not (following.text or "").strip()
+        for el in following.iterdescendants():
             if el is first:
                 break
-            before.append(el)
-        if any(isinstance(el.tag, str) and el.tag in MEDIA_TAGS for el in before):
-            continue  # a picture opens the box: the heading would come after it
-        heading.tail = None
+            if el in between:
+                opens = opens and not (el.text or "").strip()
+                continue
+            opens = False  # an element before the paragraph that is not one of its boxes
+            break
+        if not opens:
+            continue
+        heading.tail = "\n"  # the text after it stays apart: "…not proven" / "Serhii…"
         first.addprevious(heading)
-        heading.tail = None
 
 
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
@@ -2602,6 +2620,13 @@ class _Document(Document):
         own = [link for link in links if link[0] == here[0] and link[1] != here[1]]
         return bool(links) and len(own) > SITE_LINK_SHARE * len(links)
 
+    def transform_misused_divs_into_paragraphs(self):
+        """Readability's, remembering the boxes it made paragraphs of: a notice or byline in a
+        <div> is not one of the article's paragraphs to join to it."""
+        divs = list(self.tags(self.html, "div"))
+        super().transform_misused_divs_into_paragraphs()
+        self._made_paragraphs = {el for el in divs if el.tag == "p"}
+
     def get_preserved_elements(self, node):
         allowed = super().get_preserved_elements(node)
         self._kept_lists, self._kept_root = set(), node.getroottree().getroot()
@@ -2749,13 +2774,19 @@ class _Document(Document):
         best = self._paragraphs_box(candidates, best)
         threshold = max(10, best["content_score"] * 0.2)  # readability's, for joining siblings
         # Readability judges a sibling paragraph by its text before its first link: an opening
-        # sentence with a link in it reads as short and all link (mortoray's opening). Only the
-        # paragraphs before the article's box: after it come a page's notes and reply boxes.
+        # sentence with a link in it reads as short and all link (mortoray's opening). Only a
+        # bare paragraph before the article's box: not a box readability made a paragraph of,
+        # nor one with a class or id or a heading in it (a byline, a title, a notice); and after
+        # the article come a page's notes and reply boxes.
         title = _norm(self.short_title())[:TITLE_PREFIX_CHARS]
         for sibling in best["elem"].itersiblings(preceding=True):
             if (
                 sibling.tag == "p"
                 and sibling not in candidates
+                and not sibling.get("class")
+                and not sibling.get("id")
+                and sibling not in getattr(self, "_made_paragraphs", ())
+                and next(sibling.iter(*HEADINGS), None) is None
                 and self._text_paragraph(sibling)
                 and not (title and _norm(sibling.text_content()).startswith(title))  # the title set as a line
             ):

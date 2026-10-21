@@ -160,3 +160,25 @@ def test_a_short_code_box_with_its_label_is_kept():
     snippet = '<div class="c-snippet root"><div class="c-snippet header">stdout</div><pre class="c-snippet"><code>Capacity: 42</code></pre></div>'
     out = text(f"<article>{para(2)}<section>{para(1)}{snippet}</section>{para(2)}</article>")
     assert "Capacity: 42" in out
+
+
+def test_a_byline_title_or_notice_before_the_article_is_not_its_opening():
+    long, short = f"<section><h2>Main</h2>{para(6)}</section>", f"<section><h2>Aside</h2>{para(1)}</section>"
+    for needle, box in {
+        "on behalf of the": '<div class="publish-date-author">Oct. 2, 2026 · <a href="/m">Mateusz Mikuła</a>, '
+        '<a href="/r">Ralf Jung</a> on behalf of the <a href="/c">Compiler team</a>, with help from the release team</div>',
+        "Voters want Congress": '<div class="storytitle"><h1>Poll: Voters want Congress to be a check on the president, a new survey of many voters finds</h1></div>',
+        "ported from my old blog": '<div style="padding:10px">This article was ported from my old blog <a href="/old">here,</a> '
+        'If you see any issues with the rendering or layout, please <a href="mailto:me@example.com">send me an email</a>.</div>',
+    }.items():
+        out = text(f"<article><div class='elementor-widget-container'>{box}{long}{short}</div></article>")
+        assert needle not in out, needle
+
+
+def test_a_lone_heading_does_not_enter_a_list_item():
+    heading = '<div class="sl-heading-wrapper"><h4 id="new-features">New Features</h4></div>'
+    items = (
+        f'<div class="content"><ul><li><p>{WORDS} Allow any schema.</p></li><li><p>{WORDS} More.</p></li></ul></div>'
+    )
+    out = run(f"<article>{para(2)}{heading}{items}{para(1)}</article>")
+    assert "<li><h4" not in out.replace("\n", "")
