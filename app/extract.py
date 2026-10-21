@@ -744,6 +744,55 @@ def _free_code_block(root: lxml.html.HtmlElement, pre: lxml.html.HtmlElement) ->
     return False
 
 
+LONE_HEADING_DEPTH = 4  # boxes around a heading, or around the next box's first paragraph
+
+
+def _join_lone_headings(root: lxml.html.HtmlElement) -> None:
+    """Move a subheading that sits alone in its box into the box of paragraphs after it.
+
+    The BBC sets each subheading in a box of its own between boxes of paragraphs; readability
+    joins the boxes of paragraphs into the article and leaves the subheadings out. In the next
+    box, just before its first paragraph, the subheading stays where a reader sees it and goes
+    with its text. Only a box holding nothing but the heading, not one the site's furniture
+    opens ("Related topics"), and a next box that opens with a paragraph of text: nothing
+    before it (not a FAQ's question in its <summary>), a few boxes in at most."""
+    for heading in list(root.iter("h2", "h3", "h4")):
+        text = " ".join(heading.text_content().split())
+        if not text or TRAILING_FURNITURE.match(_norm(text)) or _furniture_lead(heading):
+            continue
+        box = heading
+        for _ in range(LONE_HEADING_DEPTH):
+            parent = box.getparent()
+            if parent is None or parent is root or " ".join(parent.text_content().split()) != text:
+                break
+            box = parent
+        if box is heading or box.xpath(MEDIA_XPATH):
+            continue
+        following = box.getnext()
+        while following is not None and not isinstance(following.tag, str):
+            following = following.getnext()
+        if following is None or following.tag in HEADINGS:
+            continue
+        first = next((el for el in following.iter("p") if el is not following), None)
+        if first is None or _words(first.text_content()) < CONTINUATION_PARAGRAPH_WORDS:
+            continue
+        opening = " ".join(following.text_content().split())
+        if not opening.startswith(" ".join(first.text_content().split())[:40]):
+            continue
+        if following not in list(first.iterancestors())[:LONE_HEADING_DEPTH]:
+            continue
+        before = []
+        for el in following.iter():
+            if el is first:
+                break
+            before.append(el)
+        if any(isinstance(el.tag, str) and el.tag in MEDIA_TAGS for el in before):
+            continue  # a picture opens the box: the heading would come after it
+        heading.tail = None
+        first.addprevious(heading)
+        heading.tail = None
+
+
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
 SKIP_TARGET_MAX_WORDS = 6
 
@@ -1336,6 +1385,7 @@ def _structure(
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
     _free_section_headings(root, base_url)
+    _join_lone_headings(root)
     _free_headings(root)
     _free_code_blocks(root)
     _drop_page_notices(root)
