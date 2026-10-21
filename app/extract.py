@@ -2620,6 +2620,8 @@ class _Document(Document):
         return allowed
 
     def get_link_density(self, elem):
+        if elem.tag in HEADINGS and _sentence_heading(elem):
+            return 0.0  # a question with its sources linked (Quanta's Q&A), not a link heading
         kept = getattr(self, "_kept_lists", None)
         # Readability's second try parses the page again: lists kept on the first are not here.
         if not kept or elem.getroottree().getroot() is not self._kept_root:
@@ -2764,6 +2766,20 @@ class _Document(Document):
             # else we are reporting today:").
             return not self._cards(ul) and (says or not self._site_list(ul))
         return says and not self._site_list(ul)
+
+
+SENTENCE_HEADING_WORDS = 12
+SENTENCE_HEADING_LINK_SHARE = 0.5
+
+
+def _sentence_heading(heading: lxml.html.HtmlElement) -> bool:
+    """A heading that is a sentence with links in it, not a link set as a heading. Readability
+    drops a heading over a third links; a Q&A's question citing its sources is one."""
+    text = " ".join(heading.text_content().split())
+    if _words(text) < SENTENCE_HEADING_WORDS:
+        return False
+    links = sum(len(" ".join(a.text_content().split())) for a in heading.iter("a"))
+    return links < SENTENCE_HEADING_LINK_SHARE * len(text)
 
 
 def _section_furniture(box: lxml.html.HtmlElement, level: str) -> bool:
