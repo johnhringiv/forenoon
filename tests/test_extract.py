@@ -3152,3 +3152,38 @@ def test_a_table_in_a_header_cell_keeps_its_lines():
     head = "<thead><tr><th>Size</th><th><table><tr><td>Head dim.</td></tr><tr><td>GQA/GDN</td></tr></table></th><th>Heads</th></tr></thead>"
     page = f"<html><body><article><h1>Paper</h1><p>{_sentences(6, 'the models')}</p><table>{head}<tbody>{rows}</tbody></table><p>{_sentences(6, 'the results')}</p></article></body></html>"
     assert "Head dim." in extract("https://arxiv.example/html/1", page, "", "page").body.text_content()
+
+
+def test_a_sign_in_box_is_named_so_by_a_word_not_a_tag_or_part_of_one():
+    named = lambda names: extract_module._account_named(lxml.html.fromstring(f'<div class="{names}">x</div>'))
+    assert named("c13-register aem-GridColumn") and named("c15_forgetPassword") and named("cmp-log-in")
+    assert not named("post-42 tag-passwords category-accounting") and not named("blogInner") and not named("designing")
+
+
+def test_story_cards_need_a_headline_linking_elsewhere_on_the_site_and_no_live_blog():
+    def cards(link: str, box: str = "related") -> str:
+        items = "".join(
+            f'<article><h3><a href="{link.format(n=n)}">Story {n}</a></h3><p>{_sentences(1, "a teaser")}</p></article>'
+            for n in range(4)
+        )
+        return f"<html><body><div class='{box}'>{items}</div></body></html>"
+
+    def left(page: str) -> int:
+        root = lxml.html.fromstring(page)
+        extract_module._drop_story_cards(root, "https://site.example/2026/post")
+        return len(root.findall(".//article"))
+
+    assert left(cards("https://site.example/2026/{n}/other")) == 0
+    assert left(cards("https://elsewhere.example/{n}")) == 4  # a roundup of other sites
+    assert left(cards("#entry-{n}")) == 4  # entries linking to themselves
+    assert left(cards("https://site.example/2026/{n}/other", box="liveblog-body")) == 4
+
+
+def test_sections_are_the_articles_unless_one_is_the_sites():
+    def box(heading: str) -> lxml.html.HtmlElement:
+        return lxml.html.fromstring(f"<section><h2>{heading}</h2><p>Words.</p></section>")
+
+    assert not extract_module._section_furniture(box('<a href="#preface">#</a>Preface'), "h2")
+    assert not extract_module._section_furniture(box("References and related work"), "h2")
+    assert extract_module._section_furniture(box("Related posts"), "h2")
+    assert extract_module._section_furniture(box('<a href="https://site.example/other">Another story</a>'), "h2")

@@ -283,22 +283,31 @@ All fetched content is treated as untrusted.
   the article's text and it has at least 85% of the page's word count, the feed's copy is
   used, since it is the author's own clean version.
 - **Picking the main content.** Readability (readability-lxml) picks the box with the most
-  paragraph text, with these changes. A list item a sentence long (80 characters or more,
-  at most a quarter links) counts as a paragraph would, for the box holding the list, so an
-  article written as one numbered list (a communiqué's points) is seen at all. Readability's
-  step into an `<article>` inside the best box is not taken when that `<article>` has others
-  of its kind beside it: it is one card of a list. When the best box opens with a heading
-  (h2–h4) beside two or more boxes of its kind that open with one of the same level, the box
-  holding those sections is taken instead (an article written as sections, which readability
-  would otherwise join only when each scores a fifth of the best). Readability joins a box of
-  the article's class when it is at most a quarter links, not a fifth (a podcast's first chunk
-  with its show notes). A table inside a table's cell (arXiv's two-line column headings) is
-  kept. Before readability reads the page, Tailwind's scroll margins (`scroll-mt-28`) are
-  taken off every box, as readability reads "scroll" as a scrolling widget; the site's
-  sign-in or registration box (named for an account, login, register or a password, holding
-  a form or a password field and no `<h1>`) is dropped; and so is a box of cards for the
-  site's other stories (three or more `<article>`s side by side, each of at most 80 words and
-  linking to another of the site's pages), with the heading over it.
+  paragraph text, with these changes.
+  - A list item a sentence long (80 characters or more, at most a quarter links) counts as a
+    paragraph would, for the box holding the list, so an article written as one numbered list
+    (a communiqué's points) is seen at all. Not an item that opens with a headline or link (a
+    list of stories), nor a list in a box named as a sidebar, comments or related stories, or
+    under the site's heading ("Most read").
+  - Readability's step into an `<article>` inside its pick is undone when that `<article>`
+    has others of its kind beside it: it is one card of a list.
+  - When the best box opens with a heading (h2–h4) beside two or more boxes of its kind that
+    open with one of the same level, the box holding those sections is taken instead (an
+    article written as sections, which readability would otherwise join only when each scores
+    a fifth of the best). Not when one of them is the site's: named so, its heading a link to
+    another page, or worded as furniture ("Related posts", "About the author"); a heading
+    that opens with references or notes is the article's.
+  - Readability joins a box of the article's class when it is at most a quarter links, not a
+    fifth (a podcast's first chunk with its show notes).
+  - A table inside a table's cell (arXiv's two-line column headings) is kept.
+  - Before readability reads the page: Tailwind's scroll margins (`scroll-mt-28`) are taken
+    off every box, as readability reads "scroll" as a scrolling widget. The site's sign-in or
+    registration box is dropped: named for one by a word of its class or id (`c13-register`,
+    `forgotPassword`, `log-in`; not `blogInner`, nor a post's `tag-passwords` or
+    `category-accounting`), holding a form or a password field and no `<h1>`, and at most 200
+    words or mostly its form. So is a box of cards for the site's other stories: three or more
+    `<article>`s side by side, each of at most 80 words under a headline that links to another
+    of the site's pages, not in a live blog, with the heading over it.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500

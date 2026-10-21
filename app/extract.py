@@ -58,7 +58,9 @@ NOT_ENLARGE = re.compile(r"play|video|watch|peek|reveal|cover", re.IGNORECASE)
 # A status badge (a README's "build passing"), drawn by a badge service or a CI's badge.svg.
 BADGE = re.compile(r"//(img\.)?shields\.io/|//badgen\.net/|//badge\.fury\.io/|/badge\.svg(\?|$)", re.IGNORECASE)
 OBJECT_PICTURE = re.compile(r"\.(svg|png|jpe?g|gif|webp)(\?|#|$)", re.IGNORECASE)
-ACCOUNT_BOX = re.compile(r"register|login|log-in|signin|sign-in|password|forgot|account", re.IGNORECASE)
+ACCOUNT_WORDS = {"register", "registration", "login", "signin", "password", "forgot", "account"}
+ACCOUNT_PAIRS = {("log", "in"), ("sign", "in")}
+ACCOUNT_BOX_MAX_WORDS = 200  # a sign-in box's lines; more is a page's text
 # An embedded player or post, not a drawing: a picture of it shows only its frame.
 PLAYER_EMBED = re.compile(
     r"^https?://([^/]*\.)?(spotify\.com|soundcloud\.com|podcasts\.apple\.com|embed\.music\.apple\.com|"
@@ -467,6 +469,19 @@ def _unscroll(root: lxml.html.HtmlElement) -> None:
             el.set("class", " ".join(name for name in names if not TAILWIND_SCROLL.fullmatch(name)))
 
 
+def _account_named(box: lxml.html.HtmlElement) -> bool:
+    """Whether a box's own class or id names it for signing in: as a word ("c13-register",
+    "forgotPassword", "log-in"), not inside one ("blogInner", "designing"), and not a post's
+    tag or category ("tag-passwords", "category-accounting")."""
+    for token in " ".join([box.get("class") or "", box.get("id") or ""])[:NAMES_CHARS].split():
+        if token.lower().startswith(("tag-", "category-")):
+            continue
+        words = [w.lower() for w in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", token)]
+        if ACCOUNT_WORDS & set(words) or ACCOUNT_PAIRS & set(itertools.pairwise(words)):
+            return True
+    return False
+
+
 def _drop_account_boxes(root: lxml.html.HtmlElement) -> None:
     """Drop the site's sign-in and registration boxes (NATO's "Already have an account? Log
     in" and its password rules): a box named for an account, holding a form or a password
@@ -475,8 +490,12 @@ def _drop_account_boxes(root: lxml.html.HtmlElement) -> None:
     for box in list(root.iter()):
         if not isinstance(box.tag, str) or box.tag in ("html", "body") or box.getparent() is None:
             continue
-        if not ACCOUNT_BOX.search(_names(box)[:NAMES_CHARS]):
+        if not _account_named(box):
             continue
+        words = _words(box.text_content())
+        forms = [f for f in box.iter("form") if next(f.iterancestors("form"), None) is None]
+        if words > ACCOUNT_BOX_MAX_WORDS and 2 * sum(_words(f.text_content()) for f in forms) < words:
+            continue  # more than a sign-in's lines, and mostly not its form: a page's text
         if box.xpath(".//form | .//input[@type='password']") and not box.xpath(".//h1"):
             box.drop_tree()
 
@@ -2529,21 +2548,35 @@ class _Document(Document):
         sentence's length that is mostly not links counts as a paragraph would, for the box
         holding the list (not the list) and the box around that."""
         candidates = super().score_paragraphs()
+        added: dict[lxml.html.HtmlElement, float] = {}
+        headed: dict = {}
         for li in self.tags(self._html(), "li"):
             if li.xpath(".//p | .//div | .//li"):
                 continue
+            first = next((c for c in li if isinstance(c.tag, str)), None)
+            if first is not None and first.tag in ("a", *HEADINGS) and not (li.text or "").strip():
+                continue  # a headline and its summary: a list of stories, not of sentences
             text = _readability_clean(li.text_content() or "")
             if len(text) < SENTENCE_ITEM_CHARS or self.get_link_density(li) > SENTENCE_ITEM_LINKS:
                 continue
             holder = next((a for a in li.iterancestors() if a.tag not in ("ul", "ol", "li")), None)
-            above = holder.getparent() if holder is not None else None
+            if holder is None or any(_elsewhere_name(a) for a in (holder, *holder.iterancestors())):
+                continue
+            listing = li.getparent()
+            if listing not in headed:  # under the site's heading ("Reader responses", "Most read")
+                heading = _heading_over(listing) if listing is not None and listing.tag in ("ul", "ol") else None
+                headed[listing] = heading is not None and _furniture_lead(heading)
+            if headed[listing]:
+                continue
+            above = holder.getparent()
             score = 1 + len(text.split(",")) + min(len(text) / 100, 3)
             for node, share in ((holder, 1.0), (above, 0.5)):
-                if node is None:
-                    continue
-                if node not in candidates:
-                    candidates[node] = self.score_node(node)
-                candidates[node]["content_score"] += score * share * (1 - self.get_link_density(node))
+                if node is not None:
+                    added[node] = added.get(node, 0.0) + score * share
+        for node, score in added.items():  # each box's links read once: a list may hold thousands
+            if node not in candidates:
+                candidates[node] = self.score_node(node)
+            candidates[node]["content_score"] += score * (1 - self.get_link_density(node))
         return candidates
 
     def select_best_candidate(self, candidates):
@@ -2557,15 +2590,17 @@ class _Document(Document):
         card = best["elem"]
         if not any(sib.tag == "article" for sib in (*card.itersiblings(), *card.itersiblings(preceding=True))):
             return best
-        wrapper = next(
-            (
-                c
-                for c in sorted(candidates.values(), key=lambda c: c["content_score"], reverse=True)
-                if card in set(c["elem"].iterdescendants())
-            ),
-            None,
-        )
-        return wrapper or best
+        # Only when readability stepped down into it: its pick before that step holds the card.
+        ranked = sorted(candidates.values(), key=lambda c: c["content_score"], reverse=True)
+        body = [
+            c
+            for c in ranked
+            if "articleBody" in (c["elem"].get("itemprop") or "").split() and self.get_link_density(c["elem"]) <= 0.1
+        ]
+        first = (body or ranked)[0]
+        if first is best or card not in set(first["elem"].iterdescendants()):
+            return best
+        return first
 
     def get_article(self, candidates, best_candidate, html_partial=False):
         """Readability's article, from the box holding the article's sections when the best box
@@ -2580,6 +2615,10 @@ class _Document(Document):
             if parent is None or level is None or parent.tag in ("body", "html"):
                 continue
             kin = [c for c in parent if c is not box and c.tag == box.tag and _opening_heading(c) == level]
+            # The article's sections, not boxes of the site's that open the same way ("Related
+            # posts", "About the author", a card for another story whose heading is its link).
+            if any(_section_furniture(c, level) for c in kin):
+                continue
             if len(kin) < 2 or self.get_link_density(parent) > MERGE_LINKS or _unlikely(parent):
                 continue
             holder = dict(candidates.get(parent) or self.score_node(parent))
@@ -2625,6 +2664,27 @@ class _Document(Document):
         return says and not self._site_list(ul)
 
 
+def _section_furniture(box: lxml.html.HtmlElement, level: str) -> bool:
+    """Whether a box opening with a heading is the site's, not a section of the article: named
+    so, its heading a link or the site's wording."""
+    heading = next(box.iter(level), None)
+    if heading is None:
+        return True
+    if NOTES_START.match(_norm(heading.text_content()).lstrip("#")):
+        return False  # the article's references and notes ("References and related work")
+    away = any(not (a.get("href") or "").strip().startswith("#") for a in heading.iter("a"))  # not its own anchor
+    return _elsewhere_name(box) or away or _furniture_lead(heading)
+
+
+def _elsewhere_name(el: lxml.html.HtmlElement) -> bool:
+    """Whether a box is named as something beside the article: a sidebar, comments, related
+    stories, furniture."""
+    if not isinstance(el.tag, str) or el.tag in ("html", "body"):
+        return False
+    names = _names(el)[:NAMES_CHARS]
+    return bool(ELSEWHERE.search(names) or FURNITURE_CLASS.search(names) or _unlikely(el))
+
+
 def _opening_heading(box: lxml.html.HtmlElement) -> str | None:
     """The level of the heading a box opens with (its first element with text, or a box
     around that), as "h2"; None when it opens with anything else."""
@@ -2659,15 +2719,22 @@ def _drop_story_cards(root: lxml.html.HtmlElement, base_url: str) -> None:
             continue
 
         def card(article: lxml.html.HtmlElement) -> bool:
-            hrefs = [(a.get("href") or "").strip() for a in article.iter("a")]
-            return _words(article.text_content()) <= CARD_MAX_WORDS and any(
-                _host(base_url, h) == site and _host_path(urljoin(base_url, h)) != _host_path(base_url)
-                for h in hrefs
-                if h
+            """A teaser: short, under a headline that links to another of the site's pages."""
+            if _words(article.text_content()) > CARD_MAX_WORDS:
+                return False
+            heading = next(article.iter(*HEADINGS), None)
+            link = heading.find(".//a[@href]") if heading is not None else None
+            href = (link.get("href") or "").strip() if link is not None else ""
+            return (
+                bool(href)
+                and _host(base_url, href) == site
+                and _host_path(urljoin(base_url, href)) != _host_path(base_url)
             )
 
         if not site or not all(card(c) for c in cards):
             continue
+        if any(LIVE_BLOG.search(_names(a)[:NAMES_CHARS]) for a in (box, *box.iterancestors())):
+            continue  # a live blog's entries
         top = box  # with its heading: the boxes around it holding only a few words more
         while (
             top.getparent() is not None
@@ -2710,6 +2777,7 @@ MERGE_LINKS = 0.25
 SENTENCE_ITEM_CHARS = 80  # a list item this long is a sentence of the text, not a menu entry
 SENTENCE_ITEM_LINKS = 0.25
 SECTION_LEVELS = ("h2", "h3", "h4")
+NOTES_START = re.compile(r"\W*((foot|end)?notes?|references?|sources|bibliography|citations|further reading)\b")
 STORY_CARDS = 3
 CARDS_HEADING_WORDS = 6
 CONTINUATION_DEPTH = 3  # how far up the article's box and a continuation of it meet
