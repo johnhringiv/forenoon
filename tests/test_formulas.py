@@ -377,3 +377,11 @@ def test_blogger_lines_stay_paragraphs():
     )
     out = body_html(page(post, MATHJAX))
     assert "<p>Then a formula <i>x</i><sup>2</sup> in the second line.</p>" in out
+
+
+def test_mathjax_environments_without_delimiters_and_spaced_dollars():
+    body = "<p>So $ X$ is a set, and</p><p>\\begin{align*} a &= b \\\\ c &= d \\tag{1} \\end{align*}</p><p>Pay $ 5 or $ 10.</p>"
+    out = body_html(page(body, MATHJAX))
+    assert "So <i>X</i> is a set" in out
+    assert "<i>a</i> = <i>b</i><br><i>c</i> = <i>d</i> (1)" in out
+    assert "Pay $ 5 or $ 10." in out

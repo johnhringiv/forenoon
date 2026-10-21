@@ -3451,14 +3451,12 @@ def extract(
             except Exception:  # noqa: BLE001, S110 - hostile markup; the article goes without the pictures
                 pass
             candidates["page"] = sanitize(page, url, marked=True)
-        # The article's words as the book has them: formulas as written, not their page text.
-        reference = _reference_words(formulas.strip_shadows(page_html))
-        shadowed = reference + formulas.shadow_words(page_html)  # as the page's own boxes measure
+        reference = _reference_words(formulas.strip_shadows(page_html))  # trafilatura reads no <math> either
         title, author, image, description = page_metadata(page_html)
         kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
         # Long articles only: on a short post the page furniture outweighs the text.
         if reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
-            wide = _widest(page_html, shadowed)
+            wide = _widest(page_html, reference)
             wide = sanitize(wide, url, marked=True) if wide is not None else None
             # Only when it recovers the article without dragging in much else.
             if (

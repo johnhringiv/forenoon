@@ -1208,10 +1208,6 @@ def strip_shadows(markup: str) -> str:
     return SHADOWS.sub("", markup)
 
 
-def shadow_words(markup: str) -> int:
-    return sum(len(html.unescape(m.group(1)).split()) for m in SHADOWS.finditer(markup))
-
-
 def _replace(old, holder) -> None:
     """Put a holder's content where an element was, keeping the element's tail."""
     parent = old.getparent()
@@ -1388,9 +1384,10 @@ def _tex_html(source: str, tex: Tex, display: bool):
 
 
 # Delimiters the renderers recognise: $$…$$, \[…\], \(…\), and $…$ where the page turns it on.
+ENVIRONMENT = re.compile(r"\\begin\{((?:equation|align|gather|multline|eqnarray|alignat|displaymath)\*?)\}")
 COMMENT = re.compile(r"(?<!\\)%[^\n]*")
 DELIMITERS = (("$$", "$$", True), ("\\[", "\\]", True), ("\\(", "\\)", False))
-DOLLAR = re.compile(r"(?<![\\$])\$(?![\s$])((?:\\\$|[^$])+?)(?<![\s\\])\$(?![\d$])")
+DOLLAR = re.compile(r"(?<![\\$])\$(?![$])((?:\\\$|[^$])+?)(?<![\s\\])\$(?![\d$])")
 PROSE = re.compile(r"(?<![\\{a-zA-Z])[a-zA-Z]{3,} +[a-zA-Z]{3,} +[a-zA-Z]{3,}")
 
 
@@ -1436,6 +1433,14 @@ def _spans(text: str, tex: Tex) -> list[tuple[int, int, str, bool]]:
                 break
             add(start, end + len(closing), text[start + len(opening) : end], display)
             at = end + len(closing)
+    at = 0
+    while (m := ENVIRONMENT.search(text, at)) is not None:  # MathJax renders these undelimited
+        end = text.find(f"\\end{{{m.group(1)}}}", m.end())
+        if end < 0:
+            break
+        end += len(f"\\end{{{m.group(1)}}}")
+        add(m.start(), end, text[m.start() : end], True)
+        at = end
     if tex.single_dollar:
         for m in DOLLAR.finditer(text):
             if not PROSE.search(re.sub(r"\\\w+\{[^{}]*\}", "", m.group(1))):
