@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) FROM book_checks WHERE verdict IN ('fixed', 'cannot_fix')",
+  "describe": {
+    "columns": [
+      {
+        "name": "COUNT(*)",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c94e9bf9b28c9b0d9474b36e2fff2ca43d2e515570c43ed124a5261b019dcd95"
+}

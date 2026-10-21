@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'book_checks'",
+  "describe": {
+    "columns": [
+      {
+        "name": "COUNT(*)",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4c839a1ec3f0343d456acdea78dfaa480c61f44f5e4727dfa8564942e55f1add"
+}

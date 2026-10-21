@@ -18,6 +18,17 @@ against a site's terms even for subscribers: that is yours to check.
    browser through to their articles. Nothing answers a CAPTCHA: if a site asks for one, the
    session's row and an alert email say so.
 
+The same container also takes pictures of a page's interactive figures (charts and
+sliders drawn by the page's own scripts) for the book, on any site, signed in when the site
+has a session. Without it those figures are a line saying they are interactive on the
+original page. Those pages are any site's, so Chrome runs in its own sandbox for them,
+which needs the seccomp profile `browser/seccomp.json` (Docker's default plus what the
+sandbox uses): `deploy.sh` and `docker-compose.yml` apply it, and a container run any other
+way needs `--security-opt seccomp=<that file>`. The kernel must allow user namespaces
+(`/proc/sys/user/max_user_namespaces` above 0); where it does not, no pictures are taken
+and everything else works as before. On Ubuntu 23.10 and later, the host setting
+`kernel.apparmor_restrict_unprivileged_userns=1` can block it the same way.
+
 ## Set it up
 
 1. Turn the container on:

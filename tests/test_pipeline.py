@@ -957,6 +957,9 @@ def test_the_model_chooses_the_issue_from_what_it_read(env):
 
     listing = _listing([Candidate(post1, "Post 1", "Blog", 350, 9, "read", "years", "", True)], 1, 2, 2, {})
     assert '"deferred": true' in listing and "<most_per_subject>2</most_per_subject>" in listing
+    assert '"read_in_part": false' in listing
+    long_one = Candidate("x", "Long", "Blog", 9000, 8, "read", "years", "", False, True)
+    assert '"read_in_part": true' in _listing([long_one], 1, 0, 2, {})
 
     # A reply naming nothing usable leaves the reading's order: the best read goes.
     fresh = Store(cfg.data_dir / "second.sqlite3")
@@ -1003,6 +1006,14 @@ def test_reading_pass_reorders_by_what_was_read_and_holds_back_what_is_not_an_ar
     assert report.ranking.startswith("model") and "read in full" in report.ranking
     titles = [store.get_article(i).title for i in report.delivered]
     assert titles[:2] == ["Post 9", "Post 2"] and "Post 1" not in titles  # pinned first, then the best read
+    # Each delivery keeps its place in the issue, which the web pages show it in; a pick shown
+    # only as a link was never in it.
+    placed = store.db.execute(
+        "SELECT article_id FROM deliveries WHERE user_id = ? AND position IS NOT NULL ORDER BY position", (user.id,)
+    ).fetchall()
+    assert [r["article_id"] for r in placed if r["article_id"] in report.delivered] == report.delivered
+    links = store.db.execute("SELECT position FROM deliveries WHERE link_only = 1").fetchall()
+    assert links and all(r["position"] is None for r in links)
     held = next(i for s in report.sources for i in s.items if i.title == "Post 1")
     assert "held back" in held.reason and held.review == "bad: Paywall notice only"
     # The model saw the article text, cut to the word limit and marked as cut.
@@ -1779,3 +1790,86 @@ def test_an_article_fetched_again_gets_a_new_summary_and_keeps_the_old_when_it_c
     # Nothing could be read: what was there stays.
     kept = store.get_article(ids["walled"])
     assert (kept.description, kept.status, kept.word_count) == (stale, "degraded", 90)
+
+
+def test_interactive_figures_get_a_picture_and_a_note_or_the_note_alone(env, monkeypatch):
+    import types
+
+    import app.pipeline
+    from app import sessions
+    from app.extract import extract
+    from app.fetch import FetchError
+
+    cfg, _, _ = env
+    cfg = dataclasses.replace(cfg, sessions=("paper.example",))
+    words = "<p>" + "Plain words about grid storage and the price of power at noon. " * 12 + "</p>"
+    chart = "<figure><figcaption>Prices by hour</figcaption><canvas></canvas><p>Noon 40 · Night 12</p></figure>"
+    page = f"<html><body><article>{words}{chart}{words}{chart}{words}</article></body></html>"
+    picture = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(picture, "JPEG")
+    asked = []
+
+    def figure_shots(sessions_dir, session, url, figures, total):
+        asked.append((session, url, figures, total))
+        if "down" in url:
+            raise FetchError("the browser container is not running")
+        return {figures[0]: picture.getvalue()}  # the second could not be shown
+
+    monkeypatch.setattr(sessions, "figure_shots", figure_shots)
+    for url in ("https://www.paper.example/grid", "https://down.example/grid"):
+        result = extract(url, page, "", "page")
+        article, _ = app.pipeline._assemble(types.SimpleNamespace(url=url, id="x", title="Grid", site="", author="",
+            published=None, discussion_url="", also=(), source=Source("Blog"), sources=lambda: [Source("Blog")]),
+            result, None, cfg)  # fmt: skip
+        out = etree.tostring(article.body, encoding="unicode")
+        notes = out.count(f'Interactive on the <a href="{url}">original page</a>.')
+        assert notes == 2 and "shot-" not in out and out.count("Prices by hour") == 2
+        # A figure with a picture shows it in place of its own text; one without keeps the text.
+        assert out.count("<img") == (1 if "paper" in url else 0)
+        assert out.count("Noon 40") == (1 if "paper" in url else 2)
+    # A picture that cannot be kept (not a picture at all, here) gives the figure its text back.
+    monkeypatch.setattr(sessions, "figure_shots", lambda sessions_dir, session, url, figures, total: {0: b"not a jpeg"})
+    result = extract("https://bad.example/grid", page, "", "page")
+    article, _ = app.pipeline._assemble(types.SimpleNamespace(url="https://bad.example/grid", id="x", title="Grid",
+        site="", author="", published=None, discussion_url="", also=(), source=Source("Blog"),
+        sources=lambda: [Source("Blog")]), result, None, cfg)  # fmt: skip
+    out = etree.tostring(article.body, encoding="unicode")
+    assert "<img" not in out and out.count("Noon 40") == 2
+    # Put back where it was: the caption above, the figure's own text after it.
+    assert re.search(r"<figure><p>Interactive.*?</p><figcaption>Prices by hour</figcaption><p>Noon 40", out)
+    # Asked with the site's session, or with none; each article once.
+    assert asked == [
+        ("site-paper.example", "https://www.paper.example/grid", [0, 1], 2),
+        ("", "https://down.example/grid", [0, 1], 2),
+    ]
+
+
+def test_a_drawn_figure_gets_its_picture_with_no_note_or_the_note_alone(env, monkeypatch):
+    import types
+
+    import app.pipeline
+    from app import sessions
+    from app.extract import extract
+
+    cfg, _, _ = env
+    words = "<p>" + "Plain words about image formats and how long they take to encode. " * 12 + "</p>"
+    chart = "<figure><svg>" + "<rect/>" * 30 + "</svg><figcaption>Encode time</figcaption></figure>"
+    page = f"<html><body><article>{words}{chart}{words}{chart}{words}</article></body></html>"
+    picture = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(picture, "JPEG")
+    monkeypatch.setattr(
+        sessions, "figure_shots", lambda sessions_dir, session, url, figures, total: {0: picture.getvalue()}
+    )
+    for shots in ({0: picture.getvalue()}, {0: b"not a jpeg"}):
+        monkeypatch.setattr(sessions, "figure_shots", lambda sessions_dir, session, url, figures, total, s=shots: s)
+        result = extract("https://blog.example/avif", page, "", "page")
+        article, _ = app.pipeline._assemble(types.SimpleNamespace(url="https://blog.example/avif", id="x", title="AVIF",
+            site="", author="", published=None, discussion_url="", also=(), source=Source("Blog"),
+            sources=lambda: [Source("Blog")]), result, None, cfg)  # fmt: skip
+        out = etree.tostring(article.body, encoding="unicode")
+        note = 'See the figure on the <a href="https://blog.example/avif">original page</a>.'
+        assert "Interactive" not in out and "shot-" not in out and out.count("Encode time") == 2
+        if shots[0] == b"not a jpeg":  # no picture kept: each figure points to the page
+            assert "<img" not in out and out.count(note) == 2
+        else:  # the first is drawn, with no note under it; the second points to the page
+            assert out.count("<img") == 1 and out.count(note) == 1

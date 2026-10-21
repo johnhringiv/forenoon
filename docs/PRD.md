@@ -134,7 +134,8 @@ what its own users configure and delivers only to the addresses its readers have
   session.
 
 - **Settings** for the whole install (delivery time, how old an article may be, ranking,
-  its models and token cap, how many articles are read in full, alerts, what is kept) are
+  its models and token cap, how many articles are read in full, the book check, alerts, what
+  is kept) are
   on the web pages' Settings page (admins only) and live in the database. A setting stays
   only when it controls cost, depends on the deploy, or is a real choice; what used to be a
   switch for a later feature is now just how Forenoon works, described here.
@@ -285,6 +286,18 @@ All fetched content is treated as untrusted.
   words or more), the smallest page element holding at least 90% of it is tried instead, and
   used if it recovers more without exceeding 1.3 times the page's text. This recovers
   articles laid out as several sibling blocks.
+- **Continued articles.** When the page goes on with the article in a later box, its
+  paragraphs are put back after the article: a box of the same kind and class nearby, in the
+  same `<article>`, as when an advert splits the text in two, or the box right after the
+  article's whose paragraphs are classed like the article's, as behind a "read more" button.
+  Only a box of paragraphs (three or more of some length, mostly not links, not already in
+  the article) counts, and the search stops at a heading between the boxes, at the next
+  story's title, and at a box named as comments or page furniture.
+- **Live blogs.** A live blog (a box named `liveblog` or `liveblog-body` holding three or
+  more `<article>` entries) is taken entry by entry, newest first as the page has them, when
+  that gives at least 1.5 times the words of the main content and holds what the main content
+  kept. Entries that are mostly links, comments, a pinned entry shown twice, and relative
+  times such as "1h ago" are left out.
 - **Structure.** Before the article is picked out of the page, structure that the page
   expresses only through class names and in-page links is rebuilt, by shape and by widely
   used class names, not per site:
@@ -297,6 +310,38 @@ All fetched content is treated as untrusted.
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
+  - Lists that are part of the text are kept though they are mostly links (the main-content
+    step drops such lists as menus): one a sentence introduces ("…please at least:"), or a
+    short paragraph such as "References", "Sources" or "See also", or whose items say
+    something beside their links (times, bylines and counts aside). Not one under a label or
+    heading of the site's (related posts, tags, sharing, a newsletter, "Most read", "More
+    news"), in a box named as the site's (recommendations, social links, a sign-up), holding a
+    form or button, a table of contents, a run of one-word links, links to share the page or
+    to social accounts, story cards (a link beside a teaser block), or one whose links go
+    mostly to the site's other pages, unless a sentence introduces it and its items say
+    something of their own.
+  - Section headings marked up as links to themselves (permalinks), with ids that spell
+    their text, or with scroll margins are kept, and so is a real table (with header cells
+    or a caption) in a scrolling box or under any heading. A heading an article ends on
+    ("Related", "Comments", "Back to top") is not freed.
+  - Boxes that sell, credit or play are dropped by their markup: a sign-up form (one asking
+    for an email address) and the box around it when that only pitches it; a short box named
+    for a newsletter, a sponsor or the next story, with a call to act in it and not one of a
+    run of such boxes; an advert card whose links all go to one address off the site, marked
+    `nofollow` or `sponsored`; a box named as the author's at the end of the post that opens
+    with a link to them and whose bio names them; a player's controls; a table of contents a
+    script was to fill; and, at the end, a line that is only a short link to the page itself
+    ("Share", "Read more") or to an author's page; and a pitch the article ends on, broken off
+    where its list of the site's links was left out ("If you liked this article, please" over
+    "subscribe to my newsletter"), with its heading when nothing else was under it.
+  - The label a "skip past" link jumps to ("after newsletter promotion"), which is there for
+    screen readers, is dropped with the link.
+  - Asides that are not the article are dropped: a teaser (a short label and then only
+    links, two or more, such as "Recommended" or "You may like") and one holding a form with an
+    address field and little else (a newsletter sign-up). Never dropped: a box classed as a callout (a warning,
+    a tip, "see also"), one of over 400 words or half the page's text, one holding something
+    an in-page link points at (a footnote), and one whose label is an author's ("Update:", "References",
+    "Correction:", "By", "Photo", "Part 2 of 3"). Pull quotes stay, as the editors set them.
 
   No id or class from the page reaches the book: the ids and link targets are generated.
 
@@ -306,6 +351,88 @@ All fetched content is treated as untrusted.
   link targets, image sources and alt text, table spans and list start numbers. Links and
   images must be absolute `http(s)` (or `mailto:` / embedded image data). Top-level headings
   become second-level, invalid nesting is repaired, and containers left empty are removed.
+  A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
+  the image has no address on the web (none, or an embedded stand-in): the last address of the
+  first source that has one (`srcset`, else `data-srcset`). An embedded (base64) 1×1 GIF or PNG as an
+  image's `src` counts as no picture: it holds a picture's place until a script loads it. So
+  does a placeholder file a script swaps out (named `placeholder`, `blank`, `spacer`,
+  `transparent`, `pixel` or `1x1`, alone or after `grey`, `image`, `default` or `lazy`, as
+  Monochrome's `image_placeholder.svg` and the BBC's `grey-placeholder.png`): the image takes
+  its lazy-loading address instead (`data-src` and the like), or is dropped when it has none.
+  An image in a figure with no address of its own but the link around it, holding nothing
+  else, takes the link's address (Yahoo's blank pixel, its photo on the link). A picture in a
+  button named for enlarging it (a lightbox's "Enlarge image", not a video's play button nor
+  a reveal toggle) is taken out of the button, which the book drops. An `<object>` showing a
+  picture file (`type="image/…"`, or a picture file's address: an SVG chart, an arXiv figure,
+  an equation) becomes an image of it, or of the fallback image it holds, its text the alt
+  text. A status badge (shields.io, badgen, a CI's `badge.svg`) is not kept. A
+  character lxml refuses to set again (a control character such as a form feed in a kernel
+  source's code, or U+FFFE/U+FFFF), written or as a reference, is read as a space in the page
+  and the feed; the book check reads the page, and the model's HTML, the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
+  text) appears once.
+- **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
+  can keep its caption and lose its photo (a box of its own, a lightbox button). After
+  readability, such a figure gets back the pictures of the page's figure with the same caption
+  (the words a reader sees, its own and not a figure's within it; all its words when it has
+  none); nothing is taken out. A figure within a figure gets none, nor gives any. The page is
+  read as extraction has rebuilt it (an `<aside>` the article keeps as a quote is no longer a
+  sidebar). The page's figures counted are those within the box holding the article's first
+  and last paragraphs (of 40 letters or more, spaces not counted) when it is found, figures with no words only then; otherwise anywhere.
+  Either way not those in a sidebar, footer or box of other stories (one holding half the
+  page's words is the article's, whatever its name). Figures sharing a caption are paired in
+  order, only when the page has as many as the article, and a pair only when the two sit
+  next to the same paragraph of the article, before or after (one outside figures that the
+  article and the page each have once); and on each side where the two have the same
+  neighbour (that paragraph, or the article's start or end) the same figures must stand
+  between it and them. The only figure with its caption on each side may pair beside no such
+  paragraph on either. An article figure inside a box readability kept that is named as one
+  of other stories gets none (its page figure is not counted).
+  Only pictures the book would show come back. None for a video's figure (a player or embed,
+  a player drawn by script, a picture that is or links to a video site's) or a figure of more
+  than 8 pictures (a widget's grid, cards for other stories counted; one of more than 64
+  gives none). Not a picture in
+  anything else removed (a button, `<noscript>`), in a caption, an `<aside>`, a figure within
+  the figure, or a card for another story (named so, or linking to another of the site's
+  pages, or to another post where the article's address names its post in the query; a link
+  to a picture file, to the photo's own attachment, media or gallery page, or to one under the
+  article's address, is the photo's); nor a hidden one, an icon, logo or share button, one of
+  48 pixels or less, an embedded one, a second size of the same photo, or one the article
+  already shows. In a `<picture>` holding a blurred stand-in and the photo, only its last
+  image is taken, with its sources. Of a graphic drawn once per screen width (ai2html's
+  artboards, one shown at a time), only the widest copy is taken, and none when its labels
+  are text drawn over the picture (a map's place names), which the book would lose. A page figure that is itself hidden, or named as a card for
+  other stories or an icon, gives none; so does one inside anything the book removes, a
+  player, a hidden box, a link to a video, a share link or a link to another story, up to the
+  article's own box (or the page's body when that is not found). None goes into a figure
+  holding a table, code or a quote.
+- **Dropped figures.** Readability scores boxes by their text, so a photo in a box of its own
+  between two boxes of the article's paragraphs (the BBC's, the New York Times') can go whole,
+  caption and all. After it, each figure of the page within the box holding the article's
+  first and last paragraphs goes back between the same two paragraphs (each of which the
+  article and the page have once), but only where the article has those two paragraphs one
+  after the other; among the figures it kept there, in the page's order. Not a figure that
+  shares a box with a paragraph the article lacks and none it has (a card for another story
+  readability dropped whole), nor one that, or a box around which within the article's box,
+  is named as furniture, comments or other stories. It comes back with the pictures the book
+  would show (as for figure pictures above) that the article lacks, and its own caption
+  without text hidden from sight (the BBC's "Image caption, "), unless the article already
+  has those words. When the article kept the figure's caption without its picture somewhere
+  else (readability's copy can lack a credit line, so one caption's words holding the other's
+  counts), the pictures go into that figure instead. A figure before the article's first
+  paragraph or after its last (a lead photo, related stories) is not taken. The headings the
+  article and the page have once count as such neighbours too, so a photo under a heading
+  stays in its section. At most 40 pictures come back to one article.
+- **Stacks of photos.** A carousel or slideshow shows one photo at a time; the book shows its
+  first, with its caption, and skips the rest. A stack is a box named carousel, slider,
+  slideshow, swiper, slick, glide, splide or flickity, or marked
+  `aria-roledescription="carousel"` or `"slide"`. A gallery or lightbox (a grid of photos
+  shown at once, a photo that enlarges) is not a stack. The copies of slides a looping
+  carousel adds (`slick-cloned`, `swiper-slide-duplicate`, or hidden from screen readers) are
+  never its first. Once a stack's first photo is seen (put back, or already in the article),
+  the rest stay out. This holds for figure pictures and
+  dropped figures alike.
+- **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
+  or a Google News publication page (asking readers to pick the site as a source), is removed.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
   extracted body (a standfirst in the page header), it is added in italics at the top.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt
@@ -338,6 +465,24 @@ after conversion. Each is flattened onto white (so transparent images stay reada
 converted to greyscale by default, scaled to fit 1200×1600 and saved as JPEG. Images smaller
 than 48 pixels on a side (tracking pixels, icons) and any that cannot be fetched or decoded
 are dropped and counted in the report.
+
+An SVG is drawn with resvg at twice its size on the page (its width and height, else its
+viewBox, an icon's `0 0 24 24` being 24 pixels), within the same 1200×1600, then converted
+like the rest; one under 6 pixels on
+both sides is dropped, as an equation set as SVG can be one letter. Its text is set in Arimo
+and Tinos, which take the room Arial and Times New Roman do, so labels drawn for those fit
+their boxes, and code in JetBrains Mono NL; no system font is read. Before drawing, what
+would load anything from outside the file is taken out: entities and DTDs are not read,
+links to pictures other than embedded PNG, JPEG, GIF or WebP, stylesheet imports, scripts
+and embedded HTML are removed, and relative addresses resolve to an empty folder. One of more
+than 50,000 elements is not drawn. Each is drawn in a process of its own, limited to 1 GiB of
+memory, 30 seconds of processing and 45 seconds in all, with none of the pipeline's
+environment (its keys), as a hostile SVG can ask the renderer
+for more memory than the machine has, crash it, or keep it busy for good; one that fails is
+dropped like a picture that cannot be decoded. A picture
+a line of text high (96 pixels or less as drawn: an equation) does not count toward the 40,
+so a page of equations keeps them all; once the 40 are used, only SVG addresses are still
+fetched, and at most 200 pictures are fetched for one article, in at most five minutes.
 
 ## 6. The book
 
@@ -407,7 +552,8 @@ much; the note says why, when the reader cares to.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
   the install, not a rating: it is logged, written to the extraction log, and listed for
-  admins on the web pages' Problems page. The rating is left as it was.
+  admins on the web pages' Problems page, with what the book check found (section 7i). The
+  rating is left as it was.
 - **Latest tap wins** for the rating; the note stays until it is changed. Every tap is also
   kept in an event log.
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
@@ -553,6 +699,72 @@ own words ("Too long"). The event log keeps every tap as it was.
 - It runs on `llm.model`: the verdicts change nothing that is delivered, so the routine model
   is enough. It always runs when ranking does.
 
+## 7i. The book check (optional, off by default)
+
+An agent that compares each article, as it will be printed, with the page it came from, and
+fixes what extraction got wrong. Every fix is logged as a problem, so the extractor can be
+improved for the next article like it. "Check every article with an agent before it is sent"
+(`llm.book_check`) on the Settings page turns it on; `llm.check_model` is the model (Claude
+Sonnet 5.5).
+
+- **When.** For each article about to go in a book, as it is assembled: after the pictures of
+  interactive figures are put in, before its images are fetched. Not in a dry run, not for
+  an article that will be held back anyway (judged not the article, or over the word limit),
+  and not for one sent again from the web pages. An article with no saved page (a feed's own
+  text, or saved pages turned off) is not checked; the report counts it.
+- **Only an Anthropic model**: the check needs tool use with pictures, through Anthropic's own
+  client and key. With any other model the check is skipped and the run report says why.
+- **What it is given**, all marked as untrusted data whose instructions are to be ignored: the
+  title, source, address and word count; the article as numbered blocks (paragraphs,
+  headings, lists, quotes, code, figures, tables and notes, each with its HTML; an embedded
+  picture is written `picture:N`), whole up to 30,000 characters and shortened after, each
+  shortened block marked as such with the tool that shows it, so a listing that stops is not
+  taken for an article that does; and the
+  first 8,000 characters of the saved page's visible text (no scripts, styles or navigation)
+  with its total length.
+- **Its tools**: `page_find` (where a phrase is on the page, with 300 characters around each
+  of up to 10 places), `page_read` (up to 6,000 characters from an offset), `page_view` (a
+  screenshot of the live page, section 7d; unavailable while the browser container is not
+  running), `page_copy` (the page's own HTML from the block where one phrase is to the block
+  where another is after it, reduced to the allowlist and kept as `copy:N`; a start the page
+  repeats, such as a heading over each section, is the one nearest before the end), `article_read` (blocks in
+  full, up to 16,000 characters, saying where it stops), `replace_blocks`, `delete_blocks`,
+  `insert_after`, `insert_from_page` and `replace_from_page` (a copy made and placed in one
+  call), and `finish` (a verdict, `ok`, `fixed` or `cannot_fix`, a summary of at most
+  300 characters, and each problem found: its kind, what was wrong and why it thinks so). The
+  kinds are cut short, missing content, page furniture, broken media, formatting, wrong
+  article and other. Blocks are numbered afresh after each edit, and the edit's answer lists
+  the blocks around it with their new numbers.
+- **What it may do.** It is told to edit only to restore what the page has or remove what is
+  not the article, and never to rewrite, summarise or add to the author's text; to restore with
+  `insert_from_page` or `replace_from_page`, so the page's links, emphasis, heading levels and
+  quotes come back as the page has them (a copy from `page_copy` may also stand between blocks
+  of its own HTML as `copy:N`, never inside one); to write HTML itself only to fix formatting the
+  page's markup does not give, or for a passage the tools cannot find; and to change only the
+  blocks that are wrong. An edit made from copies is recorded with their numbers. Everything it writes goes through the extractor's allowlist (section 4) before it is put in the article;
+  links to the article's own notes and headings stay links in the book, and a link left
+  pointing at nothing is unwrapped. An image must be one the article has or one whose address
+  is on the saved page; it is fetched and converted with the rest (section 5).
+- **Limits.** At most 12 calls for an article, 200,000 tokens (input, cached input and
+  output), three minutes, and the check's own daily budget (`llm.check_daily_tokens`,
+  3,000,000), checked before each call. It is apart from `llm.daily_token_cap`: the check's
+  tokens never count against the ranking's, so a busy morning of checks cannot leave the
+  next run without the model; the settings page shows the two apart. `finish` is taken only as a turn's one call, so the verdict is given
+  knowing how the edits went. Its edits are kept only when it finishes: at a limit the check
+  is recorded as `incomplete` and the article goes out as it was. A failed call, a refusal or anything else
+  that goes wrong is logged and leaves the article as it was; a delivery is never stopped by
+  it. Each call uses adaptive thinking at medium effort, with the system prompt, the tools and
+  the conversation so far marked for the prompt cache.
+- **Where it is logged.** Every call in the model log (`book-check`, with its cached tokens,
+  priced like any other); every check in the `book_checks` table (verdict, summary, the
+  problems, each edit with the HTML before and after, and its tokens); `fixed` and
+  `cannot_fix` on the Problems page (section 9a) with the summary, each problem, and whether
+  the article was edited; and in
+  the run report, how many were checked, with each verdict, their tokens and cost.
+- **Cost**, at Sonnet 5.5's prices: the first real run (20 recent articles, 18 October 2026) fixed 6 and found 14 fine in 38 calls and 502,105 tokens, 62% of them read from the
+  cache: $0.60 in all, about 3 cents an article, roughly $0.30 a day for a reader with ten. The delivery waits for the checks, up
+  to three minutes an article.
+
 ## 7d. The browser container (optional)
 
 - A separate container holds Chrome, the only thing that reads a subscriber session's cookie.
@@ -566,6 +778,45 @@ own words ("Too long"). The event log keeps every tap as it was.
   and nothing answers a CAPTCHA.
 - How each session's last page went, with the day the site says its sign-in ends, is kept in
   `<data>/sessions/status.json` for the Sources page and the run's alerts.
+- It also takes pictures of interactive figures: a `<figure>` the page's scripts draw (a
+  chart, a slider comparing pictures), recognised by having controls, a canvas or a script,
+  and no picture, player, table, code or quote of its own; and of drawn figures, which the
+  book would lose: an inline SVG of 20 elements or more (a chart, a diagram) or an embedded
+  page that is not a video, a player or a post (Spotify, SoundCloud, a podcast host,
+  Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
+  either, and not a player's (named so: its controls are SVG). The room these pictures have in
+  the article's budget leaves out its SVG pictures, mostly equations. A drawn figure's picture comes with no line
+  under it; without one, the line sends the reader to the original page for the figure. Without the scripts it is often
+  only its labels run together, so extraction puts a placeholder first in it, numbered by
+  the figure's place among the page's figures (not counting any in `<noscript>` or
+  `<template>`, as a browser running scripts counts them) with the page's total. For each
+  article going in a book, the pipeline asks for up to 20 (fewer when the article's own
+  pictures leave less room), with the site's session when it has one, and a deadline of 150
+  seconds. The page is any site's, scripts and all, in the container that holds the
+  cookies, so:
+  - Chrome runs in its own sandbox, which the container's seccomp profile
+    (`browser/seccomp.json`: Docker's default for 64-bit x86 and ARM only, plus `clone`, `unshare` and `chroot`) allows.
+    Without the profile, or on a kernel without user namespaces, no pictures are taken.
+  - It runs in a child process killed at the deadline, whatever the page does.
+  - It reaches the network only through a proxy in the container that connects to public
+    internet addresses alone, by the address it resolves itself: https only, and never this
+    machine, the LAN or the Docker host, whatever a redirect, socket, worker or DNS answer
+    says. Service workers are blocked.
+    Chrome refuses the page if its figures are not as many as the saved page's, opens any
+    closed `<details>`, and photographs each figure as it first appears, caption hidden. The
+    picture replaces what the figure held, with a line saying it is interactive on the
+    original page; without a picture (none taken, or not kept for the article's picture
+    budget) the figure keeps its own text, with the line. The container touches
+    `<data>/sessions/.fetch/alive` every five seconds, and nothing is asked for while it is
+    stale, so an install without it never waits; a page whose pictures time out is not
+    followed by more requests for pictures in that run, and a request for a subscriber's page
+    that waits behind a busy container does not count as the container being down.
+- It also shows the book check's model a page as a reader sees it (section 7i): one
+  screenshot of an 800 by 1200 screen, scrolled so a phrase the model names is in its middle
+  (or the top of the page), as JPEG of at most 1 MB. It is taken the same way as the pictures
+  of figures (the sandbox, the child process killed at the deadline, the public-only proxy),
+  of the article's own page only, with its site's session when it has one, and waits its
+  turn behind the 20 seconds between pages of one site.
 - There were Calibre news recipes here until October 2026, fetching whole papers once a day.
   They went once every source had a feed: the subscriber sessions above fetch only what the
   ranking picks. Articles that came in through a recipe keep the route `recipe`.
@@ -800,7 +1051,8 @@ database with the pipeline.
   A session lasts 30 days from its last use, in an `HttpOnly`, `SameSite=Lax` cookie.
   Changing a password signs out every other browser.
 - **Newsstand.** Delivered articles grouped by issue, newest first, 14 issues to a page, in
-  the reader's time zone. Each card shows source, author, title linked to the original, lead
+  the reader's time zone. Within an issue the cards follow the book's order (the pipeline
+  records each delivery's place in it); picks shown only as links come after. Each card shows source, author, title linked to the original, lead
   image and description when the page had them, word count and reading time, how it was
   chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
   `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
@@ -830,9 +1082,13 @@ database with the pipeline.
   text to read with when they were last rewritten, a switch to keep them or not, a
   "Correct these notes" toggle that opens a box to edit them (2,000 characters at most),
   and the last 10 versions with who wrote each and a button to restore it. `/learned`, the notes' old address, leads here.
+- **Problems** (`/problems`, admins only). The articles readers reported as broken or
+  incomplete (section 7), and those the book check fixed or could not fix (section 7i) with
+  its summary and each problem it found, newest first, each with its word count and what the
+  extractor made of it.
 - **Navigation.** Every page a signed-in reader sees carries the same row of pages under the
   name: Newsstand, Archive, Reading, Sources, then for an admin Settings, Accounts and
-  Problems (with the count of reports), then the reader's name, which opens the account page. The current
+  Problems (with the count of reports and book check findings), then the reader's name, which opens the account page. The current
   page is marked. Sign out is on the account page. Below the row each page has its own
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.
@@ -896,8 +1152,10 @@ database with the pipeline.
   pages stand.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
-  icons and the health check; everything else there is 404. It is the one page meant to be
-  indexed, and it carries `Cache-Control: public, max-age=300`. Unset on an ordinary install.
+  icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
+  It carries `Cache-Control: public, max-age=300`. It and the demo hosts' three pages are the
+  only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
+  names it. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the

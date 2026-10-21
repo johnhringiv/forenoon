@@ -140,19 +140,33 @@ start_browser() {
         mkdir -p "$DATA_DIR/sessions"
         chown 1000:1000 "$DATA_DIR/sessions"
     fi
+    # Chrome's own sandbox needs a little more than Docker's default seccomp profile allows
+    # (see browser/seccomp.json). The image carries the profile; docker reads it when the
+    # container is made, so it is copied out to a temporary file for that.
+    profile=$(mktemp)
+    seccomp=""
+    if docker run --rm --entrypoint cat "$BROWSER_IMAGE" /etc/forenoon/seccomp.json >"$profile" 2>/dev/null &&
+        [ -s "$profile" ]; then
+        seccomp="--security-opt seccomp=$profile"
+    else
+        echo "no seccomp profile in $BROWSER_IMAGE: pictures of interactive figures will not be taken"
+    fi
     # Only the sessions folder and the logins volume are mounted: this container never sees
     # the database. The web pages write the cookies. The forenoon-browser volume holds what
     # its browser keeps of a sign-in, and nothing else mounts it.
-    docker run -d --name forenoon-browser --restart unless-stopped \
+    # shellcheck disable=SC2086 # $seccomp is one option and its value, or nothing
+    # --init: Chrome leaves finished processes behind for PID 1 to reap.
+    docker run -d --name forenoon-browser --restart unless-stopped --init \
         --stop-timeout 30 \
         --read-only --tmpfs /tmp \
-        --cap-drop ALL --security-opt no-new-privileges:true \
+        --cap-drop ALL --security-opt no-new-privileges:true $seccomp \
         -v "$DATA_DIR/sessions:/sessions" \
         -v forenoon-logins:/logins:ro \
         -v forenoon-browser:/browser \
         -e TZ \
         "$BROWSER_IMAGE" >/dev/null ||
         echo "browser container did not start; the rest of the deploy is unaffected"
+    rm -f "$profile"
 }
 
 start_web() {

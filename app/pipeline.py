@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from . import archive, sessions, thumbs
+import lxml.html
+
+from . import archive, bookcheck, sessions, thumbs
 from .choose import Candidate, choose
 from .config import Config, Source, User
 from .deliver import (
@@ -24,13 +28,13 @@ from .deliver import (
     send,
 )
 from .discover import is_article, read_listing, site_host, site_source
-from .extract import Extracted, extract
+from .extract import DRAWN, SHOT_ID, Extracted, extract
 from .fetch import Fetcher, FetchError
-from .images import embed_images
+from .images import SVG_ADDRESS, embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
 from .rank import LINK_WORDS, POLICY, Ranking, abstract, group_stories, subject_links
 from .rank import rank as rank_candidates
-from .read import Reading, Verdict
+from .read import ENDING_WORDS, Reading, Verdict
 from .read import read as read_candidates
 from .render import Article, IssueEntry, book_title, issue_title, render_epub, render_issue
 from .review import review as review_extractions
@@ -128,6 +132,7 @@ class RunReport:
     chosen: list[dict[str, str | bool]] = field(default_factory=list)
     deferred: list[str] = field(default_factory=list)  # left out of the issue only for variety
     retired: list[str] = field(default_factory=list)  # added links never had: now shown as links
+    book_check: str = ""  # what the book check did (app/bookcheck.py), when it is on
 
     def to_markdown(self) -> str:
         lines = [f"# Extraction report {self.started}", ""]
@@ -153,6 +158,8 @@ class RunReport:
         if self.reviews:
             counts = ", ".join(f"{n} {verdict}" for verdict, n in sorted(self.reviews.items()))
             lines += [f"Extraction check by the model: {counts}.", ""]
+        if self.book_check:
+            lines += [f"Book check: {self.book_check}.", ""]
         if self.chosen:
             lines += ["Chosen for the issue by the model, best first, then its reserves:", ""]
             for n, c in enumerate(self.chosen, 1):
@@ -243,11 +250,118 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False, reus
     return result
 
 
-def _assemble(item: Item, result: Extracted, fetcher: Fetcher, cfg: Config) -> tuple[Article | None, int]:
-    """The article as it goes in a book, with its images fetched; None when nothing was extracted."""
+MAX_FIGURE_SHOTS = 20  # pictures of interactive figures per article; each takes the browser a few seconds
+
+
+def _figure_shots(item: Item, result: Extracted, cfg: Config) -> list[tuple[lxml.html.HtmlElement, list]]:
+    """Put a picture of each interactive figure (see extract.SHOT_ID) where the page drew it,
+    as it first appears, taken by the browser container, in place of what the figure held
+    without the page's scripts; and a line saying the figure is interactive on the original
+    page. Without a picture the figure keeps its own text, with that line above it."""
+    holders = result.body.xpath(f'.//p[starts-with(@id, "{SHOT_ID}")]')
+    if not holders:
+        return []
+    numbers, total, drawn = [], 0, []
+    for holder in holders:
+        number, _, rest = holder.get("id").removeprefix(SHOT_ID).partition("-")
+        total_text, _, kind = rest.partition("-")
+        numbers.append(int(number))
+        drawn.append(kind == DRAWN)
+        total = int(total_text)
+    # Room within the article's picture budget, which SVGs (equations, mostly) do not fill.
+    photos = [img for img in result.body.iter("img") if not SVG_ADDRESS.search(img.get("src") or "")]
+    room = min(MAX_FIGURE_SHOTS, cfg.images.max_count_per_article - len(photos))
+    shots: dict[int, bytes] = {}
+    placed: list[tuple[lxml.html.HtmlElement, list]] = []
+    if room > 0:
+        site = sessions.for_url(cfg.sessions, item.url)
+        session = sessions.name(site) if site else ""
+        try:
+            shots = sessions.figure_shots(cfg.sessions_dir, session, item.url, numbers[:room], total)
+        except FetchError as exc:
+            log.info("no pictures of interactive figures for %s: %s", item.url, exc)
+    for holder, number, still in zip(holders, numbers, drawn, strict=True):
+        del holder.attrib["id"]
+        # A drawing's picture is the figure; without one, the reader is sent to the page for it.
+        holder.text = "See the figure on the " if still else "Interactive on the "
+        link = lxml.html.Element("a", href=item.url)
+        link.text = "original page"
+        link.tail = "."
+        holder.append(link)
+        figure = holder.getparent()
+        if number not in shots or figure is None or figure.tag != "figure":
+            continue
+        # What the figure held is set aside, to be put back should the picture not be kept.
+        held = [
+            (index, child, child.tail)
+            for index, child in enumerate(figure)
+            if child is not holder and child.tag != "figcaption"
+        ]
+        held_tail = holder.tail
+        for _, child, _ in held:
+            figure.remove(child)
+        holder.tail = None
+        picture = lxml.html.Element("img", src="data:image/jpeg;base64," + base64.b64encode(shots[number]).decode())
+        picture.set(
+            "alt",
+            "A figure, as the original page draws it"
+            if still
+            else "An interactive figure, as the original page first shows it",
+        )
+        holder.addprevious(picture)
+        if still:  # the picture says it all: the line comes back only should the picture go
+            holder.text, link.tail = None, None
+            holder.remove(link)
+        placed.append((picture, [holder, held_tail, held, link if still else None]))
+    return placed
+
+
+def _restore_figures(placed: list[tuple[lxml.html.HtmlElement, list]]) -> None:
+    """Put back what a figure held when its picture was not kept (it would not convert, or the
+    article's picture budget ran out): its own text, rather than nothing."""
+    for picture, (holder, held_tail, held, line) in placed:
+        if picture.getparent() is not None:
+            if line is not None and holder.getparent() is not None and not len(holder):
+                holder.drop_tree()  # a drawing's picture, kept: no line under it
+            continue
+        if line is not None:
+            holder.text, line.tail = "See the figure on the ", "."
+            holder.append(line)
+        holder.tail = held_tail
+        figure = holder.getparent()
+        for index, child, tail in held:  # in order, each back at its own place
+            child.tail = tail
+            figure.insert(index, child)
+
+
+def _assemble(
+    item: Item,
+    result: Extracted,
+    fetcher: Fetcher,
+    cfg: Config,
+    check: Callable[[Item, Extracted, list], object] | None = None,
+) -> tuple[Article | None, int]:
+    """The article as it goes in a book, with its images fetched; None when nothing was extracted.
+
+    `check` is the book check (app/bookcheck.py), which may edit `result.body`: after the
+    pictures of interactive figures, so it sees them, and before the images are fetched, so a
+    picture it puts back is fetched like the rest."""
     if result.body is None:
         return None, 0
+    placed = _figure_shots(item, result, cfg)
+    if check is not None:
+        # The pictures and their placeholders are followed into the edited article, so a
+        # picture that is not kept still gives its figure its text back.
+        held = [el for picture, (holder, *_) in placed for el in (picture, holder)]
+        moved = getattr(check(item, result, held), "moved", None)
+        if moved:
+            placed = [
+                (moved[2 * n], [moved[2 * n + 1], held_tail, kept, line])
+                for n, (_, (_, held_tail, kept, line)) in enumerate(placed)
+                if moved[2 * n] is not None and moved[2 * n + 1] is not None
+            ]
     assets, dropped = embed_images(result.body, fetcher, cfg.images)
+    _restore_figures(placed)
     article = Article(
         id=item.id,
         url=item.url,
@@ -431,6 +545,7 @@ def _chosen(
         Candidate(
             item.id, item.title, item.source.name, words.get(item.id, 0), verdicts[item.id].score,
             verdicts[item.id].reason, verdicts[item.id].lasting, story.get(item.id, ""), item.id in deferred,
+            words.get(item.id, 0) > cfg.llm.read_words,
         )
         for item in read
     ]  # fmt: skip
@@ -763,6 +878,10 @@ def run(
     places: dict[str, int] = {}  # the day's places each source has taken
     skipped: dict[str, str] = {}  # article id -> why it was passed over when its turn came
     today = day_start.astimezone(UTC).isoformat(timespec="seconds")
+    # Every article going in a book is checked by an agent against its page, when that is on.
+    checker = (
+        bookcheck.Checker.for_run(cfg, store, user, backend, today) if cfg.llm.book_check and not dry_run else None
+    )
 
     def outbound(item: Item, body) -> list[_Link]:
         if item.id in found_ids:
@@ -800,6 +919,7 @@ def run(
                     len(words),
                     " ".join(words[: cfg.llm.read_words]),
                     [{"site": k.item.site, "text": k.text, "context": k.context} for k in links_of[item.id]],
+                    " ".join(words[-ENDING_WORDS:]) if len(words) > cfg.llm.read_words else "",
                 )
             )
         verdicts = read_candidates(cfg.llm, backend, store, user, readings, today)
@@ -848,7 +968,11 @@ def run(
         if result.signed_out:
             report.sign_in_needed[site] = result.signed_out
         pictures = _pictures(result)
-        article, dropped = _assemble(item, result, fetcher, cfg)
+        verdict = verdicts.get(item.id)
+        # Not for an article that will be held back whatever the check finds.
+        held = (verdict and verdict.complete == "bad") or result.word_count > MAX_ARTICLE_WORDS
+        check = checker.check if checker is not None and not held else None
+        article, dropped = _assemble(item, result, fetcher, cfg, check)
         if article is not None and not dry_run:
             thumbs.save(cfg.thumbs_dir, item.id, pictures, fetcher)
         if not item.title:
@@ -862,7 +986,6 @@ def run(
         if result.image_url or result.description:  # else the feed's summary stays
             store.set_preview(item.id, result.image_url, result.description)
         entry = _item_report(item, result, dropped)
-        verdict = verdicts.get(item.id)
         if verdict:
             entry.review = ": ".join(filter(None, [verdict.complete, verdict.problem]))
             report.reviews[verdict.complete] = report.reviews.get(verdict.complete, 0) + 1
@@ -1103,6 +1226,8 @@ def run(
             )
         )
 
+    if checker is not None:
+        report.book_check = checker.report()
     if not dry_run and cfg.keep_pages_days > 0:
         archive.prune(cfg.pages_dir, cfg.keep_pages_days)
     if not dry_run and cfg.keep_issues_days > 0:
@@ -1118,6 +1243,9 @@ def run(
     # ratings count, and nothing is emailed. Send to Kindle still works for an address they have.
     report.no_address = not user.kindle_addresses
     report.web_only = report.no_address or not user.daily_to_kindle
+    # Each article's place in what was built, across every message: the web pages show the
+    # issue in this order, whatever the ranking recorded.
+    positions = {i: n for n, i in enumerate(i for attachment in attachments for i in attachment.article_ids)}
     if attachments:
         try:
             messages = [(None, attachments)] if report.web_only else build_messages(user, attachments, cfg.smtp)
@@ -1132,7 +1260,7 @@ def run(
                 if not dry_run:
                     if message is not None:
                         sender([message], cfg.smtp)
-                    store.mark_delivered(user.id, ids, now, story_of)
+                    store.mark_delivered(user.id, ids, now, story_of, positions=positions)
                     if cfg.keep_issues_days != 0:
                         # A copy of what was sent, for checking a book without the device.
                         cfg.issues_dir.mkdir(parents=True, exist_ok=True)

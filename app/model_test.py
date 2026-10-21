@@ -47,6 +47,7 @@ def _models(cfg: Llm) -> list[tuple[str, str]]:
         (cfg.model, "ranking"),
         (cfg.choose_model or cfg.model, "choosing"),
         (cfg.fallback_model, "fallback"),
+        (cfg.check_model if cfg.book_check else "", "the book check"),
     ):
         if model:
             uses.setdefault(model, []).append(use)

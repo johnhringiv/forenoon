@@ -81,6 +81,14 @@ jobs:
             'forenoon golden --out /tmp/out >/dev/null && python -c "import glob, zipfile; \
             names = zipfile.ZipFile(glob.glob(\"/tmp/out/*.epub\")[0]).namelist(); \
             assert {\"OEBPS/fonts/code.ttf\", \"OEBPS/fonts/emoji.ttf\"} <= set(names), names"'
+      # An SVG picture's text is drawn in the image's fonts: with none found, it would be blank.
+      - name: SVG text draws in the image's fonts
+        run: |
+          docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --entrypoint python forenoon:ci -c \
+            'import io; from PIL import Image; from app.config import Images; from app.images import _svg_png; \
+            svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"60\"><text x=\"5\" y=\"40\" font-family=\"Arial\" font-size=\"30\">Hi</text></svg>"; \
+            ink = Image.open(io.BytesIO(_svg_png(svg, Images()))).getchannel("A").getextrema()[1]; \
+            assert ink > 0, "no text drawn"'
       - uses: docker/login-action@v4
         if: env.PUBLISH == 'true'
         with:

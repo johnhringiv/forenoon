@@ -302,15 +302,18 @@ def _usage(cfg: Config, args: argparse.Namespace) -> int:
             else ""
         )
         print(
-            f"{row['created_at']}  {row['purpose']:<6} {row['model']:<20} in {row['input_tokens']:>6}{cached}"
+            f"{row['created_at']}  {row['purpose']:<10} {row['model']:<20} in {row['input_tokens']:>6}{cached}"
             f"  out {row['output_tokens']:>5}  {cost}  {row['status']} {row['error']}"
         )
     utc = ZoneInfo("UTC")
     day = datetime.now(ZoneInfo(cfg.timezone)).replace(hour=0, minute=0, second=0, microsecond=0)
     today = store.llm_usage_since(day.astimezone(utc).isoformat(timespec="seconds"))
     month = store.llm_usage_since(day.replace(day=1).astimezone(utc).isoformat(timespec="seconds"))
-    print(f"\nToday: {today['tokens']} of {cfg.llm.daily_token_cap} tokens, about ${today['cost']:.4f}.")
-    print(f"This month: {month['tokens']} tokens, about ${month['cost']:.2f}.")
+    print(f"\nToday: {today['tokens']} of {cfg.llm.daily_token_cap} tokens", end="")
+    if today["own_tokens"] or cfg.llm.book_check:
+        print(f", and the book check {today['own_tokens']} of {cfg.llm.check_daily_tokens}", end="")
+    print(f"; about ${today['cost']:.4f} in all.")
+    print(f"This month: {month['tokens'] + month['own_tokens']} tokens, about ${month['cost']:.2f}.")
     if month["free_tokens"]:
         print(
             f"Also {today['free_tokens']} today and {month['free_tokens']} this month on servers you run, at no cost."
