@@ -200,7 +200,8 @@ TRAILING_FURNITURE = re.compile(
     r"(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
     r"replies|discussion|recommended( reading| for you)?|popular|trending|read next|up next|follow us|"
     r"elsewhere|advertisement|sponsored|support us|leave a (reply|comment)( cancel reply)?|post a comment|"
-    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like|"
+    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|related (on|from) (this|the|our) (site|blog)|"
+    r"you (may|might) also like|"
     r"you may have missed|more from (the |this |our )?(blog|site|author|archive|newsletter)|popular (tags|posts|stories|articles)|back to top( of page)?)\W*$"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
@@ -616,6 +617,7 @@ def _names_word(pattern: re.Pattern, part: str) -> bool:
     return found is not None and len(part) - found.end() <= 3
 
 
+SECTION_ID_MIN = 6  # letters of a section's id that must be its heading's: "faq" says nothing
 TAILWIND_SCROLL = re.compile(r"(?:[\w-]+:)*scroll-[mp][trblxyse]?-\S+")  # "scroll-mt-24": a margin
 
 
@@ -626,11 +628,12 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
       "<h2><a href='#setup'>Setup</a></h2>"), is all link to readability, which drops a heading
       more than a third links: the link's tag goes and its text stays, when the link holds
       most of the heading and no picture.
-    - An id that only spells the heading's text ("part-2-metascience", "a-final-remark") is
-      judged by that text, not by a word in it that readability takes for furniture ("meta",
-      "remark", "tool", "header"): it goes, unless it names furniture to us too or the
-      heading is one an article ends on ("Related", "Comments") or opens with the furniture
-      word ("Tweet this").
+    - An id that only spells the heading's text ("part-2-metascience", "a-final-remark"), on
+      the heading or on a section it opens ("typing-and-tools", "meta-models"), is judged by
+      that text, not by a word in it that readability takes for furniture ("meta", "remark",
+      "tool", "sponsor"): it goes, unless it names furniture to us too or the heading is one
+      an article ends on ("Related", "Comments") or opens with the furniture word ("Tweet
+      this"). A heading starting "References" or "Sources" is the author's whatever follows.
     - A Tailwind scroll margin ("scroll-mt-24") is not a scrolling widget: it goes.
     - The box a real table scrolls in ("table-scroll"), holding the table alone, loses the
       name readability holds against it."""
@@ -661,17 +664,22 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
             inner = len(" ".join(a.text_content().split()))
             if href.startswith("#") and unquote(href[1:]) in own and not a.xpath(MEDIA_XPATH) and inner * 2 > len(text):
                 a.drop_tag()
-        anchor = heading.get("id") or ""
-        if (
-            anchor
-            and (negative.search(anchor) or unlikely.search(anchor))
-            and _slug(anchor) == _slug(text)
-            and not FURNITURE_CLASS.search(anchor)
+        # The ids that spell the heading, on it or on the sections it opens: PEP 810's
+        # <section id="typing-and-tools">, fortran-lang's "sponsors", goodfire's "meta-models".
+        title = _slug(text)
+        article_heading = (
+            bool(title)
             and not TRAILING_FURNITURE.match(_norm(text))
             and not any(p.fullmatch(text.split()[0]) for p in (negative, unlikely))
-            and not _furniture_lead(heading)
-        ):
-            heading.attrib.pop("id", None)
+            and (not _furniture_lead(heading) or REFERENCES_HEADING.match(_norm(text)))
+        )
+        for el in opened if article_heading else ():
+            anchor = el.get("id") or ""
+            key = _slug(anchor)
+            spells = key == title if el is heading else len(key) >= SECTION_ID_MIN and (key in title or title in key)
+            ours = FURNITURE_CLASS.search(anchor) and not REFERENCES_HEADING.match(_norm(text))
+            if spells and (negative.search(anchor) or unlikely.search(anchor)) and not ours:
+                el.attrib.pop("id", None)
         names = (heading.get("class") or "").split()
         if any(TAILWIND_SCROLL.fullmatch(name) for name in names):
             heading.set("class", " ".join(name for name in names if not TAILWIND_SCROLL.fullmatch(name)))
@@ -700,30 +708,40 @@ def _slug(text: str) -> str:
 def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
     """Unwrap the box a code block sits in when it holds nothing else but empty buttons and
     links (a highlighter's "copy"): readability deletes any box with under 25 letters, so a
-    one-line block ("trait Magic: Copy { }") went with its box. A <pre> on its own stays."""
+    one-line block ("trait Magic: Copy { }") went with its box. A <pre> on its own stays.
+    Each box out is unwrapped in turn: Jekyll and Sphinx nest two (div.highlighter-rouge >
+    div.highlight > pre)."""
     for pre in list(root.iter("pre")):
-        box = pre.getparent()
-        if box is None or box is root or box.tag != "div" or (box.text or "").strip() or (pre.tail or "").strip():
-            continue
-        others = [child for child in box if child is not pre]
-        names = _names(box)
-        if (
-            FURNITURE_CLASS.search(names)
-            or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names)
-            or CODE_BOX_FURNITURE.search(names)
-        ):
-            continue
-        if all(
-            isinstance(child.tag, str)
-            and child.tag in ("button", "a", "span", "svg")
-            and not " ".join(child.text_content().split())
-            and not child.xpath(MEDIA_XPATH)
-            and not (child.tail or "").strip()
-            for child in others
-        ):
-            for child in others:
-                child.drop_tree()
-            box.drop_tag()
+        while _free_code_block(root, pre):
+            pass
+
+
+def _free_code_block(root: lxml.html.HtmlElement, pre: lxml.html.HtmlElement) -> bool:
+    """Unwrap the box around one code block; whether it did."""
+    box = pre.getparent()
+    if box is None or box is root or box.tag != "div" or (box.text or "").strip() or (pre.tail or "").strip():
+        return False
+    others = [child for child in box if child is not pre]
+    names = _names(box)
+    if (
+        FURNITURE_CLASS.search(names)
+        or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names)
+        or CODE_BOX_FURNITURE.search(names)
+    ):
+        return False
+    if all(
+        isinstance(child.tag, str)
+        and child.tag in ("button", "a", "span", "svg")
+        and not " ".join(child.text_content().split())
+        and not child.xpath(MEDIA_XPATH)
+        and not (child.tail or "").strip()
+        for child in others
+    ):
+        for child in others:
+            child.drop_tree()
+        box.drop_tag()
+        return True
+    return False
 
 
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
@@ -2420,6 +2438,9 @@ def _furniture_lead(lead: lxml.html.HtmlElement) -> bool:
 def _led_in(ul: lxml.html.HtmlElement) -> bool:
     """Whether a paragraph introduces the list: it ends in a colon ("…please at least:"), or it
     is the whole of a short reference heading set as a paragraph ("References")."""
+    heading = _heading_over(ul)
+    if heading is not None and REFERENCES_HEADING.match(_norm(heading.text_content())):
+        return True  # "References and related work", over the list
     before = _lead(ul)
     if before is None:
         return False
@@ -2430,6 +2451,9 @@ def _led_in(ul: lxml.html.HtmlElement) -> bool:
 
 
 LEAD_HEADING_CHARS = 40
+REFERENCES_HEADING = re.compile(
+    r"\W*(references?|sources|bibliography|citations|works cited|further reading|see also)\b"
+)
 # The names of boxes a site keeps its own lists in.
 LIST_BOX = re.compile(
     r"recommend|more-stories|river|taboola|outbrain|partner|social|signup|sign-up|newsletter|follow|share",
@@ -2680,7 +2704,8 @@ class _Document(Document):
         if lead is not None and _furniture_lead(lead):
             return False
         heading = _heading_over(ul)
-        if heading is not None and _furniture_lead(heading):
+        references = heading is not None and REFERENCES_HEADING.match(_norm(heading.text_content()))
+        if heading is not None and _furniture_lead(heading) and not references:
             return False
         says = _own_chars(ul) >= LIST_OWN_CHARS
         if _led_in(ul):
