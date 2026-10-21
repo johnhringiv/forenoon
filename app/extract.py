@@ -208,6 +208,11 @@ REFILL_HEADING = re.compile(
     r"see also|resources|more resources|reading list|links|technical references|"
     r"notes (and|&) references|references (and|&) notes)\W*$"
 )
+TAGS_LINE = re.compile(r"(tags|tagged|filed under|topics|categories)\s*:", re.IGNORECASE)
+VIA_LINE = re.compile(r"via\b", re.IGNORECASE)
+VIA_MAX_WORDS = 6
+FOOTER_LINK_SHARE = 0.6  # of a tags line's letters after its label, in links
+FEED_POST_FOOTER = re.compile(r"the post .{1,300} appeared first on .{1,200}$", re.IGNORECASE)
 LINK_LIST_SHARE = 0.9  # of a section's letters in links, as in a list of tags or share buttons
 LINK_LIST_WORDS = 1.25  # the most words such a list's links have on average: one, mostly
 
@@ -2871,6 +2876,23 @@ def _drop_trailing_headings(body: lxml.html.HtmlElement) -> None:
         heading.drop_tree()
 
 
+def _drop_feed_footers(body: lxml.html.HtmlElement) -> None:
+    """Remove the lines a feed entry ends with that are about the post, not of it: its tags
+    ("Tags: ai, llms", mostly links), where it was found ("Via Hacker News"), and WordPress's
+    "The post … appeared first on …". Only at the very end, and only lines of those shapes."""
+    blocks = [el for el in body.iter("p", "div") if not len(el.xpath(".//p | .//div"))]
+    for block in reversed(blocks):
+        text = " ".join(block.text_content().split())
+        if not text:
+            continue
+        links = sum(len(" ".join(a.text_content().split())) for a in block.iter("a"))
+        tags = TAGS_LINE.match(text) and links >= FOOTER_LINK_SHARE * len(text.split(":", 1)[1])
+        via = VIA_LINE.match(text) and _words(text) <= VIA_MAX_WORDS and block.find(".//a") is not None
+        if not (tags or via or FEED_POST_FOOTER.match(text)):
+            break
+        block.drop_tree()
+
+
 def _plain_blocks(el: lxml.html.HtmlElement) -> bool:
     """Whether an element is paragraphs, lists, tables and the like, or a wrapper of only
     those: what a section of an article is made of, unlike a box of buttons and links."""
@@ -3191,6 +3213,7 @@ def extract(
     else:
         method = max(counts, key=counts.get)
     body, words = candidates[method], counts[method]
+    _drop_feed_footers(body)
     _drop_trailing_headings(body)
     words = _words(body.text_content())
     if page_html:

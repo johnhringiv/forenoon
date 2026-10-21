@@ -3093,3 +3093,21 @@ def test_nested_objects_give_one_picture_with_a_short_alt():
     extract_module._object_pictures(root)
     (img,) = root.iter("img")
     assert len(img.get("alt")) <= extract_module.ALT_CHARS
+
+
+def test_a_feed_entrys_footer_lines_are_not_the_post():
+    body = lxml.html.fromstring(
+        "<div><p>The post itself, a sentence or two about the thing it links to.</p>"
+        "<p>Tags: <a href='/t/ai'>ai</a>, <a href='/t/llms'>llms</a>, <a href='/t/python'>python</a></p>"
+        "<p>Via <a href='https://news.ycombinator.com/item?id=1'>Hacker News</a></p>"
+        "<p>The post <a href='/p'>A title</a> appeared first on <a href='/'>A Site</a>.</p></div>"
+    )
+    extract_module._drop_feed_footers(body)
+    assert [" ".join(p.text_content().split()) for p in body.iter("p")] == [
+        "The post itself, a sentence or two about the thing it links to."
+    ]
+    # Only at the end, and only those shapes: a sentence about tags or "via" stays.
+    kept = "<div><p>Tags: the ones I use most are ai and llms, as the archive shows.</p><p>Via a friend, I learned this.</p></div>"
+    body = lxml.html.fromstring(kept)
+    extract_module._drop_feed_footers(body)
+    assert len(body.findall("p")) == 2

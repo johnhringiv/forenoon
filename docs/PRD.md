@@ -433,6 +433,10 @@ All fetched content is treated as untrusted.
   dropped figures alike.
 - **Preferred-source badge.** A link holding only a picture, to a Google preferred-source page
   or a Google News publication page (asking readers to pick the site as a source), is removed.
+- **Feed footers.** The lines a feed entry ends with about the post rather than of it are
+  removed from the end of the article: a tags line ("Tags:", "Filed under:", "Topics:",
+  "Categories:", mostly links), a short "Via …" line with a link, and WordPress's "The post …
+  appeared first on …". Only at the very end, and only lines of those shapes.
 - **Lead paragraph.** If the page's description is visible on the page but missing from the
   extracted body (a standfirst in the page header), it is added in italics at the top.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt
@@ -715,7 +719,8 @@ Sonnet 5.5).
 - **Only an Anthropic model**: the check needs tool use with pictures, through Anthropic's own
   client and key. With any other model the check is skipped and the run report says why.
 - **What it is given**, all marked as untrusted data whose instructions are to be ignored: the
-  title, source, address and word count; the article as numbered blocks (paragraphs,
+  title, source, address and word count, and which copy the article is (the site's feed entry
+  or the web page); the article as numbered blocks (paragraphs,
   headings, lists, quotes, code, figures, tables and notes, each with its HTML; an embedded
   picture is written `picture:N`), whole up to 30,000 characters and shortened after, each
   shortened block marked as such with the tool that shows it, so a listing that stops is not
@@ -735,6 +740,11 @@ Sonnet 5.5).
   kinds are cut short, missing content, page furniture, broken media, formatting, wrong
   article and other. Blocks are numbered afresh after each edit, and the edit's answer lists
   the blocks around it with their new numbers.
+- **The feed's copy.** When the article is the feed's copy (it has 85% of the page's words,
+  section 4), it is told that feeds often leave out what the page shows around the text
+  (pictures and captions, embedded posts, notes), to look for those on the page and restore
+  them when they are the article's: of an embedded post, its author and text, without its
+  counts of views, replies, reposts or likes, its buttons or its "Read more".
 - **What it may do.** It is told to edit only to restore what the page has or remove what is
   not the article, and never to rewrite, summarise or add to the author's text; to restore with
   `insert_from_page` or `replace_from_page`, so the page's links, emphasis, heading levels and
