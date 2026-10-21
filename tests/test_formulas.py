@@ -63,7 +63,7 @@ def test_mathml_without_tex_is_written_as_well_as_it_can_be():
 def test_mathematical_letters_become_letters_the_kindle_has():
     math = "<math><mi>𝒜</mi><mo>∈</mo><msup><mi>ℝ</mi><mi>n</mi></msup><mo>,</mo><mi>𝐱</mi></math>"
     out = body_html(page(f"<p>Take {math} here.</p>"))
-    assert "Take <i>A</i> ∈ ℝ<sup><i>n</i></sup>, <b>x</b> here." in out
+    assert "Take A ∈ ℝ<sup><i>n</i></sup>, <b>x</b> here." in out
 
 
 def test_tex_the_page_renders_becomes_text():
@@ -134,6 +134,15 @@ def test_mathjax_2_script_is_read_and_its_drawing_dropped():
         ("\\frac{(a)+(b)}{c}", "((<i>a</i>)+(<i>b</i>))/<i>c</i>"),
         ("\\overline{AB}", "<i>A\u0305B\u0305</i>"),
         ("L_\\text{VLB}", "<i>L</i><sub>VLB</sub>"),
+        ("{\\frac{1}{2}}mv^2", "(1/2)<i>mv</i><sup>2</sup>"),
+        ("\\frac{1}{2}(a+b)", "(1/2)(<i>a</i> + <i>b</i>)"),
+        ("\\frac{1}{n}\\sum x_i", "(1/<i>n</i>)∑ <i>x</i><sub><i>i</i></sub>"),
+        ("\\left(\\frac{a}{b}\\right)^2", "(<i>a</i>/<i>b</i>)<sup>2</sup>"),
+        ("x = -\\frac{1}{2}", "<i>x</i> = −1/2"),
+        ("\\infty - n", "∞ − <i>n</i>"),
+        ("x \\in \\R", "<i>x</i> ∈ ℝ"),
+        ("E = mc^2 \\tag{1}", "<i>E</i> = <i>mc</i><sup>2</sup> (1)"),
+        ("a \\xrightarrow{f} b", "<i>a</i> →<sup><i>f</i></sup> <i>b</i>"),
     ],
 )
 def test_tex_is_written_in_a_line(source, written):
@@ -222,3 +231,46 @@ def test_hostile_pages_stay_fast(body):
     started = time.monotonic()
     body_html(page(body, MATHJAX))
     assert time.monotonic() - started < 10
+
+
+def test_latexml_invisible_times_does_not_join_a_fraction_to_the_next_term():
+    math = (
+        "<math><mrow><mfrac><mn>1443</mn><mn>8192</mn></mfrac><mo>\u2062</mo>"
+        "<msup><mi>d</mi><mn>3</mn></msup></mrow></math>"
+    )
+    out = body_html(page(f"<p>It grows as {math} here.</p>"))
+    assert "grows as (1443/8192)<i>d</i><sup>3</sup> here." in out
+
+
+def test_script_letters_stay_apart_from_italic_ones():
+    out = body_html(page("<p>Both <math><mi>G</mi><mo>,</mo><mi>𝒢</mi></math> appear.</p>"))
+    assert "Both <i>G</i>, G appear." in out
+
+
+def test_tex_after_a_display_box_is_written_too():
+    loose = "<div><p>\\[y = Wx\\]</p>where \\(x\\) is the input to the layer and \\(y\\) its output.</div>"
+    out = body_html(page(loose, MATHJAX))
+    assert "<p>where <i>x</i> is the input to the layer and <i>y</i> its output.</p>" in out
+
+
+def test_wikipedia_formulas_are_text_or_their_picture_not_both():
+    def formula(mathml, tex):
+        return (
+            f'<span class="mwe-math-element"><span class="mwe-math-mathml-a11y" style="display: none;">'
+            f'<math alttext="{tex}">{mathml}</math></span><img src="https://wikimedia.org/x.svg" '
+            f'class="mwe-math-fallback-image-inline" alt="{tex}"></span>'
+        )
+
+    simple = formula("<mi>&#946;</mi><mo>=</mo><mn>1</mn>", "\\beta = 1")
+    matrix = formula("<mtable><mtr><mtd><mi>a</mi></mtd></mtr></mtable>", "\\begin{pmatrix}a\\end{pmatrix}")
+    out = body_html(page(f"<p>Set {simple} and take {matrix} as given.</p>"))
+    assert "Set β = 1 and take" in out
+    assert out.count("<img") == 1 and "<code>" not in out
+
+
+def test_hostile_regexes_stay_linear():
+    started = time.monotonic()
+    formulas.page_tex('<script>MathJax={tex:{macros:{ RR: "' + "\\" * 5000 + "x</script>")
+    formulas.page_tex("katex \\newcommand" + " " * 200_000)
+    formulas.page_tex("katex <script>MathJax={tex:{macros:{" + "a" * 20_000 + "}}}</script>")
+    assert time.monotonic() - started < 2

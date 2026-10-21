@@ -68,7 +68,7 @@ OPERATORS = {
     "approx": "≈", "sim": "∼", "simeq": "≃", "equiv": "≡", "cong": "≅", "propto": "∝",
     "in": "∈", "notin": "∉", "ni": "∋", "subset": "⊂", "subseteq": "⊆", "supset": "⊃",
     "supseteq": "⊇", "ll": "≪", "gg": "≫", "perp": "⊥", "parallel": "∥", "models": "⊨",
-    "vdash": "⊢", "coloneqq": "≔", "to": "→", "rightarrow": "→", "longrightarrow": "→",
+    "vdash": "⊢", "coloneqq": ":=", "coloneq": ":=", "to": "→", "rightarrow": "→", "longrightarrow": "→",
     "leftarrow": "←", "gets": "←", "longleftarrow": "←", "leftrightarrow": "↔",
     "Rightarrow": "⇒", "implies": "⇒", "Longrightarrow": "⇒", "Leftarrow": "⇐",
     "Leftrightarrow": "⇔", "iff": "⇔", "mapsto": "↦", "uparrow": "↑", "downarrow": "↓",
@@ -83,6 +83,7 @@ OPERATORS = {
     "bigvee": "⋁", "bigwedge": "⋀", "Re": "ℜ", "Im": "ℑ", "triangle": "△", "square": "□",
     "odot": "⊙", "dagger": "†", "ddagger": "‡", "S": "§", "colon": ":", "lt": "<", "gt": ">",
 }  # fmt: skip
+KATEX_LETTERS = {"R": "ℝ", "N": "ℕ", "Z": "ℤ", "Q": "ℚ", "C": "ℂ", "reals": "ℝ", "Reals": "ℝ", "natnums": "ℕ"}
 ESCAPES = {"{": "{", "}": "}", "%": "%", "$": "$", "&": "&", "#": "#", "_": "_", "|": "‖"}
 SPACES = {",": 0.17, ":": 0.22, ";": 0.28, ">": 0.22, " ": 0.33, "quad": 1.0, "qquad": 2.0, "!": -0.17}
 FUNCTIONS = {
@@ -201,7 +202,7 @@ def _unmath(char: str) -> tuple[str, str]:
         return plain, "b"
     if "ITALIC" in name:
         return plain, "i"
-    return plain, ""
+    return plain, "u"  # script, fraktur, sans-serif: upright, so 𝒢 does not read as the italic G beside it
 
 
 class _Writer:
@@ -289,29 +290,39 @@ class _Writer:
             self.row(_kids(node), out, script, depth)
 
     def row(self, kids: list, out: _Out, script: bool, depth: int) -> None:
+        kids = [_unwrapped(k) for k in kids]
+        heard = [not _quiet(k) for k in kids]
+        # The neighbours that are read, past invisible times and thin spaces: one pass each way.
+        afters: list = [None] * len(kids)
+        following = None
+        for n in range(len(kids) - 1, -1, -1):
+            afters[n] = following
+            following = kids[n] if heard[n] else following
+        before = None
         for n, kid in enumerate(kids):
-            following = [k for k in kids[n + 1 :] if not (_local(k.tag) == "mspace" and _em(k.get("width", "")) <= 0.1)]
-            after = following[0] if following else None
+            after = afters[n]
             if _local(kid.tag) == "mo":
-                self.operator(kid, kids[n - 1] if n else None, after, out, script)
-                continue
-            before = kids[n - 1] if n else None
-            term_next = after is not None and _local(after.tag) != "mo"
-            term_before = before is not None and _local(before.tag) not in ("mo", "mspace")
-            if _local(kid.tag) == "mfrac" and (term_next or term_before):
-                out.text("(")  # (1/2)mv², not 1/2mv²
-                self.write(kid, out, script, depth + 1)
-                out.text(")")
-            elif _local(kid.tag) == "msqrt" and term_next:
-                kid.set("data-closed", "true")  # √(2)x, not √2x
-                self.write(kid, out, script, depth + 1)
+                self.operator(kid, before, after, out, script)
             else:
-                self.write(kid, out, script, depth + 1)
-            # log₂ as LaTeXML writes it, the script on nothing after the name, takes the space after it
-            named = _named(kid) or (_empty_base(kid) and before is not None and _named(before))
-            named = named and after is not None and _local(after.tag) != "mo"
-            if named and not _starts_with_fence(after) and not _empty_base(after):
-                out.text(" ")  # a function's argument: "log n", but "log(n)" and "log₂"
+                self.term(kid, before, after, out, script, depth)
+            before = kid if heard[n] else before
+
+    def term(self, kid, before, after, out: _Out, script: bool, depth: int) -> None:
+        tag = _local(kid.tag)
+        if tag == "mfrac" and (_term(after) or _term(before, before=True)):
+            out.text("(")  # (1/2)mv², not 1/2mv²
+            self.write(kid, out, script, depth + 1)
+            out.text(")")
+        elif tag in ("msqrt", "mroot") and _term(after):
+            kid.set("data-closed", "true")  # √(2)x, not √2x
+            self.write(kid, out, script, depth + 1)
+        else:
+            self.write(kid, out, script, depth + 1)
+        # log₂ as LaTeXML writes it, the script on nothing after the name, takes the space after it
+        named = _named(kid) or (_empty_base(kid) and before is not None and _named(before))
+        named = named and after is not None and _local(after.tag) != "mo"
+        if named and not _starts_with_fence(after) and not _empty_base(after):
+            out.text(" ")  # a function's argument: "log n", but "log(n)" and "log₂"
 
     def operator(self, node, before, after, out: _Out, script: bool) -> None:
         text = "".join(node.itertext()).strip()
@@ -331,13 +342,10 @@ class _Writer:
         elif text in RELATIONS:
             out.text(f" {text} ")
         elif text in BINARY:
+            # A sign after nothing, an operator or an opening bracket; otherwise between two terms.
+            previous = "".join(before.itertext()).strip() if before is not None and _local(before.tag) == "mo" else None
             prefix = (
-                before is None
-                or node.get("form") == "prefix"
-                or (
-                    _local(before.tag) == "mo"
-                    and "".join(before.itertext()).strip() not in (")", "]", "}", "!", "′", "|")
-                )
+                before is None or node.get("form") == "prefix" or (previous is not None and _operator_like(previous))
             )
             out.text(text if prefix else f" {text} ")
         elif text in (",", ";"):
@@ -377,7 +385,7 @@ class _Writer:
                 char, style = _style(variant, char)
             if not style and italic and char.isascii() and char.isalpha():
                 style = "i"
-            out.styled(char, style)
+            out.styled(char, "" if style == "u" else style)
 
     def scripts(self, tag: str, node, kids: list, out: _Out, script: bool, depth: int) -> None:
         wanted = {"msub": 2, "msup": 2, "msubsup": 3, "munder": 2, "mover": 2, "munderover": 3}[tag]
@@ -397,8 +405,9 @@ class _Writer:
             )
             if not limits:
                 return self.fallback(node, out, script, depth)
+        relation = _local(base.tag) == "mo" and base_text in RELATIONS and not script  # a →ᶠ b
         if _local(base.tag) == "mo":
-            out.text(base_text)
+            out.text(f" {base_text}" if relation else base_text)
         else:
             self.write(base, out, script, depth + 1)
         under = rest[0] if tag in ("msub", "msubsup", "munder", "munderover") else None
@@ -407,7 +416,7 @@ class _Writer:
             self.write(under, out.child("sub"), True, depth + 1)
         if over is not None:
             self.write(over, out.child("sup"), True, depth + 1)
-        if base_text in BIG and not script:
+        if (base_text in BIG or relation) and not script:
             out.text(" ")
 
     def accent(self, base, accent: str, out: _Out, script: bool, depth: int) -> None:
@@ -467,6 +476,49 @@ def _named(node) -> bool:
         node = _kids(node)[0]
     text = "".join(node.itertext()).strip()
     return _local(node.tag) == "mi" and len(text) > 1 and text.isalpha()
+
+
+SCRIPTS = ("msub", "msup", "msubsup", "munder", "mover", "munderover")
+
+
+def _operator_like(text: str) -> bool:
+    """An operator's text that leaves the next sign a prefix: =, +, (, a comma, ∑."""
+    opening = text in OPENING and text not in ("|", "‖")
+    return text in RELATIONS or text in BINARY or text in BIG or text in (",", ";") or opening
+
+
+def _quiet(node) -> bool:
+    """Nothing to read: invisible times and function application, a thin space."""
+    tag = _local(node.tag)
+    if tag == "mo":
+        return "".join(node.itertext()).strip() in INVISIBLE
+    return tag == "mspace" and _em(node.get("width", "")) <= 0.1
+
+
+def _unwrapped(node):
+    """A group of one, as \\displaystyle and {…} make it, read as that one: {\\frac12}x is (1/2)x."""
+    while _local(node.tag) in ("mrow", "mstyle") and not node.get("mathvariant"):
+        kids = _kids(node)
+        if len(kids) != 1:
+            break
+        node = kids[0]
+    return node
+
+
+def _term(node, before: bool = False) -> bool:
+    """A neighbour a fraction would run into: a letter, a number, a bracket, ∑; not an operator."""
+    if node is None:
+        return False
+    while _local(node.tag) in SCRIPTS and _kids(node):  # x², and ")²" where TeX puts the power
+        node = _kids(node)[0]
+    if _local(node.tag) != "mo":
+        return True
+    text = "".join(node.itertext()).strip()
+    if text in RELATIONS or text in BINARY or text in (",", ";", ".", ":", "!", "") or text in INVISIBLE:
+        return False
+    if before:
+        return text not in OPENING and text not in BIG
+    return text not in CLOSING or text in ("|", "‖")
 
 
 def _empty_base(node) -> bool:
@@ -762,6 +814,13 @@ class _Parser:
             return _el("mspace", width=f"{SPACES[name]}em")
         if name == "\\":
             raise Unsupported("line break")
+        if name in KATEX_LETTERS:
+            return _el("mi", KATEX_LETTERS[name], mathvariant="normal")
+        if name == "tag":
+            return _el("mtext", f" ({self.text(self.group_text())})")
+        if name in ("xrightarrow", "xleftarrow"):
+            self.optional()
+            return _wrap("msup", _el("mo", "→" if name == "xrightarrow" else "←"), self.arg())
         if name in GREEK:
             return _el("mi", GREEK[name], mathvariant="" if name[0].islower() else "normal")
         if name in OPERATORS:
@@ -999,13 +1058,13 @@ def tex_table(tex: str):
 
 RENDERER = re.compile(r"mathjax|katex|latex-rendered", re.IGNORECASE)
 SINGLE_DOLLAR = re.compile(r"""\[\s*\\?['"]\$\\?['"]\s*,\s*\\?['"]\$\\?['"]\s*\]|left\s*:\s*\\?['"]\$\\?['"]""")
-DEFINITION = re.compile(r"\\(?:re|provide)?newcommand\*?\s*\{?\s*\\([A-Za-z]+)\s*\}?\s*(?:\[(\d)\])?\s*(?=\{)")
+DEFINITION = re.compile(r"\\(?:re|provide)?newcommand\*?\s*(?:\{\s*)?\\([A-Za-z]+)\s*(?:\}\s*)?(?:\[(\d)\]\s*)?(?=\{)")
 DEF = re.compile(r"\\def\s*\\([A-Za-z]+)\s*(?=\{)")
 PAIRED_DEFINITION = re.compile(r"\\DeclarePairedDelimiters?\s*\{\s*\\([A-Za-z]+)\s*\}\s*(?=\{)")
 OPERATOR_DEFINITION = re.compile(r"\\DeclareMathOperator\*?\s*\{\s*\\([A-Za-z]+)\s*\}\s*(?=\{)")
 CONFIG_MACROS = re.compile(r"macros\s*:\s*\{")
 CONFIG_MACRO = re.compile(
-    r"""(?:["'](?:\\\\|\\)?)?(\w+)["']?\s*:\s*(?:\[\s*)?(["'])((?:\\.|(?!\2).){0,1000})\2(?:\s*,\s*(\d))?"""
+    r"""(?<![\w\\])(?:["'](?:\\\\|\\)?)?(\w+)["']?\s*:\s*(?:\[\s*)?(["'])((?:\\.|(?!\2)[^\\]){0,1000})\2(?:\s*,\s*(\d))?"""
 )
 
 
@@ -1127,7 +1186,9 @@ def rewrite(root, tex: Tex | None = None) -> None:
             continue
         classes = set((box.get("class") or "").split())
         tag = _local(box.tag)
-        if "katex" in classes or tag == "mjx-container":
+        if "mwe-math-element" in classes:
+            _wikipedia(box)
+        elif "katex" in classes or tag == "mjx-container":
             math = next((m for m in box.iter() if _local(m.tag) == "math"), None)
             if math is not None:
                 _swap(box, math)
@@ -1140,6 +1201,21 @@ def rewrite(root, tex: Tex | None = None) -> None:
         tex.converted = 0  # the page and its feed copy are written apart
         _raw_tex(root, tex)
     _code_blocks(root)
+
+
+def _wikipedia(box) -> None:
+    """Wikipedia: hidden MathML beside a picture of the formula. Text when it reads in a line,
+    else the picture alone (its TeX is its alt text)."""
+    math = next((m for m in box.iter() if _local(m.tag) == "math"), None)
+    if math is None:
+        return
+    try:
+        holder = mathml_html(math)
+    except Exception:  # noqa: BLE001 - Unsupported, or hostile markup: the picture stays
+        hidden = math.getparent()
+        (hidden if hidden is not box else math).drop_tree()
+        return
+    _replace(box, holder)
 
 
 def _swap(box, math) -> None:
@@ -1315,6 +1391,36 @@ def _split(el, which: str, tex: Tex) -> None:
         for child in children:
             previous.addnext(child)
             previous = child
+    if children and _local(container.tag) in BARE and not any(_local(c.tag) == "p" for c in children):
+        _paragraph(el, which, container)
+
+
+BARE = {"div", "section", "article", "main", "body", "aside", "figure"}
+PHRASING = {
+    "a", "span", "em", "i", "b", "strong", "code", "sub", "sup", "small", "abbr", "cite", "q",
+    "mark", "s", "u", "kbd", "samp", "var", "br", "img", "del", "ins", "time", "font", "tt",
+}  # fmt: skip
+
+
+def _paragraph(el, which: str, container) -> None:
+    """Text with a formula in it, loose in a box beside paragraphs, becomes a paragraph of its own.
+
+    Picking the article splits such a run at its elements and loses the start; as plain TeX it
+    had none. The run goes as far as the next block, as a browser shows it.
+    """
+    if not any(_local(k.tag) not in PHRASING for k in _kids(container)):
+        return  # the box is the paragraph
+    para = lxml.html.Element("p")
+    if which == "text":
+        para.text, el.text = el.text, None
+        while len(el) and _local(el[0].tag) in PHRASING:
+            para.append(el[0])
+        el.insert(0, para)
+    else:
+        para.text, el.tail = el.tail, None
+        while el.getnext() is not None and _local(el.getnext().tag) in PHRASING:
+            para.append(el.getnext())
+        el.addnext(para)
 
 
 CONTAINERS = {"div", "section", "article", "main", "body", "blockquote", "figure", "aside", "dd", "td", "th", "li"}
@@ -1350,4 +1456,6 @@ def _own_block(el, source: str, tex: Tex) -> bool:
             block.append(child)
     block.tail = box.tail
     box.getparent().replace(box, block)
+    if block.tail:  # "where \(x\) is real" after the display: the walk has passed this box
+        _split(block, "tail", tex)
     return True

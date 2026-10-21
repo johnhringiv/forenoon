@@ -353,8 +353,10 @@ All fetched content is treated as untrusted.
     formulas, so a price in dollars is left alone). Letters are italic, exponents and indices
     `<sup>` and `<sub>`, fractions `a/b` and roots `√`; the page's own TeX macros are expanded.
     A formula that does not read in one line (a matrix, cases) keeps its TeX source once, in
-    `<code>`. A TeX array of plain cells (a results table typeset as math) becomes a table. A
-    display formula between paragraphs is a paragraph of its own.
+    `<code>` (a code block when it is alone on its line). A TeX array of plain cells (a results
+    table typeset as math) becomes a table. A display formula, or a formula alone in its box, is
+    a paragraph of its own. Wikipedia's formulas are text where they read in a line, and its
+    picture of the formula otherwise.
   - Lists that are part of the text are kept though they are mostly links (the main-content
     step drops such lists as menus): one a sentence introduces ("…please at least:"), or a
     short paragraph such as "References", "Sources" or "See also", or whose items say
