@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM builtin_sections WHERE user_id = ? AND builtin = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fa0ee94d74bbc17e1c262c6c7c4fa0678416063cbde01a17ff358515e40a648f"
+}

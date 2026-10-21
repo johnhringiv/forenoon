@@ -107,6 +107,8 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                 entries = [IssueEntry(article, _feedback_links(cfg, user, article.id, now)) for article in articles]
                 book = render_issue(entries, now, title=first.title, cover=cover)
             attachment = Attachment(safe_filename(first.title), book, tuple(ids))
+            if not store.is_reader(user.id):  # deleted while the book was being made
+                raise ValueError("the account was deleted")
             sender([message for message, _ in build_messages(user, [attachment], cfg.smtp)], cfg.smtp)
             if fresh:
                 result = rebuilt[0][1]
@@ -124,6 +126,9 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                     False,
                     None,
                 )
+            if not store.is_reader(user.id):  # deleted while the book was sent: its links must not count
+                store.forget_reader(user.id)
+                raise ValueError("the account was deleted")
         except Exception as exc:  # noqa: BLE001 - one bad request must not block the rest
             log.warning("send request %s failed: %s", request["id"], exc)
             store.finish_send(request["id"], "failed", str(exc)[:300])

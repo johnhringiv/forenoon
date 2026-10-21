@@ -12,7 +12,7 @@
 <label>Name <input name="name" value="{{ row.name }}" maxlength="80" required></label>
 <label class="wide">Feed address <input name="address" value="{{ row.address }}" maxlength="2000" required></label>
 <label>Take the text from <select name="extract">{% for choice in row.extract %}<option value="{{ choice.key }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}</select></label>
-<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{% if row.daily_max > 0 %}{{ row.daily_max }}{% endif %}" placeholder="No limit"></label>
 {% endif %}
 {% if row.followed %}<label class="tick"><input type="checkbox" name="pinned" value="1"{% if row.pinned %} checked{% endif %}> Pinned</label>{% endif %}
 {% if row.can_edit && admin %}<label class="tick"><input type="checkbox" name="enabled" value="1"{% if row.enabled %} checked{% endif %}> Fetch it for the household (untick to pause)</label>{% endif %}

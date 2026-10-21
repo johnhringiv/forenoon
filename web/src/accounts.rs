@@ -4,7 +4,7 @@
 //! password, and the address gets a link that works for a week, once. Opening it is the only
 //! way in: there is no sign-up page, and the account cannot sign in until the reader has
 //! chosen a password on the join page. An admin can send the link again or take the
-//! invitation back, which removes the account.
+//! invitation back, which removes the account, and can delete any joined account but their own.
 
 use std::str::FromStr;
 
@@ -48,6 +48,8 @@ struct Row {
     /// "Added 3 October 2026", or how the invitation stands.
     state: String,
     invited: bool,
+    /// The viewing admin's own account, which they cannot delete.
+    yours: bool,
 }
 
 #[derive(Template)]
@@ -88,6 +90,7 @@ async fn rows(state: &AppState, viewer: &User) -> Result<Vec<Row>, AppError> {
             let kindle = db::kindle_line(&user);
             Row {
                 invited: user.invited_at.is_some(),
+                yours: user.id == viewer.id,
                 id: user.id,
                 name: user.name,
                 role: user.role,
@@ -142,6 +145,7 @@ pub async fn page(
     }
     let notice = match query.saved.as_deref() {
         Some("revoked") => Some("Invitation taken back; the account is gone.".to_owned()),
+        Some("deleted") => Some("Account deleted.".to_owned()),
         _ => None,
     };
     let shown = Shown { status: StatusCode::OK, error: None, notice, link: None, typed: None };
@@ -336,6 +340,33 @@ pub async fn revoke(
         return refused(StatusCode::NOT_FOUND, "That is not an open invitation.");
     }
     Ok(Redirect::to("/accounts?saved=revoked").into_response())
+}
+
+/// Delete a joined account with everything recorded for it. Never the admin's own, so an
+/// install always keeps an admin. Its sessions end with it: a signed-in browser finds no
+/// account behind its cookie.
+pub async fn delete(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> Page {
+    let user = reader(&auth)?;
+    if !user.is_admin() {
+        return refused(StatusCode::FORBIDDEN, ADMINS_ONLY);
+    }
+    if !allowed(&headers, &session, &form.csrf).await? {
+        return refused(StatusCode::FORBIDDEN, NOT_FROM_HERE);
+    }
+    if id == user.id {
+        return refused(StatusCode::BAD_REQUEST, "You cannot delete your own account.");
+    }
+    if !db::delete_user(&state.pool, &id, &user.id).await? {
+        return refused(StatusCode::NOT_FOUND, "There is no such account. An invitation is taken back instead.");
+    }
+    Ok(Redirect::to("/accounts?saved=deleted").into_response())
 }
 
 // the join page, reached from the emailed link

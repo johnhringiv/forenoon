@@ -640,7 +640,7 @@ def _discover(
         src = reports[source.name] = SourceReport(source.name)
         report.sources.append(src)
         try:
-            items = read_listing(key, fetcher, cutoff, source)
+            items = read_listing(key, fetcher, cutoff, source, cfg.discovery.sections.get(key, ()))
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: listing failed: %s", source.name, exc)
@@ -1258,6 +1258,9 @@ def run(
             for message, group in messages:
                 ids = [i for attachment in group for i in attachment.article_ids]
                 if not dry_run:
+                    if not store.is_reader(user.id):  # checked before each message of a split book
+                        log.info("%s: the account was deleted during the run; nothing more sent", user.id)
+                        break
                     if message is not None:
                         sender([message], cfg.smtp)
                     store.mark_delivered(user.id, ids, now, story_of, positions=positions)

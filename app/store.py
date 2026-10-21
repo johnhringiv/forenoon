@@ -266,6 +266,25 @@ class Store:
 
     # readers (owned and edited by the web app; see web/migrations)
 
+    def is_reader(self, user_id: str) -> bool:
+        """Whether this account still exists and has joined: an admin can delete one mid-run.
+
+        True before the web app has made its tables, where readers come from elsewhere."""
+        if not self._has_table("users"):
+            return True
+        row = self.db.execute("SELECT 1 FROM users WHERE id = ? AND invited_at IS NULL", (user_id,)).fetchone()
+        return row is not None
+
+    def forget_reader(self, user_id: str) -> None:
+        """Delete what a run wrote for an account deleted while it ran, as the web app deletes
+        the rest; otherwise a later account with the same id would inherit it."""
+        tables = ["deliveries", "selections", "assessments", "ratings", "feedback_events", "book_checks"]
+        if self._has_table("profile_history"):
+            tables.append("profile_history")
+        with self.db:
+            for table in tables:
+                self.db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+
     def readers(self) -> tuple[User, ...]:
         """Every reader with their delivery settings; none until the web app has made an account."""
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
@@ -305,11 +324,15 @@ class Store:
         return datetime.fromisoformat(row["learned_at"]) if row and row["learned_at"] else None
 
     def set_learned(self, user_id: str, notes: str, when: datetime, changed: bool = True) -> None:
-        """Store the notes and when they were written; a changed text also goes in the history."""
+        """Store the notes and when they were written; a changed text also goes in the history.
+
+        Nothing for an account deleted meanwhile."""
         stamp = when.astimezone(UTC).isoformat(timespec="seconds")
         with self.db:
-            self.db.execute("UPDATE users SET learned = ?, learned_at = ? WHERE id = ?", (notes, stamp, user_id))
-            if changed:
+            found = self.db.execute(
+                "UPDATE users SET learned = ?, learned_at = ? WHERE id = ?", (notes, stamp, user_id)
+            ).rowcount
+            if changed and found:
                 self.db.execute(
                     "INSERT INTO profile_history (user_id, notes, author, created_at) VALUES (?, ?, 'agent', ?)",
                     (user_id, notes, stamp),
@@ -396,6 +419,31 @@ class Store:
         )
         followed = {row["builtin"] for row in rows}
         return tuple(key for key in sites if key in followed)
+
+    def builtin_sections(self, user_id: str) -> dict[str, tuple[str, ...]]:
+        """The parts of each built-in source this reader reads, by key, as they chose them on
+        the Sources page; a source missing from it is read by its front page."""
+        if not self._has_table("builtin_sections"):
+            return {}
+        # A Lobsters tag the site no longer has is left out: asked for, it fails the whole listing.
+        rows = self.db.execute(
+            "SELECT builtin, section FROM builtin_sections WHERE user_id = ?"
+            " AND (builtin != 'lobsters' OR section = 'front' OR section IN (SELECT tag FROM lobsters_tags))"
+            " ORDER BY builtin, section",
+            (user_id,),
+        )
+        sections: dict[str, tuple[str, ...]] = {}
+        for row in rows:
+            sections[row["builtin"]] = (*sections.get(row["builtin"], ()), row["section"])
+        return sections
+
+    def replace_lobsters_tags(self, tags: list[tuple[str, str, str]]) -> None:
+        """The Lobsters tags readers may choose, as the site lists them now."""
+        if not self._has_table("lobsters_tags"):
+            return  # the web app has not been upgraded yet
+        with self.db:
+            self.db.execute("DELETE FROM lobsters_tags")
+            self.db.executemany("INSERT INTO lobsters_tags (tag, category, description) VALUES (?, ?, ?)", tags)
 
     def builtin_daily_max(self) -> dict[str, int]:
         """The most of a day's places each built-in source may take, by key; 0 for no limit."""

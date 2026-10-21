@@ -15,8 +15,8 @@ from zoneinfo import ZoneInfo
 
 from .alerts import notify, notify_run
 from .config import Config, ConfigError, for_reader, from_env, with_settings
-from .discover import SITES
-from .fetch import Fetcher
+from .discover import SITES, lobsters_tags
+from .fetch import Fetcher, FetchError
 from .llm import backend_from_env
 from .pipeline import run, triage
 from .store import Store
@@ -46,6 +46,17 @@ def load(store: Store | None = None) -> Config:
             store.close()
 
 
+def _refresh_lobsters_tags(store: Store, fetcher: Fetcher, dry_run: bool) -> None:
+    """Once a run for the household: the tags readers choose from, and read by, follow the site's."""
+    try:
+        tags = lobsters_tags(fetcher)
+    except FetchError as exc:
+        log.warning("Lobsters: list of tags not read, the last one kept: %s", exc)
+        return
+    if not dry_run:
+        store.replace_lobsters_tags(tags)
+
+
 def _run_all(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     fetcher = Fetcher(cfg.user_agent, store)
@@ -60,18 +71,23 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
                 notify(cfg, "nothing delivered", ["There are no sources. Add some on the Sources page."])
             return 1
         users = [cfg.user(args.user)] if args.user else cfg.users
+        if "lobsters" in cfg.discovery.sites:
+            _refresh_lobsters_tags(store, fetcher, args.dry_run)
         if not users:
             log.error("no readers: create an account with `forenoon-web add-user <id>`")
             if not args.dry_run:
                 notify(cfg, "nothing delivered", ["There are no readers. Create an account in the web pages."])
             return 1
         for user in users:
+            if not store.is_reader(user.id):
+                log.info("%s: the account was deleted; skipped", user.id)
+                continue
             # Each reader's own: the feeds and built-in front pages they follow.
             sites = store.followed_builtins(user.id, cfg.discovery.sites)
             own = dataclasses.replace(
                 for_reader(cfg, user),
                 sources=store.sources(user.id),
-                discovery=dataclasses.replace(cfg.discovery, sites=sites),
+                discovery=dataclasses.replace(cfg.discovery, sites=sites, sections=store.builtin_sections(user.id)),
             )
             if not own.sources and not sites:
                 log.error("%s follows no sources; follow some on the Sources page", user.id)
@@ -82,10 +98,18 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             try:
                 report = run(own, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out, backend=backend)
             except Exception as exc:
+                if not args.dry_run and not store.is_reader(user.id):
+                    log.info("%s: the account was deleted during the run; its rows are dropped", user.id)
+                    store.forget_reader(user.id)
+                    continue
                 log.exception("run crashed for %s", user.id)
                 if not args.dry_run:
                     notify(cfg, "run crashed", [f"User {user.id}: {type(exc).__name__}: {exc}", "See the logs."])
                 failed += 1
+                continue
+            if not args.dry_run and not store.is_reader(user.id):
+                log.info("%s: the account was deleted during the run; its rows are dropped", user.id)
+                store.forget_reader(user.id)
                 continue
             path = report.write(cfg.data_dir / "reports")
             print(report.to_markdown())
@@ -382,7 +406,8 @@ def _replay(cfg: Config, args: argparse.Namespace) -> int:
 def _golden(args: argparse.Namespace) -> int:
     from .golden import golden_epub
 
-    # With a feedback URL and a reader the footer links are real, so taps can be tested.
+    # With a feedback URL and a reader the footer links are real, so taps can be tested; the
+    # web app answers them for the article id "golden" and records nothing.
     links = None
     cfg = from_env()
     if cfg.public_base_url and cfg.db_path.exists():

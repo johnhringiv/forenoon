@@ -130,6 +130,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/sources/{id}/delete", post(sources::delete))
         .route("/sources/{id}/toggle", post(sources::toggle))
         .route("/sources/{id}/follow", post(sources::set_follow))
+        .route("/sources/{id}/sections", post(sources::set_sections))
         .route("/sources/follow-new", post(sources::set_follow_new))
         .route("/sources/sessions", post(sources::set_session))
         .route("/sources/sessions/delete", post(sources::remove_session))
@@ -138,6 +139,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/accounts", get(accounts::page).post(accounts::invite))
         .route("/accounts/{id}/resend", post(accounts::resend))
         .route("/accounts/{id}/revoke", post(accounts::revoke))
+        .route("/accounts/{id}/delete", post(accounts::delete))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.
         .route_layer(middleware::from_fn(pages::require_login))

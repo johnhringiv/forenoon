@@ -14,7 +14,7 @@ from lxml import etree
 from PIL import Image
 
 from app.config import Config, Llm, Smtp, Source, User
-from app.fetch import Fetcher
+from app.fetch import Fetcher, FetchError
 from app.pipeline import run, triage
 from app.store import Store
 from app.tokens import verify_token
@@ -1300,6 +1300,154 @@ def test_discovery_looks_back_as_far_as_the_age_limit_and_takes_new_stories_firs
     assert "hitsPerPage=1000" in more and "attributesToRetrieve=" in more
 
 
+def test_each_reader_is_read_by_their_own_lobsters_tags_after_the_list_is_refreshed(tmp_path, monkeypatch):
+    import argparse
+
+    from app import cli
+
+    for name, value in {"FORENOON_DATA_DIR": str(tmp_path), "FORENOON_ANTHROPIC_API_KEY": ""}.items():
+        monkeypatch.setenv(name, value)
+    store = Store(tmp_path / "forenoon.sqlite3")
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    for user in ("ann", "bob"):
+        store.db.execute(
+            "INSERT INTO users (id, name, password_hash, role, email, created_at) VALUES (?, ?, 'x', 'reader', ?, 'x')",
+            (user, user, f"{user}@example.com"),
+        )
+        store.db.execute(
+            "INSERT INTO follows (user_id, source_id, pinned, created_at, chosen)"
+            " SELECT ?, id, 0, 'x', 1 FROM sources WHERE builtin = 'lobsters'",
+            (user,),
+        )
+    chosen = [("ann", "rust"), ("ann", "databases"), ("bob", "front"), ("bob", "zig")]
+    store.db.executemany("INSERT INTO builtin_sections (user_id, builtin, section) VALUES (?, 'lobsters', ?)", chosen)
+    store.db.commit()
+    store.close()
+    # Lobsters has since dropped databases.
+    live = [(tag, "languages", "") for tag in ("rust", "zig", *(f"t{n}" for n in range(25)))]
+    monkeypatch.setattr(cli, "lobsters_tags", lambda fetcher: live)
+    monkeypatch.setattr(cli, "backend_from_env", lambda llm: None)
+    monkeypatch.setattr(cli, "notify", lambda *a, **k: None)
+    read = {}
+
+    def run(cfg, store, fetcher, user, **kw):
+        read[user.id] = cfg.discovery.sections
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(cli, "run", run)
+    cli._run_all(cli.load(), argparse.Namespace(user=None, dry_run=False, out=None))
+    assert read == {"ann": {"lobsters": ("rust",)}, "bob": {"lobsters": ("front", "zig")}}
+
+
+def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_path):
+    from app import cli
+    from app.discover import lobsters_tags, read_listing
+
+    asked = []
+    # Most without the fields the site might stop sending: kept all the same.
+    tags = [{"tag": f"t{n}", "category": "languages", "description": ""} for n in range(25)]
+    tags += [
+        {
+            "tag": "rust",
+            "category": "languages",
+            "description": "Rust  programming",
+            "active": True,
+            "privileged": False,
+        },
+        {"tag": "video", "category": "format", "description": "Video", "active": True, "privileged": False},
+        {"tag": "news", "category": "genre", "description": "Old", "active": False, "privileged": False},
+        {"tag": "announce", "category": "lobsters", "description": "Site", "active": True, "privileged": True},
+        {"tag": "../x", "category": "languages", "description": "", "active": True, "privileged": False},
+        {"tag": "front", "category": "genre", "description": "", "active": True, "privileged": False},
+        {"tag": "node.js", "category": "languages", "description": "", "active": True, "privileged": False},
+    ]
+
+    def site(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        asked.append(url)
+        if url.endswith("/tags.json"):
+            return httpx.Response(200, json=tags)
+        if "/t/" in url:
+            stories = [
+                {"title": "Voted", "url": "https://a.example/voted", "score": 9, "created_at": "2026-03-05T08:00:00Z"},
+                {
+                    "title": "Brand new",
+                    "url": "https://a.example/new",
+                    "score": 1,
+                    "created_at": "2026-03-05T09:00:00Z",
+                },
+            ]
+            return httpx.Response(200, json=stories if "/page/" not in url else [])
+        return httpx.Response(200, json=[{"title": "Hot", "url": "https://a.example/hot", "score": 1}])
+
+    fetcher = Fetcher("test", None, min_host_interval=0, transport=httpx.MockTransport(site))
+    # Tags alone: their listing, newest first, and only stories with a few votes; no front page.
+    items = read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("rust", "c++", "../x"))
+    assert [i.title for i in items] == ["Voted"]
+    assert asked == ["https://lobste.rs/t/rust,c%2B%2B.json", "https://lobste.rs/t/rust,c%2B%2B/page/2.json"]
+    asked.clear()
+    items = read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("front", "rust"))
+    assert [i.title for i in items] == ["Hot", "Voted"], "the front page takes any story, first"
+    # The reader's tags before the front page's further pages: the per-site cap cuts those first.
+    assert [url.removeprefix("https://lobste.rs/") for url in asked] == [
+        "hottest.json", "t/rust.json", "t/rust/page/2.json", "page/2.json", "page/3.json"
+    ]  # fmt: skip
+    asked.clear()
+    read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("../x",))
+    assert asked[0] == "https://lobste.rs/hottest.json", "no usable tag: the front page"
+
+    # The tags a reader may choose are the site's subjects as it lists them now.
+    offered = lobsters_tags(fetcher)
+    assert ("rust", "languages", "Rust programming") in offered
+    assert not {"video", "news", "announce", "../x", "front", "node.js"} & {tag for tag, _, _ in offered}
+    tags[:] = tags[:3]
+    with pytest.raises(FetchError, match="only 3 tags"):
+        lobsters_tags(fetcher)
+
+    # Refreshed once a run; a tag the site dropped is not asked for, as it fails the listing.
+    store = Store(tmp_path / "forenoon.sqlite3")
+    store.replace_lobsters_tags([("rust", "languages", "")])  # before the web app's upgrade: nothing to do
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.executemany(
+        "INSERT INTO builtin_sections (user_id, builtin, section) VALUES ('mary', 'lobsters', ?)",
+        [("front",), ("rust",), ("databases",)],
+    )
+    store.db.commit()
+    assert store.builtin_sections("mary") == {"lobsters": ("databases", "front", "rust")}
+    store.replace_lobsters_tags([("rust", "languages", "Rust programming")])
+    assert store.builtin_sections("mary") == {"lobsters": ("front", "rust")}
+    assert store.builtin_sections("john") == {}
+    cli._refresh_lobsters_tags(store, fetcher, dry_run=False)  # the list now looks broken: kept
+    assert [r[0] for r in store.db.execute("SELECT tag FROM lobsters_tags")] == ["rust"]
+
+
+def test_a_readers_tags_reach_the_listing_and_its_failure_counts_for_the_site(env, monkeypatch):
+    from app import pipeline
+    from app.config import Discovery
+
+    cfg, store, fetcher = env
+    asked = []
+
+    def failing(key, fetcher, since, source, sections):
+        asked.append((key, sections))
+        raise FetchError("not found")
+
+    monkeypatch.setattr(pipeline, "read_listing", failing)
+    health = "SELECT failures FROM source_health WHERE source = 'Lobsters'"
+    for sections, failures in ((("rust",), 1), (("front", "rust"), 2)):
+        discovery = Discovery(sites=("lobsters",), sections={"lobsters": sections})
+        own = dataclasses.replace(_llm_cfg(cfg), sources=(), discovery=discovery)
+        user = dataclasses.replace(own.users[0], daily_cap=4)
+        report = run(own, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend({}))
+        lobsters = next(s for s in report.sources if s.name == "Lobsters")
+        assert asked[-1] == ("lobsters", sections) and lobsters.feed_error == "not found"
+        row = store.db.execute(health).fetchone()
+        # A stale tag is never asked for, so a tags-only listing fails only when the site does.
+        assert row["failures"] == failures
+
+
 def test_a_post_dated_before_it_appeared_is_not_lost(env):
     """A feed we already follow lists, for the first time, a post dated five days ago."""
     cfg, store, fetcher = env
@@ -1873,3 +2021,98 @@ def test_a_drawn_figure_gets_its_picture_with_no_note_or_the_note_alone(env, mon
             assert "<img" not in out and out.count(note) == 2
         else:  # the first is drawn, with no note under it; the second points to the page
             assert out.count("<img") == 1 and out.count(note) == 1
+
+
+def test_a_reader_deleted_during_the_run_is_sent_nothing(env):
+    """The web app's accounts table exists but john is not in it: an admin deleted him mid-run."""
+    cfg, store, fetcher = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: pytest.fail("must not send"))
+    assert report.delivered == []
+    assert store.db.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("crashed", [False, True])
+def test_the_daily_run_skips_readers_deleted_before_their_turn_and_drops_one_deleted_during_it(
+    env, monkeypatch, crashed
+):
+    import argparse
+
+    from app import cli
+    from app.pipeline import RunReport
+
+    cfg, store, _ = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    add = "INSERT INTO users (id, name, password_hash, created_at) VALUES (?, ?, 'x', ?)"
+    store.db.executemany(add, [("john", "John", "1"), ("mary", "Mary", "2")])
+    store.db.execute("INSERT INTO sources (name, url, created_at) VALUES ('Blog', 'https://blog.example/feed', 'x')")
+    store.db.execute(
+        "INSERT INTO follows (user_id, source_id, created_at) SELECT u.id, s.id, 'x' FROM users u, sources s WHERE s.name = 'Blog'"
+    )
+    store.db.commit()
+    ran, alerts = [], []
+
+    def deleting_run(own, store, fetcher, user, **_):
+        # An admin deletes both accounts while John's run goes on; it has written a delivery.
+        ran.append(user.id)
+        store.upsert_article("a1", "https://blog.example/1", "Blog", "Post", "", None)
+        store.mark_delivered(user.id, ["a1"], NOW)
+        store.db.execute("DELETE FROM users")
+        store.db.commit()
+        if crashed:
+            raise AssertionError("must not be reported")
+        return RunReport(started="x", user=user.id)
+
+    monkeypatch.setattr(cli, "run", deleting_run)
+    monkeypatch.setattr(cli, "backend_from_env", lambda llm: None)
+    monkeypatch.setattr(cli, "notify", lambda cfg, *a: alerts.append(a))
+    monkeypatch.setattr(cli, "notify_run", lambda cfg, report: alerts.append(report))
+    args = argparse.Namespace(user=None, dry_run=False, out=None)
+    assert cli._run_all(cfg, args) == 0
+    assert ran == ["john"] and alerts == [], "Mary is skipped; neither raises an alert"
+    assert store.db.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+    assert not (cfg.data_dir / "reports").exists()
+
+
+def test_a_book_in_several_messages_stops_when_the_reader_is_deleted_after_the_first(env):
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(cfg, smtp=dataclasses.replace(cfg.smtp, max_message_bytes=12_000))
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    store.db.commit()
+    sent = []
+
+    def deleting(msgs, smtp):
+        sent.extend(msgs)
+        store.db.execute("DELETE FROM users")
+        store.db.commit()
+
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=deleting)
+    assert report.messages > 1 and len(sent) == 1
+
+
+def test_a_send_to_kindle_for_an_account_deleted_while_it_went_out_leaves_nothing(env):
+    from app.resend import send_requested
+
+    cfg, store, fetcher = env
+    delivered = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None).delivered[0]
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses) VALUES ('john', 'John', 'x', 'x', 'john@kindle.com')"
+    )
+    store.db.execute(
+        "INSERT INTO send_requests (user_id, article_id, requested_at) VALUES ('john', ?, 'x')", (delivered,)
+    )
+    store.db.commit()
+
+    def deleting(msgs, smtp):
+        store.db.execute("DELETE FROM users")
+        store.db.commit()
+
+    assert send_requested(cfg, store, fetcher, now=NOW, sender=deleting) == 0
+    for table in ("deliveries", "selections"):
+        assert store.db.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id = 'john'").fetchone()[0] == 0, table
