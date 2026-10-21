@@ -126,6 +126,9 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                     False,
                     None,
                 )
+            if not store.is_reader(user.id):  # deleted while the book was sent: its links must not count
+                store.forget_reader(user.id)
+                raise ValueError("the account was deleted")
         except Exception as exc:  # noqa: BLE001 - one bad request must not block the rest
             log.warning("send request %s failed: %s", request["id"], exc)
             store.finish_send(request["id"], "failed", str(exc)[:300])

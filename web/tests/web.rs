@@ -3102,15 +3102,46 @@ async fn an_admin_deletes_an_account_with_everything_recorded_for_it() {
             .await
             .unwrap();
     }
-    sqlx::query("INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict) VALUES ('m1', 'mary', 'now', 'm', 'fixed')")
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE sources SET added_by = 'mary' WHERE id = (SELECT MIN(id) FROM sources)")
-        .execute(pool)
-        .await
-        .unwrap();
+    // One row of everything else recorded for Mary (deliveries, ratings and follows are there already).
+    sqlx::raw_sql(
+        "INSERT INTO selections (user_id, article_id, selected_at, policy) VALUES ('mary', 'm1', 'now', 'rank-v2');
+         INSERT INTO assessments (user_id, article_id, assessed_at, score) VALUES ('mary', 'm1', 'now', 4);
+         INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict) VALUES ('m1', 'mary', 'now', 'm', 'fixed');
+         INSERT INTO send_requests (user_id, article_id, requested_at) VALUES ('mary', 'm1', 'now');
+         INSERT INTO add_requests (user_id, url, action, requested_at) VALUES ('mary', 'https://blog.example/x', 'next', 'now');
+         INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES ('mary', 'm1', 'now');
+         INSERT INTO profile_history (user_id, notes, author, created_at) VALUES ('mary', 'Likes boats.', 'reader', 'now');
+         INSERT INTO email_tokens (token_hash, user_id, purpose, email, expires_at, created_at)
+             VALUES ('h', 'mary', 'reset', 'mary@example.com', 'later', 'now');
+         INSERT INTO sessions (domain, created_at, saved_by) VALUES ('paper.example', 'now', 'mary');
+         UPDATE sources SET added_by = 'mary' WHERE id = (SELECT MIN(id) FROM sources);",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     let count = |sql: &'static str| async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap() };
+    let tables = [
+        "deliveries",
+        "selections",
+        "assessments",
+        "book_checks",
+        "ratings",
+        "feedback_events",
+        "send_requests",
+        "add_requests",
+        "refresh_requests",
+        "profile_history",
+        "follows",
+        "email_tokens",
+    ];
+    // A rating link in a book she was sent counts while she has the account.
+    let link = format!("/f/{}", forenoon_web::feedback::make(FEEDBACK_SECRET, "mary", "m1", "r5", 4_000_000_000));
+    assert_eq!(Browser::default().get(&site, &link).await.status, StatusCode::OK);
+    assert_eq!(count("SELECT rating FROM ratings WHERE user_id = 'mary'").await, 5);
+    for table in tables {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE user_id = 'mary'");
+        assert!(sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await.unwrap() > 0, "{table}");
+    }
 
     // The page offers it for others' joined accounts, never the admin's own.
     let page = john.get(&site, "/accounts").await;
@@ -3133,10 +3164,11 @@ async fn an_admin_deletes_an_account_with_everything_recorded_for_it() {
     assert_eq!(deleted.location, "/accounts?saved=deleted", "{}", deleted.text);
     assert!(john.get(&site, &deleted.location).await.text.contains("Account deleted."));
     assert!(auth::find_user(pool, "mary").await.unwrap().is_none());
-    assert_eq!(count("SELECT COUNT(*) FROM deliveries WHERE user_id = 'mary'").await, 0);
-    assert_eq!(count("SELECT COUNT(*) FROM ratings WHERE user_id = 'mary'").await, 0);
-    assert_eq!(count("SELECT COUNT(*) FROM follows WHERE user_id = 'mary'").await, 0);
-    assert_eq!(count("SELECT COUNT(*) FROM book_checks WHERE user_id = 'mary'").await, 0);
+    for table in tables {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE user_id = 'mary'");
+        assert_eq!(sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await.unwrap(), 0, "{table}");
+    }
+    assert_eq!(count("SELECT COUNT(*) FROM sessions WHERE saved_by = 'john'").await, 1);
     assert_eq!(count("SELECT COUNT(*) FROM ratings WHERE user_id = 'john'").await, 1);
     assert_eq!(count("SELECT COUNT(*) FROM articles WHERE id = 'm1'").await, 1);
     assert_eq!(count("SELECT COUNT(*) FROM sources WHERE added_by = 'mary'").await, 0);
@@ -3146,8 +3178,7 @@ async fn an_admin_deletes_an_account_with_everything_recorded_for_it() {
     let after = mary.get(&site, "/").await;
     assert!(after.status == StatusCode::SEE_OTHER && after.location.starts_with("/login"), "{}", after.location);
 
-    // A rating link in a book she already has records nothing, so a later "mary" inherits nothing.
-    let link = format!("/f/{}", forenoon_web::feedback::make(FEEDBACK_SECRET, "mary", "m1", "r5", 4_000_000_000));
+    // The same link now records nothing, so a later "mary" inherits nothing.
     let tapped = Browser::default().get(&site, &link).await;
     assert!(
         tapped.status == StatusCode::NOT_FOUND && tapped.text.contains("not sent to an account"),

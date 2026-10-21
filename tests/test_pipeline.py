@@ -1926,3 +1926,45 @@ def test_the_daily_run_skips_readers_deleted_before_their_turn_and_drops_one_del
     assert ran == ["john"] and alerts == [], "Mary is skipped; neither raises an alert"
     assert store.db.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
     assert not (cfg.data_dir / "reports").exists()
+
+
+def test_a_book_in_several_messages_stops_when_the_reader_is_deleted_after_the_first(env):
+    cfg, store, fetcher = env
+    cfg = dataclasses.replace(cfg, smtp=dataclasses.replace(cfg.smtp, max_message_bytes=12_000))
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    store.db.commit()
+    sent = []
+
+    def deleting(msgs, smtp):
+        sent.extend(msgs)
+        store.db.execute("DELETE FROM users")
+        store.db.commit()
+
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=deleting)
+    assert report.messages > 1 and len(sent) == 1
+
+
+def test_a_send_to_kindle_for_an_account_deleted_while_it_went_out_leaves_nothing(env):
+    from app.resend import send_requested
+
+    cfg, store, fetcher = env
+    delivered = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: None).delivered[0]
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, kindle_addresses) VALUES ('john', 'John', 'x', 'x', 'john@kindle.com')"
+    )
+    store.db.execute(
+        "INSERT INTO send_requests (user_id, article_id, requested_at) VALUES ('john', ?, 'x')", (delivered,)
+    )
+    store.db.commit()
+
+    def deleting(msgs, smtp):
+        store.db.execute("DELETE FROM users")
+        store.db.commit()
+
+    assert send_requested(cfg, store, fetcher, now=NOW, sender=deleting) == 0
+    for table in ("deliveries", "selections"):
+        assert store.db.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id = 'john'").fetchone()[0] == 0, table

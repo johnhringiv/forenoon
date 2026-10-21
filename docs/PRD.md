@@ -1035,8 +1035,9 @@ database with the pipeline.
   sent stop recording anything, even if a later account is given the same id (a link counts
   only for an article delivered to that account). The articles stay, since other readers share them, and the
   sources and site logins it added pass to the admin who deleted it; the run reports in the
-  data folder keep its id. A daily run, Send to Kindle or added link already under way when it
-  is deleted sends it nothing and drops or refuses what it would have written. There is no
+  data folder, and the copies of books kept there, keep its id. A daily run, Send to Kindle or
+  added link already under way when it is deleted sends it nothing more than a message already
+  going out, and drops or refuses what it would have written. There is no
   undo.
 - **Sign-in is by email address**, stored lowercase so casing and stray spaces cannot make
   two accounts of one address. The account id is separate and never changes: it names the
