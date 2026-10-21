@@ -109,14 +109,18 @@ def test_the_model_sees_the_article_as_numbered_blocks_and_the_pages_text_as_unt
     assert "[1] <p>First." in first and "[3] <p>Subscribe to our newsletter</p>" in first
     assert '"words": 60' in first and URL in first
     # Which copy it is: a feed's often lacks the page's pictures and embedded posts.
-    assert f'"copy": "{"the site's feed entry" if result.method == "feed" else "the web page"}"' in first
-    assert "feeds often leave out" in request["system"][0]["text"]
+    assert '"copy": "the web page"' in first and "feeds often leave out" in request["system"][0]["text"]
     # The page's words, without its scripts, styles or navigation.
     page = first.split("<page_text")[1]
     assert "Third and last." in page and "never shown" not in page and "color: red" not in page
     assert "Home · About" not in page
     assert _rows(store)[0]["verdict"] == "ok" and _rows(store)[0]["edits"] == "[]"
     assert _html(result) == BODY, "nothing to fix: nothing changed"
+    # A feed's copy is named so.
+    checker, client, result = make(_reply(_finish()))
+    result.method = "feed"
+    checker.check(item, result)
+    assert '"copy": "the site\'s feed entry"' in client.asked[0]["messages"][0]["content"]
 
 
 def test_edits_are_applied_through_the_allowlist_and_logged_as_problems(check):

@@ -2885,8 +2885,10 @@ def _drop_feed_footers(body: lxml.html.HtmlElement) -> None:
         text = " ".join(block.text_content().split())
         if not text:
             continue
+        if block.xpath("following::text()[normalize-space()] | following::img"):
+            break  # something of the article's follows ("Via Daring Fireball:" and its quote)
         links = sum(len(" ".join(a.text_content().split())) for a in block.iter("a"))
-        tags = TAGS_LINE.match(text) and links >= FOOTER_LINK_SHARE * len(text.split(":", 1)[1])
+        tags = TAGS_LINE.match(text) and links and links >= FOOTER_LINK_SHARE * len(text.split(":", 1)[1])
         via = VIA_LINE.match(text) and _words(text) <= VIA_MAX_WORDS and block.find(".//a") is not None
         if not (tags or via or FEED_POST_FOOTER.match(text)):
             break

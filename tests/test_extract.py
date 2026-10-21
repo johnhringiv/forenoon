@@ -3111,3 +3111,8 @@ def test_a_feed_entrys_footer_lines_are_not_the_post():
     body = lxml.html.fromstring(kept)
     extract_module._drop_feed_footers(body)
     assert len(body.findall("p")) == 2
+    # A link post's "Via …:" with its quote after it is the post's.
+    quoted = "<div><p>Via <a href='https://df.example/'>Daring Fireball</a>:</p><blockquote>The quote itself.</blockquote></div>"
+    body = lxml.html.fromstring(quoted)
+    extract_module._drop_feed_footers(body)
+    assert "Daring Fireball" in body.text_content()
