@@ -348,8 +348,8 @@ All fetched content is treated as untrusted.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
   - Formulas are written once, as text: MathML, KaTeX and MathJax output, and TeX that the
-    page renders in the browser (between `$$…$$`, `\[…\]` and `\(…\)`, and `$…$` where the
-    page's settings turn it on; only on a page that loads MathJax or KaTeX, or Substack's
+    page renders in the browser (between `$$…$$`, `\[…\]` and `\(…\)`, an undelimited
+    `\begin{align}…\end{align}` and the like, and `$…$` where the page's settings turn it on; only on a page that loads MathJax or KaTeX, or Substack's
     formulas, so a price in dollars is left alone). Letters are italic, exponents and indices
     `<sup>` and `<sub>`, fractions `a/b` and roots `√`; the page's own TeX macros are expanded.
     A formula that does not read in one line (a matrix, cases) keeps its TeX source once, in
