@@ -2626,6 +2626,17 @@ class _Document(Document):
                 and sub.find(".//a") is None
             ):
                 allowed[sub] = True
+        # A short code block in a box with its label ("stdout" over "Capacity: 42"): code is not
+        # dropped for its length, as readability already spares it from its furniture names.
+        for box in self.tags(node, "div", "section"):
+            if (
+                box not in allowed
+                and box.find(".//pre") is not None
+                and len(" ".join(box.text_content().split())) < self.min_text_length
+                and self.class_weight(box) >= 0
+                and not FURNITURE_CLASS.search(_names(box))
+            ):
+                allowed[box] = True
         # A line of the article in a box of its own, where the page boxes each paragraph
         # (AsciiDoc's div.paragraph, Gleam's blog): short, or with a link, it read as furniture.
         for box in self.tags(node, "div"):
