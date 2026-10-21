@@ -1595,6 +1595,10 @@ async fn each_reader_chooses_the_front_page_and_tags_of_lobsters() {
     let lobsters = sources.iter().find(|s| s.builtin == "lobsters").unwrap();
     let hn = sources.iter().find(|s| s.builtin == "hackernews").unwrap();
     let path = format!("/sources/{}/sections", lobsters.id);
+    sqlx::query("INSERT INTO builtin_sections (user_id, builtin, section) VALUES ('john', 'lobsters', 'go')")
+        .execute(&site.pool)
+        .await
+        .unwrap();
 
     let form = [("csrf", csrf.as_str()), ("section", "rust"), ("section", "databases"), ("section", "nosuchtag")];
     assert_eq!(mary.post(&site, &path, &form).await.location, "/sources?saved=sections");
@@ -1606,7 +1610,8 @@ async fn each_reader_chooses_the_front_page_and_tags_of_lobsters() {
         .await
         .unwrap()
     };
-    assert_eq!(chosen().await, ["mary:databases", "mary:rust"], "only tags Lobsters has; others' choices untouched");
+    let saved = ["john:go", "mary:databases", "mary:rust"];
+    assert_eq!(chosen().await, saved, "only tags Lobsters has; others' choices untouched");
     let page = mary.get(&site, "/sources").await;
     assert!(page.text.contains(r#"<span class="tag">2 tags</span>"#));
     assert!(page.text.contains(r#"<input type="checkbox" name="section" value="front">"#));
@@ -1618,7 +1623,7 @@ async fn each_reader_chooses_the_front_page_and_tags_of_lobsters() {
     assert!(page.text.contains("No longer on Lobsters") && page.text.contains(r#"<span class="tag">1 tag</span>"#));
     let form = [("csrf", csrf.as_str()), ("section", "front"), ("section", "rust"), ("section", "databases")];
     mary.post(&site, &path, &form).await;
-    assert_eq!(chosen().await, ["mary:front", "mary:rust"]);
+    assert_eq!(chosen().await, ["john:go", "mary:front", "mary:rust"]);
 
     // Nothing ticked is refused: unfollowing is how a reader stops reading it.
     let reply = mary.post(&site, &path, &[("csrf", &csrf)]).await;
@@ -1627,7 +1632,15 @@ async fn each_reader_chooses_the_front_page_and_tags_of_lobsters() {
     let form = [("csrf", csrf.as_str()), ("section", "rust")];
     assert_eq!(mary.post(&site, &hn_path, &form).await.status, StatusCode::NOT_FOUND, "Hacker News has no tags");
     assert_eq!(mary.post(&site, &path, &[("csrf", "wrong"), ("section", "go")]).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(chosen().await, ["mary:front", "mary:rust"]);
+    assert_eq!(chosen().await, ["john:go", "mary:front", "mary:rust"]);
+
+    // Every tag a reader chose gone: the front page is read, as the pipeline does, and shown so.
+    mary.post(&site, &path, &[("csrf", &csrf), ("section", "rust")]).await;
+    sqlx::query("DELETE FROM lobsters_tags WHERE tag = 'rust'").execute(&site.pool).await.unwrap();
+    let page = mary.get(&site, "/sources").await;
+    assert!(page.text.contains(r#"<span class="tag">Front page</span>"#));
+    assert!(page.text.contains(r#"<input type="checkbox" name="section" value="front" checked>"#));
+    assert!(page.text.contains("No longer on Lobsters"));
 }
 
 #[tokio::test]

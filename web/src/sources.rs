@@ -326,9 +326,10 @@ fn sections(tags: &[(String, String, String)], chosen: Option<&Vec<String>>) -> 
     for group in &mut groups {
         group.ticked = group.tags.iter().filter(|tag| tag.checked).count();
     }
-    let front = chosen.contains(FRONT);
     let read =
         chosen.iter().filter(|section| **section != FRONT && tags.iter().any(|(tag, _, _)| tag == *section)).count();
+    // Every tag chosen is gone: the front page is read, as for a reader who never chose.
+    let front = chosen.contains(FRONT) || read == 0;
     let summary = match (front, read) {
         (true, 0) => "Front page".to_owned(),
         (true, n) => format!("Front page and {n} tag{}", if n == 1 { "" } else { "s" }),

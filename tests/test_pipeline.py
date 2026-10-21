@@ -1319,6 +1319,8 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
         {"tag": "news", "category": "genre", "description": "Old", "active": False, "privileged": False},
         {"tag": "announce", "category": "lobsters", "description": "Site", "active": True, "privileged": True},
         {"tag": "../x", "category": "languages", "description": "", "active": True, "privileged": False},
+        {"tag": "front", "category": "genre", "description": "", "active": True, "privileged": False},
+        {"tag": "node.js", "category": "languages", "description": "", "active": True, "privileged": False},
     ]
 
     def site(request: httpx.Request) -> httpx.Response:
@@ -1355,7 +1357,7 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
     # The tags a reader may choose are the site's subjects as it lists them now.
     offered = lobsters_tags(fetcher)
     assert ("rust", "languages", "Rust programming") in offered
-    assert not {"video", "news", "announce", "../x"} & {tag for tag, _, _ in offered}
+    assert not {"video", "news", "announce", "../x", "front", "node.js"} & {tag for tag, _, _ in offered}
     tags[:] = tags[:3]
     with pytest.raises(FetchError, match="only 3 tags"):
         lobsters_tags(fetcher)
@@ -1375,6 +1377,31 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
     assert store.builtin_sections("john") == {}
     cli._refresh_lobsters_tags(store, fetcher, dry_run=False)  # the list now looks broken: kept
     assert [r[0] for r in store.db.execute("SELECT tag FROM lobsters_tags")] == ["rust"]
+
+
+def test_a_readers_tags_reach_the_listing_and_only_the_front_page_says_how_the_site_is(env, monkeypatch):
+    from app import pipeline
+    from app.config import Discovery
+
+    cfg, store, fetcher = env
+    asked = []
+
+    def failing(key, fetcher, since, source, sections):
+        asked.append((key, sections))
+        raise FetchError("not found")
+
+    monkeypatch.setattr(pipeline, "read_listing", failing)
+    health = "SELECT failures FROM source_health WHERE source = 'Lobsters'"
+    for sections, failures in ((("rust",), None), (("front", "rust"), 1)):
+        discovery = Discovery(sites=("lobsters",), sections={"lobsters": sections})
+        own = dataclasses.replace(_llm_cfg(cfg), sources=(), discovery=discovery)
+        user = dataclasses.replace(own.users[0], daily_cap=4)
+        report = run(own, store, fetcher, user, now=NOW, sender=lambda m, s: None, backend=FakeBackend({}))
+        lobsters = next(s for s in report.sources if s.name == "Lobsters")
+        assert asked[-1] == ("lobsters", sections) and lobsters.feed_error == "not found"
+        row = store.db.execute(health).fetchone()
+        # Tags alone are the reader's own: their failure is in their report, not the household's.
+        assert (row and row["failures"]) == failures
 
 
 def test_a_post_dated_before_it_appeared_is_not_lost(env):

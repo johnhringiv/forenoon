@@ -84,7 +84,9 @@ what its own users configure and delivers only to the addresses its readers have
     Lobsters chooses what of it they read: its front page, any of its tags, or both, ticked
     in groups by the site's categories (a group with a tick in it is open); the row says
     "Front page", "Front page and 3 tags" or "3 tags". A reader who never chose reads the
-    front page. Saving with nothing ticked is refused: unfollowing is how to stop. The list
+    front page, and so does one whose every tag Lobsters has since dropped (shown ticked).
+    Saving with nothing ticked is refused: unfollowing is how to stop, and the choice is
+    kept for following again. The list
     comes from the pipeline: one that a new version adds appears switched off, so an upgrade
     never changes what is delivered by itself.
   - **Feeds**: RSS or Atom, by address.
@@ -145,7 +147,7 @@ what its own users configure and delivers only to the addresses its readers have
   only when it controls cost, depends on the deploy, or is a real choice; what used to be a
   switch for a later feature is now just how Forenoon works, described here.
 - **Each reader's own settings** are on their Reading page: one book a day or one per
-  article, the most articles on one broad subject (2; left empty for no limit, as a 0 typed), room for a surprise
+  article, the most articles on one broad subject (2; empty or 0 for no limit), room for a surprise
   (the exploration pick, on), the model's reason printed in the book (on), and notes kept
   from their ratings (on). Whether their Kindle has a colour screen (images and covers in
   colour; otherwise gray) and whether their daily issue is emailed to it (on) are on their
@@ -654,7 +656,10 @@ source).
   their tags one listing of all of them, two pages, newest first, with only the stories that
   have at least 5 points (one with fewer is found on a later day, when it has them). Up to
   five requests per site per reader's run; if the first fails the site is reported as
-  failing, and if a further one fails the rest are still used.
+  failing, and if a further one fails the rest are still used. The site's health (failing,
+  and the alert after `alerts.source_failures` runs) is the household's, so only a run that
+  reads the front page counts towards it; a reader who reads only tags has a failure in
+  their own run report.
 - **Lobsters tags.** The tags offered are the site's own subjects from its list of tags, read
   once a run for the household: active tags, without the kinds of post (video, pdf, ask, show
   and the like) or the site's news about itself. A list that cannot be read, or has fewer

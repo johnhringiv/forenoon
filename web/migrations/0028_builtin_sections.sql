@@ -21,7 +21,7 @@ INSERT INTO lobsters_tags (tag, category, description) VALUES
     ('c', 'languages', 'C programming'),
     ('c++', 'languages', 'C++ programming'),
     ('clojure', 'languages', 'Clojure programming'),
-    ('concatenative', 'languages', ' stackbased languages like Forth, Factor, Joy'),
+    ('concatenative', 'languages', 'stackbased languages like Forth, Factor, Joy'),
     ('css', 'languages', 'Cascading Style Sheets'),
     ('d', 'languages', 'D programming'),
     ('dotnet', 'languages', 'C#, F#, .NET programming'),

@@ -104,7 +104,7 @@ def _lobsters_tagged(tags: list[str]) -> list[str]:
 
 
 FRONT = "front"  # the section that is a site's front page; any other is one of its tags
-TAG = re.compile(r"[a-z0-9+.-]{1,30}")
+TAG = re.compile(r"[a-z0-9+-]{1,30}")  # no dot: Rails reads one as a format
 # A tag's listing is newest first, not by votes: a story is a candidate once it has a few.
 # One still below this is found on a later day, when it has them.
 TAG_MIN_POINTS = 5
@@ -128,7 +128,7 @@ def lobsters_tags(fetcher: Fetcher) -> list[tuple[str, str, str]]:
         if not isinstance(entry, dict) or entry.get("active") is not True or entry.get("privileged") is not False:
             continue
         tag, category, description = entry.get("tag"), entry.get("category"), entry.get("description")
-        if not isinstance(tag, str) or not TAG.fullmatch(tag) or not isinstance(category, str):
+        if not isinstance(tag, str) or not TAG.fullmatch(tag) or tag == FRONT or not isinstance(category, str):
             continue
         if category in UNOFFERED_CATEGORIES:
             continue
