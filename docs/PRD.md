@@ -1082,7 +1082,7 @@ database with the pipeline.
   Accounts page, so an install always keeps an admin. It is behind a disclosure that says what
   goes. The account goes with everything recorded for it: deliveries, selections,
   assessments, book checks, ratings, rating events and problem reports, requests, reading-profile history,
-  follows and email links. Its browsers are signed out, and the rating links in books it was
+  follows, Lobsters tag choices and email links. Its browsers are signed out, and the rating links in books it was
   sent stop recording anything, even if a later account is given the same id (a link counts
   only for an article delivered to that account). The articles stay, since other readers share them, and the
   sources and site logins it added pass to the admin who deleted it; the run reports in the

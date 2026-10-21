@@ -208,6 +208,7 @@ pub async fn delete_user(pool: &SqlitePool, id: &str, heir: &str) -> Result<bool
     sqlx::query!("DELETE FROM refresh_requests WHERE user_id = ?", id).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM profile_history WHERE user_id = ?", id).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM follows WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM builtin_sections WHERE user_id = ?", id).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM email_tokens WHERE user_id = ?", id).execute(&mut *tx).await?;
     sqlx::query!("UPDATE sources SET added_by = ? WHERE added_by = ?", heir, id).execute(&mut *tx).await?;
     sqlx::query!("UPDATE sessions SET saved_by = ? WHERE saved_by = ?", heir, id).execute(&mut *tx).await?;

@@ -3224,6 +3224,7 @@ async fn an_admin_deletes_an_account_with_everything_recorded_for_it() {
          INSERT INTO email_tokens (token_hash, user_id, purpose, email, expires_at, created_at)
              VALUES ('h', 'mary', 'reset', 'mary@example.com', 'later', 'now');
          INSERT INTO sessions (domain, created_at, saved_by) VALUES ('paper.example', 'now', 'mary');
+         INSERT INTO builtin_sections (user_id, builtin, section) VALUES ('mary', 'lobsters', 'rust');
          UPDATE sources SET added_by = 'mary' WHERE id = (SELECT MIN(id) FROM sources);",
     )
     .execute(pool)
@@ -3242,6 +3243,7 @@ async fn an_admin_deletes_an_account_with_everything_recorded_for_it() {
         "refresh_requests",
         "profile_history",
         "follows",
+        "builtin_sections",
         "email_tokens",
     ];
     // A rating link in a book she was sent counts while she has the account.
