@@ -354,7 +354,18 @@ All fetched content is treated as untrusted.
   A `<picture>` keeps its own image behind its `<source>` alternatives, and takes theirs when
   the image has no address on the web (none, or an embedded stand-in): the last address of the
   first source that has one (`srcset`, else `data-srcset`). An embedded (base64) 1×1 GIF or PNG as an
-  image's `src` counts as no picture: it holds a picture's place until a script loads it. A
+  image's `src` counts as no picture: it holds a picture's place until a script loads it. So
+  does a placeholder file a script swaps out (named `placeholder`, `blank`, `spacer`,
+  `transparent`, `pixel` or `1x1`, alone or after `grey`, `image`, `default` or `lazy`, as
+  Monochrome's `image_placeholder.svg` and the BBC's `grey-placeholder.png`): the image takes
+  its lazy-loading address instead (`data-src` and the like), or is dropped when it has none.
+  An image in a figure with no address of its own but the link around it, holding nothing
+  else, takes the link's address (Yahoo's blank pixel, its photo on the link). A picture in a
+  button named for enlarging it (a lightbox's "Enlarge image", not a video's play button nor
+  a reveal toggle) is taken out of the button, which the book drops. An `<object>` showing a
+  picture file (`type="image/…"`, or a picture file's address: an SVG chart, an arXiv figure,
+  an equation) becomes an image of it, or of the fallback image it holds, its text the alt
+  text. A status badge (shields.io, badgen, a CI's `badge.svg`) is not kept. A
   character lxml refuses to set again (a control character such as a form feed in a kernel
   source's code, or U+FFFE/U+FFFF), written or as a reference, is read as a space in the page
   and the feed; the book check reads the page, and the model's HTML, the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
@@ -454,6 +465,24 @@ after conversion. Each is flattened onto white (so transparent images stay reada
 converted to greyscale by default, scaled to fit 1200×1600 and saved as JPEG. Images smaller
 than 48 pixels on a side (tracking pixels, icons) and any that cannot be fetched or decoded
 are dropped and counted in the report.
+
+An SVG is drawn with resvg at twice its size on the page (its width and height, else its
+viewBox, an icon's `0 0 24 24` being 24 pixels), within the same 1200×1600, then converted
+like the rest; one under 6 pixels on
+both sides is dropped, as an equation set as SVG can be one letter. Its text is set in Arimo
+and Tinos, which take the room Arial and Times New Roman do, so labels drawn for those fit
+their boxes, and code in JetBrains Mono NL; no system font is read. Before drawing, what
+would load anything from outside the file is taken out: entities and DTDs are not read,
+links to pictures other than embedded PNG, JPEG, GIF or WebP, stylesheet imports, scripts
+and embedded HTML are removed, and relative addresses resolve to an empty folder. One of more
+than 50,000 elements is not drawn. Each is drawn in a process of its own, limited to 1 GiB of
+memory, 30 seconds of processing and 45 seconds in all, with none of the pipeline's
+environment (its keys), as a hostile SVG can ask the renderer
+for more memory than the machine has, crash it, or keep it busy for good; one that fails is
+dropped like a picture that cannot be decoded. A picture
+a line of text high (96 pixels or less as drawn: an equation) does not count toward the 40,
+so a page of equations keeps them all; once the 40 are used, only SVG addresses are still
+fetched, and at most 200 pictures are fetched for one article, in at most five minutes.
 
 ## 6. The book
 
@@ -732,7 +761,13 @@ Sonnet 5.5).
   `<data>/sessions/status.json` for the Sources page and the run's alerts.
 - It also takes pictures of interactive figures: a `<figure>` the page's scripts draw (a
   chart, a slider comparing pictures), recognised by having controls, a canvas or a script,
-  and no picture, player, table, code or quote of its own. Without the scripts it is often
+  and no picture, player, table, code or quote of its own; and of drawn figures, which the
+  book would lose: an inline SVG of 20 elements or more (a chart, a diagram) or an embedded
+  page that is not a video, a player or a post (Spotify, SoundCloud, a podcast host,
+  Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
+  either, and not a player's (named so: its controls are SVG). The room these pictures have in
+  the article's budget leaves out its SVG pictures, mostly equations. A drawn figure's picture comes with no line
+  under it; without one, the line sends the reader to the original page for the figure. Without the scripts it is often
   only its labels run together, so extraction puts a placeholder first in it, numbered by
   the figure's place among the page's figures (not counting any in `<noscript>` or
   `<template>`, as a browser running scripts counts them) with the page's total. For each

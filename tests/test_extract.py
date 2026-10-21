@@ -3005,3 +3005,91 @@ def test_a_dropped_figure_under_a_heading_stays_in_its_section():
     root = lxml.html.fromstring(body)
     extract_module._restore_dropped_figures(root, page, STORY)
     assert [el.tag for el in root][1:4] == ["p", "h2", "figure"]
+
+
+def test_a_placeholder_file_gives_way_to_the_picture_a_script_loads():
+    img = lxml.html.fromstring(
+        '<img src="https://w.example/theme/image_placeholder.svg" data-src="https://w.example/uploads/watch.jpg">'
+    )
+    assert extract_module._image_src(img) == "https://w.example/uploads/watch.jpg"
+    # With nothing to load, no picture: not the grey square.
+    assert extract_module._image_src(lxml.html.fromstring('<img src="https://b.example/grey-placeholder.png">')) == ""
+    # A photo whose name only mentions the word is a photo.
+    cover = lxml.html.fromstring('<img src="https://l.example/lazy-import-cover-825.jpg">')
+    assert extract_module._image_src(cover) == "https://l.example/lazy-import-cover-825.jpg"
+
+
+def test_a_figure_picture_held_only_by_its_link_gets_the_links_address():
+    figure = lxml.html.fromstring(
+        '<figure><div><a href="https://img.example/api/photo/"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></a></div><figcaption>A bus shelter</figcaption></figure>'
+    )
+    assert extract_module._image_src(figure.find(".//img")) == "https://img.example/api/photo/"
+    # A link with words of its own is a link, not the picture's address.
+    worded = lxml.html.fromstring('<figure><a href="https://x.example/story">Read <img src=""></a></figure>')
+    assert extract_module._image_src(worded.find(".//img")) == ""
+
+
+def test_a_lightbox_button_gives_up_its_picture_and_a_play_button_does_not():
+    root = lxml.html.fromstring(
+        "<div><figure>"
+        '<button aria-label="Enlarge image" class="Lightbox_trigger"><img src="https://n.example/nebula.jpg"></button>'
+        "<figcaption>The Dumbbell Nebula</figcaption></figure><figure>"
+        '<button aria-label="Play video: the clash"><img src="https://n.example/poster.jpg"></button>'
+        "</figure></div>"
+    )
+    extract_module._unwrap_lightboxes(root)
+    assert root.find(".//figure/img").get("src") == "https://n.example/nebula.jpg"
+    assert root.find(".//button//img").get("src") == "https://n.example/poster.jpg"
+
+
+def test_an_object_showing_a_picture_file_becomes_an_image():
+    root = lxml.html.fromstring(
+        '<div><p>Solutions to <object data="https://e.example/math/a.svg" type="image/svg+xml" style="height: 15px">\\[x^2=1\\]</object>.</p>'
+        '<object data="/timeline.svg" type="image/svg+xml"><img src="/timeline.svg" alt="Timeline"></object>'
+        '<object data="https://e.example/app.swf" type="application/x-shockwave-flash"></object></div>'
+    )
+    extract_module._object_pictures(root)
+    imgs = root.findall(".//img")
+    assert [(i.get("src"), i.get("alt")) for i in imgs] == [
+        ("https://e.example/math/a.svg", "\\[x^2=1\\]"),
+        ("/timeline.svg", "Timeline"),
+    ]
+    assert root.find(".//p").text_content() == "Solutions to ."
+    assert len(root.findall(".//object")) == 1
+
+
+def test_a_drawn_figure_is_marked_for_a_picture_and_a_players_is_not():
+    chart = "<svg>" + "<rect/>" * 30 + "</svg>"
+    page = (
+        "<html><body>"
+        f"<figure>{chart}<figcaption>Encode time</figcaption></figure>"
+        '<figure><iframe src="https://flo.uri.sh/visualisation/1/embed"></iframe></figure>'
+        '<figure><iframe src="https://www.youtube.com/embed/x"></iframe></figure>'
+        f'<figure><div class="video-player">{chart}</div></figure>'
+        "<figure><svg><path/></svg><figcaption>An icon</figcaption></figure>"
+        "</body></html>"
+    )
+    root = lxml.html.fromstring(page)
+    extract_module._mark_widgets(root)
+    marks = [h.get(extract_module.MARK) for h in root.xpath(f"//p[@{extract_module.MARK}]")]
+    numbers = [h.get(extract_module.MARK_N) for h in root.xpath(f"//p[@{extract_module.MARK}]")]
+    assert marks == ["drawn", "drawn"] and numbers == ["0", "1"]
+
+
+def test_a_status_badge_is_not_a_picture():
+    root = lxml.html.fromstring(
+        '<div><p><img src="https://github.com/o/r/actions/workflows/ci.yml/badge.svg?branch=main">'
+        '<img src="https://img.shields.io/crates/v/x.svg"><img src="https://g.example/diagram.svg"></p></div>'
+    )
+    body = extract_module.sanitize(root, "https://github.com/o/r")
+    assert [i.get("src") for i in body.iter("img")] == ["https://g.example/diagram.svg"]
+
+
+def test_nested_objects_give_one_picture_with_a_short_alt():
+    words = "word " * 10_000
+    root = lxml.html.fromstring(
+        "<div>" + '<object data="https://x.example/a.svg">' * 50 + words + "</object>" * 50 + "</div>"
+    )
+    extract_module._object_pictures(root)
+    (img,) = root.iter("img")
+    assert len(img.get("alt")) <= extract_module.ALT_CHARS
