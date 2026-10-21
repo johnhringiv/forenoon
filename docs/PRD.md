@@ -664,8 +664,9 @@ source).
   and the like) or the site's news about itself. A list that cannot be read, or has fewer
   than 20 tags, is not used and the last one is kept; the first is the list as it was when
   this was built. A tag the site no longer lists is not asked for (Lobsters answers a listing
-  with an unknown tag as not found), and the reader's Sources page shows it still ticked under
-  "No longer on Lobsters" until they next save, which removes it.
+  with an unknown tag as not found). The reader's Sources page shows it still ticked under "No
+  longer on Lobsters", and saving keeps it while it stays ticked, so a tag the site drops for
+  a while is read again when it comes back. Unticking it drops it.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
   anything already delivered or previously failed. At most `discovery.per_site` (100) per site.

@@ -1617,11 +1617,38 @@ async fn each_reader_chooses_the_front_page_and_tags_of_lobsters() {
     assert!(page.text.contains(r#"<input type="checkbox" name="section" value="front">"#));
     assert!(page.text.contains(r#"<details class="tagset" open>"#), "a group with a ticked tag is open");
 
-    // A tag Lobsters drops stays ticked, under its own heading, until the reader saves without it.
-    sqlx::query("DELETE FROM lobsters_tags WHERE tag = 'databases'").execute(&site.pool).await.unwrap();
+    // A tag Lobsters drops stays ticked, under its own heading, and saving keeps it while it is
+    // ticked; it is read again when it comes back. A gone tag the reader never had is not saved.
+    let dropped: (String, String) =
+        sqlx::query_as("SELECT category, description FROM lobsters_tags WHERE tag = 'databases'")
+            .fetch_one(&site.pool)
+            .await
+            .unwrap();
+    sqlx::query("DELETE FROM lobsters_tags WHERE tag IN ('databases', 'python')").execute(&site.pool).await.unwrap();
     let page = mary.get(&site, "/sources").await;
     assert!(page.text.contains("No longer on Lobsters") && page.text.contains(r#"<span class="tag">1 tag</span>"#));
-    let form = [("csrf", csrf.as_str()), ("section", "front"), ("section", "rust"), ("section", "databases")];
+    let form = [
+        ("csrf", csrf.as_str()),
+        ("section", "front"),
+        ("section", "rust"),
+        ("section", "databases"),
+        ("section", "python"),
+    ];
+    mary.post(&site, &path, &form).await;
+    assert_eq!(chosen().await, ["john:go", "mary:databases", "mary:front", "mary:rust"]);
+    sqlx::query("INSERT INTO lobsters_tags (tag, category, description) VALUES ('databases', ?, ?)")
+        .bind(&dropped.0)
+        .bind(&dropped.1)
+        .execute(&site.pool)
+        .await
+        .unwrap();
+    let page = mary.get(&site, "/sources").await;
+    assert!(
+        !page.text.contains("No longer on Lobsters")
+            && page.text.contains(r#"<span class="tag">Front page and 2 tags</span>"#)
+    );
+    // Unticked, it is dropped.
+    let form = [("csrf", csrf.as_str()), ("section", "front"), ("section", "rust")];
     mary.post(&site, &path, &form).await;
     assert_eq!(chosen().await, ["john:go", "mary:front", "mary:rust"]);
 

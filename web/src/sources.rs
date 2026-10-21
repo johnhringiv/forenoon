@@ -316,7 +316,9 @@ fn sections(tags: &[(String, String, String)], chosen: Option<&Vec<String>>) -> 
         .filter(|section| **section != FRONT && !tags.iter().any(|(tag, _, _)| tag == *section))
         .map(|section| TagBox {
             tag: (*section).to_owned(),
-            description: "Lobsters no longer has this tag, so it is not read. Untick it and save.".to_owned(),
+            description:
+                "Lobsters no longer has this tag, so it is not read. Kept in case it comes back; untick it to drop it."
+                    .to_owned(),
             checked: true,
         })
         .collect();
@@ -1124,12 +1126,16 @@ pub async fn set_sections(
         return refused(StatusCode::NOT_FOUND, NO_SUCH);
     };
     let tags = lobsters_tags(pool).await?;
-    // A tag the site has, or front; anything else is dropped, including a tag it no longer has.
+    // A tag the site has, or front, or one the reader had already: a tag the site drops for a
+    // while is kept, so it is read again when it comes back. Anything else is dropped.
+    let had = chosen_sections(pool, &user.id).await?.remove(&source.builtin).unwrap_or_default();
     let ticked: BTreeSet<&str> = form
         .iter()
         .filter(|(key, _)| key == "section")
         .map(|(_, value)| value.as_str())
-        .filter(|value| *value == FRONT || tags.iter().any(|(tag, _, _)| tag == value))
+        .filter(|value| {
+            *value == FRONT || tags.iter().any(|(tag, _, _)| tag == value) || had.iter().any(|h| h == value)
+        })
         .collect();
     if ticked.is_empty() {
         let problem = format!("Tick the front page or a tag. To stop reading {}, unfollow it.", source.name);
