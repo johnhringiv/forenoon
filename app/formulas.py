@@ -62,7 +62,7 @@ GREEK = {
     "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω",
 }  # fmt: skip
 OPERATORS = {
-    "times": "×", "cdot": "·", "pm": "±", "mp": "∓", "div": "÷", "ast": "∗", "star": "⋆",
+    "times": "×", "cdot": "·", "pm": "±", "mp": "∓", "div": "÷", "ast": "*", "star": "⋆",
     "circ": "∘", "bullet": "•", "oplus": "⊕", "otimes": "⊗", "wedge": "∧", "land": "∧",
     "vee": "∨", "lor": "∨", "cup": "∪", "cap": "∩", "setminus": "∖", "mid": "∣", "neg": "¬",
     "lnot": "¬", "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥", "ne": "≠", "neq": "≠",
@@ -1161,14 +1161,55 @@ def _tex_source(math) -> str:
     return (math.get("alttext") or "").strip()
 
 
-MARK = "data-fn-math"  # on a box a formula was written into; extract's "data-fn" markers are ours alone
+SHADOW = "data-fn-shadow"  # extract's "data-fn" markers are ours alone; a page's own are removed first
+SHADOWS = re.compile(r'<math data-fn-shadow="true">(.*?)</math>', re.DOTALL)
 
 
-def _mark(box) -> None:
-    """The box holds a formula: kept by the article picker however short (a short box reads as
-    furniture, and a formula as text is shorter than its TeX was)."""
-    if box is not None and isinstance(box.tag, str):
-        box.set(MARK, "true")
+def _shadow(holder, original: str):
+    """Keep, beside a formula written as text, the text the page had for it, in a <math> of ours.
+
+    Picking the article measures boxes by their text, and spares any holding <math>: with each
+    formula as long as it was, it decides as it did before formulas were written, keeping a
+    short display, a remark full of formulas, a sentence whose links now look dense. `sanitize`
+    drops the shadows; nothing of them reaches the book.
+    """
+    if not original.strip():
+        return holder
+    shadow = lxml.html.Element("math")
+    shadow.set(SHADOW, "true")
+    shadow.text = _less(original, holder.text_content()) or " "  # an empty one still spares its box
+
+    shadow.tail, holder.text = holder.text, None
+    holder.insert(0, shadow)
+    return holder
+
+
+def _less(original: str, written: str) -> str:
+    """The original text, shorter by the written text's characters and commas.
+
+    The written formula and its shadow together then measure as the original did: readability
+    scores a paragraph by its length and its commas, and a formula counted twice would tip which
+    sections it joins to the article.
+    """
+    commas = written.count(",")
+    others = len(written) - commas
+    kept = []
+    for char in original:
+        if char == "," and commas:
+            commas -= 1
+        elif char != "," and others:
+            others -= 1
+        else:
+            kept.append(char)
+    return "".join(kept)
+
+
+def strip_shadows(markup: str) -> str:
+    return SHADOWS.sub("", markup)
+
+
+def shadow_words(markup: str) -> int:
+    return sum(len(html.unescape(m.group(1)).split()) for m in SHADOWS.finditer(markup))
 
 
 def _replace(old, holder) -> None:
@@ -1176,7 +1217,7 @@ def _replace(old, holder) -> None:
     parent = old.getparent()
     if parent is None:
         return
-    _mark(parent)
+    _shadow(holder, old.text_content())
     # addprevious, not replace and drop_tag: those walk the parent's children for every formula.
     text, children, tail = holder.text or "", list(holder), old.tail or ""
     previous = old.getprevious()
@@ -1215,7 +1256,8 @@ def _code_blocks(root) -> None:
             continue
         del code.attrib[DISPLAY_CODE]
         parent = code.getparent()
-        alone = len(parent) == 1 and not (parent.text or "").strip() and not (code.tail or "").strip()
+        others = [k for k in parent if k is not code and not (isinstance(k.tag, str) and k.get(SHADOW))]
+        alone = not others and not (parent.text or "").strip() and not (code.tail or "").strip()
         if alone and _local(parent.tag) in ("p", "div"):
             parent.tag = "pre"
 
@@ -1264,7 +1306,7 @@ def rewrite(root, tex: Tex | None = None) -> None:
                 _swap(box, math)
         elif tag == "script" and (box.get("type") or "").startswith("math/tex"):
             _mathjax2(box, tex)
-    for math in [m for m in root.iter() if _local(m.tag) == "math"]:
+    for math in [m for m in root.iter() if _local(m.tag) == "math" and not m.get(SHADOW)]:
         if math.getparent() is not None and not any(_local(a.tag) == "math" for a in math.iterancestors()):
             _swap(math, math)
     if tex is not None:
@@ -1422,15 +1464,13 @@ def _split(el, which: str, tex: Tex) -> None:
         if not text[:start].strip() and not text[end:].strip() and _own_block(el, source, tex):
             return
     container = el if which == "text" else el.getparent()
-    _mark(container)
     pieces: list = []
     at = 0
     for start, end, source, display in spans:
         pieces.append(text[at:start])
-        piece = _tex_html(source, tex, display)
+        piece = _shadow(_tex_html(source, tex, display), text[start:end])
         if display and _local(container.tag) in CONTAINERS:
             piece.tag = "p"  # a display between paragraphs is one, as its page shows it
-            _mark(piece)
             piece = _wrap("span", piece)
         pieces.append(piece)
         at = end
@@ -1467,7 +1507,7 @@ def _split(el, which: str, tex: Tex) -> None:
 
 BARE = {"div", "section", "article", "main", "body", "aside", "figure"}
 PHRASING = {
-    "a", "span", "em", "i", "b", "strong", "code", "sub", "sup", "small", "abbr", "cite", "q",
+    "a", "span", "em", "i", "b", "math", "strong", "code", "sub", "sup", "small", "abbr", "cite", "q",
     "mark", "s", "u", "kbd", "samp", "var", "br", "img", "del", "ins", "time", "font", "tt",
 }  # fmt: skip
 
@@ -1484,22 +1524,17 @@ def _paragraph(el, which: str, container) -> None:
     if not mixed:
         return  # the box is the paragraph
     para = lxml.html.Element("p")
-    _mark(para)
     if which == "text":
         para.text, el.text = el.text, None
-        while len(el) and _local(el[0].tag) in PHRASING:
+        while len(el) and _inline(el[0]):
             para.append(el[0])
         el.insert(0, para)
         return
     # The run starts after the block before it: "As shown by <a>Euler</a>, \\(x\\)…" stays one.
     start = el
-    while (
-        _local(start.tag) in PHRASING
-        and start.getprevious() is not None
-        and _local(start.getprevious().tag) in PHRASING
-    ):
+    while _inline(start) and start.getprevious() is not None and _inline(start.getprevious()):
         start = start.getprevious()
-    if _local(start.tag) in PHRASING:
+    if _inline(start):
         before = start.getprevious()
         if before is None:
             para.text, container.text = container.text, None
@@ -1512,15 +1547,20 @@ def _paragraph(el, which: str, container) -> None:
             following = node.getnext()
             para.append(node)
             node = following
-        while stop is not None and _local(stop.tag) in PHRASING:
+        while stop is not None and _inline(stop):
             following = stop.getnext()
             para.append(stop)
             stop = following
         return
     para.text, el.tail = el.tail, None
-    while el.getnext() is not None and _local(el.getnext().tag) in PHRASING:
+    while el.getnext() is not None and _inline(el.getnext()):
         para.append(el.getnext())
     el.addnext(para)
+
+
+def _inline(el) -> bool:
+    """Part of a line of text; a <br> ends the run as a block does (Blogger's lines)."""
+    return _local(el.tag) in PHRASING and _local(el.tag) != "br"
 
 
 _mixed: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()  # box → holds blocks beside its text
@@ -1551,15 +1591,16 @@ def _own_block(el, source: str, tex: Tex) -> bool:
         block = tex_table(expand(source, tex.macros))
     except Exception:  # noqa: BLE001 - hostile input; the formula is written another way
         block = None
+    original = box.text_content()
     if block is None:
         block = lxml.html.Element("p")
-        piece = _tex_html(source, tex, True)
+        piece = _shadow(_tex_html(source, tex, True), original)
         block.text = piece.text
         for child in list(piece):
             block.append(child)
+    else:
+        _shadow(next(block.iter("th", "td")), original)
     block.tail = box.tail
-    _mark(block)
-    _mark(box.getparent())
     box.getparent().replace(box, block)
     if block.tail:  # "where \(x\) is real" after the display: the walk has passed this box
         _split(block, "tail", tex)

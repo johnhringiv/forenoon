@@ -337,3 +337,43 @@ def test_many_formulas_in_one_paragraph_stay_fast():
     root = lxml.html.fromstring("<div>" + "<div>\\(x\\)</div>" * 40_000 + "</div>")
     formulas.rewrite(root, formulas.Tex())
     assert time.monotonic() - started < 10
+
+
+def arxiv_math(tex: str, mathml: str) -> str:
+    return (
+        f'<math class="ltx_Math" alttext="{tex}" display="inline"><semantics>{mathml}'
+        f'<annotation encoding="application/x-tex">{tex}</annotation></semantics></math>'
+    )
+
+
+def test_a_remark_full_of_formulas_is_kept_as_before():
+    # The article picker drops boxes named "remark" unless they hold <math>; a formula written
+    # as text leaves its old text behind in a <math> of ours, so the remark is kept, as on main.
+    x = arxiv_math("x", "<mi>x</mi>")
+    remark = (
+        f'<div class="ltx_theorem ltx_theorem_remark"><h6>Remark 2.3.</h6><div class="ltx_para">'
+        f"<p>Here {x} may be any point of the space, and the bound holds for every such {x} as well.</p></div></div>"
+    )
+    out = body_html(page(remark))
+    assert "Here <i>x</i> may be any point" in out
+    assert "data-fn-shadow" not in out and "<math" not in out
+
+
+def test_a_short_equation_table_is_kept():
+    eq = arxiv_math("w=1", "<mrow><mi>w</mi><mo>=</mo><mn>1</mn></mrow>")
+    table = (
+        f'<p>Indeed, the moving pole</p><table class="ltx_equation ltx_eqn_table"><tr>'
+        f'<td class="ltx_eqn_cell">{eq}</td></tr></table><p>lies outside the disc.</p>'
+    )
+    out = body_html(page(table))
+    assert "<i>w</i> = 1" in out and "w=1" not in out
+
+
+def test_blogger_lines_stay_paragraphs():
+    post = (
+        '<div class="post-body"><div class="separator"><img src="https://example.com/a.png"></div>'
+        "The first line of the post says something.<br><br>Then a formula \\(x^2\\) in the second line.<br><br>"
+        "And a third line follows it.</div>"
+    )
+    out = body_html(page(post, MATHJAX))
+    assert "<p>Then a formula <i>x</i><sup>2</sup> in the second line.</p>" in out

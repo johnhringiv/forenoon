@@ -1571,7 +1571,8 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
     """
     root = copy.deepcopy(root)
     for el in list(root.iter()):
-        if not isinstance(el.tag, str):  # comments, processing instructions
+        # Comments and processing instructions; and a formula's old text, kept only to pick the article.
+        if not isinstance(el.tag, str) or (marked and el.get(formulas.SHADOW)):
             el.drop_tree()
     _unnest_empty(root)
     _picture_fallbacks(root)
@@ -2532,14 +2533,14 @@ class _Document(Document):
         for table in self.tags(node, "table"):
             if any(a.tag in ("td", "th") for a in table.iterancestors()):
                 allowed[table] = True
-        # A short box holding a formula: written as text it is shorter than its TeX, and the
-        # length rule would take it for furniture ("where x is real." beside a display).
-        for box in self.tags(node, "div", "section"):
+        # A display equation as short as "w = 1", in its own table or box: the length rule would
+        # take it for furniture, formula or not.
+        for box in self.tags(node, "table", "div", "section"):
             if (
                 box not in allowed
                 and len(" ".join(box.text_content().split())) < self.min_text_length
                 and self.class_weight(box) >= 0
-                and box.xpath(f"descendant-or-self::*[@{formulas.MARK}]")
+                and box.xpath(f"descendant::math[@{formulas.SHADOW}]")
             ):
                 allowed[box] = True
         return allowed
@@ -3450,12 +3451,14 @@ def extract(
             except Exception:  # noqa: BLE001, S110 - hostile markup; the article goes without the pictures
                 pass
             candidates["page"] = sanitize(page, url, marked=True)
-        reference = _reference_words(page_html)
+        # The article's words as the book has them: formulas as written, not their page text.
+        reference = _reference_words(formulas.strip_shadows(page_html))
+        shadowed = reference + formulas.shadow_words(page_html)  # as the page's own boxes measure
         title, author, image, description = page_metadata(page_html)
         kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
         # Long articles only: on a short post the page furniture outweighs the text.
         if reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
-            wide = _widest(page_html, reference)
+            wide = _widest(page_html, shadowed)
             wide = sanitize(wide, url, marked=True) if wide is not None else None
             # Only when it recovers the article without dragging in much else.
             if (

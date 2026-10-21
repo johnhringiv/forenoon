@@ -222,6 +222,8 @@ use, in the reading font beside an embedded Noto Sans Math:
   superscript on one letter sit one after the other, not stacked (`∑` then `i=1` then `M`).
 - A formula kept as TeX in `<code>` alone on its line is justified like the paragraph it is
   in, so its spaces stretch (see code above). Such a formula is put in `<pre>`.
+- Not yet seen on the device, from the same blocks as the symbols above: `ℂ ℚ ⋆ ∖ ∬ ∓ ≜ ⌈ ⌉ ≔`,
+  and `⩽ ⩾` from arXiv's MathML. KaTeX's `∣ ∥ ∗ ⟺` are written as `| ‖ * ⇔`, which were seen.
 
 ## Not yet checked on the device
 
