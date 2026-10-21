@@ -266,6 +266,25 @@ class Store:
 
     # readers (owned and edited by the web app; see web/migrations)
 
+    def is_reader(self, user_id: str) -> bool:
+        """Whether this account still exists and has joined: an admin can delete one mid-run.
+
+        True before the web app has made its tables, where readers come from elsewhere."""
+        if not self._has_table("users"):
+            return True
+        row = self.db.execute("SELECT 1 FROM users WHERE id = ? AND invited_at IS NULL", (user_id,)).fetchone()
+        return row is not None
+
+    def forget_reader(self, user_id: str) -> None:
+        """Delete what a run wrote for an account deleted while it ran, as the web app deletes
+        the rest; otherwise a later account with the same id would inherit it."""
+        tables = ["deliveries", "selections", "assessments", "ratings", "feedback_events", "book_checks"]
+        if self._has_table("profile_history"):
+            tables.append("profile_history")
+        with self.db:
+            for table in tables:
+                self.db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+
     def readers(self) -> tuple[User, ...]:
         """Every reader with their delivery settings; none until the web app has made an account."""
         if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone():
@@ -305,11 +324,15 @@ class Store:
         return datetime.fromisoformat(row["learned_at"]) if row and row["learned_at"] else None
 
     def set_learned(self, user_id: str, notes: str, when: datetime, changed: bool = True) -> None:
-        """Store the notes and when they were written; a changed text also goes in the history."""
+        """Store the notes and when they were written; a changed text also goes in the history.
+
+        Nothing for an account deleted meanwhile."""
         stamp = when.astimezone(UTC).isoformat(timespec="seconds")
         with self.db:
-            self.db.execute("UPDATE users SET learned = ?, learned_at = ? WHERE id = ?", (notes, stamp, user_id))
-            if changed:
+            found = self.db.execute(
+                "UPDATE users SET learned = ?, learned_at = ? WHERE id = ?", (notes, stamp, user_id)
+            ).rowcount
+            if changed and found:
                 self.db.execute(
                     "INSERT INTO profile_history (user_id, notes, author, created_at) VALUES (?, ?, 'agent', ?)",
                     (user_id, notes, stamp),

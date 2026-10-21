@@ -57,6 +57,8 @@ def add_one(
         store.set_preview(item_id, result.image_url, result.description)
         thumbs.save(cfg.thumbs_dir, item_id, _pictures(result), fetcher)
     store.add_route(item_id, "manual", "")
+    if not store.is_reader(user_id):  # deleted while the page was fetched
+        raise ValueError("the account was deleted")
     if action == "keep" and rating:
         # Read already, and rated. Rated or not, the request on record keeps it from being sent.
         store.record_feedback(user_id, item_id, f"r{rating}", "web")

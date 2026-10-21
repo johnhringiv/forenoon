@@ -29,6 +29,10 @@
 <form method="post" action="/accounts/{{ row.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Take the invitation back</button></form>
 {% endif %}</div>
 <p class="hint">{{ row.id }} · {{ row.email }}{% if !row.kindle.is_empty() %} · Kindle: {{ row.kindle }}{% endif %} · {{ row.state }}</p>
+{% if !row.invited && !row.yours %}<details class="help"><summary>Delete this account</summary>
+<form method="post" action="/accounts/{{ row.id }}/delete"><input type="hidden" name="csrf" value="{{ csrf }}">
+<p>Deletes {{ row.name }}'s account and everything recorded for it: deliveries, ratings, reading profile and follows. Sources and site logins they added become yours. This cannot be undone.</p>
+<p><button>Delete {{ row.name }}'s account</button></p></form></details>{% endif %}
 </div>
 {% endfor %}
 {% endblock %}

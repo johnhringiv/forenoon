@@ -25,6 +25,8 @@ use crate::{
 };
 
 const VERSION: &str = "1";
+/// The article id in the rendering test book's links (`_golden` in app/cli.py).
+const GOLDEN: &str = "golden";
 const SIGNATURE_BYTES: usize = 16;
 /// Taps allowed from one client address in the limiter's minute.
 pub(crate) const TAPS_PER_CLIENT: usize = 30;
@@ -179,6 +181,17 @@ async fn answer(state: AppState, Client(client): Client, token: String, note: Op
     let pool = &state.pool;
     if !db::pipeline_ready(pool).await? {
         return plain(StatusCode::NOT_FOUND, "Link not valid.", "");
+    }
+    // The rendering test book (`forenoon golden`) has real links for a made-up article, so
+    // taps can be tried on the device; they are answered and recorded nowhere.
+    if claim.article == GOLDEN {
+        return plain(StatusCode::OK, "This link works.", "A tap from the rendering test book: nothing is recorded.");
+    }
+    // Only for an article this account was sent. A book outlives its reader's account, and
+    // deleting the account deletes its deliveries, so the links in its books record nothing,
+    // even for a later account given the same id.
+    if !db::is_delivered(pool, &claim.user, &claim.article).await? {
+        return plain(StatusCode::NOT_FOUND, "Link not valid.", "This book was not sent to an account here.");
     }
     let title = db::article_title(pool, &claim.article).await?.unwrap_or_default();
     let rating = match (&claim.tap, note) {

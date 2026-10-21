@@ -841,3 +841,34 @@ def test_an_svg_with_an_absurd_size_is_a_picture_that_would_not_draw():
     # A length or viewBox past what a number holds, or of nothing, is no size: the default is.
     for size in ('viewBox="0 0 1e999 10"', 'width="0" height="10"'):
         assert _convert(svg(size), Images())
+
+
+def test_an_account_deleted_meanwhile_keeps_nothing_the_pipeline_writes(tmp_path):
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    store = Store(tmp_path / "forenoon.sqlite3")
+    assert store.is_reader("john"), "before the web app has made its tables, readers come from elsewhere"
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.execute("INSERT INTO users (id, name, password_hash, created_at) VALUES ('john', 'John', 'x', 'x')")
+    store.db.execute(
+        "INSERT INTO users (id, name, password_hash, created_at, invited_at) VALUES ('bob', 'Bob', '', 'x', 'x')"
+    )
+    assert store.is_reader("john") and not store.is_reader("bob") and not store.is_reader("mary")
+
+    # Mary was deleted while her run went on: her notes go nowhere, and what the run wrote is dropped.
+    when = datetime(2026, 3, 10, tzinfo=UTC)
+    store.set_learned("mary", "Likes long reads.", when)
+    store.set_learned("john", "Likes short reads.", when)
+    history = store.db.execute("SELECT user_id FROM profile_history").fetchall()
+    assert [row[0] for row in history] == ["john"]
+    store.upsert_article("a1", "https://blog.example/1", "Blog", "Post", "", None)
+    for user in ("mary", "john"):
+        store.mark_delivered(user, ["a1"], when)
+        store.record_feedback(user, "a1", "f5", "kindle", when.isoformat())
+        store.record_book_check("a1", user, "m", "ok", "", [], [], (0, 0, 0, 0))
+    store.forget_reader("mary")
+    for table in ("deliveries", "ratings", "feedback_events", "book_checks"):
+        rows = store.db.execute(f"SELECT user_id FROM {table}").fetchall()
+        assert [row[0] for row in rows] == ["john"], table

@@ -2621,6 +2621,15 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert_eq!(last, ("note".to_owned(), "Saw it elsewhere".to_owned()));
     kindle.get(&site, &link("r5")).await;
 
+    // The rendering test book's links answer, and record nothing.
+    let golden = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "golden", "r5", later))).await;
+    assert!(golden.status == StatusCode::OK && golden.text.contains("This link works."), "{}", golden.text);
+    let recorded: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM feedback_events WHERE article_id = 'golden'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(recorded, 0);
+
     // Expired, forged and malformed links change nothing.
     let expired = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "r1", 1000))).await;
     assert!(expired.status == StatusCode::BAD_REQUEST && expired.text.contains("This link has expired."));
@@ -3183,4 +3192,115 @@ async fn the_newsstand_shows_an_issue_in_the_order_it_was_built() {
     let page = browser.get(&site, "/").await.text;
     let at = |title: &str| page.find(title).unwrap_or_else(|| panic!("{title}"));
     assert!(at("Charlie") < at("Alpha") && at("Alpha") < at("Bravo") && at("Bravo") < at("Delta"), "{page}");
+}
+
+#[tokio::test]
+async fn an_admin_deletes_an_account_with_everything_recorded_for_it() {
+    let site = site(true).await;
+    let pool = &site.pool;
+    let mut john = Browser::default();
+    john.sign_in(&site, "john").await;
+    let mut mary = Browser::default();
+    mary.sign_in(&site, "mary").await;
+    article(pool, "m1", "https://blog.example/m", "Blog", "Mary's", "mary", "2026-10-10T10:00:00+00:00").await;
+    article(pool, "j1", "https://blog.example/j", "Blog", "John's", "john", "2026-10-10T10:00:00+00:00").await;
+    for (user, article) in [("mary", "m1"), ("john", "j1")] {
+        sqlx::query("INSERT INTO ratings (user_id, article_id, rating, updated_at) VALUES (?, ?, 4, 'now')")
+            .bind(user)
+            .bind(article)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    // One row of everything else recorded for Mary (deliveries, ratings and follows are there already).
+    sqlx::raw_sql(
+        "INSERT INTO selections (user_id, article_id, selected_at, policy) VALUES ('mary', 'm1', 'now', 'rank-v2');
+         INSERT INTO assessments (user_id, article_id, assessed_at, score) VALUES ('mary', 'm1', 'now', 4);
+         INSERT INTO book_checks (article_id, user_id, checked_at, model, verdict) VALUES ('m1', 'mary', 'now', 'm', 'fixed');
+         INSERT INTO send_requests (user_id, article_id, requested_at) VALUES ('mary', 'm1', 'now');
+         INSERT INTO add_requests (user_id, url, action, requested_at) VALUES ('mary', 'https://blog.example/x', 'next', 'now');
+         INSERT INTO refresh_requests (user_id, article_id, requested_at) VALUES ('mary', 'm1', 'now');
+         INSERT INTO profile_history (user_id, notes, author, created_at) VALUES ('mary', 'Likes boats.', 'reader', 'now');
+         INSERT INTO email_tokens (token_hash, user_id, purpose, email, expires_at, created_at)
+             VALUES ('h', 'mary', 'reset', 'mary@example.com', 'later', 'now');
+         INSERT INTO sessions (domain, created_at, saved_by) VALUES ('paper.example', 'now', 'mary');
+         INSERT INTO builtin_sections (user_id, builtin, section) VALUES ('mary', 'lobsters', 'rust');
+         UPDATE sources SET added_by = 'mary' WHERE id = (SELECT MIN(id) FROM sources);",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let count = |sql: &'static str| async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap() };
+    let tables = [
+        "deliveries",
+        "selections",
+        "assessments",
+        "book_checks",
+        "ratings",
+        "feedback_events",
+        "send_requests",
+        "add_requests",
+        "refresh_requests",
+        "profile_history",
+        "follows",
+        "builtin_sections",
+        "email_tokens",
+    ];
+    // A rating link in a book she was sent counts while she has the account.
+    let link = format!("/f/{}", forenoon_web::feedback::make(FEEDBACK_SECRET, "mary", "m1", "r5", 4_000_000_000));
+    assert_eq!(Browser::default().get(&site, &link).await.status, StatusCode::OK);
+    assert_eq!(count("SELECT rating FROM ratings WHERE user_id = 'mary'").await, 5);
+    for table in tables {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE user_id = 'mary'");
+        assert!(sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await.unwrap() > 0, "{table}");
+    }
+
+    // The page offers it for others' joined accounts, never the admin's own.
+    let page = john.get(&site, "/accounts").await;
+    assert!(page.text.contains(r#"action="/accounts/mary/delete""#), "{}", page.text);
+    assert!(!page.text.contains(r#"action="/accounts/john/delete""#));
+    let csrf = page.csrf();
+
+    // Refused: a reader, the admin's own account, an unknown one, and an open invitation.
+    let mary_csrf = mary.get(&site, "/").await.csrf();
+    assert_eq!(mary.post(&site, "/accounts/john/delete", &[("csrf", &mary_csrf)]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(john.post(&site, "/accounts/john/delete", &[("csrf", &csrf)]).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(john.post(&site, "/accounts/nobody/delete", &[("csrf", &csrf)]).await.status, StatusCode::NOT_FOUND);
+    db::invite_user(pool, "bob", "bob@example.com", "Bob", "reader", "UTC").await.unwrap();
+    assert_eq!(john.post(&site, "/accounts/bob/delete", &[("csrf", &csrf)]).await.status, StatusCode::NOT_FOUND);
+    assert!(auth::find_user(pool, "bob").await.unwrap().is_some(), "an invitation is taken back instead");
+    assert!(auth::find_user(pool, "mary").await.unwrap().is_some());
+
+    // Deleted: the account and its rows go; John's stay; the article and Mary's source stay, now John's.
+    let deleted = john.post(&site, "/accounts/mary/delete", &[("csrf", &csrf)]).await;
+    assert_eq!(deleted.location, "/accounts?saved=deleted", "{}", deleted.text);
+    assert!(john.get(&site, &deleted.location).await.text.contains("Account deleted."));
+    assert!(auth::find_user(pool, "mary").await.unwrap().is_none());
+    for table in tables {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE user_id = 'mary'");
+        assert_eq!(sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await.unwrap(), 0, "{table}");
+    }
+    assert_eq!(count("SELECT COUNT(*) FROM sessions WHERE saved_by = 'john'").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM ratings WHERE user_id = 'john'").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM articles WHERE id = 'm1'").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM sources WHERE added_by = 'mary'").await, 0);
+    assert_eq!(count("SELECT COUNT(*) FROM sources WHERE added_by = 'john'").await, 1);
+
+    // Her browser is signed out: no account is behind its cookie any more.
+    let after = mary.get(&site, "/").await;
+    assert!(after.status == StatusCode::SEE_OTHER && after.location.starts_with("/login"), "{}", after.location);
+
+    // The same link now records nothing, so a later "mary" inherits nothing.
+    let tapped = Browser::default().get(&site, &link).await;
+    assert!(
+        tapped.status == StatusCode::NOT_FOUND && tapped.text.contains("not sent to an account"),
+        "{}",
+        tapped.text
+    );
+    assert_eq!(count("SELECT COUNT(*) FROM ratings WHERE user_id = 'mary'").await, 0);
+    assert_eq!(count("SELECT COUNT(*) FROM feedback_events WHERE user_id = 'mary'").await, 0);
+    // Nor once the address is invited again under the same id: the link counts only for a delivery.
+    db::invite_user(pool, "mary", "mary@example.com", "Mary", "reader", "UTC").await.unwrap();
+    assert_eq!(Browser::default().get(&site, &link).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(count("SELECT COUNT(*) FROM ratings WHERE user_id = 'mary'").await, 0);
 }

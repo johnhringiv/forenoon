@@ -1258,6 +1258,9 @@ def run(
             for message, group in messages:
                 ids = [i for attachment in group for i in attachment.article_ids]
                 if not dry_run:
+                    if not store.is_reader(user.id):  # checked before each message of a split book
+                        log.info("%s: the account was deleted during the run; nothing more sent", user.id)
+                        break
                     if message is not None:
                         sender([message], cfg.smtp)
                     store.mark_delivered(user.id, ids, now, story_of, positions=positions)
