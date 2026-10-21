@@ -2608,6 +2608,18 @@ class _Document(Document):
         for table in self.tags(node, "table"):
             if any(a.tag in ("td", "th") for a in table.iterancestors()):
                 allowed[table] = True
+        # A sub-list of short values ("Operating system" > "Ubuntu 24.04.4 LTS"): part of its item,
+        # not a box of its own to judge by length. Not a menu's, which is links.
+        for sub in self.tags(node, "ul", "ol"):
+            parent = sub.getparent()
+            if (
+                sub not in allowed
+                and parent is not None
+                and parent.tag == "li"
+                and len(" ".join(sub.text_content().split())) < self.min_text_length
+                and sub.find(".//a") is None
+            ):
+                allowed[sub] = True
         # A line of the article in a box of its own, where the page boxes each paragraph
         # (AsciiDoc's div.paragraph, Gleam's blog): short, or with a link, it read as furniture.
         for box in self.tags(node, "div"):
