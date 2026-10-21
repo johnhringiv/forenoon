@@ -2711,6 +2711,20 @@ class _Document(Document):
         that open with one of the same level (Logfire's, Mercor's). Readability joins siblings
         only on their own scores, and a short section scores less than a fifth of a long one."""
         best = best_candidate
+        best = self._paragraphs_box(candidates, best)
+        threshold = max(10, best["content_score"] * 0.2)  # readability's, for joining siblings
+        # Readability judges a sibling paragraph by its text before its first link: an opening
+        # sentence with a link in it reads as short and all link (mortoray's opening). Only the
+        # paragraphs before the article's box: after it come a page's notes and reply boxes.
+        title = _norm(self.short_title())[:TITLE_PREFIX_CHARS]
+        for sibling in best["elem"].itersiblings(preceding=True):
+            if (
+                sibling.tag == "p"
+                and sibling not in candidates
+                and self._text_paragraph(sibling)
+                and not (title and _norm(sibling.text_content()).startswith(title))  # the title set as a line
+            ):
+                candidates[sibling] = {"content_score": threshold, "elem": sibling}
         for box in (best["elem"], best["elem"].getparent()):
             if box is None:
                 break
@@ -2730,6 +2744,40 @@ class _Document(Document):
             candidates[parent] = best = holder
             break
         return super().get_article(candidates, best, html_partial)
+
+    def _text_paragraph(self, p) -> bool:
+        return _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS and self.get_link_density(p) < PARAGRAPH_LINKS
+
+    def _paragraphs_box(self, candidates, best):
+        """The box whose own paragraphs open the article, when the best box is inside it.
+
+        Cloudflare's post opens with two paragraphs in its article box and goes on in boxes of
+        quotes; the best box was one quote, four boxes in, and the opening went. A box a few
+        levels up is taken instead when it opens with two or more paragraphs of text of its own
+        (after a heading at most) before the one holding the best box, is not mostly links or
+        named as furniture, and holds at most three times the best box's text."""
+        elem = best["elem"]
+        size = len(" ".join(elem.text_content().split()))
+        for box in list(elem.iterancestors())[:PARAGRAPHS_BOX_DEPTH]:
+            if box.tag in ("body", "html") or _unlikely(box) or FURNITURE_CLASS.search(_names(box)):
+                break
+            if len(" ".join(box.text_content().split())) > PARAGRAPHS_BOX_GROWTH * size:
+                break
+            # It opens with paragraphs of text (after a heading at most), before the best box's branch.
+            opening = 0
+            for child in box:
+                if not isinstance(child.tag, str) or child.tag in HEADINGS:
+                    continue
+                if child.tag != "p" or not self._text_paragraph(child) or elem in child.iterdescendants():
+                    break
+                opening += 1
+            if opening >= 2 and self.get_link_density(box) <= MERGE_LINKS:
+                holder = dict(candidates.get(box) or self.score_node(box))
+                holder["elem"] = box
+                holder["content_score"] = max(holder["content_score"], best["content_score"])
+                candidates[box] = holder
+                return holder
+        return best
 
     def _text_list(self, ul) -> bool:
         if not ul.findall("li") or self.class_weight(ul) < 0 or FURNITURE_CLASS.search(_names(ul)):
@@ -2768,6 +2816,10 @@ class _Document(Document):
         return says and not self._site_list(ul)
 
 
+TITLE_PREFIX_CHARS = 40
+PARAGRAPH_LINKS = 0.25  # readability's, for a sibling paragraph of the article
+PARAGRAPHS_BOX_DEPTH = 4
+PARAGRAPHS_BOX_GROWTH = 3  # times the best box's text: more is the page around the article
 SENTENCE_HEADING_WORDS = 12
 SENTENCE_HEADING_LINK_SHARE = 0.5
 
