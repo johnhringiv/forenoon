@@ -20,6 +20,8 @@ from readability import Document
 from readability.readability import REGEXES as READABILITY_PATTERNS
 from readability.readability import clean as _readability_clean
 
+from . import formulas
+
 KEEP = {
     "p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "table", "thead",
     "tbody", "tfoot", "tr", "td", "th", "caption", "figure", "figcaption", "hr", "br", "dl", "dt",
@@ -1149,7 +1151,9 @@ def _drop_lone_links(body, url: str) -> None:
             el.drop_tree()
 
 
-def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False) -> lxml.html.HtmlElement | None:
+def _structure(
+    root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False, tex: formulas.Tex | None = None
+) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
     Works on the whole page, before the article is picked out of it, and returns the notes
@@ -1161,12 +1165,17 @@ def _structure(root: lxml.html.HtmlElement, base_url: str, whole_page: bool = Fa
     - Other in-page links to headings stay links inside the book instead of going to the site.
     - Inline code, callouts, and comments and keywords in highlighted code keep their meaning
       as elements.
+    - Formulas (MathML, KaTeX, and TeX the page renders with `tex`) become text (`formulas`).
 
     It works by shape and by widely used class names, not per site. What it finds is recorded
     in marker attributes that `sanitize` turns into ids and links of our own making, so no id
     or class from the page reaches the book.
     """
     _unmark(root)
+    try:
+        formulas.rewrite(root, tex)
+    except Exception:  # noqa: BLE001, S110 - hostile markup; the rest of the page is still rebuilt
+        pass
     _unwrap_lightboxes(root)
     _object_pictures(root)
     _unscroll(root)
@@ -1526,14 +1535,16 @@ def _picture_fallbacks(root: lxml.html.HtmlElement) -> None:
                 img.set("src", address)
 
 
-def _lift(markup: str, base_url: str, whole_page: bool) -> tuple[str, lxml.html.HtmlElement | None]:
+def _lift(
+    markup: str, base_url: str, whole_page: bool, tex: formulas.Tex | None = None
+) -> tuple[str, lxml.html.HtmlElement | None]:
     """The markup with its structure rebuilt and its notes taken out, and those notes."""
     try:
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
         _unnest_empty(root)
-        notes = _structure(root, base_url, whole_page)
+        notes = _structure(root, base_url, whole_page, tex)
         return lxml.html.tostring(root, encoding="unicode"), notes
     except Exception:  # noqa: BLE001 - hostile input; the article is still delivered without this
         # Unprocessed, so any marker in it is the page's own: make sure none is acted on.
@@ -1560,7 +1571,8 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
     """
     root = copy.deepcopy(root)
     for el in list(root.iter()):
-        if not isinstance(el.tag, str):  # comments, processing instructions
+        # Comments and processing instructions; and a formula's old text, kept only to pick the article.
+        if not isinstance(el.tag, str) or (marked and el.get(formulas.SHADOW)):
             el.drop_tree()
     _unnest_empty(root)
     _picture_fallbacks(root)
@@ -2521,6 +2533,16 @@ class _Document(Document):
         for table in self.tags(node, "table"):
             if any(a.tag in ("td", "th") for a in table.iterancestors()):
                 allowed[table] = True
+        # A display equation as short as "w = 1", in its own table or box: the length rule would
+        # take it for furniture, formula or not.
+        for box in self.tags(node, "table", "div", "section"):
+            if (
+                box not in allowed
+                and len(" ".join(box.text_content().split())) < self.min_text_length
+                and self.class_weight(box) >= 0
+                and box.xpath(f"descendant::math[@{formulas.SHADOW}]")
+            ):
+                allowed[box] = True
         return allowed
 
     def get_link_density(self, elem):
@@ -3411,11 +3433,12 @@ def extract(
     title = author = image = description = ""
     pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
+    tex = formulas.page_tex(page_html or "")  # the feed's copy is written with the page's TeX
     if page_html and mode != "feed":
         # An XHTML page's "<?xml ... encoding=...?>": the text is decoded already, and lxml
         # refuses to parse a string that still declares an encoding.
         page_html = XML_DECLARATION.sub("", page_html, count=1)
-        page_html, notes["page"] = _lift(page_html, url, whole_page=True)
+        page_html, notes["page"] = _lift(page_html, url, whole_page=True, tex=tex)
         notes["page-wide"] = notes["page"]
         page = _readability(page_html, url)
         if page is not None:
@@ -3428,7 +3451,7 @@ def extract(
             except Exception:  # noqa: BLE001, S110 - hostile markup; the article goes without the pictures
                 pass
             candidates["page"] = sanitize(page, url, marked=True)
-        reference = _reference_words(page_html)
+        reference = _reference_words(formulas.strip_shadows(page_html))  # trafilatura reads no <math> either
         title, author, image, description = page_metadata(page_html)
         kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
         # Long articles only: on a short post the page furniture outweighs the text.
@@ -3449,7 +3472,7 @@ def extract(
             candidates["page-live"] = live
             notes["page-live"] = notes["page"]
     if mode != "page" or not candidates:
-        feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False)
+        feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False, tex=tex)
         feed = _parse_fragment(feed_html)
         if feed is not None:
             candidates["feed"] = sanitize(feed, url, marked=True)
