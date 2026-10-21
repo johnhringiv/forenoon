@@ -101,7 +101,7 @@ pub(crate) async fn render(
         interests: user.interests.clone(),
         daily_stories: user.daily_stories.to_string(),
         format: user.format.clone(),
-        most_per_subject: user.most_per_subject.to_string(),
+        most_per_subject: if user.most_per_subject > 0 { user.most_per_subject.to_string() } else { String::new() },
         explore: user.explore,
         show_reasons: user.show_reasons,
     });

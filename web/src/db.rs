@@ -176,6 +176,7 @@ pub async fn revoke_invite(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Er
     }
     sqlx::query!("DELETE FROM email_tokens WHERE user_id = ?", id).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM follows WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM builtin_sections WHERE user_id = ?", id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(true)
 }
