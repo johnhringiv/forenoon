@@ -107,6 +107,8 @@ def send_requested(cfg: Config, store: Store, fetcher: Fetcher, now: datetime | 
                 entries = [IssueEntry(article, _feedback_links(cfg, user, article.id, now)) for article in articles]
                 book = render_issue(entries, now, title=first.title, cover=cover)
             attachment = Attachment(safe_filename(first.title), book, tuple(ids))
+            if not store.is_reader(user.id):  # deleted while the book was being made
+                raise ValueError("the account was deleted")
             sender([message for message, _ in build_messages(user, [attachment], cfg.smtp)], cfg.smtp)
             if fresh:
                 result = rebuilt[0][1]

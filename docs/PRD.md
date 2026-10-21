@@ -1027,6 +1027,17 @@ database with the pipeline.
   address counts as confirmed, the account follows every shared source, and the reader lands
   on the Reading page. Kindle hints name the install's sender address (`FORENOON_SMTP_SENDER`)
   and link to Amazon's Personal Document Settings, where every Kindle must approve it.
+- **Deleting an account.** An admin can delete any joined account but their own, from the
+  Accounts page, so an install always keeps an admin. It is behind a disclosure that says what
+  goes. The account goes with everything recorded for it: deliveries, selections,
+  assessments, book checks, ratings, rating events and problem reports, requests, reading-profile history,
+  follows and email links. Its browsers are signed out, and the rating links in books it was
+  sent stop recording anything, even if a later account is given the same id (a link counts
+  only for an article delivered to that account). The articles stay, since other readers share them, and the
+  sources and site logins it added pass to the admin who deleted it; the run reports in the
+  data folder keep its id. A daily run, Send to Kindle or added link already under way when it
+  is deleted sends it nothing and drops or refuses what it would have written. There is no
+  undo.
 - **Sign-in is by email address**, stored lowercase so casing and stray spaces cannot make
   two accounts of one address. The account id is separate and never changes: it names the
   reader in the pipeline's records.

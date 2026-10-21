@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sources SET added_by = ? WHERE added_by = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b3508553e7ba6f2c60682778928694ad7cb5fe3910f89167a141c638f8ea9cd6"
+}

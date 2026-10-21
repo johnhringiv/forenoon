@@ -66,6 +66,9 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
                 notify(cfg, "nothing delivered", ["There are no readers. Create an account in the web pages."])
             return 1
         for user in users:
+            if not store.is_reader(user.id):
+                log.info("%s: the account was deleted; skipped", user.id)
+                continue
             # Each reader's own: the feeds and built-in front pages they follow.
             sites = store.followed_builtins(user.id, cfg.discovery.sites)
             own = dataclasses.replace(
@@ -82,10 +85,18 @@ def _run_all(cfg: Config, args: argparse.Namespace) -> int:
             try:
                 report = run(own, store, fetcher, user, dry_run=args.dry_run, out_dir=args.out, backend=backend)
             except Exception as exc:
+                if not args.dry_run and not store.is_reader(user.id):
+                    log.info("%s: the account was deleted during the run; its rows are dropped", user.id)
+                    store.forget_reader(user.id)
+                    continue
                 log.exception("run crashed for %s", user.id)
                 if not args.dry_run:
                     notify(cfg, "run crashed", [f"User {user.id}: {type(exc).__name__}: {exc}", "See the logs."])
                 failed += 1
+                continue
+            if not args.dry_run and not store.is_reader(user.id):
+                log.info("%s: the account was deleted during the run; its rows are dropped", user.id)
+                store.forget_reader(user.id)
                 continue
             path = report.write(cfg.data_dir / "reports")
             print(report.to_markdown())
@@ -382,7 +393,8 @@ def _replay(cfg: Config, args: argparse.Namespace) -> int:
 def _golden(args: argparse.Namespace) -> int:
     from .golden import golden_epub
 
-    # With a feedback URL and a reader the footer links are real, so taps can be tested.
+    # With a feedback URL and a reader the footer links are real, so taps can be tested; the
+    # web app answers them for the article id "golden" and records nothing.
     links = None
     cfg = from_env()
     if cfg.public_base_url and cfg.db_path.exists():

@@ -2,7 +2,8 @@
 //!
 //! One SQLite file is shared with the Python pipeline. This app owns `users` and the session
 //! table. The pipeline owns everything else (see `pipeline-schema.sql`); of its tables this
-//! app writes only `ratings` and `feedback_events`, with the same rules as `app/store.py`.
+//! app writes only `ratings` and `feedback_events`, with the same rules as `app/store.py`,
+//! and deletes a reader's rows from them all when their account is deleted.
 
 use std::{path::Path, str::FromStr, time::Duration};
 
@@ -175,6 +176,40 @@ pub async fn revoke_invite(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Er
     }
     sqlx::query!("DELETE FROM email_tokens WHERE user_id = ?", id).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM follows WHERE user_id = ?", id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Delete a joined account and everything recorded for it, in one transaction. The articles
+/// stay, since other readers share them; the sources and site logins it added pass to `heir`,
+/// the admin deleting it, so someone can still manage them. False when there is no such
+/// joined account.
+pub async fn delete_user(pool: &SqlitePool, id: &str, heir: &str) -> Result<bool, sqlx::Error> {
+    let pipeline = pipeline_ready(pool).await?;
+    let checks = has_book_checks(pool).await?;
+    let mut tx = pool.begin().await?;
+    let done = sqlx::query!("DELETE FROM users WHERE id = ? AND invited_at IS NULL", id).execute(&mut *tx).await?;
+    if done.rows_affected() == 0 {
+        return Ok(false);
+    }
+    if pipeline {
+        sqlx::query!("DELETE FROM deliveries WHERE user_id = ?", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM selections WHERE user_id = ?", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM assessments WHERE user_id = ?", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM ratings WHERE user_id = ?", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM feedback_events WHERE user_id = ?", id).execute(&mut *tx).await?;
+    }
+    if checks {
+        sqlx::query!("DELETE FROM book_checks WHERE user_id = ?", id).execute(&mut *tx).await?;
+    }
+    sqlx::query!("DELETE FROM send_requests WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM add_requests WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM refresh_requests WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM profile_history WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM follows WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM email_tokens WHERE user_id = ?", id).execute(&mut *tx).await?;
+    sqlx::query!("UPDATE sources SET added_by = ? WHERE added_by = ?", heir, id).execute(&mut *tx).await?;
+    sqlx::query!("UPDATE sessions SET saved_by = ? WHERE saved_by = ?", heir, id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(true)
 }

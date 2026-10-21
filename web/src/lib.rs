@@ -138,6 +138,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/accounts", get(accounts::page).post(accounts::invite))
         .route("/accounts/{id}/resend", post(accounts::resend))
         .route("/accounts/{id}/revoke", post(accounts::revoke))
+        .route("/accounts/{id}/delete", post(accounts::delete))
         .route("/logout", post(pages::logout))
         // Everything above needs a session; an anonymous request is sent to the sign-in page.
         .route_layer(middleware::from_fn(pages::require_login))

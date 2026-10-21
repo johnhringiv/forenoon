@@ -1873,3 +1873,56 @@ def test_a_drawn_figure_gets_its_picture_with_no_note_or_the_note_alone(env, mon
             assert "<img" not in out and out.count(note) == 2
         else:  # the first is drawn, with no note under it; the second points to the page
             assert out.count("<img") == 1 and out.count(note) == 1
+
+
+def test_a_reader_deleted_during_the_run_is_sent_nothing(env):
+    """The web app's accounts table exists but john is not in it: an admin deleted him mid-run."""
+    cfg, store, fetcher = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    report = run(cfg, store, fetcher, cfg.users[0], now=NOW, sender=lambda m, s: pytest.fail("must not send"))
+    assert report.delivered == []
+    assert store.db.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("crashed", [False, True])
+def test_the_daily_run_skips_readers_deleted_before_their_turn_and_drops_one_deleted_during_it(
+    env, monkeypatch, crashed
+):
+    import argparse
+
+    from app import cli
+    from app.pipeline import RunReport
+
+    cfg, store, _ = env
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    add = "INSERT INTO users (id, name, password_hash, created_at) VALUES (?, ?, 'x', ?)"
+    store.db.executemany(add, [("john", "John", "1"), ("mary", "Mary", "2")])
+    store.db.execute("INSERT INTO sources (name, url, created_at) VALUES ('Blog', 'https://blog.example/feed', 'x')")
+    store.db.execute(
+        "INSERT INTO follows (user_id, source_id, created_at) SELECT u.id, s.id, 'x' FROM users u, sources s WHERE s.name = 'Blog'"
+    )
+    store.db.commit()
+    ran, alerts = [], []
+
+    def deleting_run(own, store, fetcher, user, **_):
+        # An admin deletes both accounts while John's run goes on; it has written a delivery.
+        ran.append(user.id)
+        store.upsert_article("a1", "https://blog.example/1", "Blog", "Post", "", None)
+        store.mark_delivered(user.id, ["a1"], NOW)
+        store.db.execute("DELETE FROM users")
+        store.db.commit()
+        if crashed:
+            raise AssertionError("must not be reported")
+        return RunReport(started="x", user=user.id)
+
+    monkeypatch.setattr(cli, "run", deleting_run)
+    monkeypatch.setattr(cli, "backend_from_env", lambda llm: None)
+    monkeypatch.setattr(cli, "notify", lambda cfg, *a: alerts.append(a))
+    monkeypatch.setattr(cli, "notify_run", lambda cfg, report: alerts.append(report))
+    args = argparse.Namespace(user=None, dry_run=False, out=None)
+    assert cli._run_all(cfg, args) == 0
+    assert ran == ["john"] and alerts == [], "Mary is skipped; neither raises an alert"
+    assert store.db.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+    assert not (cfg.data_dir / "reports").exists()

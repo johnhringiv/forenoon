@@ -1241,6 +1241,9 @@ def run(
     # A reader with no Kindle address, or who turned the daily email off, reads on the web pages:
     # the issue is built and recorded as for anyone, so it is on their newsstand and their
     # ratings count, and nothing is emailed. Send to Kindle still works for an address they have.
+    if attachments and not dry_run and not store.is_reader(user.id):
+        log.info("%s: the account was deleted during the run; nothing sent", user.id)
+        return report
     report.no_address = not user.kindle_addresses
     report.web_only = report.no_address or not user.daily_to_kindle
     # Each article's place in what was built, across every message: the web pages show the
