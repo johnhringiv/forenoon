@@ -618,6 +618,7 @@ def _names_word(pattern: re.Pattern, part: str) -> bool:
     return found is not None and len(part) - found.end() <= 3
 
 
+TABLE_WRAPPER_DEPTH = 3
 SECTION_ID_MIN = 6  # letters of a section's id that must be its heading's: "faq" says nothing
 TAILWIND_SCROLL = re.compile(r"(?:[\w-]+:)*scroll-[mp][trblxyse]?-\S+")  # "scroll-mt-24": a margin
 
@@ -636,8 +637,8 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
       an article ends on ("Related", "Comments") or opens with the furniture word ("Tweet
       this"). A heading starting "References" or "Sources" is the author's whatever follows.
     - A Tailwind scroll margin ("scroll-mt-24") is not a scrolling widget: it goes.
-    - The box a real table scrolls in ("table-scroll"), holding the table alone, loses the
-      name readability holds against it."""
+    - The boxes a real table scrolls in ("table-scroll", "scroll > table-wrap"), each holding
+      the table alone, lose the names readability holds against them."""
     page = base_url.split("#")[0]
     negative, unlikely = READABILITY_PATTERNS["negativeRe"], READABILITY_PATTERNS["unlikelyCandidatesRe"]
     for heading in list(root.iter(*HEADINGS)):
@@ -685,21 +686,26 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
         if any(TAILWIND_SCROLL.fullmatch(name) for name in names):
             heading.set("class", " ".join(name for name in names if not TAILWIND_SCROLL.fullmatch(name)))
     for table in root.iter("table"):
-        box = table.getparent()
-        if (
-            not table.xpath(".//th | .//thead | .//caption")
-            or box is None
-            or box is root
-            or box.tag != "div"
-            or (box.text or "").strip()
-            or (table.tail or "").strip()
-            or [c for c in box if isinstance(c.tag, str)] != [table]
-            or FURNITURE_CLASS.search(_names(box))
-        ):
+        if not table.xpath(".//th | .//thead | .//caption"):
             continue
-        if negative.search(_names(box)) or unlikely.search(_names(box)):
-            box.attrib.pop("class", None)
-            box.attrib.pop("id", None)
+        # Each box out that holds the table alone, as wrappers nest (div.scroll > div.table-wrap).
+        inner = table
+        for _ in range(TABLE_WRAPPER_DEPTH):
+            box = inner.getparent()
+            if (
+                box is None
+                or box is root
+                or box.tag != "div"
+                or (box.text or "").strip()
+                or (inner.tail or "").strip()
+                or [c for c in box if isinstance(c.tag, str)] != [inner]
+                or FURNITURE_CLASS.search(_names(box))
+            ):
+                break
+            if negative.search(_names(box)) or unlikely.search(_names(box)):
+                box.attrib.pop("class", None)
+                box.attrib.pop("id", None)
+            inner = box
 
 
 def _slug(text: str) -> str:
