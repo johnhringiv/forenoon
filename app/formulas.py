@@ -1157,7 +1157,8 @@ def tex_table(tex: str):
 
 RENDERER = re.compile(r"mathjax|katex|latex-rendered", re.IGNORECASE)
 SINGLE_DOLLAR = re.compile(
-    r"""mathjaxToggle|\[\s*\\?['"]\$\\?['"]\s*,\s*\\?['"]\$\\?['"]\s*\]|left\s*:\s*\\?['"]\$\\?['"]"""
+    # arXiv's abstract pages, al-folio and Chirpy turn $…$ on in a script file of their own
+    r"""mathjaxToggle|/assets/(?:al_math/)?js/mathjax-setup\.js|/assets/js/data/mathjax\.js|\[\s*\\?['"]\$\\?['"]\s*,\s*\\?['"]\$\\?['"]\s*\]|left\s*:\s*\\?['"]\$\\?['"]"""
 )
 DEFINITION = re.compile(
     r"\\(?:re|provide)?newcommand\*?\s*(?:\{\s*)?\\([A-Za-z]+)\s*(?:\}\s*)?(?:\[(\d)\]\s*(?:\[([^\]]{0,200})\]\s*)?)?(?=\{)"
@@ -1452,6 +1453,9 @@ ENVIRONMENT = re.compile(r"\\begin\{((?:equation|align|gather|multline|eqnarray|
 COMMENT = re.compile(r"(?<!\\)%[^\n]*")
 DELIMITERS = (("$$", "$$", True), ("\\[", "\\]", True), ("\\(", "\\)", False))
 DOLLAR = re.compile(r"(?<![\\$])\$(?![$])((?:\\\$|[^$])+?)(?<![\s\\])\$(?![\d$])")
+# "$ E = mc^2 $", spaced inside as al-folio's own demo writes it: only with TeX in it, so a
+# spaced price ("$ 5 or $ 10") is never a formula. It never matches past a dollar it rejects.
+SPACED = re.compile(r"(?<![\\$])\$(?![$])(?=[^$]*[\\^_=])((?:\\\$|[^$])+?)(?<!\\)\$(?![\d$])")
 PROSE = re.compile(r"(?<![\\{a-zA-Z])[a-zA-Z]{3,} +[a-zA-Z]{3,} +[a-zA-Z]{3,}")
 
 
@@ -1506,9 +1510,10 @@ def _spans(text: str, tex: Tex) -> list[tuple[int, int, str, bool]]:
         add(m.start(), end, text[m.start() : end], True)
         at = end
     if tex.single_dollar:
-        for m in DOLLAR.finditer(text):
-            if not PROSE.search(re.sub(r"\\\w+\{[^{}]*\}", "", m.group(1))):
-                add(m.start(), m.end(), m.group(1), False)
+        for pattern in (DOLLAR, SPACED):
+            for m in pattern.finditer(text):
+                if not PROSE.search(re.sub(r"\\\w+\{[^{}]*\}", "", m.group(1))):
+                    add(m.start(), m.end(), m.group(1), False)
     return sorted(found)
 
 

@@ -406,3 +406,14 @@ def test_mathjax_2_macros_in_its_config():
     )
     out = body_html(page("<p>Weights \\(w_{\\rc{i}}\\) and \\(\\y_1\\) here.</p>", head))
     assert "Weights <i>w</i><sub><i>i</i></sub> and <b>y</b><sub>1</sub> here." in out
+
+
+@pytest.mark.parametrize(
+    "setup",
+    ["/al-folio/assets/al_math/js/mathjax-setup.js", "/assets/js/mathjax-setup.js", "/assets/js/data/mathjax.js"],
+)
+def test_themes_that_turn_on_single_dollars_in_a_file(setup):
+    # al-folio and Chirpy set inlineMath [["$", "$"]] in a script of their own, not in the page.
+    head = f'<script src="{setup}"></script><script id="MathJax-script" src="https://cdn.example/mathjax/tex-chtml.js"></script>'
+    out = body_html(page("<p>Einstein: $ E = mc^2 $ and $x$, for $ 5 or $ 10 a month.</p>", head))
+    assert "Einstein: <i>E</i> = <i>mc</i><sup>2</sup> and <i>x</i>, for $ 5 or $ 10 a month." in out
