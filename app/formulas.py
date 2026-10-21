@@ -1120,11 +1120,22 @@ def _tex_source(math) -> str:
     return (math.get("alttext") or "").strip()
 
 
+MARK = "data-fn-math"  # on a box a formula was written into; extract's "data-fn" markers are ours alone
+
+
+def _mark(box) -> None:
+    """The box holds a formula: kept by the article picker however short (a short box reads as
+    furniture, and a formula as text is shorter than its TeX was)."""
+    if box is not None and isinstance(box.tag, str):
+        box.set(MARK, "true")
+
+
 def _replace(old, holder) -> None:
     """Put a holder's content where an element was, keeping the element's tail."""
     parent = old.getparent()
     if parent is None:
         return
+    _mark(parent)
     holder.tail = old.tail
     parent.replace(old, holder)
     holder.drop_tag()
@@ -1354,6 +1365,7 @@ def _split(el, which: str, tex: Tex) -> None:
         if not text[:start].strip() and not text[end:].strip() and _own_block(el, source, tex):
             return
     container = el if which == "text" else el.getparent()
+    _mark(container)
     pieces: list = []
     at = 0
     for start, end, source, display in spans:
@@ -1361,6 +1373,7 @@ def _split(el, which: str, tex: Tex) -> None:
         piece = _tex_html(source, tex, display)
         if display and _local(container.tag) in CONTAINERS:
             piece.tag = "p"  # a display between paragraphs is one, as its page shows it
+            _mark(piece)
             piece = _wrap("span", piece)
         pieces.append(piece)
         at = end
@@ -1411,6 +1424,7 @@ def _paragraph(el, which: str, container) -> None:
     if not any(_local(k.tag) not in PHRASING for k in _kids(container)):
         return  # the box is the paragraph
     para = lxml.html.Element("p")
+    _mark(para)
     if which == "text":
         para.text, el.text = el.text, None
         while len(el) and _local(el[0].tag) in PHRASING:
@@ -1455,6 +1469,8 @@ def _own_block(el, source: str, tex: Tex) -> bool:
         for child in list(piece):
             block.append(child)
     block.tail = box.tail
+    _mark(block)
+    _mark(box.getparent())
     box.getparent().replace(box, block)
     if block.tail:  # "where \(x\) is real" after the display: the walk has passed this box
         _split(block, "tail", tex)

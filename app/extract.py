@@ -2532,6 +2532,16 @@ class _Document(Document):
         for table in self.tags(node, "table"):
             if any(a.tag in ("td", "th") for a in table.iterancestors()):
                 allowed[table] = True
+        # A short box holding a formula: written as text it is shorter than its TeX, and the
+        # length rule would take it for furniture ("where x is real." beside a display).
+        for box in self.tags(node, "div", "section"):
+            if (
+                box not in allowed
+                and len(" ".join(box.text_content().split())) < self.min_text_length
+                and self.class_weight(box) >= 0
+                and box.xpath(f"descendant-or-self::*[@{formulas.MARK}]")
+            ):
+                allowed[box] = True
         return allowed
 
     def get_link_density(self, elem):

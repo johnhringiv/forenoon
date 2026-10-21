@@ -274,3 +274,12 @@ def test_hostile_regexes_stay_linear():
     formulas.page_tex("katex \\newcommand" + " " * 200_000)
     formulas.page_tex("katex <script>MathJax={tex:{macros:{" + "a" * 20_000 + "}}}</script>")
     assert time.monotonic() - started < 2
+
+
+def test_a_short_box_with_a_formula_is_kept():
+    # Written as text, "where x is real." is under the 25 characters below which the article
+    # picker drops a box as furniture; as raw TeX it was just over.
+    out = body_html(page("<div><p>\\[x^2\\]</p>where \\(x\\) is real.</div>", MATHJAX))
+    assert "<p><i>x</i><sup>2</sup></p><p>where <i>x</i> is real.</p>" in out
+    out = body_html(page('<div class="sidebar"><p>See \\(x\\) too.</p></div>', MATHJAX))
+    assert "See" not in out  # a box the page names as furniture is not kept for its formula
