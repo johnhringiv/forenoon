@@ -1529,15 +1529,18 @@ pub async fn set_reading(
     let interests = form.interests.replace("\r\n", "\n");
     let interests = interests.trim();
     let daily = form.daily_stories.trim().parse::<i64>().ok().filter(|n| (1..=MAX_DAILY_STORIES).contains(n));
-    let per_subject = form.most_per_subject.as_deref().unwrap_or("").trim().parse::<i64>().ok();
-    let per_subject = per_subject.filter(|n| (0..=MAX_PER_SUBJECT).contains(n));
+    // Left empty, no limit: stored as 0.
+    let per_subject = match form.most_per_subject.as_deref().unwrap_or("").trim() {
+        "" => Some(0),
+        text => text.parse::<i64>().ok().filter(|n| (0..=MAX_PER_SUBJECT).contains(n)),
+    };
     let format = form.format.as_deref().filter(|format| ["issue", "articles"].contains(format));
     let problem = if interests.chars().count() > MAX_INTERESTS {
         Some(format!("Interests can be at most {MAX_INTERESTS} characters."))
     } else if daily.is_none() {
         Some(format!("Stories a day must be a number from 1 to {MAX_DAILY_STORIES}."))
     } else if per_subject.is_none() {
-        Some(format!("Most on one subject must be a number from 0 to {MAX_PER_SUBJECT}."))
+        Some(format!("Most on one subject must be a number from 1 to {MAX_PER_SUBJECT}, or empty for no limit."))
     } else if format.is_none() {
         Some("Choose one book a day or one book per article.".to_owned())
     } else {

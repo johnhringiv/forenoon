@@ -11,6 +11,7 @@
 //! whoever follows the feed.
 
 use std::{
+    collections::{BTreeSet, HashMap},
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path as FilePath, PathBuf},
@@ -199,15 +200,15 @@ fn check_name(name: &str) -> Result<String, String> {
     }
 }
 
-/// The most of a day's places a source may take: a whole number from 0 (no limit) to 50.
+/// The most of a day's places a source may take, up to 50; left empty (or 0, as it is stored),
+/// no limit.
 fn daily_max(sent: Option<&str>) -> Result<i64, String> {
     match sent.map(str::trim) {
         None => Ok(DEFAULT_DAILY_MAX),
-        Some(text) => text
-            .parse()
-            .ok()
-            .filter(|n| (0..=MAX_DAILY_MAX).contains(n))
-            .ok_or_else(|| format!("Places a day: give a whole number from 0 (no limit) to {MAX_DAILY_MAX}.")),
+        Some("") => Ok(0),
+        Some(text) => text.parse().ok().filter(|n| (0..=MAX_DAILY_MAX).contains(n)).ok_or_else(|| {
+            format!("Places a day: give a whole number from 1 to {MAX_DAILY_MAX}, or leave it empty for no limit.")
+        }),
     }
 }
 
@@ -232,6 +233,108 @@ struct BuiltinRow {
     state: &'static str,
     /// The dot's tooltip.
     dot: String,
+    /// The parts of it this reader reads, for a source that has parts (Lobsters).
+    sections: Option<Sections>,
+}
+
+/// A reader's choice of a site's front page and tags, as the picker shows it.
+struct Sections {
+    front: bool,
+    /// The tags by category, in the order of CATEGORIES; the last group is any the reader chose
+    /// that the site no longer has.
+    groups: Vec<TagGroup>,
+    /// What is read, in a few words: "Front page and 3 tags".
+    summary: String,
+}
+
+struct TagGroup {
+    label: &'static str,
+    /// How many of its tags are ticked, shown on the closed group.
+    ticked: usize,
+    tags: Vec<TagBox>,
+}
+
+struct TagBox {
+    tag: String,
+    description: String,
+    checked: bool,
+}
+
+/// The section that is a site's front page; any other is one of its tags.
+const FRONT: &str = "front";
+/// Lobsters' categories of tags, in the order the picker shows them; one it adds goes last.
+const CATEGORIES: [(&str, &str); 10] = [
+    ("languages", "Languages"),
+    ("os", "Operating systems"),
+    ("platforms", "Platforms"),
+    ("tools", "Tools"),
+    ("practices", "Practices"),
+    ("compsci", "Computer science"),
+    ("field", "Other fields"),
+    ("interaction", "Design"),
+    ("culture", "Culture"),
+    ("genre", "Kind of story"),
+];
+
+/// The Lobsters tags a reader may choose, as (tag, category, description).
+async fn lobsters_tags(pool: &SqlitePool) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    let rows =
+        sqlx::query!("SELECT tag, category, description FROM lobsters_tags ORDER BY tag").fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|row| (row.tag, row.category, row.description)).collect())
+}
+
+/// The sections this reader chose, by built-in key; one missing is read by its front page.
+async fn chosen_sections(pool: &SqlitePool, user: &str) -> Result<HashMap<String, Vec<String>>, sqlx::Error> {
+    let rows =
+        sqlx::query!("SELECT builtin, section FROM builtin_sections WHERE user_id = ?", user).fetch_all(pool).await?;
+    let mut chosen: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        chosen.entry(row.builtin).or_default().push(row.section);
+    }
+    Ok(chosen)
+}
+
+fn sections(tags: &[(String, String, String)], chosen: Option<&Vec<String>>) -> Sections {
+    let chosen: BTreeSet<&str> =
+        chosen.map_or_else(|| BTreeSet::from([FRONT]), |c| c.iter().map(String::as_str).collect());
+    let label =
+        |category: &str| CATEGORIES.iter().find(|(key, _)| *key == category).map_or("Other tags", |(_, label)| *label);
+    let order = |category: &str| CATEGORIES.iter().position(|(key, _)| *key == category).unwrap_or(CATEGORIES.len());
+    let mut groups: Vec<TagGroup> = Vec::new();
+    let mut sorted: Vec<&(String, String, String)> = tags.iter().collect();
+    sorted.sort_by_key(|(tag, category, _)| (order(category), label(category), tag.clone()));
+    for (tag, category, description) in sorted {
+        let checked = chosen.contains(tag.as_str());
+        let tag = TagBox { tag: tag.clone(), description: description.clone(), checked };
+        match groups.last_mut() {
+            Some(group) if group.label == label(category) => group.tags.push(tag),
+            _ => groups.push(TagGroup { label: label(category), ticked: 0, tags: vec![tag] }),
+        }
+    }
+    let gone: Vec<TagBox> = chosen
+        .iter()
+        .filter(|section| **section != FRONT && !tags.iter().any(|(tag, _, _)| tag == *section))
+        .map(|section| TagBox {
+            tag: (*section).to_owned(),
+            description: "Lobsters no longer has this tag, so it is not read. Untick it and save.".to_owned(),
+            checked: true,
+        })
+        .collect();
+    if !gone.is_empty() {
+        groups.push(TagGroup { label: "No longer on Lobsters", ticked: 0, tags: gone });
+    }
+    for group in &mut groups {
+        group.ticked = group.tags.iter().filter(|tag| tag.checked).count();
+    }
+    let front = chosen.contains(FRONT);
+    let read =
+        chosen.iter().filter(|section| **section != FRONT && tags.iter().any(|(tag, _, _)| tag == *section)).count();
+    let summary = match (front, read) {
+        (true, 0) => "Front page".to_owned(),
+        (true, n) => format!("Front page and {n} tag{}", if n == 1 { "" } else { "s" }),
+        (false, n) => format!("{n} tag{}", if n == 1 { "" } else { "s" }),
+    };
+    Sections { front, groups, summary }
 }
 
 struct FeedRow {
@@ -424,6 +527,8 @@ async fn render(
     let health = health(&state.pool).await?;
     let sources = list(&state.pool, user).await?;
     let sites = sessions(&state.pool).await?;
+    let tags = lobsters_tags(&state.pool).await?;
+    let chosen = chosen_sections(&state.pool, &user.id).await?;
     let runs: std::collections::HashMap<String, Run> =
         read_json(&state.sessions_dir.join("status.json")).unwrap_or_default();
     let (total, paused) = (sources.len(), sources.iter().filter(|source| !source.enabled).count());
@@ -461,6 +566,7 @@ async fn render(
                 enabled: source.enabled,
                 followed: source.followed,
                 dot: dot(if source.followed { "chosen" } else { "none" }, state, None, status.as_deref()),
+                sections: (source.builtin == "lobsters").then(|| sections(&tags, chosen.get(&source.builtin))),
                 status,
                 failing,
                 state,
@@ -642,6 +748,7 @@ pub async fn page(State(state): State<AppState>, viewer: Viewer, Query(query): Q
         Some("session") => Some("Session saved. Pages from that site are fetched with it from the next run."),
         Some("nosession") => Some("Session removed."),
         Some("saved") => Some("Saved."),
+        Some("sections") => Some("Saved. It is read that way for you from the next run."),
         Some("removed") => Some("Source removed. Articles already delivered from it are kept."),
         _ => None,
     };
@@ -993,6 +1100,56 @@ pub async fn toggle(
     .execute(&state.pool)
     .await?;
     saved("saved")
+}
+
+/// What of a built-in source this reader reads: its front page, and any of its tags. The form
+/// is a list of `section` fields, one per ticked box.
+pub async fn set_sections(
+    State(state): State<AppState>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Form(form): Form<Vec<(String, String)>>,
+) -> Page {
+    let csrf = form.iter().find(|(key, _)| key == "csrf").map_or("", |(_, value)| value.as_str());
+    if let Some(response) = guard(&auth, &session, &headers, csrf).await? {
+        return Ok(response);
+    }
+    let user = reader(&auth)?;
+    let pool = &state.pool;
+    let Some(source) = visible(pool, &user, id).await?.filter(|s| s.kind == "builtin" && s.builtin == "lobsters")
+    else {
+        return refused(StatusCode::NOT_FOUND, NO_SUCH);
+    };
+    let tags = lobsters_tags(pool).await?;
+    // A tag the site has, or front; anything else is dropped, including a tag it no longer has.
+    let ticked: BTreeSet<&str> = form
+        .iter()
+        .filter(|(key, _)| key == "section")
+        .map(|(_, value)| value.as_str())
+        .filter(|value| *value == FRONT || tags.iter().any(|(tag, _, _)| tag == value))
+        .collect();
+    if ticked.is_empty() {
+        let problem = format!("Tick the front page or a tag. To stop reading {}, unfollow it.", source.name);
+        return finish(&state, &auth, &session, Ok(Err(problem)), "").await;
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query!("DELETE FROM builtin_sections WHERE user_id = ? AND builtin = ?", user.id, source.builtin)
+        .execute(&mut *tx)
+        .await?;
+    for section in ticked {
+        sqlx::query!(
+            "INSERT INTO builtin_sections (user_id, builtin, section) VALUES (?, ?, ?)",
+            user.id,
+            source.builtin,
+            section
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    saved("sections")
 }
 
 #[derive(Deserialize)]

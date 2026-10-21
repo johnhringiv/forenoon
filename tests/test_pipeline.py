@@ -14,7 +14,7 @@ from lxml import etree
 from PIL import Image
 
 from app.config import Config, Llm, Smtp, Source, User
-from app.fetch import Fetcher
+from app.fetch import Fetcher, FetchError
 from app.pipeline import run, triage
 from app.store import Store
 from app.tokens import verify_token
@@ -1296,6 +1296,85 @@ def test_discovery_looks_back_as_far_as_the_age_limit_and_takes_new_stories_firs
     # Three days, not one: a story that gets its votes a day late is still inside the window.
     assert 0 <= (NOW - timedelta(days=3)).timestamp() - since < 3600
     assert "hitsPerPage=1000" in more and "attributesToRetrieve=" in more
+
+
+def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_path):
+    from app import cli
+    from app.discover import lobsters_tags, read_listing
+
+    asked = []
+    tags = [
+        {"tag": f"t{n}", "category": "languages", "description": "", "active": True, "privileged": False}
+        for n in range(25)
+    ]
+    tags += [
+        {
+            "tag": "rust",
+            "category": "languages",
+            "description": "Rust  programming",
+            "active": True,
+            "privileged": False,
+        },
+        {"tag": "video", "category": "format", "description": "Video", "active": True, "privileged": False},
+        {"tag": "news", "category": "genre", "description": "Old", "active": False, "privileged": False},
+        {"tag": "announce", "category": "lobsters", "description": "Site", "active": True, "privileged": True},
+        {"tag": "../x", "category": "languages", "description": "", "active": True, "privileged": False},
+    ]
+
+    def site(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        asked.append(url)
+        if url.endswith("/tags.json"):
+            return httpx.Response(200, json=tags)
+        if "/t/" in url:
+            stories = [
+                {"title": "Voted", "url": "https://a.example/voted", "score": 9, "created_at": "2026-03-05T08:00:00Z"},
+                {
+                    "title": "Brand new",
+                    "url": "https://a.example/new",
+                    "score": 1,
+                    "created_at": "2026-03-05T09:00:00Z",
+                },
+            ]
+            return httpx.Response(200, json=stories if "/page/" not in url else [])
+        return httpx.Response(200, json=[{"title": "Hot", "url": "https://a.example/hot", "score": 1}])
+
+    fetcher = Fetcher("test", None, min_host_interval=0, transport=httpx.MockTransport(site))
+    # Tags alone: their listing, newest first, and only stories with a few votes; no front page.
+    items = read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("rust", "c++", "../x"))
+    assert [i.title for i in items] == ["Voted"]
+    assert asked == ["https://lobste.rs/t/rust,c%2B%2B.json", "https://lobste.rs/t/rust,c%2B%2B/page/2.json"]
+    asked.clear()
+    items = read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("front", "rust"))
+    assert [i.title for i in items] == ["Hot", "Voted"], "the front page takes any story, first"
+    assert len(asked) == 5
+    asked.clear()
+    read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("../x",))
+    assert asked[0] == "https://lobste.rs/hottest.json", "no usable tag: the front page"
+
+    # The tags a reader may choose are the site's subjects as it lists them now.
+    offered = lobsters_tags(fetcher)
+    assert ("rust", "languages", "Rust programming") in offered
+    assert not {"video", "news", "announce", "../x"} & {tag for tag, _, _ in offered}
+    tags[:] = tags[:3]
+    with pytest.raises(FetchError, match="only 3 tags"):
+        lobsters_tags(fetcher)
+
+    # Refreshed once a run; a tag the site dropped is not asked for, as it fails the listing.
+    store = Store(tmp_path / "forenoon.sqlite3")
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    store.db.executemany(
+        "INSERT INTO builtin_sections (user_id, builtin, section) VALUES ('mary', 'lobsters', ?)",
+        [("front",), ("rust",), ("databases",)],
+    )
+    store.db.commit()
+    assert store.builtin_sections("mary") == {"lobsters": ("databases", "front", "rust")}
+    store.replace_lobsters_tags([("rust", "languages", "Rust programming")])
+    assert store.builtin_sections("mary") == {"lobsters": ("front", "rust")}
+    assert store.builtin_sections("john") == {}
+    cli._refresh_lobsters_tags(store, fetcher, dry_run=False)  # the list now looks broken: kept
+    assert [r[0] for r in store.db.execute("SELECT tag FROM lobsters_tags")] == ["rust"]
 
 
 def test_a_post_dated_before_it_appeared_is_not_lost(env):

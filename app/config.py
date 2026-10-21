@@ -107,6 +107,8 @@ class Discovery:
     sites: tuple[str, ...] = ()
     # The most of a day's places each may take, by key, as set there; 0 or missing, no limit.
     daily_max: dict[str, int] = field(default_factory=dict)
+    # The parts of each a reader reads, by key, as they chose them there; missing, the front page.
+    sections: dict[str, tuple[str, ...]] = field(default_factory=dict)
     per_site: int = 100  # candidates sent to the model per site
 
 

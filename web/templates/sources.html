@@ -9,12 +9,12 @@
 {% if let Some(notice) = notice %}<p class="notice">{{ notice }}</p>{% endif %}
 
 <h2>Built in <span>front pages Forenoon knows how to read</span></h2>
-<p class="hint">Their stories join the day's candidates and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places (0){% if admin %}; set one to cap it{% endif %}.{% if !demo %} Follow the ones you want in your issue.{% endif %}</p>
+<p class="hint">Their stories join the day's candidates and compete for the day's places on the model's score like any feed's articles. Each carries many publishers, so by default it has no limit on the day's places{% if admin %}; set one to cap it{% endif %}.{% if !demo %} Follow the ones you want in your issue.{% endif %}</p>
 {% for row in builtins %}
 {% if demo %}<div class="row{% if !row.enabled %} paused{% endif %}{% if !row.followed %} unfollowed{% endif %}">
 <div class="summary">{% else %}<details class="row{% if !row.enabled %} paused{% endif %}{% if !row.followed %} unfollowed{% endif %}">
 <summary>{% endif %}<span class="dot {{ row.state }}" role="img" title="{{ row.dot }}" aria-label="{{ row.dot }}"></span><span class="name">{{ row.name }}</span><span class="addr">{{ row.about }}</span>
-<span class="tags">{% if !row.followed %}<span class="tag">Not followed</span>{% endif %}{% if !row.enabled %}<span class="tag">Off</span>{% endif %}<span class="tag">{{ row.limit }}</span></span>
+<span class="tags">{% if !row.followed %}<span class="tag">Not followed</span>{% endif %}{% if !row.enabled %}<span class="tag">Off</span>{% endif %}{% if let Some(sections) = row.sections %}{% if row.followed %}<span class="tag">{{ sections.summary }}</span>{% endif %}{% endif %}<span class="tag">{{ row.limit }}</span></span>
 <p class="state{% if row.failing && row.enabled %} failing{% endif %}">{% if !row.enabled %}Off for everyone.{% else if let Some(status) = row.status %}{{ status }}{% else %}Not read yet.{% endif %}</p>
 {% if demo %}</div></div>{% else %}</summary>
 <form class="source" method="post" action="/sources/{{ row.id }}/follow">
@@ -23,11 +23,25 @@
 {% if row.followed %}<button name="follow" value="0">Unfollow</button>{% else %}<button class="primary" name="follow" value="1">Follow</button>{% endif %}
 </div>
 </form>
+{% if let Some(sections) = row.sections %}{% if row.followed %}
+<form class="source sections" method="post" action="/sources/{{ row.id }}/sections">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<p class="hint">What you read of {{ row.name }}: its front page, and the stories with any tag you tick. A tag's stories are taken once they have a few votes. Hover over a tag for what it covers.</p>
+<label class="tick"><input type="checkbox" name="section" value="front"{% if sections.front %} checked{% endif %}> Front page: the hottest stories, whatever their tags</label>
+{% for group in sections.groups %}
+<details class="tagset"{% if group.ticked > 0 %} open{% endif %}>
+<summary>{{ group.label }}{% if group.ticked > 0 %} <span class="count">{{ group.ticked }} ticked</span>{% endif %}</summary>
+<div class="taglist">{% for tag in group.tags %}<label class="tick" title="{{ tag.description }}"><input type="checkbox" name="section" value="{{ tag.tag }}"{% if tag.checked %} checked{% endif %}> {{ tag.tag }}</label>{% endfor %}</div>
+</details>
+{% endfor %}
+<div class="fields"><button class="primary">Save</button></div>
+</form>
+{% endif %}{% endif %}
 {% if admin %}
 <form class="source" method="post" action="/sources/{{ row.id }}/toggle">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <div class="fields">
-<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{{ row.daily_max }}"></label>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="{% if row.daily_max > 0 %}{{ row.daily_max }}{% endif %}" placeholder="No limit"></label>
 <button class="primary" name="enabled" value="{% if row.enabled %}1{% else %}0{% endif %}">Save</button>
 {% if row.enabled %}<button name="enabled" value="0">Turn off</button>{% else %}<button name="enabled" value="1">Turn on</button>{% endif %}
 </div>
@@ -46,12 +60,12 @@
 <label>Name <input name="name" maxlength="80" required></label>
 <label class="wide">Feed or site address <input name="address" maxlength="2000" placeholder="https://example.com/" required></label>
 <label>Take the text from <select name="extract"><option value="auto">Best of page and feed</option><option value="page">Web page only</option><option value="feed">Feed only</option><option value="link">Nowhere: show picks as links</option></select></label>
-<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="2"></label>
+<label>Places a day, at most <input name="daily_max" type="number" step="1" min="0" max="50" value="2" placeholder="No limit"></label>
 <label class="tick"><input type="checkbox" name="pinned" value="1"> Pinned</label>
 <label class="tick"><input type="checkbox" name="shared" value="1" checked> Shared with the household</label>
 <button class="primary">Add</button>
 </div>
-<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. "Places a day" is the most of an issue the source may take (0 for no limit); links you add by hand do not count. A pinned source's articles are all taken, before all others, and past its places a day they are extra: they do not use the day's places. A feed is shared with the household unless you untick it: sharing it adds it to the sources of every reader who follows shared feeds (the tick below), and anyone who does not want it unfollows it. A private feed is yours alone until you share it. Changes apply from the next run.</p>
+<p class="hint">Paste a feed's address, or just the site's: the feed is looked for and the address corrected within a minute. "Best of page and feed" takes whichever copy of an article is fuller; "Web page only" suits feeds that carry just a teaser; "Feed only" never fetches the article page. "Places a day" is the most of an issue the source may take (empty for no limit); links you add by hand do not count. A pinned source's articles are all taken, before all others, and past its places a day they are extra: they do not use the day's places. A feed is shared with the household unless you untick it: sharing it adds it to the sources of every reader who follows shared feeds (the tick below), and anyone who does not want it unfollows it. A private feed is yours alone until you share it. Changes apply from the next run.</p>
 </form>
 </details>
 <form class="switch" method="post" action="/sources/follow-new"><input type="hidden" name="csrf" value="{{ csrf }}"><label class="tick"><input type="checkbox" name="follow_new" value="1"{% if follow_new %} checked{% endif %}> Follow feeds when they are shared with the household</label> <button>Save</button></form>{% endif %}
