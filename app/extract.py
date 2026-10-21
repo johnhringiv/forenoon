@@ -10,6 +10,7 @@ import base64
 import copy
 import itertools
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit
 
@@ -2607,6 +2608,11 @@ class _Document(Document):
         for table in self.tags(node, "table"):
             if any(a.tag in ("td", "th") for a in table.iterancestors()):
                 allowed[table] = True
+        # A line of the article in a box of its own, where the page boxes each paragraph
+        # (AsciiDoc's div.paragraph, Gleam's blog): short, or with a link, it read as furniture.
+        for box in self.tags(node, "div"):
+            if box not in allowed and self._paragraph_box(box):
+                allowed[box] = True
         # A display equation as short as "w = 1", in its own table or box: the length rule would
         # take it for furniture, formula or not.
         for box in self.tags(node, "table", "div", "section"):
@@ -2748,6 +2754,32 @@ class _Document(Document):
     def _text_paragraph(self, p) -> bool:
         return _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS and self.get_link_density(p) < PARAGRAPH_LINKS
 
+    def _paragraph_box(self, box) -> bool:
+        """A box holding one paragraph or quote of the article: the page puts each in a box of
+        its own (a sibling box of the same class holds one too), and it says something of its
+        own beside any link, in the article's words rather than a site's pitch."""
+        kids = [c for c in box if isinstance(c.tag, str)]
+        if len(kids) != 1 or kids[0].tag not in ("p", "blockquote") or (box.text or "").strip():
+            return False
+        line = kids[0]
+        text = " ".join(line.text_content().split())
+        if len(text) >= PARAGRAPH_BOX_CHARS or self.class_weight(box) < 0 or FURNITURE_CLASS.search(_names(box)):
+            return False
+        links = " ".join(" ".join(a.text_content().split()) for a in line.iter("a"))
+        if _words(text) - _words(links) < PARAGRAPH_BOX_OWN_WORDS or line.xpath(MEDIA_XPATH):
+            return False
+        if _furniture_lead(line) or (line.tag == "p" and _furniture_lead(box)):
+            return False
+        parent, style = box.getparent(), box.get("class")
+        if parent is None or not style:
+            return False
+        cache = self.__dict__.setdefault("_paragraph_classes", {})
+        if parent not in cache:  # once per parent: a page can box thousands of paragraphs
+            cache[parent] = Counter(
+                c.get("class") for c in parent if isinstance(c.tag, str) and c.tag == "div" and c.find("p") is not None
+            )
+        return cache[parent][style] >= 2  # this box and another of the article's
+
     def _paragraphs_box(self, candidates, best):
         """The box whose own paragraphs open the article, when the best box is inside it.
 
@@ -2817,6 +2849,8 @@ class _Document(Document):
 
 
 TITLE_PREFIX_CHARS = 40
+PARAGRAPH_BOX_CHARS = 200  # longer, readability keeps the box on its own length
+PARAGRAPH_BOX_OWN_WORDS = 3
 PARAGRAPH_LINKS = 0.25  # readability's, for a sibling paragraph of the article
 PARAGRAPHS_BOX_DEPTH = 4
 PARAGRAPHS_BOX_GROWTH = 3  # times the best box's text: more is the page around the article
