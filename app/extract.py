@@ -818,6 +818,112 @@ def _join_lone_headings(root: lxml.html.HtmlElement) -> None:
         first.addprevious(heading)
 
 
+LOOSE_RUN_MIN_WORDS = 3
+LOOSE_BOXES = ("div", "section", "article", "main", "aside", "body")
+# The blocks that end a run of loose text; anything else (inline elements, a toolbar's buttons
+# and custom elements) runs with the text.
+RUN_BLOCKS = {
+    "p", "div", "section", "article", "main", "aside", "header", "footer", "nav", "ul", "ol", "dl",
+    "pre", "blockquote", "table", "figure", "hr", "details", "form", "fieldset", "address", "center",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}  # fmt: skip
+# A sentence's end, or a lead-in's colon, after a lowercase word: "features.", "letter:"; not
+# "M.Sc.", "J." or "From:".
+SENTENCE_END = re.compile(r"\b[a-z]{3,}[.!?:][\"'”’)\]]*(\s|$)")
+
+
+def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
+    """Make each run of loose text in a box of blocks a paragraph of its own, as a browser shows it.
+
+    Readability-lxml makes a paragraph of a box's leading text and of each text after an inline
+    element, so a sentence was cut at every link or <em> (Phoronix writes its article as text
+    and <br>s in a box beside a few blocks). Here a run of text and inline elements between two
+    blocks is one paragraph; two <br>s in a row end one, as they look on the page. Only a run of
+    prose is made one: three words or more outside links, with a sentence's end. A label, a lone
+    "Read more", a toolbar's strings or a line of dates is left as it is, and so is a box with no
+    blocks (buttons and custom elements are not blocks), which readability makes one paragraph."""
+    for box in list(root.iter(*LOOSE_BOXES)):
+        if not any(isinstance(c.tag, str) and c.tag in RUN_BLOCKS for c in box):
+            continue
+        if not (box.text or "").strip() and not any(
+            (c.tail or "").strip() or (isinstance(c.tag, str) and c.tag not in RUN_BLOCKS and c.tag != "br")
+            for c in box
+        ):
+            continue
+        # The box's children and text, as runs between its blocks.
+        runs: list[list] = [[box.text or ""]]
+        box.text = None
+        order: list = []  # blocks and runs, in the page's order
+        for child in list(box):
+            tail, child.tail = child.tail or "", None
+            box.remove(child)
+            inline = not isinstance(child.tag, str) or child.tag not in RUN_BLOCKS
+            if inline and child.tag == "br" and _ends_with_br(runs[-1]):
+                runs[-1].pop()  # the first <br> of the pair, and whitespace after it
+                while runs[-1] and isinstance(runs[-1][-1], str) and not runs[-1][-1].strip():
+                    runs[-1].pop()
+                order.append(runs[-1])
+                runs.append([tail])
+                continue
+            if inline:
+                runs[-1].extend([child, tail])
+                continue
+            order.append(runs[-1])
+            order.append(child)
+            runs.append([tail])
+        order.append(runs[-1])
+        for part in order:
+            if not isinstance(part, list):
+                box.append(part)
+                continue
+            for node in _loose_run(part):
+                box.append(node) if not isinstance(node, str) else _append_text(box, node)
+
+
+def _ends_with_br(run: list) -> bool:
+    for node in reversed(run):
+        if isinstance(node, str):
+            if node.strip():
+                return False
+            continue
+        return isinstance(node.tag, str) and node.tag == "br"
+    return False
+
+
+def _loose_run(run: list) -> list:
+    """A run's nodes: one paragraph holding them when there is text outside links, else as they were."""
+    own = "".join(n if isinstance(n, str) else _text_outside_links(n) for n in run)
+    # Not a label ("0", "Note:"), only links, or a line of the page's own (dates, "Sign in"): prose.
+    if _words(own) < LOOSE_RUN_MIN_WORDS or not SENTENCE_END.search(" ".join(own.split())):
+        return run
+    para = lxml.html.Element("p")
+    while run and isinstance(run[-1], str) and not run[-1].strip():
+        run.pop()
+    while run and not isinstance(run[-1], str) and isinstance(run[-1].tag, str) and run[-1].tag == "br":
+        run.pop()  # a <br> that ends the run ends nothing
+    for node in run:
+        if isinstance(node, str):
+            _append_text(para, node)
+        else:
+            para.append(node)
+    return [para]
+
+
+def _text_outside_links(el) -> str:
+    if not isinstance(el.tag, str) or el.tag == "a":
+        return ""
+    return (el.text or "") + "".join(_text_outside_links(c) + (c.tail or "") for c in el)
+
+
+def _append_text(el: lxml.html.HtmlElement, text: str) -> None:
+    if not text:
+        return
+    if len(el):
+        el[-1].tail = (el[-1].tail or "") + text
+    else:
+        el.text = (el.text or "") + text
+
+
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
 SKIP_TARGET_MAX_WORDS = 6
 
@@ -1417,6 +1523,7 @@ def _structure(
     _drop_skip_targets(root)
     _drop_furniture(root, base_url, page_words, linked_to)
     _unclass_data_tables(root)
+    _wrap_loose_text(root)
     if not notes:
         return None
     holder = lxml.html.Element("div")
@@ -3523,6 +3630,28 @@ def _reference_words(page_html: str) -> int:
         return 0
 
 
+def _drop_title_heading(body: lxml.html.HtmlElement, title: str) -> None:
+    """Drop a heading that opens the page's copy and repeats the article's title, which the book
+    prints above it: LWN's page has its headline over the brief, the feed's copy does not."""
+    key = _norm(title)
+    if not key:
+        return
+    first = next(
+        (el for el in body.iter() if isinstance(el.tag, str) and el is not body and (el.text or "").strip()), None
+    )
+    if first is None or first.tag not in HEADINGS:
+        return
+    text = _norm(first.text_content())
+    if text == key or (_words(text) >= TITLE_HEADING_MIN_WORDS and key.startswith(text)):
+        first.drop_tree()
+
+
+TITLE_HEADING_MIN_WORDS = 3
+DECLARED_TITLE = re.compile(
+    r"<title[\s>]|property=[\"']?og:title|name=[\"']?twitter:title", re.IGNORECASE
+)  # a heading the title only starts with ("Results from the 2026 TAB election | LWN")
+
+
 def page_metadata(page_html: str) -> tuple[str, str, str, str]:
     """Title, author, lead image URL (og:image) and description, each "" when absent."""
     try:
@@ -3714,6 +3843,12 @@ def extract(
         if feed is not None:
             candidates["feed"] = sanitize(feed, url, marked=True)
 
+    # Only a title the page declares: without one, the title is taken from the body's own first
+    # heading, and dropping that would drop a section's heading.
+    declared = bool(page_html) and bool(DECLARED_TITLE.search(page_html.split("<body", 1)[0]))
+    for name in ("page", "page-wide", "page-live") if declared else ():
+        if name in candidates:
+            _drop_title_heading(candidates[name], title)
     counts = {name: _words(body.text_content()) for name, body in candidates.items()}
     reference = max([reference, *counts.values()], default=0)
     reasons = [f"page fetch failed: {fetch_error}"] if fetch_error else []
