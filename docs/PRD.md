@@ -282,10 +282,31 @@ All fetched content is treated as untrusted.
 - **Choosing the body.** The article page is reduced to its main content. If the feed carries
   the article's text and it has at least 85% of the page's word count, the feed's copy is
   used, since it is the author's own clean version.
+- **Picking the main content.** Readability (readability-lxml) picks the box with the most
+  paragraph text, with these changes. A list item a sentence long (80 characters or more,
+  at most a quarter links) counts as a paragraph would, for the box holding the list, so an
+  article written as one numbered list (a communiqué's points) is seen at all. Readability's
+  step into an `<article>` inside the best box is not taken when that `<article>` has others
+  of its kind beside it: it is one card of a list. When the best box opens with a heading
+  (h2–h4) beside two or more boxes of its kind that open with one of the same level, the box
+  holding those sections is taken instead (an article written as sections, which readability
+  would otherwise join only when each scores a fifth of the best). Readability joins a box of
+  the article's class when it is at most a quarter links, not a fifth (a podcast's first chunk
+  with its show notes). A table inside a table's cell (arXiv's two-line column headings) is
+  kept. Before readability reads the page, Tailwind's scroll margins (`scroll-mt-28`) are
+  taken off every box, as readability reads "scroll" as a scrolling widget; the site's
+  sign-in or registration box (named for an account, login, register or a password, holding
+  a form or a password field and no `<h1>`) is dropped; and so is a box of cards for the
+  site's other stories (three or more `<article>`s side by side, each of at most 80 words and
+  linking to another of the site's pages), with the heading over it.
+- **The page's own word count** (used for the checks below and the "extracted N of ~M
+  words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
   words or more), the smallest page element holding at least 90% of it is tried instead, and
-  used if it recovers more without exceeding 1.3 times the page's text. This recovers
-  articles laid out as several sibling blocks.
+  used if it recovers more without exceeding 1.3 times the page's text, and holds at least
+  80% of the main content's paragraphs of 12 words or more. This recovers articles laid out
+  as several sibling blocks, and is not a box that holds most of the page's words without
+  the article (a site's menu, the comments under a post).
 - **Continued articles.** When the page goes on with the article in a later box, its
   paragraphs are put back after the article: a box of the same kind and class nearby, in the
   same `<article>`, as when an advert splits the text in two, or the box right after the

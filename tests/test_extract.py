@@ -224,7 +224,7 @@ def test_article_split_across_sibling_containers_is_recovered_whole():
     result = extract("https://x.example/post", page, "", "page")
     headings = [h.text_content() for h in result.body.iter("h2")]
     assert headings == [f"Part {n}" for n in range(5)]
-    assert result.status == "clean" and result.method == "page-wide"
+    assert result.status == "clean" and result.method in ("page", "page-wide")  # readability, or widened
     assert "track()" not in result.body.text_content() and "Copyright" not in result.body.text_content()
 
     # An ordinary page is untouched: the first choice already covers it.
@@ -3093,3 +3093,62 @@ def test_nested_objects_give_one_picture_with_a_short_alt():
     extract_module._object_pictures(root)
     (img,) = root.iter("img")
     assert len(img.get("alt")) <= extract_module.ALT_CHARS
+
+
+def _sentences(n: int, about: str = "the alliance and its drones") -> str:
+    return " ".join(f"Sentence {i} says something about {about}, at some length, for the reader." for i in range(n))
+
+
+def test_an_article_written_as_one_list_wins_over_a_sign_in_box():
+    popup = (
+        '<div class="c13-register"><div class="cmp-text"><p>Already have an account? Log in</p></div>'
+        '<form><input type="password"><div class="cmp-text">Passwords need eight characters and a digit.</div></form></div>'
+    )
+    points = "".join(f"<li>{_sentences(2)}</li>" for _ in range(6))
+    page = f"<html><body><header>{popup}</header><h1>The statement</h1><div class='text'><ol>{points}</ol></div></body></html>"
+    body = extract("https://nato.example/statement", page, "", "page").body
+    text = body.text_content()
+    assert "Sentence 0 says something" in text and "Already have an account" not in text
+
+
+def test_a_box_of_the_sites_story_cards_is_not_the_pick():
+    cards = "".join(
+        f'<article><h3><a href="https://picks.example/2026/10/{n}/other/">Other story {n}</a></h3><p>{_sentences(2, "another story")}</p></article>'
+        for n in range(4)
+    )
+    page = (
+        "<html><body><article class='post'><h1>The pick</h1><div class='entry-content'>"
+        f"<p>{_sentences(4, 'the pick')}</p><blockquote><p>{_sentences(2, 'a quote')}</p></blockquote>"
+        f"<div class='homepage-articles'><h2>More stories from them</h2>{cards}</div></div></article></body></html>"
+    )
+    text = extract("https://picks.example/2026/10/14/the-pick/", page, "", "page").body.text_content()
+    assert "about the pick" in text and "another story" not in text and "More stories" not in text
+    # An article's own passages, each an <article> that links nowhere, stay.
+    passages = "".join(f"<article><p>{_sentences(2, 'a passage')}</p></article>" for _ in range(4))
+    page = f"<html><body><article><h1>Notes</h1>{passages}</article></body></html>"
+    assert "about a passage" in extract("https://notes.example/a", page, "", "page").body.text_content()
+
+
+def test_a_widened_body_must_hold_the_article_readability_found():
+    article = "".join(f"<p>{_sentences(3, 'the patches')}</p>" for _ in range(2))
+    menu = (
+        "<nav><ul>"
+        + "".join(f"<li><a href='/s{n}'>Section {n} of the university and its schools</a></li>" for n in range(120))
+        + "</ul></nav>"
+    )
+    body = lxml.html.fromstring(f"<div>{article}</div>")
+    assert extract_module._holds(lxml.html.fromstring(f"<div>{article}{menu}</div>"), body)
+    assert not extract_module._holds(lxml.html.fromstring(f"<div>{menu}</div>"), body)
+
+
+def test_tailwind_scroll_margins_do_not_make_a_section_a_widget():
+    root = lxml.html.fromstring('<div><section class="scroll-mt-28 md:scroll-mt-32 mx-auto"><p>x</p></section></div>')
+    extract_module._unscroll(root)
+    assert root.find("section").get("class") == "mx-auto"
+
+
+def test_a_table_in_a_header_cell_keeps_its_lines():
+    rows = "".join(f"<tr><th>{n}B</th><td>{n * 128}/64</td><td>{n}/2</td></tr>" for n in range(1, 8))
+    head = "<thead><tr><th>Size</th><th><table><tr><td>Head dim.</td></tr><tr><td>GQA/GDN</td></tr></table></th><th>Heads</th></tr></thead>"
+    page = f"<html><body><article><h1>Paper</h1><p>{_sentences(6, 'the models')}</p><table>{head}<tbody>{rows}</tbody></table><p>{_sentences(6, 'the results')}</p></article></body></html>"
+    assert "Head dim." in extract("https://arxiv.example/html/1", page, "", "page").body.text_content()
