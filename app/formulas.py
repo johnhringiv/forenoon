@@ -65,7 +65,7 @@ OPERATORS = {
     "times": "×", "cdot": "·", "pm": "±", "mp": "∓", "div": "÷", "ast": "*", "star": "⋆",
     "circ": "∘", "bullet": "•", "oplus": "⊕", "otimes": "⊗", "wedge": "∧", "land": "∧",
     "vee": "∨", "lor": "∨", "cup": "∪", "cap": "∩", "setminus": "∖", "mid": "∣", "neg": "¬",
-    "lnot": "¬", "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥", "ne": "≠", "neq": "≠",
+    "lnot": "¬", "le": "≤", "leq": "≤", "leqslant": "≤", "ge": "≥", "geq": "≥", "geqslant": "≥", "ne": "≠", "neq": "≠",
     "approx": "≈", "sim": "∼", "simeq": "≃", "equiv": "≡", "cong": "≅", "propto": "∝",
     "in": "∈", "notin": "∉", "ni": "∋", "subset": "⊂", "subseteq": "⊆", "supset": "⊃",
     "supseteq": "⊇", "ll": "≪", "gg": "≫", "perp": "⊥", "parallel": "∥", "models": "⊨",
@@ -406,7 +406,7 @@ class _Writer:
         wanted = {"msub": 2, "msup": 2, "msubsup": 3, "munder": 2, "mover": 2, "munderover": 3}[tag]
         if len(kids) != wanted:
             return self.fallback(node, out, script, depth)
-        base, rest = kids[0], kids[1:]
+        base, rest = _unwrapped(kids[0]), kids[1:]  # {=} in \stackrel{def}{=} is the = itself
         base_text = "".join(base.itertext()).strip()
         if tag in ("munder", "mover", "munderover"):
             accent = "".join(rest[-1].itertext()).strip() if tag == "mover" else ""
@@ -755,6 +755,13 @@ class _Parser:
             if c in "^_'":
                 self.attach(row)
                 continue
+            infix = INFIX.match(self.s, self.i)
+            if infix:  # {n \\choose k}, {a \\over b}: what comes before, and the rest of the group
+                self.i = infix.end()
+                left, right = row, self.parse()
+                if infix.group(1) == "over":
+                    return _wrap("mrow", _wrap("mfrac", left, right))
+                return _binomial(left, right)
             atom = self.atom()
             if atom is not None:
                 row.append(atom)
@@ -792,6 +799,11 @@ class _Parser:
                     sub = arg
             else:
                 break
+        brace = base.get("data-brace")
+        label = sub if brace == "_" else sup if brace == "^" else None
+        if label is not None:  # \\underbrace{v}_{signal}: v (signal)
+            row.append(_wrap("mrow", base, _el("mtext", " ("), label, _el("mtext", ")")))
+            return
         if sub is not None and sup is not None:
             node = _wrap("msubsup", base, sub, sup)
         elif sub is not None:
@@ -839,7 +851,31 @@ class _Parser:
         if name in SPACES:
             return _el("mspace", width=f"{SPACES[name]}em")
         if name == "\\":
-            raise Unsupported("line break")
+            if self.depth:  # inside a group or an argument
+                raise Unsupported("line break")
+            self.optional()  # \\\\[2pt]
+            return etree.Element("mbr")  # LaTeXML's multline and split, one line after another
+        if name in ("hskip", "kern", "mskip", "mkern", "hspace*"):
+            m = DIMENSION.match(self.s, self.i)
+            self.i = m.end() if m else self.i
+            return _el("mspace", width="0.3em")
+        if name == "mathchoice":  # four versions of one formula; the first is the display one
+            first = self.arg()
+            for _ in range(3):
+                self.group_text()
+            return first
+        if name in ("stackrel", "overset"):
+            over = self.arg()
+            return _wrap("msup", self.arg(), over)  # =ᵈᵉᶠ
+        if name == "underset":
+            under = self.arg()
+            return _wrap("msub", self.arg(), under)  # argminₓ
+        if name in ("underbrace", "overbrace"):
+            node = _wrap("mrow", self.arg())
+            node.set("data-brace", "_" if name == "underbrace" else "^")
+            return node
+        if name == "substack":
+            return self.sub_rows(self.group_text())
         if name in KATEX_LETTERS:
             return _el("mi", KATEX_LETTERS[name], mathvariant="normal")
         if name == "tag":
@@ -897,10 +933,7 @@ class _Parser:
         if name in ("operatorname", "operatorname*"):
             return _el("mi", self.text(self.group_text()), mathvariant="normal")
         if name in ("binom", "dbinom", "tbinom"):
-            n, k = self.arg(), self.arg()
-            return _wrap(
-                "mrow", _el("mi", "C", mathvariant="normal"), _el("mo", "("), n, _el("mo", ","), k, _el("mo", ")")
-            )
+            return _binomial(self.arg(), self.arg())
         if name in ("frac", "dfrac", "tfrac", "cfrac"):
             return _wrap("mfrac", self.arg(), self.arg())
         if name == "sqrt":
@@ -960,7 +993,38 @@ class _Parser:
                     row.append(etree.Element("mbr"))
                 row.append(self.sub(line.replace("&", "")))
             return row
+        if base in ("cases", "dcases", "rcases"):
+            # Each case on a line of its own after the brace: value, then its condition.
+            row = _wrap("mrow", _el("mo", "{"))
+            for n, line in enumerate(_rows(body)):
+                if n:
+                    row.append(etree.Element("mbr"))
+                for m, cell in enumerate(line.split("&")):
+                    if m:
+                        row.append(_el("mspace", width="0.5em"))
+                    row.append(self.sub(cell))
+            return row
+        if base == "subarray":  # lines under ∑, as one line: i < j, j ≤ N
+            return self.sub_rows(re.sub(r"^\s*\{[^{}]*\}", "", body))
         raise Unsupported(f"{name} environment")
+
+    def sub_rows(self, body: str) -> etree._Element:
+        row = etree.Element("mrow")
+        for n, line in enumerate(_rows(body)):
+            if n:
+                row.append(_el("mo", ","))
+            row.append(self.sub(line.replace("&", "")))
+        return row
+
+
+INFIX = re.compile(r"\\(choose|over)(?![A-Za-z])")
+DIMENSION = re.compile(
+    r"\s*-?[\d.]*\s*(?:pt|em|ex|mu|cm|mm|in|bp|px|sp)?(?:\s*(?:plus|minus)\s*-?[\d.]*\s*(?:pt|em|ex|mu|fil+)?)*"
+)
+
+
+def _binomial(n, k) -> etree._Element:
+    return _wrap("mrow", _el("mi", "C", mathvariant="normal"), _el("mo", "("), n, _el("mo", ","), k, _el("mo", ")"))
 
 
 def _rows(body: str) -> list[str]:
@@ -1101,7 +1165,7 @@ DEFINITION = re.compile(
 DEF = re.compile(r"\\def\s*\\([A-Za-z]+)\s*(?=\{)")
 PAIRED_DEFINITION = re.compile(r"\\DeclarePairedDelimiters?\s*\{\s*\\([A-Za-z]+)\s*\}\s*(?=\{)")
 OPERATOR_DEFINITION = re.compile(r"\\DeclareMathOperator\*?\s*\{\s*\\([A-Za-z]+)\s*\}\s*(?=\{)")
-CONFIG_MACROS = re.compile(r"macros\s*:\s*\{")
+CONFIG_MACROS = re.compile(r"macros\s*:\s*\{", re.IGNORECASE)  # MathJax 2 writes Macros
 CONFIG_MACRO = re.compile(
     r"""(?<![\w\\])(?:["'](?:\\\\|\\)?)?(\w+)["']?\s*:\s*(?:\[\s*)?(["'])((?:\\.|(?!\2)[^\\]){0,1000})\2(?:\s*,\s*(\d))?"""
 )

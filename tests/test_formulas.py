@@ -147,6 +147,17 @@ def test_mathjax_2_script_is_read_and_its_drawing_dropped():
         ("\\sqrt{x}^2", "(√<i>x</i>)<sup>2</sup>"),
         ("2\\frac{1}{2}", "2 1/2"),
         ("\\binom{n}{k}", "C(<i>n</i>, <i>k</i>)"),
+        (
+            "f = \\begin{cases} 1, & x > 0 \\\\ 0, & \\text{else} \\end{cases}",
+            "<i>f</i> = {1, <i>x</i> &gt; 0<br>0, else",
+        ),
+        ("a = b \\\\ c = d", "<i>a</i> = <i>b</i><br><i>c</i> = <i>d</i>"),
+        ("\\sum_{\\substack{i<j \\\\ j\\le N}} x", "∑<sub><i>i</i>&lt;<i>j</i>,<i>j</i>≤<i>N</i></sub> <i>x</i>"),
+        ("a \\leqslant b \\hskip 2pt c", "<i>a</i> ≤ <i>b</i> <i>c</i>"),
+        ("{n \\choose k} + {a \\over b}", "C(<i>n</i>, <i>k</i>) + <i>a</i>/<i>b</i>"),
+        ("v = \\underbrace{w}_{\\text{noise}}", "<i>v</i> = <i>w</i> (noise)"),
+        ("a \\stackrel{\\text{def}}{=} b", "<i>a</i> =<sup>def</sup> <i>b</i>"),
+        ("\\underset{x}{\\operatorname{argmin}} f", "argmin<sub><i>x</i></sub> <i>f</i>"),
     ],
 )
 def test_tex_is_written_in_a_line(source, written):
@@ -156,7 +167,7 @@ def test_tex_is_written_in_a_line(source, written):
 @pytest.mark.parametrize(
     "source",
     [
-        "\\begin{cases} a & b \\end{cases}",
+        "\\begin{pmatrix} a & b \\end{pmatrix}",
         "\\unknown{x}",
         "a^b^c",
         "{a",
@@ -211,8 +222,8 @@ def test_a_formula_alone_in_its_box_is_kept_as_a_paragraph():
 
 
 def test_a_display_kept_as_tex_is_a_code_block():
-    out = body_html(page("<p>$$f = \\underbrace{a}_{b}$$</p>", MATHJAX))
-    assert "<pre><code>f = \\underbrace{a}_{b}</code></pre>" in out
+    out = body_html(page("<p>$$A = \\begin{pmatrix} a & b \\end{pmatrix}$$</p>", MATHJAX))
+    assert "<pre><code>A = \\begin{pmatrix} a &amp; b \\end{pmatrix}</code></pre>" in out
 
 
 def test_katex_config_macros_with_quoted_names():
@@ -385,3 +396,13 @@ def test_mathjax_environments_without_delimiters_and_spaced_dollars():
     assert "So <i>X</i> is a set" in out
     assert "<i>a</i> = <i>b</i><br><i>c</i> = <i>d</i> (1)" in out
     assert "Pay $ 5 or $ 10." in out
+
+
+def test_mathjax_2_macros_in_its_config():
+    head = (
+        '<script type="text/x-mathjax-config">MathJax.Hub.Config({TeX: {Macros: '
+        '{rc: ["{\\\\color{red} #1}", 1], y: "\\\\mathbf{y}"}}});</script>'
+        '<script src="MathJax.js"></script>'
+    )
+    out = body_html(page("<p>Weights \\(w_{\\rc{i}}\\) and \\(\\y_1\\) here.</p>", head))
+    assert "Weights <i>w</i><sub><i>i</i></sub> and <b>y</b><sub>1</sub> here." in out
