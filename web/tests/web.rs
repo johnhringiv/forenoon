@@ -2512,7 +2512,6 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
     assert_eq!(last, ("note".to_owned(), "Saw it elsewhere".to_owned()));
     kindle.get(&site, &link("r5")).await;
 
-    // Expired, forged and malformed links change nothing.
     // The rendering test book's links answer, and record nothing.
     let golden = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "golden", "r5", later))).await;
     assert!(golden.status == StatusCode::OK && golden.text.contains("This link works."), "{}", golden.text);
@@ -2521,6 +2520,8 @@ async fn a_rating_link_in_a_book_records_the_tap_without_a_sign_in() {
         .await
         .unwrap();
     assert_eq!(recorded, 0);
+
+    // Expired, forged and malformed links change nothing.
     let expired = kindle.get(&site, &format!("/f/{}", make(FEEDBACK_SECRET, "john", "a1", "r1", 1000))).await;
     assert!(expired.status == StatusCode::BAD_REQUEST && expired.text.contains("This link has expired."));
     let forged = kindle
