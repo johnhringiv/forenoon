@@ -46,7 +46,6 @@
 {% if let Some(said) = card.said %}<p class="why">{{ said }}</p>{% endif %}
 <div class="meta">
 {% for fact in card.facts %}<span>{{ fact }}</span>{% endfor %}
-{% for mark in card.marks %}<span class="rated">{{ mark }}</span>{% endfor %}
 </div>
 {% include "_rate.html" %}
 {% if demo %}<div class="extra"><button type="button" class="kindle inert" title="In your own install this sends the article to your Kindle, as a book of its own with fresh rating links">Send to Kindle</button></div>

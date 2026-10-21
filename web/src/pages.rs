@@ -239,10 +239,10 @@ pub fn secured(mut response: Response) -> Response {
     for (name, value) in [
         (
             header::CONTENT_SECURITY_POLICY,
-            // The one script allowed is the light/dark switch in base.html, by its hash; the test
+            // The one script allowed is base.html's (the light/dark switch and the note box), by its hash; the test
             // `pages_need_a_session_and_sign_in_is_limited` recomputes it from the page.
             "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
-             script-src 'sha256-LsgPpy9RudQAfXAFFw65QECvlytkgTUb3TZNUiJKO5k='; manifest-src 'self'; base-uri 'none'; \
+             script-src 'sha256-DtSnAjkVGtXr5fApO72Eclowf4F1hHMGhDRQJU5J5Wc='; manifest-src 'self'; base-uri 'none'; \
              form-action 'self'; frame-ancestors 'none'",
         ),
         // Not `no-referrer`: that makes browsers send `Origin: null` on our own form posts.
@@ -714,36 +714,14 @@ struct Filter {
     current: bool,
 }
 
+/// One of the five rating buttons, with whether it is the rating given.
 pub(crate) struct Star {
     pub(crate) n: i64,
     pub(crate) on: bool,
 }
 
-pub(crate) struct ReasonOption {
-    pub(crate) key: &'static str,
-    pub(crate) short: &'static str,
-    pub(crate) label: &'static str,
-    pub(crate) selected: bool,
-}
-
 pub(crate) fn stars(rating: Option<i64>) -> Vec<Star> {
     (1..=5).map(|n| Star { n, on: rating == Some(n) }).collect()
-}
-
-/// The reasons a reader can give for this rating, with the ones they chose marked.
-pub(crate) fn reason_options(rating: Option<i64>, why: &str) -> Vec<ReasonOption> {
-    match rating {
-        Some(_) => ratings::reasons_for(rating)
-            .iter()
-            .map(|(key, label)| ReasonOption {
-                key,
-                short: ratings::short(key),
-                label,
-                selected: ratings::chosen(why).any(|chosen| chosen == *key),
-            })
-            .collect(),
-        None => Vec::new(),
-    }
 }
 
 /// "1,200 words, 5 min", or nothing for an article whose length is not known.
@@ -778,13 +756,10 @@ struct Card {
     picked: Option<String>,
     tags: Vec<&'static str>,
     facts: Vec<String>,
-    marks: Vec<String>,
     unrated: bool,
-    finished: bool,
     stars: Vec<Star>,
-    reasons: Vec<ReasonOption>,
-    /// The question the reason buttons answer.
-    question: &'static str,
+    /// The reader's note; the box for one is shown once there is a rating to go with it.
+    note: String,
     /// Whether a "Send to Kindle" button is offered, and what became of the last request.
     sendable: bool,
     sent: Option<String>,
@@ -900,16 +875,6 @@ fn card(row: Delivered) -> Card {
         facts.push(format!("Score {score}{rank}"));
     }
     facts.extend(length(row.word_count));
-    let finished = row.finished == Some(true);
-    let mut marks = Vec::new();
-    if let Some(rating) = row.rating {
-        marks.push(format!("Rated {rating} of 5"));
-    }
-    if finished {
-        marks.push("Finished".to_owned());
-    }
-    facts.extend(ratings::chosen(&row.why).filter_map(ratings::label).map(str::to_owned));
-    let reasons = reason_options(row.rating, &row.why);
     Card {
         link: web_url(&row.url),
         image: web_url(&row.image_url),
@@ -919,12 +884,9 @@ fn card(row: Delivered) -> Card {
         picked: row.picked.filter(|reason| !reason.is_empty()),
         tags,
         facts,
-        marks,
-        unrated: row.rating.is_none() && !finished,
-        finished,
+        unrated: row.rating.is_none(),
         stars: stars(row.rating),
-        reasons,
-        question: ratings::question(row.rating),
+        note: row.note,
         sendable: false,
         sent: None,
         source: row.source.split(" via ").next().unwrap_or_default().to_owned(),
@@ -1077,9 +1039,8 @@ pub struct RateForm {
     article: String,
     back: Option<String>,
     rating: Option<String>,
-    finished: Option<String>,
     clear: Option<String>,
-    reason: Option<String>,
+    note: Option<String>,
 }
 
 /// An article's thumbnail, for a reader it was delivered to.
@@ -1304,32 +1265,21 @@ pub async fn rate(
         return refused(StatusCode::NOT_FOUND, "No such article.");
     }
     let now = db::get_rating(pool, &user.id, &form.article).await?;
-    let rated = now.as_ref().and_then(|rating| rating.rating);
-    let finished = now.as_ref().is_some_and(|rating| rating.finished);
-    let chosen = form.rating.as_deref().and_then(|n| n.parse::<i64>().ok()).filter(|n| (1..=5).contains(n));
-    let signal = if form.clear.is_some() {
-        None
-    } else if let Some(rating) = chosen {
-        Some(Signal::Rated { rating, finished })
-    } else if let Some(flag @ ("0" | "1")) = form.finished.as_deref() {
-        match (rated, flag == "1") {
-            (Some(rating), finished) => Some(Signal::Rated { rating, finished }),
-            (None, true) => Some(Signal::Done),
-            (None, false) => None, // finished was all there was
+    if let Some(note) = form.note.as_deref() {
+        if ratings::clean_note(note) != now.map(|rating| rating.note).unwrap_or_default() {
+            db::record_note(pool, &user.id, &form.article, note, "web").await?;
         }
-    } else if rated.is_some() {
-        match form.reason {
-            Some(reason) if ratings::fits(&reason, rated) => Some(Signal::Why(reason)),
-            _ => return back_to(&form.back, &form.article), // not a reason for this rating: ignored
-        }
-    } else {
-        return back_to(&form.back, &form.article);
-    };
-    match signal {
-        Some(signal) => {
-            db::record_feedback(pool, &user.id, &form.article, &signal, "web").await?;
-        }
-        None => db::clear_rating(pool, &user.id, &form.article).await?,
+    } else if form.clear.is_some() {
+        db::clear_rating(pool, &user.id, &form.article).await?;
+    } else if let Some(n) = form
+        .rating
+        .as_deref()
+        .and_then(|n| n.parse::<i64>().ok())
+        .filter(|n| (1..=5).contains(n))
+        // The rating already given is left alone: pressing it again records nothing.
+        .filter(|n| now.is_none_or(|rating| rating.rating != *n))
+    {
+        db::record_feedback(pool, &user.id, &form.article, &Signal::Rated(n), "web").await?;
     }
     back_to(&form.back, &form.article)
 }

@@ -29,15 +29,15 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     article_id TEXT NOT NULL,
     signal TEXT NOT NULL,
     source TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS ratings (
     user_id TEXT NOT NULL,
     article_id TEXT NOT NULL,
-    rating INTEGER,
-    finished INTEGER NOT NULL DEFAULT 0,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
     updated_at TEXT NOT NULL,
-    reason TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, article_id)
 );
 CREATE TABLE IF NOT EXISTS llm_calls (

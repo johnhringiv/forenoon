@@ -9,72 +9,40 @@ import time
 from dataclasses import dataclass
 
 RATINGS = (1, 2, 3, 4, 5)
-# r<n>: rated n, not finished. f<n>: rated n and finished. One tap carries both facts.
-LINK_SIGNALS = tuple(f"{kind}{n}" for kind in ("f", "r") for n in RATINGS)
-# The web pages also log "clear" when a rating is removed. It is never a link signal, so it is
-# not in SIGNALS; anything replaying feedback_events must handle it.
-# Why a rating was given: one optional tap after rating. Offered by how the article was rated.
-LOW_REASONS = {
-    "topic": "Not interested in the topic",
-    "thin": "Too thin, nothing in it",
-    "known": "Already knew this",
-    "long": "Too long",
-    "wrong": "Wrong or misleading",
-}
-HIGH_REASONS = {
-    "more-topic": "More on this topic",
-    "more-source": "More from this source",
-    "depth": "Liked the depth",
-}
-REASONS = LOW_REASONS | HIGH_REASONS
-REASON_SIGNALS = tuple(f"why-{key}" for key in REASONS)
-# "This article came out broken or incomplete": a report to whoever runs the install, about the
-# delivery. It is not a rating and not a reason for one.
+# Signals, the same words in links, on the web pages and in the event log:
+#   r<n>     rated n: the links at an article's end, and the web pages
+#   f<n>     rated n too. Books sent before October 2026 had a second row of links, for an
+#            article that was finished; finished is no longer kept, the rating is. Answered
+#            while those books' links last, never put in a new book.
+#   note     the reader's note, sent with its text from the tap page or the web pages
+#   problem  "This article came out broken or incomplete": a report to whoever runs the
+#            install, about the delivery. It is not a rating.
+# The web pages also log "clear" when a rating is removed, and an install from before October
+# 2026 holds "done" (finished, from the web pages). Neither is a link signal, so neither is in
+# SIGNALS; anything replaying feedback_events must handle both.
+LINK_SIGNALS = tuple(f"r{n}" for n in RATINGS)
+OLDER_LINKS = tuple(f"f{n}" for n in RATINGS)
+NOTE = "note"
+MAX_NOTE = 200
 PROBLEM = "problem"
-SIGNALS = LINK_SIGNALS + REASON_SIGNALS + (PROBLEM,)
+SIGNALS = (*LINK_SIGNALS, *OLDER_LINKS, NOTE, PROBLEM)
 
 
-def chosen(reason: str) -> list[str]:
-    """The reason keys stored for a rating: what was liked can be several things at once."""
-    return [key for key in reason.split(",") if key]
+def clean_note(text: str) -> str:
+    """A note as kept: one line, at most MAX_NOTE characters."""
+    return " ".join(text.split())[:MAX_NOTE].strip()
 
 
-def reason_labels(reason: str) -> list[str]:
-    return [REASONS[key] for key in chosen(reason) if key in REASONS]
-
-
-def with_reason(reason: str, key: str, rating: int | None) -> str:
-    """The stored reasons after one more tap on `key`.
-
-    Tapping a chosen reason again takes it back. What was liked adds up (the topic and the
-    depth); what was wrong is one thing, so a new choice replaces the old.
-    """
-    fitting = reasons_for(rating)
-    now = [k for k in chosen(reason) if k in fitting]
-    if key in now:
-        now.remove(key)
-    elif key in fitting:
-        now = [*now, key] if fitting is HIGH_REASONS else [key]
-    return ",".join(k for k in fitting if k in now)
-
-
-def reasons_for(rating: int | None) -> dict[str, str]:
-    """The reasons that fit a rating: one list for 4 and 5, the other for the rest."""
-    return HIGH_REASONS if rating and rating >= 4 else LOW_REASONS
+def meaning(signal: str) -> int | None:
+    """The rating a signal gives; None for one that changes no rating (a note, a report)."""
+    if signal in LINK_SIGNALS or signal in OLDER_LINKS:
+        return int(signal[1])
+    if signal in (NOTE, PROBLEM):
+        return None
+    raise ValueError(f"unknown signal: {signal}")
 
 
 _VERSION = "1"
-
-
-def meaning(signal: str) -> tuple[int | None, bool | None]:
-    """(rating, finished) a signal sets; None leaves that fact as it was."""
-    if signal in LINK_SIGNALS:
-        return int(signal[1]), signal[0] == "f"
-    if signal in REASON_SIGNALS or signal == PROBLEM:
-        return None, None  # a reason or a problem report changes neither
-    if signal == "done":  # finished, with no rating: only ever from the web pages
-        return None, True
-    raise ValueError(f"unknown signal: {signal}")
 
 
 class TokenError(ValueError):

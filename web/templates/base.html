@@ -29,6 +29,27 @@
     });
     dark.addEventListener('change', label);
   });
+  // A note's Save is off until the words differ from what is kept; Enter saves, since a note is
+  // one line; opening Edit puts the cursor at the end of the note, and Cancel forgets the typing.
+  addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form.note').forEach(function (form) {
+      var box = form.querySelector('textarea'), save = form.querySelector('button');
+      if (!box || !save) return;
+      function same() { return box.value.trim() === box.defaultValue.trim() }
+      save.disabled = same();
+      box.addEventListener('input', function () { save.disabled = same() });
+      box.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.shiftKey) return;
+        event.preventDefault();
+        if (!save.disabled) form.requestSubmit();
+      });
+      var details = form.closest('details');
+      if (details) details.addEventListener('toggle', function () {
+        if (details.open) { box.focus(); box.setSelectionRange(box.value.length, box.value.length) }
+        else { box.value = box.defaultValue; save.disabled = true }
+      });
+    });
+  });
 })();
 </script>
 <title>{% block title %}Forenoon{% endblock %}</title>
@@ -142,7 +163,6 @@ h4 a:hover { text-decoration:underline }
   article.story .more { border-left:0; border-top:1px solid var(--line) }
 }
 .tag { border:1px solid var(--line); border-radius:3px; padding:0 .35rem }
-.rated { color:var(--ink); font-weight:600 }
 nav.pager { margin:2rem 0 3rem; display:flex; gap:1.2rem; font-size:.95rem }
 a { color:var(--accent) }
 .empty { margin:3rem 0; color:var(--soft) }
@@ -155,7 +175,7 @@ button, select, input { font:inherit; color:var(--ink); background:var(--card); 
   border-radius:3px }
 button, select { padding:.15rem .45rem; cursor:pointer }
 /* The one button that carries out a form, and the one that sends a book, must not look like the small
-   choice buttons beside them (ratings, reasons). */
+   choice buttons beside them (the ratings). */
 button.primary { background:var(--accent); border-color:var(--accent); color:var(--card); font-weight:600 }
 button.kindle { border:1.5px solid var(--accent); color:var(--accent); font-weight:600; padding:.25rem .7rem }
 button.primary:hover, button.kindle:hover { filter:brightness(1.1) }
@@ -165,17 +185,40 @@ button.primary:hover, button.kindle:hover { filter:brightness(1.1) }
 section.learned { max-width:44rem; margin:2rem 0 }
 section.learned > p.notes { margin:.8rem 0; padding:.1rem 0 .1rem .9rem; border-left:3px solid var(--line) }
 section.learned form.sheet { margin:.6rem 0 0; font-size:.9rem; color:var(--ink) }
-.rate { margin:0; display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; font-size:.78rem }
-.rate button.on { background:var(--ink); color:var(--card); border-color:var(--ink) }
+/* A rating: 1 to 5 as one joined control, so they read as one choice, and Clear beside it; then,
+   once there is a rating, a note. "Add a note" sits on the same row; a saved note, as a
+   quotation, takes a row of its own; the box, open, takes the full width. The link reads Add a
+   note, Edit or Cancel by the state of the details element. */
+.rating { margin:.15rem 0 0; display:flex; flex-wrap:wrap; gap:.3rem .9rem; align-items:center; font-size:.78rem }
+.rate { margin:0; display:flex; gap:.9rem; align-items:center }
+.seg { display:grid; grid-template-columns:repeat(5,2.2rem); gap:1px; background:var(--line);
+  border:1px solid var(--line); border-radius:4px; overflow:hidden }
+.seg button { border:0; border-radius:0; background:var(--card); padding:.3rem 0; text-align:center }
+.seg button:not(.inert):hover { background:var(--bg) }
+.seg button[aria-pressed=true] { background:var(--ink); color:var(--card); font-weight:600 }
+.rate .clear { border:0; background:none; padding:0; font-size:.74rem; color:var(--accent); text-decoration:underline }
+.note { margin:0; max-width:30rem }
+.note.has, details.note[open] { flex-basis:100% }
+form.note { display:flex; gap:.3rem; align-items:flex-start; margin-top:.3rem }
+.note textarea { flex:1; min-width:0; padding:.25rem .45rem; font:inherit; font-size:.78rem; line-height:1.4;
+  resize:none; field-sizing:content; min-height:calc(1.4em + .5rem + 2px) }
+.note textarea:focus { min-height:calc(4.2em + .5rem + 2px) }
+.note button { padding:.15rem .6rem }
+.note button:disabled { opacity:.45; cursor:default }
+details.note > summary { list-style:none; cursor:pointer }
+details.note > summary::-webkit-details-marker { display:none }
+details.note[open] > summary .said { display:none }
+.note .said { font-size:.72rem; color:var(--soft) }
+.note .edit { color:var(--accent); text-decoration:underline; font-size:.74rem }
+.note .edit span { display:none }
+details.note:not(.has):not([open]) .edit .add { display:inline }
+details.note.has:not([open]) .edit .change { display:inline }
+details.note[open] .edit .cancel { display:inline }
 /* On a demo host the buttons are shown as they are, and do nothing. */
 button.inert { cursor:default }
 .extra { display:flex; flex-wrap:wrap; gap:.3rem .9rem; align-items:center; font-size:.78rem; color:var(--soft) }
 .extra form { margin:0 }
 form.send { margin:0; display:flex; flex-wrap:wrap; gap:.3rem .6rem; align-items:center; font-size:.78rem; color:var(--soft) }
-.gap { margin-left:.5rem }
-.why-row { flex-basis:100%; display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; color:var(--soft);
-  margin-top:.2rem }
-.why-q { flex-basis:100%; font-size:.72rem }
 button.link { border:0; background:none; padding:0; color:var(--accent); text-decoration:underline }
 form.sheet { max-width:24rem; margin:2rem 0; display:flex; flex-direction:column; gap:.8rem }
 form.sheet label { display:flex; flex-direction:column; gap:.25rem; font-size:.9rem }

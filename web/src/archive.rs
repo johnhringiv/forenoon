@@ -24,10 +24,9 @@ use crate::{
     auth::AuthSession,
     db::{self, Shelf, Shelved},
     pages::{
-        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, ReasonOption, Star, Viewer, allowed, back_to, html,
-        length, local, reader, reason_options, refused, send_outcome, shorten, stars, web_url,
+        AppState, MAX_DESCRIPTION_CHARS, NOT_FROM_HERE, Nav, Page, Star, Viewer, allowed, back_to, html, length, local,
+        reader, refused, send_outcome, shorten, stars, web_url,
     },
-    ratings,
 };
 
 const PER_PAGE: i64 = 50;
@@ -48,14 +47,8 @@ const ROUTE: [(&str, &str); 6] = [
     ("linked", "Linked from another article"),
     ("manual", "Added by hand"),
 ];
-const RATING: [(&str, &str); 6] = [
-    ("", "Any"),
-    ("rated", "Rated"),
-    ("unrated", "Not rated"),
-    ("high", "4 or 5"),
-    ("low", "1 or 2"),
-    ("finished", "Finished"),
-];
+const RATING: [(&str, &str); 5] =
+    [("", "Any"), ("rated", "Rated"), ("unrated", "Not rated"), ("high", "4 or 5"), ("low", "1 or 2")];
 const LASTING: [(&str, &str); 3] = [("", "Any"), ("months", "Months or longer"), ("years", "Years")];
 const SORT: [(&str, &str); 4] =
     [("", "Newest"), ("score", "Model's score"), ("rating", "Your rating"), ("length", "Longest")];
@@ -105,12 +98,10 @@ struct Row {
     /// What the model said of it, with whether it had read it.
     said: Option<String>,
     facts: Vec<String>,
-    marks: Vec<String>,
     unrated: bool,
-    finished: bool,
     stars: Vec<Star>,
-    reasons: Vec<ReasonOption>,
-    question: &'static str,
+    /// The reader's note; the box for one is shown once there is a rating.
+    note: String,
     sendable: bool,
     sent: Option<String>,
     /// How the last "Fetch again" went, within the day; and whether it is still waiting.
@@ -217,13 +208,13 @@ fn row(found: Shelved, zone: Tz) -> Row {
     let kicker =
         [found.source.as_str(), author].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
     let day = |stamp: &str| local(stamp, zone).map_or(stamp.to_owned(), |at| at.format("%-d %B %Y").to_string());
-    let finished = found.finished == Some(true);
+    let unrated = found.rating.is_none();
     let mut facts = Vec::new();
     let added = found.added_at.as_deref().zip(found.added_for.as_deref());
     facts.push(match (&found.delivered_at, found.policy.as_deref(), found.read) {
         (Some(at), Some("requested"), _) => format!("Sent on request {}", day(at)),
         (Some(at), _, _) => format!("Delivered {}", day(at)),
-        (None, _, _) if added.is_some_and(|(_, wanted)| wanted == "next") && found.rating.is_none() && !finished => {
+        (None, _, _) if added.is_some_and(|(_, wanted)| wanted == "next") && unrated => {
             "Added by you; in your next issue".to_owned()
         }
         (None, _, _) if added.is_some() => format!("Added by you {}", day(added.map_or("", |(at, _)| at))),
@@ -241,14 +232,6 @@ fn row(found: Shelved, zone: Tz) -> Row {
         _ => {}
     }
     facts.extend(arrivals(&found.routes));
-    facts.extend(ratings::chosen(&found.why).filter_map(ratings::label).map(str::to_owned));
-    let mut marks = Vec::new();
-    if let Some(rating) = found.rating {
-        marks.push(format!("Rated {rating} of 5"));
-    }
-    if finished {
-        marks.push("Finished".to_owned());
-    }
     let said = (!found.said.is_empty()).then(|| {
         let how = if found.read || found.delivered_at.is_some() { "The model" } else { "The model, from the headline" };
         format!("{how}: {}", found.said)
@@ -261,12 +244,9 @@ fn row(found: Shelved, zone: Tz) -> Row {
         desc: (!found.description.is_empty()).then(|| shorten(&found.description, MAX_DESCRIPTION_CHARS)),
         said,
         facts,
-        marks,
-        unrated: found.rating.is_none() && !finished,
-        finished,
+        unrated,
         stars: stars(found.rating),
-        reasons: reason_options(found.rating, &found.why),
-        question: ratings::question(found.rating),
+        note: found.note,
         sendable: false,
         sent: None,
         refreshed: None,

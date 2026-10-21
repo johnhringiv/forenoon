@@ -29,7 +29,9 @@ MAX_URL_CHARS = 2000
 TURNED_AWAY = re.compile(r"\bHTTP 40[13]\b")  # how a refused page fetch is reported
 
 
-def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, rating) -> str:
+def add_one(
+    cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str, action: str, rating: int | None
+) -> str:
     """Store the article behind a link for a reader. Returns its id; raises ValueError when it cannot."""
     url = without_tracking(url.strip())
     parts = urlsplit(url)
@@ -55,9 +57,9 @@ def add_one(cfg: Config, store: Store, fetcher: Fetcher, user_id: str, url: str,
         store.set_preview(item_id, result.image_url, result.description)
         thumbs.save(cfg.thumbs_dir, item_id, _pictures(result), fetcher)
     store.add_route(item_id, "manual", "")
-    if action == "keep":
-        # Read already: on record as finished, with the rating when one was given.
-        store.record_feedback(user_id, item_id, f"f{rating}" if rating else "done", "web")
+    if action == "keep" and rating:
+        # Read already, and rated. Rated or not, the request on record keeps it from being sent.
+        store.record_feedback(user_id, item_id, f"r{rating}", "web")
     return item_id
 
 

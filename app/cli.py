@@ -278,16 +278,16 @@ def _feedback_log(cfg: Config, args: argparse.Namespace) -> int:
     store = Store(cfg.db_path)
     for row in store.feedback_rows():
         print(
-            f"{row['created_at']}  {row['user_id']:<10} {row['signal']:<5}"
+            f"{row['created_at']}  {row['user_id']:<10} {row['signal']:<8}"
             f" {row['article_source']} · {row['title'] or row['article_id']}"
+            + (f'\n    "{row["detail"]}"' if row["detail"] else "")
         )
     print("\nCurrent ratings:")
     for row in store.rating_rows():
-        rating = f"{row['rating']}/5" if row["rating"] else "  -"
         print(
-            f"{row['updated_at']}  {row['user_id']:<10} {rating}"
-            f" {'finished    ' if row['finished'] else 'not finished'}"
+            f"{row['updated_at']}  {row['user_id']:<10} {row['rating']}/5"
             f" {row['article_source']} · {row['title'] or row['article_id']}"
+            + (f'\n    "{row["note"]}"' if row["note"] else "")
         )
     return 0
 

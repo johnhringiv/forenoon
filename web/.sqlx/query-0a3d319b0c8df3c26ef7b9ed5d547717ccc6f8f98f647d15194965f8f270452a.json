@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rating, note FROM ratings WHERE user_id = ? AND article_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rating",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "note",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0a3d319b0c8df3c26ef7b9ed5d547717ccc6f8f98f647d15194965f8f270452a"
+}

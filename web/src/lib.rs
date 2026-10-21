@@ -147,7 +147,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .route("/verify/{token}", get(pages::verify))
         .route("/join/{token}", get(accounts::join_page).post(accounts::join))
         .route("/healthz", get(pages::health))
-        .route("/f/{token}", get(feedback::tap));
+        .route("/f/{token}", get(feedback::tap).post(feedback::note));
     let router = icons::FILES.iter().fold(router, |router, &(path, media_type, body)| {
         router.route(path, get(move || async move { icons::serve(path, media_type, body) }))
     });

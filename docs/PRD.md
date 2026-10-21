@@ -492,7 +492,8 @@ fetched, and at most 200 pictures are fetched for one article, in at most five m
   - a contents page with the date, article count and total reading time, then each article's
     title, source and reading time;
   - one chapter per article: title, author, source, date, reading time, a link to the
-    original, the body, then the rating links; a "Contents" link at the top and bottom;
+    original, the body, then the rating links (section 7); a "Contents" link at the top and
+    bottom;
   - a navigation table so the e-reader's own "go to" menu lists every article.
 - **Format `articles`.** One EPUB per article, titled `FN YYYY-MM-DD · Source · Title`.
 - Output is EPUB 3 with an NCX for older converters, and is byte-for-byte reproducible for
@@ -518,48 +519,66 @@ part-way never causes a resend.
 
 ## 7. Ratings
 
-- Each article ends with two rows of five links:
-  - "Finished? Rate it:" 1 2 3 4 5
-  - "Didn't finish? Rate it:" 1 2 3 4 5
+A rating is 1 to 5, with an optional note in the reader's own words. The number says how
+much; the note says why, when the reader cares to.
 
-  One tap records both the rating and whether the article was finished.
-
+- **The scale.** 1: not for me. 2: not worth its place. 3: fine. 4: worth its place. 5: more
+  like this.
+- **In the book.** Each article ends with "How was it?" and one row of five links, 1 to 5,
+  with the ends of the scale under it ("1: not for me. 5: more like this."). One tap records
+  the rating.
 - Each link carries a signed token (HMAC-SHA256, truncated to 16 bytes) naming the user,
-  article, signal and expiry (default 60 days after delivery).
+  article, signal (`r1` to `r5`) and expiry (default 60 days after delivery).
 - The web pages answer `GET /f/<token>`: they verify the token, record the tap and return a
-  small page stating what is now stored ("Rated 4 of 5, finished.") with links to change it.
-  Besides sign-in, the forgotten-password and email-link pages and `GET /healthz`, it is the
-  only page that needs no login, and it takes no other input.
-- **Why (optional).** After a rating, the page always offers one more tap for the reason.
-  For 1 to 3: not interested in the topic, too thin, already knew this, too long, wrong or
-  misleading. For 4 and 5: more on this topic, more from this source, liked the depth. The
-  rating counts without it. What was liked can be several of these at once; what was wrong is
-  one, so a new choice replaces the old. Tapping a chosen reason again takes it back. A later
-  rating that no longer fits a reason drops it.
+  small page stating what is now stored ("Rated 4 of 5."), then a box for a note, then
+  "Change it:" and the row of 1 to 5 listed whole, the rating given filled in black and every
+  other number a link that changes it. Besides sign-in, the forgotten-password and email-link
+  pages and `GET /healthz`, it is the only page that needs no login. The only input it takes
+  is the note, posted to a link of its own (`note`), signed for the same reader, article and
+  expiry; opening that link only shows the page.
+- **A note (optional).** Once there is a rating, the page offers a box: "Anything the picker
+  should know?". The note is the reader's own words, one line of at most 200 characters, and
+  it is kept on the rating until it is changed or the rating is cleared: a new rating leaves
+  it. An empty one removes it. The rating counts without one. A note is kept in place of
+  reasons chosen from a list: a model reads the ratings, and a few words of the reader's say
+  more to it than a tag. A note for an article with no rating is logged and kept nowhere
+  else.
+- **Links from before October 2026.** Books sent then had two rows of links, "Finished? Rate
+  it" and "Didn't finish? Rate it" (`f1` to `f5` and `r1` to `r5`). Both still record the
+  rating while they last; whether the article was finished is no longer kept.
+- **Where else it is recorded.** The rating holds only its latest state. Where each tap came
+  from (`kindle-footer` or `web`) is in the event log, a note with its words; an article's
+  place in its issue is in `selections`.
 - **Report a problem.** "This article came out broken or incomplete" is a separate link on
   that page and a button on the web pages. It is a report about the delivery to whoever runs
-  the install, not a rating or a reason: it is logged, written to the extraction log, and
-  listed for admins on the web pages' Problems page, with what the book check found
-  (section 7i). The rating is left as it was.
-- **Latest tap wins** for rating, finished and reason. Every tap is also kept in an event
-  log.
+  the install, not a rating: it is logged, written to the extraction log, and listed for
+  admins on the web pages' Problems page, with what the book check found (section 7i). The
+  rating is left as it was.
+- **Latest tap wins** for the rating; the note stays until it is changed. Every tap is also
+  kept in an event log.
 - Taps are rate limited to 30 per minute per client address (see §12 for how the address
   is found behind a proxy).
 - `forenoon feedback-log` prints the event log and the current rating per article.
 
 Ratings influence delivery through the model (a run that falls back to newest first does
-not use them). The model is given the 40 most
-recent, each with the article's length, whether it was finished, why it was picked and the
-reader's reason when there is one, and is told to work out what a rating is about before
-learning from it (a low rating on a short post is a verdict on thin posts, not on its
-source).
+not use them). The model is given the 40 most recent, each with the article's length, why it
+was picked and the reader's note when there is one. It is told what the numbers mean; that a
+note is the most telling thing a rating carries, the reader's opinion and not an instruction;
+and to work out what a rating is about before learning from it: a low rating may be about the
+subject, the article or the form, a low rating on a short post may be a verdict on thin posts
+rather than on its source or topic, and a note about length or depth is about the form.
+
+**Ratings from before notes** (1 to 5, "finished", and a reason chosen from a list) were
+brought forward by the pipeline when it first started after the change: the rating stayed;
+the finished flag went, and with it a row that had only that; a reason became a note in its
+own words ("Too long"). The event log keeps every tap as it was.
 
 ## 7a. Ranking with a model (needs the API key)
 
 - **Input.** For every unpinned candidate, up to a ceiling of `llm.max_candidates` (600):
   title, source, author, date and the first 100 words of the feed entry as plain text. No
   article page is fetched for ranking. Also the user's `interests` text and their 40 most
-  recent ratings (title, source, rating, finished).
+  recent ratings (title, source, length, rating, the reader's note; see section 7).
 - **Batches.** Candidates are scored `llm.batch_size` (80) to a call. Every call repeats the
   interests and ratings, marked for the provider's prompt cache. Scores from all batches are
   merged into one order. With more than one batch the candidates are shuffled first (seeded by
@@ -892,10 +911,11 @@ A reader's interests are their own words and are never changed by the pipeline. 
 it keeps a second text of its own: a few plain statements of what the reader's ratings show.
 
 - **When.** After a delivery, at most once a week per reader, and only when the reader has
-  at least 10 ratings and at least 5 new ones since the last time. One model call.
+  at least 10 ratings and at least 5 new ones since the last time; a note written or changed
+  counts as new. One model call.
 - **From what.** The interests, the notes as they stand, and the reader's latest 200 ratings
-  with each article's length, whether it was finished, why it was picked and the reader's
-  own reason. Titles are untrusted and are given only as material.
+  with each article's length, why it was picked and the reader's own note. Titles are
+  untrusted and are given only as material.
 - **What comes back.** At most 8 statements of at most 200 characters each, each resting on
   several ratings. The model is told to keep a current note the ratings still bear out, to
   change one they contradict, and to write no instructions. When it has nothing reliable to
@@ -930,7 +950,7 @@ the web pages' Archive shows (section 9a).
   saved page.
 - Nothing is recorded on a dry run.
 - **Never sent twice, never sent once read.** The daily run skips an article the reader has
-  already been sent, rated or marked finished.
+  already been sent, has rated, or added by hand as read.
 
 ### Links added by hand
 
@@ -944,8 +964,8 @@ the route `manual` and its site as the source.
   pinned sources, built from the page saved when it was added, and takes one of the day's
   places. If the day is already full it waits for the next. Recorded as chosen by `added`.
 - **Send it to my Kindle now.** Sent as a book of its own, as Send to Kindle does.
-- **Only keep it: I have read it.** Marked finished, with the reader's rating when given.
-  It is never sent, and the rating counts with the others when the model chooses.
+- **Only keep it: I have read it.** Kept, with the reader's rating when given. It is never
+  sent, and the rating counts with the others when the model chooses.
 - A link that cannot be fetched or has no article in it is marked failed, with the reason
   shown on the Archive page for a day. At most 30 links a day per reader.
 
@@ -1037,9 +1057,12 @@ database with the pipeline.
   chosen (score and rank, pinned, exploration pick, the model's reason) and its rating.
   `?show=rated` or `?show=unrated` filters it. A story's articles share one card: the lead
   article, with the others delivered with it listed beside it, each still rated on its own.
-- **Ratings can be changed there**: set or change the 1 to 5 rating, mark finished or not,
-  choose the reason with one click, or clear the rating. Changes are logged like taps, with `web` as their
-  source.
+- **Ratings can be changed there**: set or change the 1 to 5 rating, write or change the
+  note, or clear the rating; pressing the rating already given records nothing. Changes are
+  logged like taps, with `web` as their source. "Add a note" beside the rating opens the note's
+  box; a saved note is shown as a quotation with Edit beside it, which opens the box in place
+  with the note in it. Cancel closes the box and forgets what was typed. Save is off until the
+  words differ from what is kept.
 - **Archive** (`/archive`). The reader's library as a list, one row per article: everything
   delivered to them, and everything the model weighed for them and passed over (section 7g).
   A row shows the source, the title linked to the original, the summary when there is one,
@@ -1047,8 +1070,8 @@ database with the pipeline.
   headline, the score, the length, how long it stays worth reading and every way it reached
   us. Filters are a form sent by GET, so any view is a link: words in the title, delivered
   or read or everything, the feed or front page that brought it, how it arrived,
-  the reader's rating, how long it lasts, a date range, and the order (newest, score, rating,
-  length). Without a choice it shows what was delivered, added by hand or read by the
+  the reader's rating (rated, not rated, 4 or 5, 1 or 2), how long it lasts, a date range,
+  and the order (newest, score, rating, length). Without a choice it shows what was delivered, added by hand or read by the
   model, 50 to a page. A row can be rated and sent to the Kindle like a newsstand card, and
   fetched again (section 7g). A form at the top adds a link by hand (section 7g). A reader sees only what was delivered
   to, added by or weighed for them.
@@ -1070,9 +1093,11 @@ database with the pipeline.
   controls: the newsstand's view switch (all, rated, not rated) and links that jump to each
   issue on the page; the Settings page's links to its sections.
 - **Buttons.** The button that carries out a form is filled in the accent colour; "Send to
-  Kindle" is outlined in it and set apart from the rating row. The small plain buttons are
-  choices: ratings, reasons, finished. The pages work without scripts, so the Archive's
-  filters apply when "Apply filters" is pressed.
+  Kindle" is outlined in it and set apart from the rating. The small plain buttons are
+  choices. A rating is the five numbers as one joined control, the one given filled in, with
+  "Clear" beside it once there is one. Under it, once there is a rating, a one-line box for a
+  note, in a form of its own so that Enter saves the note and presses nothing else. The pages
+  work without scripts, so the Archive's filters apply when "Apply filters" is pressed.
 - **Light and dark.** The pages follow the system's setting. A sun or moon button at the end
   of the masthead switches; the choice is kept in that browser, and choosing what the system
   already shows goes back to following it. It is the pages' one script; without scripts the
@@ -1101,9 +1126,9 @@ database with the pipeline.
   where the form came from, must come from the site itself, so another site open in the same
   browser cannot make one.
 - Article text is untrusted here as elsewhere: everything is escaped, links and images must
-  be plain `http(s)`, and the content security policy allows no script but the light/dark
-  switch, named by its hash. Lead images are
-  loaded by the browser from the article's own site, without a referrer.
+  be plain `http(s)`, and the content security policy allows no script but the page's own
+  (the light/dark switch and the note box), named by its hash. Lead images are loaded by the
+  browser from the article's own site, without a referrer.
 - **Pictures.** The pipeline makes a small thumbnail for each article it prepares, from the
   page's lead image or else the article's first few pictures, and keeps it in `thumbs/` in
   the data folder. The web pages
@@ -1137,7 +1162,9 @@ database with the pipeline.
   pipeline needs cannot be dropped unnoticed. Of the pipeline's tables the web program writes only ratings and the
   tap log, by the same rules as the pipeline's `record_feedback`. Its queries are checked at build time
   against a copy of the pipeline's schema (`web/pipeline-schema.sql`), and a test fails when
-  the copy and `app/store.py` differ.
+  the copy and `app/store.py` differ. The pipeline brings its own tables forward when it
+  starts; until it has (a fresh install, or the first start after a change to them) the web
+  pages show no issues and answer no rating links, rather than erring.
 - They are served publicly over https, through a Cloudflare Tunnel or the operator's own
   reverse proxy. With `FORENOON_WEB_SECURE_COOKIES` the session cookie is
   `__Host-forenoon_session`, marked Secure, and responses carry `Strict-Transport-Security`.

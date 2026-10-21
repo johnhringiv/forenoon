@@ -33,9 +33,11 @@ pub fn now_iso() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
-/// Whether the pipeline has created its tables yet; false on an install that has never run.
+/// Whether the pipeline has made its tables and brought them to the shape this build reads
+/// (`app/store.py`: a rating carries a note since October 2026). Until then the pages show
+/// nothing, not an error: the pipeline does that when it first starts.
 pub async fn pipeline_ready(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let found = sqlx::query_scalar!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'")
+    let found = sqlx::query_scalar!("SELECT COUNT(*) FROM pragma_table_info('ratings') WHERE name = 'note'")
         .fetch_one(pool)
         .await?;
     Ok(found > 0)
@@ -625,8 +627,8 @@ pub struct Delivered {
     pub rank: Option<i64>,
     pub explore: Option<bool>,
     pub rating: Option<i64>,
-    pub finished: Option<bool>,
-    pub why: String,
+    /// The reader's note on it.
+    pub note: String,
     /// Picked, but its page could not be had: shown as a link and not sent.
     pub link_only: bool,
 }
@@ -645,8 +647,7 @@ pub async fn delivered(
         r#"SELECT d.delivered_at, d.story, a.id AS "id!", a.url, a.source, a.title, a.author, a.word_count,
            a.image_url, a.description, s.policy AS "policy?", s.score AS "score?: f64",
            s.reason AS "picked?", s.rank AS "rank?: i64", s.explore AS "explore?: bool",
-           r.rating AS "rating?: i64", r.finished AS "finished?: bool",
-           COALESCE(r.reason, '') AS "why!: String", d.link_only AS "link_only: bool"
+           r.rating AS "rating?: i64", COALESCE(r.note, '') AS "note!: String", d.link_only AS "link_only: bool"
            FROM deliveries d JOIN articles a ON a.id = d.article_id
            LEFT JOIN selections s ON s.user_id = d.user_id AND s.article_id = d.article_id
            LEFT JOIN ratings r ON r.user_id = d.user_id AND r.article_id = d.article_id
@@ -748,7 +749,7 @@ pub struct Shelf<'a> {
     pub via: &'a str,
     /// How it arrived: feed, recipe, found, linked.
     pub route: &'a str,
-    /// rated, unrated, high (4 or 5), low (1 or 2), finished.
+    /// rated, unrated, high (4 or 5), low (1 or 2).
     pub rating: &'a str,
     /// years, or months (months or longer).
     pub lasting: &'a str,
@@ -784,8 +785,8 @@ pub struct Shelved {
     pub lasting: String,
     pub policy: Option<String>,
     pub rating: Option<i64>,
-    pub finished: Option<bool>,
-    pub why: String,
+    /// The reader's note on it.
+    pub note: String,
     /// One "route:via" per line.
     pub routes: String,
 }
@@ -813,8 +814,7 @@ macro_rules! on_shelf {
            AND (?4 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.via = ?4))
            AND (?5 = '' OR EXISTS (SELECT 1 FROM article_routes t WHERE t.article_id = a.id AND t.route = ?5))
            AND CASE ?6 WHEN 'rated' THEN r.rating IS NOT NULL WHEN 'unrated' THEN r.rating IS NULL
-               WHEN 'high' THEN COALESCE(r.rating >= 4, 0) WHEN 'low' THEN COALESCE(r.rating <= 2, 0)
-               WHEN 'finished' THEN COALESCE(r.finished, 0) ELSE 1 END
+               WHEN 'high' THEN COALESCE(r.rating >= 4, 0) WHEN 'low' THEN COALESCE(r.rating <= 2, 0) ELSE 1 END
            AND CASE ?7 WHEN 'years' THEN COALESCE(x.lasting = 'years', 0)
                WHEN 'months' THEN COALESCE(x.lasting IN ('months', 'years'), 0) ELSE 1 END
            AND (?8 = '' OR substr(COALESCE(d.delivered_at, (SELECT MAX(m.requested_at) FROM add_requests m WHERE m.user_id = ?1 AND m.article_id = a.id AND m.status = 'done'), x.assessed_at, a.first_seen), 1, 10) >= ?8)
@@ -848,8 +848,7 @@ pub async fn shelved(pool: &SqlitePool, shelf: &Shelf<'_>) -> Result<Vec<Shelved
            COALESCE(s.score, x.score) AS "score?: f64",
            COALESCE(NULLIF(s.reason, ''), x.reason, '') AS "said!: String",
            COALESCE(x.read, 0) AS "read!: bool", COALESCE(x.lasting, '') AS "lasting!: String",
-           s.policy AS "policy?", r.rating AS "rating?: i64", r.finished AS "finished?: bool",
-           COALESCE(r.reason, '') AS "why!: String",
+           s.policy AS "policy?", r.rating AS "rating?: i64", COALESCE(r.note, '') AS "note!: String",
            COALESCE((SELECT group_concat(t.route || ':' || t.via, char(10)) FROM article_routes t
                      WHERE t.article_id = a.id), '') AS "routes!: String""#,
         r#"
@@ -1198,30 +1197,20 @@ pub async fn book_problems(pool: &SqlitePool, limit: i64) -> Result<Vec<BookChec
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rating {
-    /// 1 to 5; `None` when only "finished" was recorded.
-    pub rating: Option<i64>,
-    pub finished: bool,
-    /// Keys of the reasons the reader gave, comma-separated; "" when none.
-    pub reason: String,
+    /// 1 to 5.
+    pub rating: i64,
+    /// The reader's own words about it; "" when none.
+    pub note: String,
 }
 
 pub async fn get_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<Option<Rating>, sqlx::Error> {
-    sqlx::query_as!(
-        Rating,
-        r#"SELECT rating AS "rating?: i64", finished AS "finished!: bool", reason
-           FROM ratings WHERE user_id = ? AND article_id = ?"#,
-        user,
-        article
-    )
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as!(Rating, "SELECT rating, note FROM ratings WHERE user_id = ? AND article_id = ?", user, article)
+        .fetch_optional(pool)
+        .await
 }
 
-/// Log the signal and apply it: the latest one decides the stored rating and finished flag.
-/// Returns the rating as it now stands.
-///
-/// A reason sets only the reason. A new rating drops a stored reason that no longer fits it
-/// (a "too thin" on an article now rated 5). `source` is as for `report_problem`.
+/// Log the signal and apply it, as `app/store.py` does: the latest rating wins, and the note
+/// stays with it. Returns the rating as it now stands. `source` is as for `report_problem`.
 pub async fn record_feedback(
     pool: &SqlitePool,
     user: &str,
@@ -1231,7 +1220,7 @@ pub async fn record_feedback(
 ) -> Result<Rating, sqlx::Error> {
     let now = now_iso();
     let text = signal.to_string();
-    let (rating, finished) = signal.meaning();
+    let rating = signal.rating();
     let mut tx = pool.begin().await?;
     sqlx::query!(
         "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -1243,42 +1232,59 @@ pub async fn record_feedback(
     )
     .execute(&mut *tx)
     .await?;
-    sqlx::query!(
-        r#"INSERT INTO ratings (user_id, article_id, rating, finished, updated_at)
-           VALUES (?1, ?2, ?3, COALESCE(?4, 0), ?5)
-           ON CONFLICT(user_id, article_id) DO UPDATE SET
-           rating = COALESCE(excluded.rating, rating),
-           finished = COALESCE(?4, finished), updated_at = excluded.updated_at"#,
+    let stored = sqlx::query_as!(
+        Rating,
+        r#"INSERT INTO ratings (user_id, article_id, rating, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, article_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at
+           RETURNING rating, note"#,
         user,
         article,
         rating,
-        finished,
         now
-    )
-    .execute(&mut *tx)
-    .await?;
-    let stored = sqlx::query!(
-        r#"SELECT rating AS "rating?: i64", finished AS "finished!: bool", reason
-           FROM ratings WHERE user_id = ? AND article_id = ?"#,
-        user,
-        article
     )
     .fetch_one(&mut *tx)
     .await?;
-    // A reason adds, replaces or takes back; any signal drops reasons that no longer fit.
-    let pressed = if let Signal::Why(reason) = signal { reason.as_str() } else { "" };
-    let fitting = ratings::with_reason(&stored.reason, "", stored.rating);
-    let kept = ratings::with_reason(&fitting, pressed, stored.rating);
-    if kept != stored.reason {
-        sqlx::query!("UPDATE ratings SET reason = ? WHERE user_id = ? AND article_id = ?", kept, user, article)
-            .execute(&mut *tx)
-            .await?;
-    }
     tx.commit().await?;
-    Ok(Rating { rating: stored.rating, finished: stored.finished, reason: kept })
+    Ok(stored)
 }
 
-/// Forget an article's rating, finished flag and reason; the event log keeps the history.
+/// Log the reader's note and keep it on the rating, as `app/store.py` does; an empty one removes
+/// it. A note on an article with no rating is logged and kept nowhere else. Returns the rating
+/// as it now stands.
+pub async fn record_note(
+    pool: &SqlitePool,
+    user: &str,
+    article: &str,
+    text: &str,
+    source: &str,
+) -> Result<Option<Rating>, sqlx::Error> {
+    let (now, note) = (now_iso(), ratings::clean_note(text));
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        "INSERT INTO feedback_events (user_id, article_id, signal, source, created_at, detail)
+         VALUES (?, ?, 'note', ?, ?, ?)",
+        user,
+        article,
+        source,
+        now,
+        note
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "UPDATE ratings SET note = ?, updated_at = ? WHERE user_id = ? AND article_id = ?",
+        note,
+        now,
+        user,
+        article
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    get_rating(pool, user, article).await
+}
+
+/// Forget an article's rating and note; the event log keeps the history.
 pub async fn clear_rating(pool: &SqlitePool, user: &str, article: &str) -> Result<(), sqlx::Error> {
     let now = now_iso();
     let mut tx = pool.begin().await?;
