@@ -369,9 +369,23 @@ All fetched content is treated as untrusted.
     mostly to the site's other pages, unless a sentence introduces it and its items say
     something of their own.
   - Section headings marked up as links to themselves (permalinks), with ids that spell
-    their text, or with scroll margins are kept, and so is a real table (with header cells
-    or a caption) in a scrolling box or under any heading. A heading an article ends on
-    ("Related", "Comments", "Back to top") is not freed.
+    their text, or with scroll margins are kept, and so is a section whose id spells its
+    heading ("typing-and-tools"), and a real table (with header cells or a caption) in
+    scrolling boxes or under any heading. A heading an article ends on ("Related",
+    "Comments", "Back to top") is not freed; one starting "References", "Sources" or "See
+    also" introduces the list under it.
+  - Short blocks are not dropped for being short: a code block in the boxes a highlighter
+    nests it in, or beside a label ("stdout"); a line of the article in a box of its own
+    where the page boxes each paragraph (a sibling box of the same class holds one too), with
+    words of its own beside any link and not a site's pitch; a sub-list of short values in a
+    list item.
+  - A subheading alone in its box (the BBC's) moves to just before the first paragraph of the
+    box after it, when that paragraph opens it, so it goes with its text.
+  - A heading that is a sentence (twelve words or more, under half links: a Q&A's question
+    citing its sources) is not taken for a link heading.
+  - An article's opening paragraphs stay with it: a paragraph before the article's box with
+    a link in its first sentence, and the paragraphs a box opens with when the best box is
+    inside it (Cloudflare's intro before its boxes of quotes).
   - Boxes that sell, credit or play are dropped by their markup: a sign-up form (one asking
     for an email address) and the box around it when that only pitches it; a short box named
     for a newsletter, a sponsor or the next story, with a call to act in it and not one of a

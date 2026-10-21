@@ -10,6 +10,7 @@ import base64
 import copy
 import itertools
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit
 
@@ -200,7 +201,8 @@ TRAILING_FURNITURE = re.compile(
     r"(\d+ )?(related|share|share this|tags|tagged|topics|categories|filed under|comments?|responses|"
     r"replies|discussion|recommended( reading| for you)?|popular|trending|read next|up next|follow us|"
     r"elsewhere|advertisement|sponsored|support us|leave a (reply|comment)( cancel reply)?|post a comment|"
-    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|you (may|might) also like|"
+    r"related (posts|stories|articles|reading|content|links)( by [\w .'-]+)?|related (on|from) (this|the|our) (site|blog)|"
+    r"you (may|might) also like|"
     r"you may have missed|more from (the |this |our )?(blog|site|author|archive|newsletter)|popular (tags|posts|stories|articles)|back to top( of page)?)\W*$"
 )
 # The heading of a section of notes or references, which may be gathered at the end by other means.
@@ -616,6 +618,8 @@ def _names_word(pattern: re.Pattern, part: str) -> bool:
     return found is not None and len(part) - found.end() <= 3
 
 
+TABLE_WRAPPER_DEPTH = 3
+SECTION_ID_MIN = 6  # letters of a section's id that must be its heading's: "faq" says nothing
 TAILWIND_SCROLL = re.compile(r"(?:[\w-]+:)*scroll-[mp][trblxyse]?-\S+")  # "scroll-mt-24": a margin
 
 
@@ -626,14 +630,15 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
       "<h2><a href='#setup'>Setup</a></h2>"), is all link to readability, which drops a heading
       more than a third links: the link's tag goes and its text stays, when the link holds
       most of the heading and no picture.
-    - An id that only spells the heading's text ("part-2-metascience", "a-final-remark") is
-      judged by that text, not by a word in it that readability takes for furniture ("meta",
-      "remark", "tool", "header"): it goes, unless it names furniture to us too or the
-      heading is one an article ends on ("Related", "Comments") or opens with the furniture
-      word ("Tweet this").
+    - An id that only spells the heading's text ("part-2-metascience", "a-final-remark"), on
+      the heading or on a section it opens ("typing-and-tools", "meta-models"), is judged by
+      that text, not by a word in it that readability takes for furniture ("meta", "remark",
+      "tool", "sponsor"): it goes, unless it names furniture to us too or the heading is one
+      an article ends on ("Related", "Comments") or opens with the furniture word ("Tweet
+      this"). A heading starting "References" or "Sources" is the author's whatever follows.
     - A Tailwind scroll margin ("scroll-mt-24") is not a scrolling widget: it goes.
-    - The box a real table scrolls in ("table-scroll"), holding the table alone, loses the
-      name readability holds against it."""
+    - The boxes a real table scrolls in ("table-scroll", "scroll > table-wrap"), each holding
+      the table alone, lose the names readability holds against them."""
     page = base_url.split("#")[0]
     negative, unlikely = READABILITY_PATTERNS["negativeRe"], READABILITY_PATTERNS["unlikelyCandidatesRe"]
     for heading in list(root.iter(*HEADINGS)):
@@ -661,36 +666,46 @@ def _free_section_headings(root: lxml.html.HtmlElement, base_url: str) -> None:
             inner = len(" ".join(a.text_content().split()))
             if href.startswith("#") and unquote(href[1:]) in own and not a.xpath(MEDIA_XPATH) and inner * 2 > len(text):
                 a.drop_tag()
-        anchor = heading.get("id") or ""
-        if (
-            anchor
-            and (negative.search(anchor) or unlikely.search(anchor))
-            and _slug(anchor) == _slug(text)
-            and not FURNITURE_CLASS.search(anchor)
+        # The ids that spell the heading, on it or on the sections it opens: PEP 810's
+        # <section id="typing-and-tools">, fortran-lang's "sponsors", goodfire's "meta-models".
+        title = _slug(text)
+        article_heading = (
+            bool(title)
             and not TRAILING_FURNITURE.match(_norm(text))
             and not any(p.fullmatch(text.split()[0]) for p in (negative, unlikely))
-            and not _furniture_lead(heading)
-        ):
-            heading.attrib.pop("id", None)
+            and (not _furniture_lead(heading) or REFERENCES_HEADING.match(_norm(text)))
+        )
+        for el in opened if article_heading else ():
+            anchor = el.get("id") or ""
+            key = _slug(anchor)
+            spells = key == title if el is heading else len(key) >= SECTION_ID_MIN and (key in title or title in key)
+            ours = FURNITURE_CLASS.search(anchor) and not REFERENCES_HEADING.match(_norm(text))
+            if spells and (negative.search(anchor) or unlikely.search(anchor)) and not ours:
+                el.attrib.pop("id", None)
         names = (heading.get("class") or "").split()
         if any(TAILWIND_SCROLL.fullmatch(name) for name in names):
             heading.set("class", " ".join(name for name in names if not TAILWIND_SCROLL.fullmatch(name)))
     for table in root.iter("table"):
-        box = table.getparent()
-        if (
-            not table.xpath(".//th | .//thead | .//caption")
-            or box is None
-            or box is root
-            or box.tag != "div"
-            or (box.text or "").strip()
-            or (table.tail or "").strip()
-            or [c for c in box if isinstance(c.tag, str)] != [table]
-            or FURNITURE_CLASS.search(_names(box))
-        ):
+        if not table.xpath(".//th | .//thead | .//caption"):
             continue
-        if negative.search(_names(box)) or unlikely.search(_names(box)):
-            box.attrib.pop("class", None)
-            box.attrib.pop("id", None)
+        # Each box out that holds the table alone, as wrappers nest (div.scroll > div.table-wrap).
+        inner = table
+        for _ in range(TABLE_WRAPPER_DEPTH):
+            box = inner.getparent()
+            if (
+                box is None
+                or box is root
+                or box.tag != "div"
+                or (box.text or "").strip()
+                or (inner.tail or "").strip()
+                or [c for c in box if isinstance(c.tag, str)] != [inner]
+                or FURNITURE_CLASS.search(_names(box))
+            ):
+                break
+            if negative.search(_names(box)) or unlikely.search(_names(box)):
+                box.attrib.pop("class", None)
+                box.attrib.pop("id", None)
+            inner = box
 
 
 def _slug(text: str) -> str:
@@ -700,30 +715,107 @@ def _slug(text: str) -> str:
 def _free_code_blocks(root: lxml.html.HtmlElement) -> None:
     """Unwrap the box a code block sits in when it holds nothing else but empty buttons and
     links (a highlighter's "copy"): readability deletes any box with under 25 letters, so a
-    one-line block ("trait Magic: Copy { }") went with its box. A <pre> on its own stays."""
+    one-line block ("trait Magic: Copy { }") went with its box. A <pre> on its own stays.
+    Each box out is unwrapped in turn: Jekyll and Sphinx nest two (div.highlighter-rouge >
+    div.highlight > pre)."""
     for pre in list(root.iter("pre")):
-        box = pre.getparent()
-        if box is None or box is root or box.tag != "div" or (box.text or "").strip() or (pre.tail or "").strip():
+        while _free_code_block(root, pre):
+            pass
+
+
+def _free_code_block(root: lxml.html.HtmlElement, pre: lxml.html.HtmlElement) -> bool:
+    """Unwrap the box around one code block; whether it did."""
+    box = pre.getparent()
+    if box is None or box is root or box.tag != "div" or (box.text or "").strip() or (pre.tail or "").strip():
+        return False
+    others = [child for child in box if child is not pre]
+    names = _names(box)
+    if (
+        FURNITURE_CLASS.search(names)
+        or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names)
+        or CODE_BOX_FURNITURE.search(names)
+    ):
+        return False
+    if all(
+        isinstance(child.tag, str)
+        and child.tag in ("button", "a", "span", "svg")
+        and not " ".join(child.text_content().split())
+        and not child.xpath(MEDIA_XPATH)
+        and not (child.tail or "").strip()
+        for child in others
+    ):
+        for child in others:
+            child.drop_tree()
+        box.drop_tag()
+        return True
+    return False
+
+
+LONE_HEADING_DEPTH = 4  # boxes around a heading, or around the next box's first paragraph
+
+
+def _join_lone_headings(root: lxml.html.HtmlElement) -> None:
+    """Move a subheading that sits alone in its box into the box of paragraphs after it.
+
+    The BBC sets each subheading in a box of its own between boxes of paragraphs; readability
+    joins the boxes of paragraphs into the article and leaves the subheadings out. In the next
+    box, just before its first paragraph, the subheading stays where a reader sees it and goes
+    with its text. Only a box holding nothing but the heading, not one the site's furniture
+    opens ("Related topics"), and a next box that opens with a paragraph of text: nothing
+    before it (not a FAQ's question in its <summary>), a few boxes in at most."""
+    for heading in list(root.iter("h2", "h3", "h4")):
+        text = " ".join(heading.text_content().split())
+        if not text or TRAILING_FURNITURE.match(_norm(text)) or _furniture_lead(heading):
             continue
-        others = [child for child in box if child is not pre]
-        names = _names(box)
-        if (
-            FURNITURE_CLASS.search(names)
-            or READABILITY_PATTERNS["unlikelyCandidatesRe"].search(names)
-            or CODE_BOX_FURNITURE.search(names)
-        ):
+        # The boxes that hold the heading alone: no text or element beside it (checked by its
+        # neighbours, not by each box's whole text: a flat page has thousands of headings).
+        box = heading
+        for _ in range(LONE_HEADING_DEPTH):
+            parent = box.getparent()
+            alone = (
+                parent is not None
+                and parent is not root
+                and parent.tag in ("div", "section")
+                and box.getprevious() is None
+                and box.getnext() is None
+                and not (parent.text or "").strip()
+                and not (box.tail or "").strip()
+            )
+            if not alone:
+                break
+            box = parent
+        if box is heading or box.xpath(MEDIA_XPATH):
             continue
-        if all(
-            isinstance(child.tag, str)
-            and child.tag in ("button", "a", "span", "svg")
-            and not " ".join(child.text_content().split())
-            and not child.xpath(MEDIA_XPATH)
-            and not (child.tail or "").strip()
-            for child in others
-        ):
-            for child in others:
-                child.drop_tree()
-            box.drop_tag()
+        following = box.getnext()
+        while following is not None and not isinstance(following.tag, str):
+            following = following.getnext()
+        if following is None or following.tag not in ("div", "section"):
+            continue
+        first = next((el for el in following.iter("p") if el is not following), None)
+        if first is None or _words(first.text_content()) < CONTINUATION_PARAGRAPH_WORDS:
+            continue
+        # Plain boxes between them, not a list item, quote, cell or aside the heading would enter.
+        between = []
+        for el in first.iterancestors():
+            if el is following:
+                break
+            between.append(el)
+        if len(between) >= LONE_HEADING_DEPTH or any(el.tag not in ("div", "section") for el in between):
+            continue
+        # The paragraph opens the box: no text, picture or question (a FAQ's <summary>) before it.
+        opens = not (following.text or "").strip()
+        for el in following.iterdescendants():
+            if el is first:
+                break
+            if el in between:
+                opens = opens and not (el.text or "").strip()
+                continue
+            opens = False  # an element before the paragraph that is not one of its boxes
+            break
+        if not opens:
+            continue
+        heading.tail = "\n"  # the text after it stays apart: "…not proven" / "Serhii…"
+        first.addprevious(heading)
 
 
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
@@ -1318,6 +1410,7 @@ def _structure(
         if _classes(heading) & SECTION_HEADING_CLASSES and not FURNITURE_CLASS.search(names):
             heading.attrib.pop("class", None)
     _free_section_headings(root, base_url)
+    _join_lone_headings(root)
     _free_headings(root)
     _free_code_blocks(root)
     _drop_page_notices(root)
@@ -2420,6 +2513,9 @@ def _furniture_lead(lead: lxml.html.HtmlElement) -> bool:
 def _led_in(ul: lxml.html.HtmlElement) -> bool:
     """Whether a paragraph introduces the list: it ends in a colon ("…please at least:"), or it
     is the whole of a short reference heading set as a paragraph ("References")."""
+    heading = _heading_over(ul)
+    if heading is not None and REFERENCES_HEADING.match(_norm(heading.text_content())):
+        return True  # "References and related work", over the list
     before = _lead(ul)
     if before is None:
         return False
@@ -2430,6 +2526,9 @@ def _led_in(ul: lxml.html.HtmlElement) -> bool:
 
 
 LEAD_HEADING_CHARS = 40
+REFERENCES_HEADING = re.compile(
+    r"\W*(references?|sources|bibliography|citations|works cited|further reading|see also)\b"
+)
 # The names of boxes a site keeps its own lists in.
 LIST_BOX = re.compile(
     r"recommend|more-stories|river|taboola|outbrain|partner|social|signup|sign-up|newsletter|follow|share",
@@ -2521,6 +2620,13 @@ class _Document(Document):
         own = [link for link in links if link[0] == here[0] and link[1] != here[1]]
         return bool(links) and len(own) > SITE_LINK_SHARE * len(links)
 
+    def transform_misused_divs_into_paragraphs(self):
+        """Readability's, remembering the boxes it made paragraphs of: a notice or byline in a
+        <div> is not one of the article's paragraphs to join to it."""
+        divs = list(self.tags(self.html, "div"))
+        super().transform_misused_divs_into_paragraphs()
+        self._made_paragraphs = {el for el in divs if el.tag == "p"}
+
     def get_preserved_elements(self, node):
         allowed = super().get_preserved_elements(node)
         self._kept_lists, self._kept_root = set(), node.getroottree().getroot()
@@ -2533,6 +2639,34 @@ class _Document(Document):
         for table in self.tags(node, "table"):
             if any(a.tag in ("td", "th") for a in table.iterancestors()):
                 allowed[table] = True
+        # A sub-list of short values ("Operating system" > "Ubuntu 24.04.4 LTS"): part of its item,
+        # not a box of its own to judge by length. Not a menu's, which is links.
+        for sub in self.tags(node, "ul", "ol"):
+            parent = sub.getparent()
+            if (
+                sub not in allowed
+                and parent is not None
+                and parent.tag == "li"
+                and len(" ".join(sub.text_content().split())) < self.min_text_length
+                and sub.find(".//a") is None
+            ):
+                allowed[sub] = True
+        # A short code block in a box with its label ("stdout" over "Capacity: 42"): code is not
+        # dropped for its length, as readability already spares it from its furniture names.
+        for box in self.tags(node, "div", "section"):
+            if (
+                box not in allowed
+                and box.find(".//pre") is not None
+                and len(" ".join(box.text_content().split())) < self.min_text_length
+                and self.class_weight(box) >= 0
+                and not FURNITURE_CLASS.search(_names(box))
+            ):
+                allowed[box] = True
+        # A line of the article in a box of its own, where the page boxes each paragraph
+        # (AsciiDoc's div.paragraph, Gleam's blog): short, or with a link, it read as furniture.
+        for box in self.tags(node, "div"):
+            if box not in allowed and self._paragraph_box(box):
+                allowed[box] = True
         # A display equation as short as "w = 1", in its own table or box: the length rule would
         # take it for furniture, formula or not.
         for box in self.tags(node, "table", "div", "section"):
@@ -2546,6 +2680,8 @@ class _Document(Document):
         return allowed
 
     def get_link_density(self, elem):
+        if elem.tag in HEADINGS and _sentence_heading(elem):
+            return 0.0  # a question with its sources linked (Quanta's Q&A), not a link heading
         kept = getattr(self, "_kept_lists", None)
         # Readability's second try parses the page again: lists kept on the first are not here.
         if not kept or elem.getroottree().getroot() is not self._kept_root:
@@ -2635,6 +2771,26 @@ class _Document(Document):
         that open with one of the same level (Logfire's, Mercor's). Readability joins siblings
         only on their own scores, and a short section scores less than a fifth of a long one."""
         best = best_candidate
+        best = self._paragraphs_box(candidates, best)
+        threshold = max(10, best["content_score"] * 0.2)  # readability's, for joining siblings
+        # Readability judges a sibling paragraph by its text before its first link: an opening
+        # sentence with a link in it reads as short and all link (mortoray's opening). Only a
+        # bare paragraph before the article's box: not a box readability made a paragraph of,
+        # nor one with a class or id or a heading in it (a byline, a title, a notice); and after
+        # the article come a page's notes and reply boxes.
+        title = _norm(self.short_title())[:TITLE_PREFIX_CHARS]
+        for sibling in best["elem"].itersiblings(preceding=True):
+            if (
+                sibling.tag == "p"
+                and sibling not in candidates
+                and not sibling.get("class")
+                and not sibling.get("id")
+                and sibling not in getattr(self, "_made_paragraphs", ())
+                and next(sibling.iter(*HEADINGS), None) is None
+                and self._text_paragraph(sibling)
+                and not (title and _norm(sibling.text_content()).startswith(title))  # the title set as a line
+            ):
+                candidates[sibling] = {"content_score": threshold, "elem": sibling}
         for box in (best["elem"], best["elem"].getparent()):
             if box is None:
                 break
@@ -2654,6 +2810,66 @@ class _Document(Document):
             candidates[parent] = best = holder
             break
         return super().get_article(candidates, best, html_partial)
+
+    def _text_paragraph(self, p) -> bool:
+        return _words(p.text_content()) >= CONTINUATION_PARAGRAPH_WORDS and self.get_link_density(p) < PARAGRAPH_LINKS
+
+    def _paragraph_box(self, box) -> bool:
+        """A box holding one paragraph or quote of the article: the page puts each in a box of
+        its own (a sibling box of the same class holds one too), and it says something of its
+        own beside any link, in the article's words rather than a site's pitch."""
+        kids = [c for c in box if isinstance(c.tag, str)]
+        if len(kids) != 1 or kids[0].tag not in ("p", "blockquote") or (box.text or "").strip():
+            return False
+        line = kids[0]
+        text = " ".join(line.text_content().split())
+        if len(text) >= PARAGRAPH_BOX_CHARS or self.class_weight(box) < 0 or FURNITURE_CLASS.search(_names(box)):
+            return False
+        links = " ".join(" ".join(a.text_content().split()) for a in line.iter("a"))
+        if _words(text) - _words(links) < PARAGRAPH_BOX_OWN_WORDS or line.xpath(MEDIA_XPATH):
+            return False
+        if _furniture_lead(line) or (line.tag == "p" and _furniture_lead(box)):
+            return False
+        parent, style = box.getparent(), box.get("class")
+        if parent is None or not style:
+            return False
+        cache = self.__dict__.setdefault("_paragraph_classes", {})
+        if parent not in cache:  # once per parent: a page can box thousands of paragraphs
+            cache[parent] = Counter(
+                c.get("class") for c in parent if isinstance(c.tag, str) and c.tag == "div" and c.find("p") is not None
+            )
+        return cache[parent][style] >= 2  # this box and another of the article's
+
+    def _paragraphs_box(self, candidates, best):
+        """The box whose own paragraphs open the article, when the best box is inside it.
+
+        Cloudflare's post opens with two paragraphs in its article box and goes on in boxes of
+        quotes; the best box was one quote, four boxes in, and the opening went. A box a few
+        levels up is taken instead when it opens with two or more paragraphs of text of its own
+        (after a heading at most) before the one holding the best box, is not mostly links or
+        named as furniture, and holds at most three times the best box's text."""
+        elem = best["elem"]
+        size = len(" ".join(elem.text_content().split()))
+        for box in list(elem.iterancestors())[:PARAGRAPHS_BOX_DEPTH]:
+            if box.tag in ("body", "html") or _unlikely(box) or FURNITURE_CLASS.search(_names(box)):
+                break
+            if len(" ".join(box.text_content().split())) > PARAGRAPHS_BOX_GROWTH * size:
+                break
+            # It opens with paragraphs of text (after a heading at most), before the best box's branch.
+            opening = 0
+            for child in box:
+                if not isinstance(child.tag, str) or child.tag in HEADINGS:
+                    continue
+                if child.tag != "p" or not self._text_paragraph(child) or elem in child.iterdescendants():
+                    break
+                opening += 1
+            if opening >= 2 and self.get_link_density(box) <= MERGE_LINKS:
+                holder = dict(candidates.get(box) or self.score_node(box))
+                holder["elem"] = box
+                holder["content_score"] = max(holder["content_score"], best["content_score"])
+                candidates[box] = holder
+                return holder
+        return best
 
     def _text_list(self, ul) -> bool:
         if not ul.findall("li") or self.class_weight(ul) < 0 or FURNITURE_CLASS.search(_names(ul)):
@@ -2680,7 +2896,8 @@ class _Document(Document):
         if lead is not None and _furniture_lead(lead):
             return False
         heading = _heading_over(ul)
-        if heading is not None and _furniture_lead(heading):
+        references = heading is not None and REFERENCES_HEADING.match(_norm(heading.text_content()))
+        if heading is not None and _furniture_lead(heading) and not references:
             return False
         says = _own_chars(ul) >= LIST_OWN_CHARS
         if _led_in(ul):
@@ -2689,6 +2906,26 @@ class _Document(Document):
             # else we are reporting today:").
             return not self._cards(ul) and (says or not self._site_list(ul))
         return says and not self._site_list(ul)
+
+
+TITLE_PREFIX_CHARS = 40
+PARAGRAPH_BOX_CHARS = 200  # longer, readability keeps the box on its own length
+PARAGRAPH_BOX_OWN_WORDS = 3
+PARAGRAPH_LINKS = 0.25  # readability's, for a sibling paragraph of the article
+PARAGRAPHS_BOX_DEPTH = 4
+PARAGRAPHS_BOX_GROWTH = 3  # times the best box's text: more is the page around the article
+SENTENCE_HEADING_WORDS = 12
+SENTENCE_HEADING_LINK_SHARE = 0.5
+
+
+def _sentence_heading(heading: lxml.html.HtmlElement) -> bool:
+    """A heading that is a sentence with links in it, not a link set as a heading. Readability
+    drops a heading over a third links; a Q&A's question citing its sources is one."""
+    text = " ".join(heading.text_content().split())
+    if _words(text) < SENTENCE_HEADING_WORDS:
+        return False
+    links = sum(len(" ".join(a.text_content().split())) for a in heading.iter("a"))
+    return links < SENTENCE_HEADING_LINK_SHARE * len(text)
 
 
 def _section_furniture(box: lxml.html.HtmlElement, level: str) -> bool:
