@@ -657,8 +657,8 @@ source).
   have at least 5 points (one with fewer is found on a later day, when it has them). Up to
   five requests per site per reader's run; if the first fails the site is reported as
   failing, and if a further one fails the rest are still used. The front page is read first,
-  then the tags, then the front page's further pages, and the cap on candidates below takes
-  them in that order.
+  then the tags, then the front page's further pages; the cap on candidates below keeps that
+  order among stories never seen before, and again among those seen on an earlier day.
 - **Lobsters tags.** The tags offered are the site's own subjects from its list of tags, read
   once a run for the household: active tags, without the kinds of post (video, pdf, ask, show
   and the like) or the site's news about itself. A list that cannot be read, or has fewer

@@ -1298,6 +1298,46 @@ def test_discovery_looks_back_as_far_as_the_age_limit_and_takes_new_stories_firs
     assert "hitsPerPage=1000" in more and "attributesToRetrieve=" in more
 
 
+def test_each_reader_is_read_by_their_own_lobsters_tags_after_the_list_is_refreshed(tmp_path, monkeypatch):
+    import argparse
+
+    from app import cli
+
+    for name, value in {"FORENOON_DATA_DIR": str(tmp_path), "FORENOON_ANTHROPIC_API_KEY": ""}.items():
+        monkeypatch.setenv(name, value)
+    store = Store(tmp_path / "forenoon.sqlite3")
+    for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
+        store.db.executescript(migration.read_text())
+    for user in ("ann", "bob"):
+        store.db.execute(
+            "INSERT INTO users (id, name, password_hash, role, email, created_at) VALUES (?, ?, 'x', 'reader', ?, 'x')",
+            (user, user, f"{user}@example.com"),
+        )
+        store.db.execute(
+            "INSERT INTO follows (user_id, source_id, pinned, created_at, chosen)"
+            " SELECT ?, id, 0, 'x', 1 FROM sources WHERE builtin = 'lobsters'",
+            (user,),
+        )
+    chosen = [("ann", "rust"), ("ann", "databases"), ("bob", "front"), ("bob", "zig")]
+    store.db.executemany("INSERT INTO builtin_sections (user_id, builtin, section) VALUES (?, 'lobsters', ?)", chosen)
+    store.db.commit()
+    store.close()
+    # Lobsters has since dropped databases.
+    live = [(tag, "languages", "") for tag in ("rust", "zig", *(f"t{n}" for n in range(25)))]
+    monkeypatch.setattr(cli, "lobsters_tags", lambda fetcher: live)
+    monkeypatch.setattr(cli, "backend_from_env", lambda llm: None)
+    monkeypatch.setattr(cli, "notify", lambda *a, **k: None)
+    read = {}
+
+    def run(cfg, store, fetcher, user, **kw):
+        read[user.id] = cfg.discovery.sections
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(cli, "run", run)
+    cli._run_all(cli.load(), argparse.Namespace(user=None, dry_run=False, out=None))
+    assert read == {"ann": {"lobsters": ("rust",)}, "bob": {"lobsters": ("front", "zig")}}
+
+
 def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_path):
     from app import cli
     from app.discover import lobsters_tags, read_listing
