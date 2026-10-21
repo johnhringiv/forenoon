@@ -27,7 +27,7 @@ from .deliver import (
     safe_filename,
     send,
 )
-from .discover import SITES, is_article, listings, read_listing, site_host, site_source
+from .discover import is_article, read_listing, site_host, site_source
 from .extract import DRAWN, SHOT_ID, Extracted, extract
 from .fetch import Fetcher, FetchError
 from .images import SVG_ADDRESS, embed_images
@@ -639,19 +639,15 @@ def _discover(
         source = site_source(key, cfg.discovery.daily_max.get(key, 0))
         src = reports[source.name] = SourceReport(source.name)
         report.sources.append(src)
-        sections = cfg.discovery.sections.get(key, ())
-        # The site's health is the household's: a run that reads only the reader's own tags
-        # neither fails it nor clears it, so it does not hang on who ran first.
-        tracked = not dry_run and listings(key, cutoff, sections)[0][0] == SITES[key].url
         try:
-            items = read_listing(key, fetcher, cutoff, source, sections)
+            items = read_listing(key, fetcher, cutoff, source, cfg.discovery.sections.get(key, ()))
         except FetchError as exc:
             src.feed_error = str(exc)
             log.warning("%s: listing failed: %s", source.name, exc)
-            if tracked:
+            if not dry_run:
                 src.consecutive_failures = store.track_source(source.name, src.feed_error)
             continue
-        if tracked:
+        if not dry_run:
             store.track_source(source.name)
         # Stories never seen before go first, so those still waiting from earlier days (the
         # listing reaches back as far as the age limit) cannot crowd them out of the cap.

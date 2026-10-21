@@ -1303,10 +1303,8 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
     from app.discover import lobsters_tags, read_listing
 
     asked = []
-    tags = [
-        {"tag": f"t{n}", "category": "languages", "description": "", "active": True, "privileged": False}
-        for n in range(25)
-    ]
+    # Most without the fields the site might stop sending: kept all the same.
+    tags = [{"tag": f"t{n}", "category": "languages", "description": ""} for n in range(25)]
     tags += [
         {
             "tag": "rust",
@@ -1349,7 +1347,10 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
     asked.clear()
     items = read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("front", "rust"))
     assert [i.title for i in items] == ["Hot", "Voted"], "the front page takes any story, first"
-    assert len(asked) == 5
+    # The reader's tags before the front page's further pages: the per-site cap cuts those first.
+    assert [url.removeprefix("https://lobste.rs/") for url in asked] == [
+        "hottest.json", "t/rust.json", "t/rust/page/2.json", "page/2.json", "page/3.json"
+    ]  # fmt: skip
     asked.clear()
     read_listing("lobsters", fetcher, NOW - timedelta(days=3), sections=("../x",))
     assert asked[0] == "https://lobste.rs/hottest.json", "no usable tag: the front page"
@@ -1364,6 +1365,7 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
 
     # Refreshed once a run; a tag the site dropped is not asked for, as it fails the listing.
     store = Store(tmp_path / "forenoon.sqlite3")
+    store.replace_lobsters_tags([("rust", "languages", "")])  # before the web app's upgrade: nothing to do
     for migration in sorted((Path(__file__).parent.parent / "web" / "migrations").glob("*.sql")):
         store.db.executescript(migration.read_text())
     store.db.executemany(
@@ -1379,7 +1381,7 @@ def test_lobsters_is_read_by_a_readers_tags_and_the_tags_follow_the_site(tmp_pat
     assert [r[0] for r in store.db.execute("SELECT tag FROM lobsters_tags")] == ["rust"]
 
 
-def test_a_readers_tags_reach_the_listing_and_only_the_front_page_says_how_the_site_is(env, monkeypatch):
+def test_a_readers_tags_reach_the_listing_and_its_failure_counts_for_the_site(env, monkeypatch):
     from app import pipeline
     from app.config import Discovery
 
@@ -1392,7 +1394,7 @@ def test_a_readers_tags_reach_the_listing_and_only_the_front_page_says_how_the_s
 
     monkeypatch.setattr(pipeline, "read_listing", failing)
     health = "SELECT failures FROM source_health WHERE source = 'Lobsters'"
-    for sections, failures in ((("rust",), None), (("front", "rust"), 1)):
+    for sections, failures in ((("rust",), 1), (("front", "rust"), 2)):
         discovery = Discovery(sites=("lobsters",), sections={"lobsters": sections})
         own = dataclasses.replace(_llm_cfg(cfg), sources=(), discovery=discovery)
         user = dataclasses.replace(own.users[0], daily_cap=4)
@@ -1400,8 +1402,8 @@ def test_a_readers_tags_reach_the_listing_and_only_the_front_page_says_how_the_s
         lobsters = next(s for s in report.sources if s.name == "Lobsters")
         assert asked[-1] == ("lobsters", sections) and lobsters.feed_error == "not found"
         row = store.db.execute(health).fetchone()
-        # Tags alone are the reader's own: their failure is in their report, not the household's.
-        assert (row and row["failures"]) == failures
+        # A stale tag is never asked for, so a tags-only listing fails only when the site does.
+        assert row["failures"] == failures
 
 
 def test_a_post_dated_before_it_appeared_is_not_lost(env):

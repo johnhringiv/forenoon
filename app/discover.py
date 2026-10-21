@@ -7,6 +7,7 @@ still decided by the ranker and fetched through the same extraction path as feed
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ from .config import Source
 from .fetch import Fetcher, FetchError
 from .sources import Item
 from .urls import article_id
+
+log = logging.getLogger("forenoon")
 
 MAX_LISTING_BYTES = 8 * 1024 * 1024
 MAX_TITLE_CHARS = 300
@@ -125,7 +128,9 @@ def lobsters_tags(fetcher: Fetcher) -> list[tuple[str, str, str]]:
         raise FetchError("response is not a list of tags") from exc
     tags = {}
     for entry in data if isinstance(data, list) else []:
-        if not isinstance(entry, dict) or entry.get("active") is not True or entry.get("privileged") is not False:
+        # Only what the site marks as retired or for moderators is left out: a field it stops
+        # sending must not empty the list.
+        if not isinstance(entry, dict) or entry.get("active") is False or entry.get("privileged") is True:
             continue
         tag, category, description = entry.get("tag"), entry.get("category"), entry.get("description")
         if not isinstance(tag, str) or not TAG.fullmatch(tag) or tag == FRONT or not isinstance(category, str):
@@ -192,15 +197,15 @@ def _summary(site: Site, story: dict, host: str) -> str:
 
 def listings(key: str, since: datetime, sections: tuple[str, ...] = ()) -> list[tuple[str, int]]:
     """The listings a reader's sections of a site take, each with the points a story in it
-    needs; front page first. No sections, or a site without tags: its front page alone."""
+    needs. No sections, or a site without tags: its front page alone. The front page comes
+    first and the tags before its further pages, so the cap on a site's candidates, which
+    takes them in this order, cuts the stories the reader chose last."""
     site = SITES[key]
     tags = [s for s in dict.fromkeys(sections) if s != FRONT and TAG.fullmatch(s)] if site.tagged else []
-    found = []
-    if not tags or FRONT in sections:
-        found = [(site.url, 0), *((url, 0) for url in site.more(since))]
-    if site.tagged and tags:
-        found += [(url, TAG_MIN_POINTS) for url in site.tagged(tags)]
-    return found
+    tagged = [(url, TAG_MIN_POINTS) for url in site.tagged(tags)] if site.tagged and tags else []
+    if tags and FRONT not in sections:
+        return tagged
+    return [(site.url, 0), *tagged, *((url, 0) for url in site.more(since))]
 
 
 def read_listing(
@@ -229,7 +234,8 @@ def read_listing(
     for url, floor in rest:
         try:
             parsed = site.parse(json.loads(fetcher.get(url, max_bytes=MAX_LISTING_BYTES).content))
-        except (FetchError, ValueError, RecursionError):
+        except (FetchError, ValueError, RecursionError) as exc:
+            log.warning("%s: listing %s skipped: %s", site.name, url, exc)
             continue
         stories += [story for story in parsed if _count(story.get("points")) >= floor]
     items: dict[str, Item] = {}

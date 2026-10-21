@@ -368,6 +368,8 @@ class Store:
 
     def replace_lobsters_tags(self, tags: list[tuple[str, str, str]]) -> None:
         """The Lobsters tags readers may choose, as the site lists them now."""
+        if not self._has_table("lobsters_tags"):
+            return  # the web app has not been upgraded yet
         with self.db:
             self.db.execute("DELETE FROM lobsters_tags")
             self.db.executemany("INSERT INTO lobsters_tags (tag, category, description) VALUES (?, ?, ?)", tags)

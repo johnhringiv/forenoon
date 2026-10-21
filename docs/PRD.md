@@ -656,17 +656,16 @@ source).
   their tags one listing of all of them, two pages, newest first, with only the stories that
   have at least 5 points (one with fewer is found on a later day, when it has them). Up to
   five requests per site per reader's run; if the first fails the site is reported as
-  failing, and if a further one fails the rest are still used. The site's health (failing,
-  and the alert after `alerts.source_failures` runs) is the household's, so only a run that
-  reads the front page counts towards it; a reader who reads only tags has a failure in
-  their own run report.
+  failing, and if a further one fails the rest are still used. The front page is read first,
+  then the tags, then the front page's further pages, and the cap on candidates below takes
+  them in that order.
 - **Lobsters tags.** The tags offered are the site's own subjects from its list of tags, read
   once a run for the household: active tags, without the kinds of post (video, pdf, ask, show
   and the like) or the site's news about itself. A list that cannot be read, or has fewer
   than 20 tags, is not used and the last one is kept; the first is the list as it was when
   this was built. A tag the site no longer lists is not asked for (Lobsters answers a listing
   with an unknown tag as not found), and the reader's Sources page shows it still ticked under
-  "No longer on Lobsters" until they save without it.
+  "No longer on Lobsters" until they next save, which removes it.
 - **Candidates.** Stories with a link to an article. Dropped: stories without a link, links to
   video and social sites or to files such as PDFs, anything older than `max_age_days`, and
   anything already delivered or previously failed. At most `discovery.per_site` (100) per site.
