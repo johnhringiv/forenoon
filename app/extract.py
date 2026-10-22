@@ -891,18 +891,26 @@ def _loose_run(run: list) -> list:
     """A run's nodes: paragraphs holding them when the run is prose, else the nodes as they were.
 
     The <br>s and whitespace at a paragraph's ends go outside it (whitespace kept, so words on
-    either side stay apart), and a <br> after a sentence's end ends a paragraph: Blogger turns
-    each line break of a post into one."""
+    either side stay apart), and a <br> after a line of a paragraph's length that ends a sentence
+    ends a paragraph: Blogger turns each break between paragraphs into one. A hard-wrapped email
+    (lines of 80 characters), a poem or an address keeps its line breaks."""
     own = "".join(n if isinstance(n, str) else _text_outside_links(n) for n in run)
     # Not a label ("0", "Note:"), only links, or a line of the page's own (dates, "Sign in"): prose.
     if _words(own) < LOOSE_RUN_MIN_WORDS or not SENTENCE_END.search(" ".join(own.split())):
         return run
-    pieces, line = [], []
+    # A line's length and its last characters, kept as it grows: reading the line again at each
+    # <br> would make a run of thousands of them quadratic.
+    pieces, line, length, tail = [], [], 0, ""
     for node in run:
-        if not isinstance(node, str) and node.tag == "br" and SENTENCE_END.search(_line_end(line) + " "):
-            pieces.append(line)
-            line = []
-            continue
+        if not isinstance(node, str) and node.tag == "br":
+            if length >= PARAGRAPH_LINE_CHARS and LINE_ENDS_SENTENCE.search(tail):
+                pieces.append(line)
+                line, length, tail = [], 0, ""
+                continue
+        else:
+            text = node if isinstance(node, str) else _text_outside_links(node)
+            length += len(text)
+            tail = (tail + text)[-LINE_END_CHARS:]
         line.append(node)
     pieces.append(line)
     out = []
@@ -911,18 +919,9 @@ def _loose_run(run: list) -> list:
     return out
 
 
-def _line_end(nodes: list) -> str:
-    """The last words of a line, enough to see whether it ends a sentence; not the whole line,
-    which a run of thousands of lines would read again at every <br>."""
-    text = ""
-    for node in reversed(nodes):
-        text = (node if isinstance(node, str) else _text_outside_links(node)) + text
-        if len(text.strip()) >= LINE_END_CHARS:
-            break
-    return " ".join(text.split())[-LINE_END_CHARS:]
-
-
-LINE_END_CHARS = 40
+LINE_END_CHARS = 40  # of a line's end, read for whether it ends a sentence
+PARAGRAPH_LINE_CHARS = 100  # a line this long before a <br> is a paragraph; a wrapped email's are 80
+LINE_ENDS_SENTENCE = re.compile(r"\b(?!al\.)[A-Za-z]?[a-z]{2,}[)\]\"'”’]*[.!?][\"'”’)\]]*\s*$")
 
 
 def _paragraph_of(nodes: list) -> list:

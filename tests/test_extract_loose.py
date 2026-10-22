@@ -118,13 +118,25 @@ def test_a_wrapped_paragraph_starts_and_ends_with_its_text():
     assert len(made) == 3
 
 
-def test_a_line_break_after_a_sentence_ends_a_paragraph():
-    # Blogger's "convert line breaks": one <br> between paragraphs.
+def test_a_line_break_after_a_paragraph_ends_it():
+    # Blogger's "convert line breaks": one <br> between paragraphs, each a long line.
     made = wrapped(
-        "<div><h3>Intro</h3>We published a paper on it (on Arxiv, and to ICLR as well).<br>"
-        "The TLDR is that it works, and you can use it with Theano.<br>You can find the code here.</div>"
+        "<div><h3>Intro</h3>We published a paper on this technique a while ago, with two colleagues (on Arxiv, and to ICLR as well).<br>"
+        "The TLDR is that it works well for categorical features, and you can use it today with the framework you already use.<br>"
+        "You can find the code for this article on GitHub, together with the notebook that made every figure.</div>"
     )
     assert len(made) == 3
+
+
+def test_short_lines_keep_their_breaks():
+    # A hard-wrapped email (LKML's hypermail) and an address: lines of 80 characters or fewer.
+    made = wrapped(
+        "<div><h3>Re: patch</h3>Yeah, I think the conversion is actually broken.  There isn't anything<br>"
+        "which prevents work item execution racing against irq disabling.  I<br>"
+        "agree the right thing is to fix it in the driver.<br><br>"
+        "Acme Inc.<br>1200 Lakeview Ave.<br>Springfield, with thanks to all of you.</div>"
+    )
+    assert len(made) == 2 and all("<br>" in p for p in made)
 
 
 def test_a_pair_of_breaks_stays_in_text_that_is_not_wrapped():
