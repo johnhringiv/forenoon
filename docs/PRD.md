@@ -347,6 +347,16 @@ All fetched content is treated as untrusted.
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
     (bold) in highlighted code blocks keep their meaning as elements.
+  - Line numbers come out of code: in a `<pre>`, a box named for them (Shiki's `ln`,
+    `line-number`, a gutter) that holds only digits, or one hidden from screen readers that
+    holds only digits or nothing; and a table whose every row is a cell of line numbers, named
+    as such (Rouge's `rouge-gutter`, Pygments' `linenos`), beside a cell of code becomes the
+    code.
+  - A line break hidden from screen readers is a layout's hint where a line may break (anoma.ly
+    sets one before every syllable), so it goes; between two words of a block it leaves a
+    space.
+  - In a figure's caption, or a box of a figure named for a caption (a lightbox's copy), a box
+    that repeats the words just before it goes: Ars Technica writes each credit twice.
   - Formulas are written once, as text: MathML, KaTeX and MathJax output, and TeX that the
     page renders in the browser (between `$$…$$`, `\[…\]` and `\(…\)`, an undelimited
     `\begin{align}…\end{align}` and the like, and `$…$` where the page's settings turn it on;
