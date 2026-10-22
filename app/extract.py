@@ -818,6 +818,169 @@ def _join_lone_headings(root: lxml.html.HtmlElement) -> None:
         first.addprevious(heading)
 
 
+LOOSE_RUN_MIN_WORDS = 3
+LOOSE_BOXES = ("div", "section", "article", "main", "aside", "body")
+# The blocks that end a run of loose text; anything else (inline elements, a toolbar's buttons
+# and custom elements) runs with the text.
+RUN_BLOCKS = {
+    "p", "div", "section", "article", "main", "aside", "header", "footer", "nav", "ul", "ol", "dl",
+    "pre", "blockquote", "table", "figure", "hr", "details", "form", "fieldset", "address", "center",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}  # fmt: skip
+# The end of a sentence after a word ("features.", "Theano)."), or a lead-in's colon after a
+# lowercase one ("letter:"); not after initials, abbreviations or a citation ("J.", "M.Sc.",
+# "et al."), nor a label's colon ("From:").
+SENTENCE_END = re.compile(r"(\b(?!al\.)[A-Za-z]?[a-z]{2,}[)\]\"'”’]*[.!?]|\b[a-z]{2,}:)[\"'”’)\]]*(\s|$)")
+
+
+def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
+    """Make each run of loose text in a box of blocks a paragraph of its own, as a browser shows it.
+
+    Readability-lxml makes a paragraph of a box's leading text and of each text after an inline
+    element, so a sentence was cut at every link or <em> (Phoronix writes its article as text
+    and <br>s in a box beside a few blocks). Here a run of text and inline elements between two
+    blocks is one paragraph; two <br>s in a row end one, as they look on the page. Only a run of
+    prose is made one: three words or more outside links, with a sentence's end. A label, a lone
+    "Read more", a toolbar's strings or a line of dates is left as it is, and so is a box with no
+    blocks (buttons and custom elements are not blocks), which readability makes one paragraph."""
+    for box in list(root.iter(*LOOSE_BOXES)):
+        blocks = {c for c in box if isinstance(c.tag, str) and _run_block(c)}
+        if not blocks:
+            continue
+        if not (box.text or "").strip() and not any(
+            (c.tail or "").strip() or (isinstance(c.tag, str) and c not in blocks and c.tag != "br") for c in box
+        ):
+            continue
+        # The box's children and text, as runs between its blocks.
+        runs: list[list] = [[box.text or ""]]
+        box.text = None
+        order: list = []  # blocks and runs, in the page's order
+        for child in list(box):
+            tail, child.tail = child.tail or "", None
+            box.remove(child)
+            inline = child not in blocks
+            if inline and child.tag == "br" and _ends_with_br(runs[-1]):
+                runs[-1].append(child)  # the pair ends the run, and stays with it unless it is wrapped
+                order.append(runs[-1])
+                runs.append([tail])
+                continue
+            if inline:
+                runs[-1].extend([child, tail])
+                continue
+            order.append(runs[-1])
+            order.append(child)
+            runs.append([tail])
+        order.append(runs[-1])
+        out = _Appender(box)
+        for part in order:
+            for node in _loose_run(part) if isinstance(part, list) else [part]:
+                out.add(node)
+
+
+def _ends_with_br(run: list) -> bool:
+    for node in reversed(run):
+        if isinstance(node, str):
+            if node.strip():
+                return False
+            continue
+        return isinstance(node.tag, str) and node.tag == "br"
+    return False
+
+
+def _loose_run(run: list) -> list:
+    """A run's nodes: paragraphs holding them when the run is prose, else the nodes as they were.
+
+    The <br>s and whitespace at a paragraph's ends go outside it (whitespace kept, so words on
+    either side stay apart), and a <br> after a line of a paragraph's length that ends a sentence
+    ends a paragraph: Blogger turns each break between paragraphs into one. A hard-wrapped email
+    (lines of 80 characters), a poem or an address keeps its line breaks."""
+    own = "".join(n if isinstance(n, str) else _text_outside_links(n) for n in run)
+    # Not a label ("0", "Note:"), only links, or a line of the page's own (dates, "Sign in"): prose.
+    if _words(own) < LOOSE_RUN_MIN_WORDS or not SENTENCE_END.search(" ".join(own.split())):
+        return run
+    # A line's length and its last characters, kept as it grows: reading the line again at each
+    # <br> would make a run of thousands of them quadratic.
+    pieces, line, length, tail = [], [], 0, ""
+    for node in run:
+        if not isinstance(node, str) and node.tag == "br":
+            ends = length >= PARAGRAPH_LINE_CHARS and LINE_ENDS_SENTENCE.search(tail)
+            length, tail = 0, ""  # each line is judged on its own, from the last <br>
+            if ends:
+                pieces.append(line)
+                line = []
+                continue
+        else:
+            text = node if isinstance(node, str) else _text_outside_links(node)
+            length += len(text)
+            tail = (tail + text)[-LINE_END_CHARS:]
+        line.append(node)
+    pieces.append(line)
+    out = []
+    for piece in pieces:
+        out.extend(_paragraph_of(piece))
+    return out
+
+
+LINE_END_CHARS = 40  # of a line's end, read for whether it ends a sentence
+PARAGRAPH_LINE_CHARS = 100  # a line this long before a <br> is a paragraph; a wrapped email's are 80
+LINE_ENDS_SENTENCE = re.compile(r"\b(?!al\.)[A-Za-z]?[a-z]{2,}[)\]\"'”’]*[.!?][\"'”’)\]]*\s*$")
+
+
+def _paragraph_of(nodes: list) -> list:
+    """One <p> of the nodes, with the <br>s and whitespace at its ends left outside it."""
+
+    def edge(node) -> bool:  # whitespace, a <br>, or a script or style the reader never sees
+        if isinstance(node, str):
+            return not node.strip()
+        return node.tag in ("br", "script", "style", "noscript", "template")
+
+    lead, trail = [], []
+    while nodes and edge(nodes[0]):
+        lead.append(nodes.pop(0))
+    while nodes and edge(nodes[-1]):
+        trail.insert(0, nodes.pop())
+    spaces = " " if any(isinstance(n, str) or n.tag == "br" for n in lead + trail) else ""
+    if not nodes:
+        return [spaces] if spaces else []
+    para = lxml.html.Element("p")
+    out = _Appender(para)
+    for node in nodes:
+        out.add(node)
+    return [spaces, para, spaces] if spaces else [para]
+
+
+def _run_block(el) -> bool:
+    """A block, or an element that holds one (Distill's <dt-article>, an old page's <font>)."""
+    return el.tag in RUN_BLOCKS or next(el.iterdescendants(*RUN_BLOCKS), None) is not None
+
+
+def _text_outside_links(el) -> str:
+    """The text a reader sees outside links: not a script's, a style's or a link's."""
+    if not isinstance(el.tag, str) or el.tag in ("a", "script", "style", "noscript", "template"):
+        return ""
+    return (el.text or "") + "".join(_text_outside_links(c) + (c.tail or "") for c in el)
+
+
+class _Appender:
+    """Appends elements and text to an element, keeping its last child at hand: asking lxml for
+    it walks the children, and a box can hold tens of thousands of lines."""
+
+    def __init__(self, el: lxml.html.HtmlElement):
+        self.el, self.last = el, el[-1] if len(el) else None
+
+    def add(self, node) -> None:
+        if isinstance(node, str):
+            if not node:
+                return
+            if self.last is None:
+                self.el.text = (self.el.text or "") + node
+            else:
+                self.last.tail = (self.last.tail or "") + node
+            return
+        self.el.append(node)
+        self.last = node
+
+
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
 SKIP_TARGET_MAX_WORDS = 6
 
@@ -1417,6 +1580,7 @@ def _structure(
     _drop_skip_targets(root)
     _drop_furniture(root, base_url, page_words, linked_to)
     _unclass_data_tables(root)
+    _wrap_loose_text(root)
     if not notes:
         return None
     holder = lxml.html.Element("div")
@@ -1600,12 +1764,15 @@ def _unmark(root: lxml.html.HtmlElement) -> None:
 def _unnest_empty(root: lxml.html.HtmlElement) -> None:
     """Take out what lxml's parser put inside a <source> or <track>: it does not know they are
     empty, so it nests what follows them there, a <picture>'s own <img> among it. Written out
-    again, the emptied tag is closed and parses as it should. Only in a <picture>: in a player
-    (<amp-video>, <video-js>) what follows is the fallback text, which goes with the player."""
+    again, the emptied tag is closed and parses as it should. In a <picture> itself, or in a box
+    that is not a player (<video>, <audio>, <amp-video>, <video-js>, where what follows is the
+    fallback text, which goes with the player) nor inside a <picture>: a stray <source> swallowed
+    the rest of its box, which went with it."""
     for el in list(root.iter("source", "track")):
         holder = next((a for a in el.iterancestors() if a.tag not in ("source", "track")), None)
-        if holder is None or holder.tag != "picture":
-            continue
+        in_picture = holder is not None and next(holder.iterancestors("picture"), None) is not None
+        if holder is None or in_picture or holder.tag in ("video", "audio", "object") or "-" in holder.tag:
+            continue  # a box inside a <picture> holds a stand-in; a player holds its fallback
         children, text, tail = list(el), el.text or "", el.tail or ""
         el.text = None
         if children:
@@ -3523,6 +3690,28 @@ def _reference_words(page_html: str) -> int:
         return 0
 
 
+def _drop_title_heading(body: lxml.html.HtmlElement, title: str) -> None:
+    """Drop a heading that opens the page's copy and repeats the article's title, which the book
+    prints above it: LWN's page has its headline over the brief, the feed's copy does not."""
+    key = _norm(title)
+    if not key:
+        return
+    first = next(
+        (el for el in body.iter() if isinstance(el.tag, str) and el is not body and (el.text or "").strip()), None
+    )
+    if first is None or first.tag not in HEADINGS:
+        return
+    text = _norm(first.text_content())
+    if text == key or (_words(text) >= TITLE_HEADING_MIN_WORDS and key.startswith(text)):
+        first.drop_tree()
+
+
+TITLE_HEADING_MIN_WORDS = 3
+DECLARED_TITLE = re.compile(
+    r"<title[\s>]|property=[\"']?og:title|name=[\"']?twitter:title", re.IGNORECASE
+)  # a heading the title only starts with ("Results from the 2026 TAB election | LWN")
+
+
 def page_metadata(page_html: str) -> tuple[str, str, str, str]:
     """Title, author, lead image URL (og:image) and description, each "" when absent."""
     try:
@@ -3751,6 +3940,10 @@ def extract(
     if TRUNCATED_TAIL.search(text[-300:]):
         reasons.append("looks truncated")
     _drop_lone_links(body, url)
+    # The title repeated over the page's copy, once the copy is chosen and judged as before. Only a
+    # title the page declares: without one, the title is the body's own first heading.
+    if method.startswith("page") and page_html and DECLARED_TITLE.search(page_html.split("<body", 1)[0]):
+        _drop_title_heading(body, title)
     status = "degraded" if reasons else "clean"
     image, description = _preview(body, url, image, description)
     return Extracted(body, status, reasons, words, method, title, author, image, description, pictures)
