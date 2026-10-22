@@ -903,9 +903,11 @@ def _loose_run(run: list) -> list:
     pieces, line, length, tail = [], [], 0, ""
     for node in run:
         if not isinstance(node, str) and node.tag == "br":
-            if length >= PARAGRAPH_LINE_CHARS and LINE_ENDS_SENTENCE.search(tail):
+            ends = length >= PARAGRAPH_LINE_CHARS and LINE_ENDS_SENTENCE.search(tail)
+            length, tail = 0, ""  # each line is judged on its own, from the last <br>
+            if ends:
                 pieces.append(line)
-                line, length, tail = [], 0, ""
+                line = []
                 continue
         else:
             text = node if isinstance(node, str) else _text_outside_links(node)

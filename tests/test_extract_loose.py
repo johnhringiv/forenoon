@@ -154,3 +154,14 @@ def test_words_on_either_side_of_a_wrapped_paragraph_stay_apart():
     )
     _wrap_loose_text(box)
     assert "here. The next" in " ".join(box.text_content().split())
+
+
+def test_a_sentence_ending_inside_a_wrapped_paragraph_does_not_end_it():
+    # LKML: after a few short lines, a 72-character line ending in a full stop is still mid-paragraph.
+    made = wrapped(
+        "<div><h3>Re: patch</h3>&gt; These are the extra sections the compiler emits for the arc<br>"
+        "&gt; sections (collated by kernel/vmlinux.lds into .arcextmap in final link).<br>"
+        "&gt; This section is used by debuggers, and so we keep it in the image for now.<br><br>"
+        "Thanks for the explanation, that makes the whole thing a lot clearer to me.</div>"
+    )
+    assert "final link).<br>" in made[0] and "debuggers" in made[0]
