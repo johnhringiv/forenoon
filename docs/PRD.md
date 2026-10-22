@@ -343,6 +343,11 @@ All fetched content is treated as untrusted.
     out of the page and put back at the end of the article under "Notes", each with a link
     back. They are marked as footnotes so a reader that supports it shows them as pop-ups.
     Where a reference and its note link to each other, the later of the two is the note.
+    A link written against the page's `<base href>` or as the page's own address counts as
+    in-page, a trailing slash being no difference; a marker shown in brackets ("[1]",
+    Asciidoctor's) counts as its number. A note cited only from another note of the same list
+    is kept too, and then the notes keep the page's order. A note's own number, linked back to
+    the text, goes with the punctuation after it ("1. ").
   - Links to a heading on the same page stay links inside the book. Other in-page links
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
