@@ -827,9 +827,10 @@ RUN_BLOCKS = {
     "pre", "blockquote", "table", "figure", "hr", "details", "form", "fieldset", "address", "center",
     "h1", "h2", "h3", "h4", "h5", "h6",
 }  # fmt: skip
-# A sentence's end, or a lead-in's colon, after a lowercase word: "features.", "letter:"; not
-# "M.Sc.", "J." or "From:".
-SENTENCE_END = re.compile(r"\b(?!al\.)[a-z]{2,}[.!?:][\"'”’)\]]*(\s|$)")  # not "et al."
+# The end of a sentence after a word ("features.", "Theano)."), or a lead-in's colon after a
+# lowercase one ("letter:"); not after initials, abbreviations or a citation ("J.", "M.Sc.",
+# "et al."), nor a label's colon ("From:").
+SENTENCE_END = re.compile(r"(\b(?!al\.)[A-Za-z]?[a-z]{2,}[)\]\"'”’]*[.!?]|\b[a-z]{2,}:)[\"'”’)\]]*(\s|$)")
 
 
 def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
@@ -859,9 +860,7 @@ def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
             box.remove(child)
             inline = child not in blocks
             if inline and child.tag == "br" and _ends_with_br(runs[-1]):
-                runs[-1].pop()  # the first <br> of the pair, and whitespace after it
-                while runs[-1] and isinstance(runs[-1][-1], str) and not runs[-1][-1].strip():
-                    runs[-1].pop()
+                runs[-1].append(child)  # the pair ends the run, and stays with it unless it is wrapped
                 order.append(runs[-1])
                 runs.append([tail])
                 continue
@@ -889,20 +888,64 @@ def _ends_with_br(run: list) -> bool:
 
 
 def _loose_run(run: list) -> list:
-    """A run's nodes: one paragraph holding them when there is text outside links, else as they were."""
+    """A run's nodes: paragraphs holding them when the run is prose, else the nodes as they were.
+
+    The <br>s and whitespace at a paragraph's ends go outside it (whitespace kept, so words on
+    either side stay apart), and a <br> after a sentence's end ends a paragraph: Blogger turns
+    each line break of a post into one."""
     own = "".join(n if isinstance(n, str) else _text_outside_links(n) for n in run)
     # Not a label ("0", "Note:"), only links, or a line of the page's own (dates, "Sign in"): prose.
     if _words(own) < LOOSE_RUN_MIN_WORDS or not SENTENCE_END.search(" ".join(own.split())):
         return run
-    para = lxml.html.Element("p")
-    while run and isinstance(run[-1], str) and not run[-1].strip():
-        run.pop()
-    while run and not isinstance(run[-1], str) and isinstance(run[-1].tag, str) and run[-1].tag == "br":
-        run.pop()  # a <br> that ends the run ends nothing
-    out = _Appender(para)
+    pieces, line = [], []
     for node in run:
+        if not isinstance(node, str) and node.tag == "br" and SENTENCE_END.search(_line_end(line) + " "):
+            pieces.append(line)
+            line = []
+            continue
+        line.append(node)
+    pieces.append(line)
+    out = []
+    for piece in pieces:
+        out.extend(_paragraph_of(piece))
+    return out
+
+
+def _line_end(nodes: list) -> str:
+    """The last words of a line, enough to see whether it ends a sentence; not the whole line,
+    which a run of thousands of lines would read again at every <br>."""
+    text = ""
+    for node in reversed(nodes):
+        text = (node if isinstance(node, str) else _text_outside_links(node)) + text
+        if len(text.strip()) >= LINE_END_CHARS:
+            break
+    return " ".join(text.split())[-LINE_END_CHARS:]
+
+
+LINE_END_CHARS = 40
+
+
+def _paragraph_of(nodes: list) -> list:
+    """One <p> of the nodes, with the <br>s and whitespace at its ends left outside it."""
+
+    def edge(node) -> bool:  # whitespace, a <br>, or a script or style the reader never sees
+        if isinstance(node, str):
+            return not node.strip()
+        return node.tag in ("br", "script", "style", "noscript", "template")
+
+    lead, trail = [], []
+    while nodes and edge(nodes[0]):
+        lead.append(nodes.pop(0))
+    while nodes and edge(nodes[-1]):
+        trail.insert(0, nodes.pop())
+    spaces = " " if any(isinstance(n, str) or n.tag == "br" for n in lead + trail) else ""
+    if not nodes:
+        return [spaces] if spaces else []
+    para = lxml.html.Element("p")
+    out = _Appender(para)
+    for node in nodes:
         out.add(node)
-    return [para]
+    return [spaces, para, spaces] if spaces else [para]
 
 
 def _run_block(el) -> bool:

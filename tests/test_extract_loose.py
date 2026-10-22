@@ -1,5 +1,6 @@
 """Text outside a <p> (#97): loose runs become paragraphs, chrome stays as it was."""
 
+import re
 import time
 
 import lxml.html
@@ -99,3 +100,45 @@ def test_wrapping_a_long_run_of_lines_is_linear():
     started = time.monotonic()
     _wrap_loose_text(box)
     assert time.monotonic() - started < 2
+
+
+def wrapped(html: str) -> list[str]:
+    box = lxml.html.fragment_fromstring(html)
+    _wrap_loose_text(box)
+    return [lxml.html.tostring(p, encoding="unicode").strip() for p in box.findall("p")]
+
+
+def test_a_wrapped_paragraph_starts_and_ends_with_its_text():
+    # Phoronix: "</p><br />The new branch…"; a gist's <script> before a Blogger line.
+    made = wrapped(
+        "<div><p>An image paragraph.</p><br>The new branch to appear is this one, made by him.<br><br>"
+        "<script>gist()</script>\n<br>Despite its simplicity, it works well enough here.</div>"
+    )
+    assert all(not re.match(r"<p>\s*<br", p) and not re.search(r"<br>\s*</p>", p) for p in made)
+    assert len(made) == 3
+
+
+def test_a_line_break_after_a_sentence_ends_a_paragraph():
+    # Blogger's "convert line breaks": one <br> between paragraphs.
+    made = wrapped(
+        "<div><h3>Intro</h3>We published a paper on it (on Arxiv, and to ICLR as well).<br>"
+        "The TLDR is that it works, and you can use it with Theano.<br>You can find the code here.</div>"
+    )
+    assert len(made) == 3
+
+
+def test_a_pair_of_breaks_stays_in_text_that_is_not_wrapped():
+    # A mailing-list patch: its blank lines are <br><br>, and it is not prose.
+    box = lxml.html.fragment_fromstring(
+        "<div><h3>Patch</h3>+ int retry = 0<br>\\n<br>\\n start_pfn = PFN_DOWN(start)<br></div>"
+    )
+    _wrap_loose_text(box)
+    assert box.find("p") is None and len(box.findall("br")) == 3
+
+
+def test_words_on_either_side_of_a_wrapped_paragraph_stay_apart():
+    box = lxml.html.fragment_fromstring(
+        "<div><p>One paragraph ends here.</p>\nThe next one is loose text in the box, as it was written.\n<p>And then another.</p></div>"
+    )
+    _wrap_loose_text(box)
+    assert "here. The next" in " ".join(box.text_content().split())
