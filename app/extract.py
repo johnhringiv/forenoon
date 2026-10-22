@@ -95,6 +95,7 @@ CROSS_REFERENCE = re.compile(
 )
 NOTE_CHROME_WORDS = 8
 BACK_LABELS = {"back", "return", "top"}
+NOTE_NUMBER_REST = re.compile(r"^[.):\]](?=\s)\s*")  # "1. Many…" once its linked "1" is gone
 # LaTeXML (arXiv's HTML) writes each footnote in the text the same way, with its number twice.
 SIDENOTE_CLASSES = {"sidenote", "marginnote", "side-note", "margin-note", "ltx_role_footnote"}
 SIDENOTE_CHROME = {"margin-toggle", "sidenote-number", "ltx_note_mark", "ltx_tag_note", "ltx_note_type"}
@@ -398,12 +399,17 @@ def _cross_reference(ref: lxml.html.HtmlElement, label: str) -> bool:
     return bool(CROSS_REFERENCE.search(text))
 
 
+def _note_shaped(target: lxml.html.HtmlElement) -> bool:
+    """Whether a link's target has a footnote's own shape: an item of a list, or named as a note."""
+    return target.tag == "li" or next(target.iterancestors("li"), None) is not None or "note" in _names(target)
+
+
 def _note_body(target: lxml.html.HtmlElement, ref: lxml.html.HtmlElement, root: lxml.html.HtmlElement):
     """The element holding the note a link points at, or None when the target is not a note:
     a figure, or anything the link names as numbered in the text ("see Figure 3")."""
     # A footnote's own shape (an item of a list, or classed as a note) is a note whatever the
     # text before its link says ("…told in the Appendix 1").
-    shaped = target.tag == "li" or next(target.iterancestors("li"), None) is not None or "note" in _names(target)
+    shaped = _note_shaped(target)
     if target.tag == "figure" or (not shaped and _cross_reference(ref, " ".join(ref.text_content().split()))):
         return None
     el = target
@@ -1487,17 +1493,14 @@ def _structure(
             for key in (el.get("id"), el.get("name") if el.tag == "a" else None):
                 if key:
                     targets.setdefault(key, el)
-    page = base_url.split("#")[0]
+    page, base = _page_and_base(root, base_url)
     notes: list[tuple[str, lxml.html.HtmlElement]] = []
     numbers: dict[int, int] = {}  # id() of a note's element -> its number
     sections = 0
+    nested = False  # a note referred to only from inside another note
 
     def in_page(anchor: lxml.html.HtmlElement) -> str:
-        href = (anchor.get("href") or "").strip()
-        if not href.startswith("#"):  # also "/post/#fn-1": the page's own address, written out
-            resolved = _join(page, href) if "#" in href else ""
-            href = resolved[len(page) :] if resolved.startswith(page + "#") else ""
-        return unquote(href[1:]) if href.startswith("#") else ""
+        return _in_page_id(anchor.get("href") or "", page, base)
 
     # lxml hands out element objects on demand, and an id() is only unique while its object
     # lives; holding them all keeps the ids below meaningful.
@@ -1516,16 +1519,26 @@ def _structure(
         target = targets.get(in_page(anchor))
         if target is None:
             continue
-        if any(id(ancestor) in numbers for ancestor in anchor.iterancestors()):
-            continue  # inside a note: its link back to the text, removed with the note below
         label = " ".join(anchor.text_content().split())
+        holder = next((a for a in anchor.iterancestors() if id(a) in numbers), None)
+        if holder is not None:
+            # Inside a note: its link back to the text, removed with the note below; or a
+            # reference to another note of the same list of notes (babysteps' note 1 cites
+            # note 5). A note's link back to its marker is not one, whatever the marker's name.
+            other = _note_body(target, anchor, root) if NOTE_LABEL.match(label) else None
+            # (The text's markers have lost their "footnote-anchor" classes in the loop below
+            # by now, so a link back to one is not taken for a note.)
+            sibling = other is not None and other is not holder and other.getparent() is holder.getparent()
+            if not sibling or not (_note_shaped(target) or _note_shaped(other)) or within(anchor, other):
+                continue
+            nested = True
         body = _note_body(target, anchor, root) if NOTE_LABEL.match(label) else None
         if body is not None:
             # Reference and note often link to each other. Of such a pair the later block is
             # the note, so a link from it is the way back, not a reference to the paragraph.
             mine = block_of(anchor)
             answers = any(within(targets.get(in_page(other)), mine) for other in body.iter("a"))
-            if answers and order[id(mine)] > order[id(body)]:
+            if holder is None and answers and order[id(mine)] > order[id(body)]:
                 continue
             if id(body) not in numbers:
                 notes.append((label, body))
@@ -1538,7 +1551,8 @@ def _structure(
             # only it lose theirs here. The allowlist would remove them anyway, and the
             # targets were all found above.
             wrapper = anchor
-            while wrapper is not None and wrapper is not root and " ".join(wrapper.text_content().split()) == label:
+            shown = (label, f"[{label}]", f"({label})")  # Asciidoctor writes "[1]" around the link
+            while wrapper is not None and wrapper is not root and " ".join(wrapper.text_content().split()) in shown:
                 wrapper.attrib.pop("class", None)
                 wrapper.attrib.pop("id", None)
                 wrapper = wrapper.getparent()
@@ -1552,6 +1566,7 @@ def _structure(
             number = heading.get(MARK_N)
             anchor.set(MARK, "jump")
             anchor.set(MARK_N, number)
+    linked = len(notes)  # the notes found by links; side notes follow them
     for el in list(root.iter("span", "aside", "small", "div", "blockquote")):
         if not _classes(el) & SIDENOTE_CLASSES or id(el) in numbers or el is root or el.getparent() is None:
             continue
@@ -1587,7 +1602,10 @@ def _structure(
     etree.SubElement(holder, "hr")
     etree.SubElement(holder, "h3").text = "Notes"
     emptied = []
-    for number, (label, body) in enumerate(notes, 1):
+    listed = list(enumerate(notes, 1))
+    if nested:  # in the page's order, not the order their references were met in; side notes after
+        listed[:linked] = sorted(listed[:linked], key=lambda item: order.get(id(item[1][1]), len(order)))
+    for number, (label, body) in listed:
         if body.getparent() is not None:  # not already taken out with a link inside a note
             emptied.append(body.getparent())
             body.drop_tree()  # keeps the text that followed it in place
@@ -1618,7 +1636,7 @@ def _structure(
             lead = inner if inner is not None and inner.tag == "p" and not (body.text or "").strip() else body
         back = etree.Element("a", {MARK: "back", MARK_N: str(number)})
         back.text = label
-        back.tail = " " + (lead.text or "").lstrip()
+        back.tail = " " + NOTE_NUMBER_REST.sub("", (lead.text or "").lstrip())
         lead.text = None
         lead.insert(0, back)
     # A container that held nothing but notes goes with them, along with what is left of its
@@ -1732,15 +1750,41 @@ def _around_first_link(box: lxml.html.HtmlElement) -> tuple[str, str]:
 
 def _in_page_targets(root: lxml.html.HtmlElement, base_url: str) -> set[str]:
     """The ids and names that links on the page point at, written as the notes code reads them."""
+    page, base = _page_and_base(root, base_url)
+    return {key for href in root.xpath("//a/@href") if (key := _in_page_id(href, page, base))}
+
+
+def _page_and_base(root: lxml.html.HtmlElement, base_url: str) -> tuple[str, str]:
+    """The page's address (without a fragment) and the one its links are read against: its
+    <base href> when it has one (leangineer's "/", with links written "blog/post#fn-1")."""
     page = base_url.split("#")[0]
-    targets = set()
-    for href in root.xpath("//a/@href"):
-        href = href.strip()
-        if href.startswith(page + "#"):
-            href = href[len(page) :]
-        if href.startswith("#") and len(href) > 1:
-            targets.add(unquote(href[1:]))
-    return targets
+    tag = next(iter(root.xpath("//base[@href]")), None)
+    return page, (_join(page, tag.get("href").strip()) or page) if tag is not None else page
+
+
+def _in_page_id(href: str, page: str, base: str) -> str:
+    """The id a link points at on this page ("#fn-1", or the page's address with a fragment,
+    written out or against its <base>), else ""."""
+    href = href.strip()
+    if href.startswith("#"):
+        return unquote(href[1:])
+    if "#" not in href:
+        return ""
+    address, _, fragment = _join(base, href).partition("#")
+    return unquote(fragment) if fragment and _same_address(address, page) else ""
+
+
+def _same_address(a: str, b: str) -> bool:
+    """Whether two addresses name one page: a trailing slash is no difference."""
+    try:
+        one, two = urlsplit(a), urlsplit(b)
+    except ValueError:
+        return False
+    return (one.netloc.lower(), one.path.rstrip("/"), one.query) == (
+        two.netloc.lower(),
+        two.path.rstrip("/"),
+        two.query,
+    )
 
 
 def _visible_text(root: lxml.html.HtmlElement) -> str:
@@ -1817,8 +1861,13 @@ def _attach_notes(body: lxml.html.HtmlElement, notes: lxml.html.HtmlElement | No
         return
     kept = {a.get("href") for a in body.iter("a") if a.get("class") == "noteref"}
     holder = sanitize(notes, base_url, marked=True)
-    for note in list(holder.iter("aside")):
-        if f"#{note.get('id')}" not in kept:
+    asides = {f"#{note.get('id')}": note for note in holder.iter("aside")}
+    seen: set[str] = set()
+    while waiting := (kept & asides.keys()) - seen:  # and those a kept note refers to
+        seen |= waiting
+        kept |= {a.get("href") for ref in waiting for a in asides[ref].iter("a") if a.get("class") == "noteref"}
+    for ref, note in asides.items():
+        if ref not in kept:
             note.drop_tree()
     if holder.find(".//aside") is not None:
         body.append(holder)

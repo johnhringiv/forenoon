@@ -3355,3 +3355,58 @@ def test_no_lead_photo_from_elsewhere_or_unnamed():
     )
     body = extract("https://news.example/2026/islands", page, "", "page").body
     assert len(body.xpath("//img")) <= 1
+
+
+NOTE_FILLER = "<p>" + "Plain words about compilers and borrow checking and the long history of both. " * 30 + "</p>"
+
+
+def notes_of(body: lxml.html.HtmlElement) -> list[str]:
+    return [" ".join(note.text_content().split()) for note in body.iter("aside")]
+
+
+def test_footnotes_written_against_the_pages_base_and_in_brackets_are_kept():
+    # leangineer: <base href="/"> and links written "blog/post#fn-1".
+    page = f"""<html><head><base href="/"></head><body><article><h1>Post</h1>
+    <p>A claim.<sup class="fn-ref"><a href="blog/post#fn-one" id="fnref-one">1</a></sup></p>{NOTE_FILLER}
+    <section class="footnotes"><ol><li id="fn-one">The first note. <a href="blog/post#fnref-one">↩</a></li></ol></section>
+    </article></body></html>"""
+    body = extract("https://blog.example/blog/post/", page, "", "page").body
+    assert body.xpath("//a[@class='noteref']") and notes_of(body) == ["1 The first note."]
+    # Asciidoctor (davepacheco): "[1]" around the link, the note's number linked back.
+    page = f"""<html><body><div class="post"><h1>Post</h1>
+    <p>A claim.<sup class="footnote">[<a id="_footnoteref_1" class="footnote" href="#_footnotedef_1">1</a>]</sup></p>{NOTE_FILLER}
+    <div id="footnotes"><div class="footnote" id="_footnotedef_1"><a href="#_footnoteref_1">1</a>. The first note.</div></div>
+    </div></body></html>"""
+    body = extract("https://blog.example/post", page, "", "page").body
+    assert body.xpath("//a[@class='noteref']") and notes_of(body) == ["1 The first note."]
+
+
+def test_a_note_cited_only_from_another_note_is_kept_in_the_pages_order():
+    # babysteps: note 1 cites note 2, which nothing in the text cites.
+    page = f"""<html><body><article><h1>Post</h1>
+    <p>A claim.<sup id="fnref:1"><a href="#fn:1">1</a></sup> Another.<sup id="fnref:3"><a href="#fn:3">3</a></sup></p>{NOTE_FILLER}
+    <ol class="footnotes"><li id="fn:1">The first note, see<sup><a href="#fn:2">2</a></sup>. <a href="#fnref:1">↩</a></li>
+    <li id="fn:2">The second note. <a href="#fnref:2">↩</a></li>
+    <li id="fn:3">The third note. <a href="#fnref:3">↩</a></li></ol>
+    </article></body></html>"""
+    body = extract("https://blog.example/post", page, "", "page").body
+    notes = notes_of(body)
+    assert [n.split(" ", 1)[1][:10] for n in notes] == ["The first ", "The second", "The third "]
+    # Not a note's link back to its marker, whose class names it a footnote (Substack), nor a
+    # link from a note to an item of a list in the text (Wikipedia).
+    page = f"""<html><body><article><h1>Post</h1>
+    <ul><li id="item">A list item with a marker<a class="footnote-anchor" id="footnote-anchor-1" href="#footnote-1">1</a></li>
+    <li id="other">Another item of the article's own list.</li></ul>{NOTE_FILLER}
+    <div class="footnote" id="footnote-1"><a class="footnote-number" href="#footnote-anchor-1">1</a>
+    <div class="footnote-content"><p>The note, see <a href="#other">2</a>.</p></div></div>
+    </article></body></html>"""
+    body = extract("https://blog.example/post", page, "", "page").body
+    assert len(notes_of(body)) == 1 and "Another item of the article" in " ".join(
+        li.text_content() for li in body.iter("li")
+    )
+    # A note that opens with an ellipsis keeps it.
+    page = f"""<html><body><article><h1>Post</h1>
+    <p>A claim.<sup id="fnref:1"><a href="#fn:1">1</a></sup></p>{NOTE_FILLER}
+    <ol class="footnotes"><li id="fn:1">...because I ran out of space. <a href="#fnref:1">↩</a></li></ol>
+    </article></body></html>"""
+    assert notes_of(extract("https://blog.example/post", page, "", "page").body) == ["1 ...because I ran out of space."]
