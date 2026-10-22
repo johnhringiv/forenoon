@@ -386,6 +386,15 @@ All fetched content is treated as untrusted.
   - An article's opening paragraphs stay with it: a paragraph before the article's box with
     a link in its first sentence, and the paragraphs a box opens with when the best box is
     inside it (Cloudflare's intro before its boxes of quotes).
+  - Loose text between blocks is read as the page shows it: each run of text and inline
+    elements between two blocks is one paragraph, and two `<br>`s end one (Phoronix writes its
+    articles so; readability cut each sentence at its links). Only prose is made a paragraph,
+    with a sentence's end or a lead-in's colon; a label, a toolbar's strings or a line of
+    dates is left as it was.
+  - A heading that opens the page's copy and repeats the title the page declares (in
+    `<title>` or `og:title`) is dropped: the book prints the title above the article.
+  - A `<source>` that the parser leaves open no longer swallows the rest of its box, outside
+    a player, whose fallback text still goes with it.
   - Boxes that sell, credit or play are dropped by their markup: a sign-up form (one asking
     for an email address) and the box around it when that only pitches it; a short box named
     for a newsletter, a sponsor or the next story, with a call to act in it and not one of a

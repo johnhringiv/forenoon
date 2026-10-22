@@ -829,7 +829,7 @@ RUN_BLOCKS = {
 }  # fmt: skip
 # A sentence's end, or a lead-in's colon, after a lowercase word: "features.", "letter:"; not
 # "M.Sc.", "J." or "From:".
-SENTENCE_END = re.compile(r"\b[a-z]{3,}[.!?:][\"'”’)\]]*(\s|$)")
+SENTENCE_END = re.compile(r"\b[a-z]{2,}[.!?:][\"'”’)\]]*(\s|$)")
 
 
 def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
@@ -1707,12 +1707,15 @@ def _unmark(root: lxml.html.HtmlElement) -> None:
 def _unnest_empty(root: lxml.html.HtmlElement) -> None:
     """Take out what lxml's parser put inside a <source> or <track>: it does not know they are
     empty, so it nests what follows them there, a <picture>'s own <img> among it. Written out
-    again, the emptied tag is closed and parses as it should. Only in a <picture>: in a player
-    (<amp-video>, <video-js>) what follows is the fallback text, which goes with the player."""
+    again, the emptied tag is closed and parses as it should. In a <picture> itself, or in a box
+    that is not a player (<video>, <audio>, <amp-video>, <video-js>, where what follows is the
+    fallback text, which goes with the player) nor inside a <picture>: a stray <source> swallowed
+    the rest of its box, which went with it."""
     for el in list(root.iter("source", "track")):
         holder = next((a for a in el.iterancestors() if a.tag not in ("source", "track")), None)
-        if holder is None or holder.tag != "picture":
-            continue
+        in_picture = holder is not None and next(holder.iterancestors("picture"), None) is not None
+        if holder is None or in_picture or holder.tag in ("video", "audio", "object") or "-" in holder.tag:
+            continue  # a box inside a <picture> holds a stand-in; a player holds its fallback
         children, text, tail = list(el), el.text or "", el.tail or ""
         el.text = None
         if children:
