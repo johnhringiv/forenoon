@@ -829,7 +829,7 @@ RUN_BLOCKS = {
 }  # fmt: skip
 # A sentence's end, or a lead-in's colon, after a lowercase word: "features.", "letter:"; not
 # "M.Sc.", "J." or "From:".
-SENTENCE_END = re.compile(r"\b[a-z]{2,}[.!?:][\"'”’)\]]*(\s|$)")
+SENTENCE_END = re.compile(r"\b(?!al\.)[a-z]{2,}[.!?:][\"'”’)\]]*(\s|$)")  # not "et al."
 
 
 def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
@@ -843,11 +843,11 @@ def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
     "Read more", a toolbar's strings or a line of dates is left as it is, and so is a box with no
     blocks (buttons and custom elements are not blocks), which readability makes one paragraph."""
     for box in list(root.iter(*LOOSE_BOXES)):
-        if not any(isinstance(c.tag, str) and c.tag in RUN_BLOCKS for c in box):
+        blocks = {c for c in box if isinstance(c.tag, str) and _run_block(c)}
+        if not blocks:
             continue
         if not (box.text or "").strip() and not any(
-            (c.tail or "").strip() or (isinstance(c.tag, str) and c.tag not in RUN_BLOCKS and c.tag != "br")
-            for c in box
+            (c.tail or "").strip() or (isinstance(c.tag, str) and c not in blocks and c.tag != "br") for c in box
         ):
             continue
         # The box's children and text, as runs between its blocks.
@@ -857,7 +857,7 @@ def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
         for child in list(box):
             tail, child.tail = child.tail or "", None
             box.remove(child)
-            inline = not isinstance(child.tag, str) or child.tag not in RUN_BLOCKS
+            inline = child not in blocks
             if inline and child.tag == "br" and _ends_with_br(runs[-1]):
                 runs[-1].pop()  # the first <br> of the pair, and whitespace after it
                 while runs[-1] and isinstance(runs[-1][-1], str) and not runs[-1][-1].strip():
@@ -872,12 +872,10 @@ def _wrap_loose_text(root: lxml.html.HtmlElement) -> None:
             order.append(child)
             runs.append([tail])
         order.append(runs[-1])
+        out = _Appender(box)
         for part in order:
-            if not isinstance(part, list):
-                box.append(part)
-                continue
-            for node in _loose_run(part):
-                box.append(node) if not isinstance(node, str) else _append_text(box, node)
+            for node in _loose_run(part) if isinstance(part, list) else [part]:
+                out.add(node)
 
 
 def _ends_with_br(run: list) -> bool:
@@ -901,27 +899,42 @@ def _loose_run(run: list) -> list:
         run.pop()
     while run and not isinstance(run[-1], str) and isinstance(run[-1].tag, str) and run[-1].tag == "br":
         run.pop()  # a <br> that ends the run ends nothing
+    out = _Appender(para)
     for node in run:
-        if isinstance(node, str):
-            _append_text(para, node)
-        else:
-            para.append(node)
+        out.add(node)
     return [para]
 
 
+def _run_block(el) -> bool:
+    """A block, or an element that holds one (Distill's <dt-article>, an old page's <font>)."""
+    return el.tag in RUN_BLOCKS or next(el.iterdescendants(*RUN_BLOCKS), None) is not None
+
+
 def _text_outside_links(el) -> str:
-    if not isinstance(el.tag, str) or el.tag == "a":
+    """The text a reader sees outside links: not a script's, a style's or a link's."""
+    if not isinstance(el.tag, str) or el.tag in ("a", "script", "style", "noscript", "template"):
         return ""
     return (el.text or "") + "".join(_text_outside_links(c) + (c.tail or "") for c in el)
 
 
-def _append_text(el: lxml.html.HtmlElement, text: str) -> None:
-    if not text:
-        return
-    if len(el):
-        el[-1].tail = (el[-1].tail or "") + text
-    else:
-        el.text = (el.text or "") + text
+class _Appender:
+    """Appends elements and text to an element, keeping its last child at hand: asking lxml for
+    it walks the children, and a box can hold tens of thousands of lines."""
+
+    def __init__(self, el: lxml.html.HtmlElement):
+        self.el, self.last = el, el[-1] if len(el) else None
+
+    def add(self, node) -> None:
+        if isinstance(node, str):
+            if not node:
+                return
+            if self.last is None:
+                self.el.text = (self.el.text or "") + node
+            else:
+                self.last.tail = (self.last.tail or "") + node
+            return
+        self.el.append(node)
+        self.last = node
 
 
 SKIP_LINK = re.compile(r"skip\b", re.IGNORECASE)
@@ -3846,12 +3859,6 @@ def extract(
         if feed is not None:
             candidates["feed"] = sanitize(feed, url, marked=True)
 
-    # Only a title the page declares: without one, the title is taken from the body's own first
-    # heading, and dropping that would drop a section's heading.
-    declared = bool(page_html) and bool(DECLARED_TITLE.search(page_html.split("<body", 1)[0]))
-    for name in ("page", "page-wide", "page-live") if declared else ():
-        if name in candidates:
-            _drop_title_heading(candidates[name], title)
     counts = {name: _words(body.text_content()) for name, body in candidates.items()}
     reference = max([reference, *counts.values()], default=0)
     reasons = [f"page fetch failed: {fetch_error}"] if fetch_error else []
@@ -3889,6 +3896,10 @@ def extract(
     if TRUNCATED_TAIL.search(text[-300:]):
         reasons.append("looks truncated")
     _drop_lone_links(body, url)
+    # The title repeated over the page's copy, once the copy is chosen and judged as before. Only a
+    # title the page declares: without one, the title is the body's own first heading.
+    if method.startswith("page") and page_html and DECLARED_TITLE.search(page_html.split("<body", 1)[0]):
+        _drop_title_heading(body, title)
     status = "degraded" if reasons else "clean"
     image, description = _preview(body, url, image, description)
     return Extracted(body, status, reasons, words, method, title, author, image, description, pictures)

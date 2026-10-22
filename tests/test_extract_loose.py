@@ -1,5 +1,7 @@
 """Text outside a <p> (#97): loose runs become paragraphs, chrome stays as it was."""
 
+import time
+
 import lxml.html
 
 from app.extract import _wrap_loose_text, extract
@@ -69,3 +71,31 @@ def test_without_a_declared_title_the_first_heading_stays():
     body = f"<article><h2>Part zero of the story</h2>{para(3)}<h2>Part one</h2>{para(2)}</article>"
     result = run(body, head="")
     assert "Part zero of the story" in result.body.text_content()
+
+
+def test_an_element_holding_blocks_is_a_block_not_part_of_a_run():
+    # Distill's <dt-article>, Google's <devsite-content>, an old page's <font>: a whole section.
+    box = lxml.html.fragment_fromstring(
+        "<div><dt-header>Distill</dt-header><dt-article><h1>Title</h1><p>The article itself, long.</p></dt-article>"
+        "<dt-appendix><h3>Acknowledgments</h3><p>Thank you to everyone.</p></dt-appendix>"
+        "<style>dt-article { display: block; }</style></div>"
+    )
+    _wrap_loose_text(box)
+    assert box.find("p") is None  # nothing wrapped: the custom elements hold the blocks
+
+
+def test_script_text_and_et_al_are_not_prose():
+    box = lxml.html.fragment_fromstring(
+        "<div><p>An opening paragraph.</p><script>window.data = {a: 1}; display: block;</script>"
+        "<span>Navigation strings here</span><div>a block</div>VGG19 Simonyan et al.<div>a block</div></div>"
+    )
+    _wrap_loose_text(box)
+    assert [" ".join(p.text_content().split()) for p in box.findall("p")] == ["An opening paragraph."]
+
+
+def test_wrapping_a_long_run_of_lines_is_linear():
+    lines = "".join(f"Line {i} of the log says something happened here.<br>" for i in range(40_000))
+    box = lxml.html.fragment_fromstring(f"<div><h2>Log</h2>{lines}</div>")
+    started = time.monotonic()
+    _wrap_loose_text(box)
+    assert time.monotonic() - started < 2
