@@ -50,7 +50,7 @@ LAZY_SRC = ("data-src", "data-lazy-src", "data-original", "data-orig-file")
 # A file a page shows until a script loads the picture (Monochrome's image_placeholder.svg, the
 # BBC's grey-placeholder.png): not "lazy-import-cover.jpg".
 PLACEHOLDER_FILE = re.compile(
-    r"^((grey|gray|image|img|default|lazy)[-_]?)?(placeholder|blank|spacer|transparent|pixel|1x1)\.(png|gif|svg|jpe?g|webp)$",
+    r"^((grey|gray|image|img|default|lazy)[-_]?)?(placeholder|blank|spacer|transparent|pixel|1x1)([-_](xs|sm|md|lg|xl|small|medium|large))?\.(png|gif|svg|jpe?g|webp)$",
     re.IGNORECASE,
 )
 # A button that only enlarges its picture (a lightbox's), unlike a video's play button.
@@ -1953,8 +1953,8 @@ ELSEWHERE = re.compile(
 )
 RESPONSIVE_SHOWN = re.compile(r"(?<![\w-])(sm|md|lg|xl|2xl):(block|flex|grid|inline|inline-block|table)\b")
 PLAYER_NAME_PICTURE = re.compile(
-    r"video|player|youtube|vimeo|(?<![a-z])yt-|facade", re.IGNORECASE
-)  # inside names too: jwplayer, VideoPlayer_root
+    r"(?<!aspect-)video|player|youtube|vimeo|(?<![a-z])yt-|facade", re.IGNORECASE
+)  # inside names too: jwplayer, VideoPlayer_root; not Tailwind's aspect-video, a 16:9 box
 VIDEO_LINK = re.compile(
     r"^https?://([^/]*\.)?(youtube\.com|youtu\.be|vimeo\.com|ytimg\.com|vimeocdn\.com)/", re.IGNORECASE
 )
@@ -2412,8 +2412,9 @@ def _shown_pictures(
         ):
             return []
         sizes = [img.get(n, "").strip() for n in ("width", "height")]
-        if any(size.isascii() and size.isdigit() and int(size) <= RESTORE_MIN_SIZE for size in sizes):
-            continue
+        given = [int(size) for size in sizes if size.isascii() and size.isdigit()]
+        if any(0 < size <= RESTORE_MIN_SIZE for size in given) or (given and not any(given)):
+            continue  # 0 is a size not given (height="0" beside a width), unless both are
         if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in above):
             continue  # the whole figure links to another story: a card for it
         if any(a.tag == "a" and _story_link(url, a.get("href") or "", address) for a in boxes):
@@ -3727,6 +3728,221 @@ def _norm(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
+# What names one photo in its addresses, whatever its size or crop: an id (a UUID, a long hex
+# run) or the file's name less the words that only size or crop it ("-superJumbo", "-Lede").
+PHOTO_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}")
+PHOTO_SIZE_WORD = re.compile(  # one piece of a file name between - _ or .
+    r"\d{2,5}(?:x\d{2,5})?w?|scaled|social|lede|large|medium|small|thumb[a-z0-9]*|crop[a-z0-9]*"
+    r"|[a-z0-9]*jumbo|articlelarge|master\d*|og|cover|featured?|hero|share|card|wide|square|\d+by\d+"
+)
+PHOTO_NAME_SEPARATOR = re.compile(r"([-_.])")
+PHOTO_STEM_LETTERS = 8  # a shorter file name ("image", "cover-1") names no one photo
+LEAD_PARAGRAPH_WORDS = 20  # fewer: a standfirst or a summary, which the photo can follow
+LEAD_PARAGRAPHS_TRIED = 3  # of the article's first paragraphs, to find where its text starts on the page
+PHOTO_SHARED = 3  # an id in more of the page's pictures names the site (an account), not a photo
+LEAD_HOLDERS = ("li", "ul", "ol", "dl", "blockquote", "table", "aside")  # a lead photo goes before, not in
+SITE_HEADER = re.compile(r"site-header|masthead|site-banner|header-image", re.IGNORECASE)
+LEAD_CAPTION = re.compile(r"(?<![\w-])(caption|wp-caption-text)(?![\w-])", re.IGNORECASE)
+LEAD_CAPTION_DEPTH = 7  # boxes around a lead photo outside a <figure> searched for its caption
+
+
+def _photo_marks(address: str) -> set[str]:
+    """The ids and file name that name the photo at an address (see PHOTO_ID)."""
+    text = unquote(unquote(address)).lower()
+    marks = set(PHOTO_ID.findall(text))
+    try:
+        path = urlsplit(address.strip()).path
+    except ValueError:
+        return marks
+    # Pieces dropped from the end one at a time (a pattern over the whole name can take
+    # exponential time on a crafted one); a name that is only a size ("1200x800") names none.
+    pieces = PHOTO_NAME_SEPARATOR.split(unquote(unquote(path)).rsplit("/", 1)[-1].rsplit(".", 1)[0].lower())
+    while pieces and (pieces[-1] in "-_." or PHOTO_SIZE_WORD.fullmatch(pieces[-1])):
+        pieces.pop()
+    stem = "".join(pieces)
+    if len(stem) >= PHOTO_STEM_LETTERS:
+        marks.add("name:" + stem)
+    return marks
+
+
+def _img_addresses(img: lxml.html.HtmlElement) -> list[str]:
+    """Every address an image is offered at: its own, its lazy ones, its srcset's and its
+    <picture>'s sources'."""
+    found = [img.get(a) or "" for a in ("src", *LAZY_SRC)]
+    found += srcset_urls(img.get("srcset") or "") + srcset_urls(img.get("data-srcset") or "")
+    parent = img.getparent()
+    if parent is not None and parent.tag == "picture" and parent.find("img") is img:  # a browser reads only its first
+        for source in parent.findall("source"):
+            found += srcset_urls(source.get("srcset") or "") + srcset_urls(source.get("data-srcset") or "")
+    return [a.strip() for a in found if a.strip() and not a.strip().lower().startswith("data:")]
+
+
+def _add_lead_photo(body: lxml.html.HtmlElement, page_html: str, url: str, image: str) -> None:
+    """Put back the article's lead photo: the picture the page names as its own (og:image) when
+    it sits between the article's title and its first paragraph, where readability, which keeps
+    the paragraphs, leaves it. Named by the page and placed under the title, it is the
+    article's photo rather than a banner, an author's portrait or another story's; a picture
+    elsewhere on the page that the page names (a site's logo in a menu) is not taken. It goes
+    before the article's first paragraph with its own caption, only as the book would show it
+    (see _shown_pictures: not a video's poster, nor a hidden or tiny picture), and only when the
+    article does not already open with a picture or have this one."""
+    wanted = _photo_marks(_join(url, image.strip())) if image.strip() else set()
+    if not wanted:
+        return
+    paragraphs = [p for p in body.iter("p") if len(_text_key(p)) >= 40]
+    opening = next((p for p in paragraphs if _words(p.text_content()) >= LEAD_PARAGRAPH_WORDS), None)
+    if opening is None:
+        return
+    for el in body.iter("img", "p"):
+        if el is opening:
+            break
+        if el.tag == "img":
+            return  # the article opens with a picture: its lead, in another crop
+    if any(wanted & _photo_marks(_join(url, a)) for img in body.iter("img") for a in _img_addresses(img)):
+        return
+    try:
+        page = lxml.html.fromstring(page_html)
+    except (etree.ParserError, ValueError):
+        return
+    page.make_links_absolute(url, resolve_base_href=True, handle_failures="ignore")
+    _unnest_empty(page)
+    # Where the article's text starts on the page: a feed's copy can word its first lines
+    # differently from the page's.
+    tried = {_text_key(p) for p in paragraphs[paragraphs.index(opening) :][:LEAD_PARAGRAPHS_TRIED]}
+    order = list(page.iter())
+    first = next((el for el in order if el.tag == "p" and _text_key(el) in tried), None)
+    if first is None:
+        return
+    end = order.index(first)
+    title = next((el for el in reversed(order[:end]) if el.tag == "h1"), None)
+    if title is None:
+        return
+    # From the top of the box holding the title and the text (a photo set above the title, as
+    # the Guardian's is), else from the title.
+    above = set(first.iterancestors())
+    box = next((a for a in title.iterancestors() if a in above), None)
+    start = order.index(box if box is not None and box.tag not in ("html", "body") else title)
+    # An id that many of the page's pictures share names the site (an account), not this photo;
+    # a file's name stays, a photo shown again in a gallery being still the one named.
+    count: Counter[str] = Counter()
+    for img in page.iter("img"):
+        count.update({m for a in _img_addresses(img) for m in _photo_marks(a)})
+    wanted = {m for m in wanted if m.startswith("name:") or count[m] <= PHOTO_SHARED}
+    named = {m.removeprefix("name:") for m in wanted if m.startswith("name:")}
+
+    def same_photo(address: str) -> bool:
+        marks = _photo_marks(address)
+        shared = wanted & marks
+        if not shared or any(m.startswith("name:") for m in shared):
+            return bool(shared)
+        # Only an id in common: a site's id in every address (Ghost's) is not the photo's,
+        # when the two files have other names, neither holding the id.
+        names = {m.removeprefix("name:") for m in marks if m.startswith("name:")}
+        held = any(i in n for i in shared for n in names | named)
+        return held or not names or not named
+
+    img = next(
+        (el for el in order[start:end] if el.tag == "img" and any(same_photo(a) for a in _img_addresses(el))),
+        None,
+    )
+    if img is None:
+        return
+    # The address the book would show must be the named photo too, not a lazy stand-in; or
+    # another crop of it, offered by the same <picture>'s sources.
+    # The crop shown only for a picture loaded at once: a lazy one's own address may be its
+    # stand-in (a spinner), with the photo only in an address a script fills in.
+    parent = img.getparent()
+    eager = not any(img.get(a) for a in (*LAZY_SRC, "data-srcset"))
+    crops = parent.findall("source") if eager and parent is not None and parent.tag == "picture" else []
+    sources = [a for source in crops for a in srcset_urls(source.get("srcset") or "")]
+    if not same_photo(_join(url, _picture_address(img))) and not any(same_photo(a) for a in sources):
+        return
+    # Not a banner of the site's header or a menu, outside the box holding the title. A
+    # <header> is the site's when it holds a menu or a link home; an article's own header
+    # (the CSO's, its photo beside the title's column) holds neither.
+    holding_title = set(title.iterancestors())
+    try:
+        home = urlsplit(url)._replace(path="/", query="", fragment="").geturl()
+    except ValueError:
+        return
+    for a in img.iterancestors():
+        site = a.tag == "nav" or (a.get("role") or "").strip().lower() == "banner"
+        site = site or bool(SITE_HEADER.search(_names(a)))
+        if a.tag == "header":
+            links = (_join(url, (x.get("href") or "").strip()).split("#")[0] for x in a.iter("a"))
+            site = site or a.find(".//nav") is not None or any(link in (home, home[:-1]) for link in links)
+        if site and a not in holding_title:
+            return
+    figure = next(img.iterancestors("figure"), None)
+    holder = figure if figure is not None else (img.getparent() if img.getparent() is not None else img)
+    if holder.getparent() is None:
+        return
+    name = _picture_name(_join(url, _picture_address(img)))
+    pictures = [picture for n, picture in _shown_pictures(holder, url) if n == name]
+    if not pictures:
+        return
+    lead = lxml.html.Element("figure")
+    lead.append(pictures[0])
+    caption = _own_caption(figure) if figure is not None else _beside_caption(img, first)
+    if caption is not None:
+        piece = copy.deepcopy(caption)
+        piece.tail = None
+        for el in [el for el in piece.iterdescendants() if isinstance(el.tag, str) and _hidden(el)]:
+            el.drop_tree()  # "Image caption, ", there for screen readers only
+        said = {_text_key(el) for el in body.iter("p", "figcaption", "li")}
+        if (words := _text_key(piece)) and words not in said:
+            lead.append(piece)
+    wrapper = lxml.html.Element("div")
+    wrapper.append(lead)
+    clean = sanitize(wrapper, url, marked=True)
+    if clean.find(".//img") is None:
+        return
+    # Before the first of the article's paragraphs that the page shows after the photo (a
+    # standfirst before it stays above it), and outside any list or quote that holds it.
+    at = order.index(img)
+    found: dict[str, int] = {}
+    for n, el in enumerate(order):
+        if el.tag == "p" and (key := _text_key(el)):
+            found.setdefault(key, n)
+    place = opening
+    for p in body.iter("p"):
+        if found.get(_text_key(p), -1) > at:
+            place = p
+            break
+        if p is opening:
+            break
+    for a in place.iterancestors():
+        if a is body:
+            break
+        if a.tag in LEAD_HOLDERS:
+            place = a
+    for el in list(clean):
+        el.tail = None
+        place.addprevious(el)
+
+
+def _beside_caption(img: lxml.html.HtmlElement, first: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The caption of a photo outside a <figure>: a box named caption near it (Ars Technica's
+    sits beside the photo's box), within a few boxes of it and not in the box holding the
+    article's text, as a <figcaption> of its words."""
+    text_boxes = set(first.iterancestors())
+    for box in itertools.islice(img.iterancestors(), LEAD_CAPTION_DEPTH):
+        if box in text_boxes:
+            return None
+        for el in box.iter():
+            if (
+                not isinstance(el.tag, str)
+                or not LEAD_CAPTION.search(el.get("class") or "")
+                or el.find(".//img") is not None
+            ):
+                continue
+            if words := " ".join(el.text_content().split()):
+                caption = lxml.html.Element("figcaption")
+                caption.text = words
+                return caption
+    return None
+
+
 def _add_standfirst(body: lxml.html.HtmlElement, page_html: str, description: str) -> None:
     """Restore a lead paragraph that sits in the page header, outside the article body.
 
@@ -3921,6 +4137,10 @@ def extract(
     words = _words(body.text_content())
     if page_html:
         pictures = _page_pictures(page_html, url, body)  # before a standfirst is added to the body
+        try:
+            _add_lead_photo(body, page_html, url, image)
+        except Exception:  # noqa: BLE001, S110 - hostile markup; the article goes without its photo
+            pass
     if page_html and description:
         _add_standfirst(body, page_html, description)
     _attach_notes(body, notes.get(method), url)

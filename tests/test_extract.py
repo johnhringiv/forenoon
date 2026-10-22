@@ -3210,3 +3210,148 @@ def test_sections_are_the_articles_unless_one_is_the_sites():
     assert not extract_module._section_furniture(box("References and related work"), "h2")
     assert extract_module._section_furniture(box("Related posts"), "h2")
     assert extract_module._section_furniture(box('<a href="https://site.example/other">Another story</a>'), "h2")
+
+
+LEAD_PARAS = "".join(
+    f"<p>Paragraph {i} of the story runs on about the islands, the people there, the boats and the long dispute over the waters.</p>"
+    for i in range(8)
+)
+
+
+def lead_page(head_image: str, before_title: str = "", after_title: str = "", after_text: str = "") -> str:
+    meta = f'<meta property="og:image" content="{head_image}">' if head_image else ""
+    return (
+        f"<html><head><title>T</title>{meta}</head><body><header><a href='/'>Site</a></header>"
+        f"<article>{before_title}<h1>The islands</h1><p>A dek of a few words.</p>{after_title}"
+        f"<div class='body'>{LEAD_PARAS}</div>{after_text}</article></body></html>"
+    )
+
+
+def test_the_lead_photo_the_page_names_comes_back_under_the_title():
+    photo = (
+        '<figure><img alt="Boats" src="https://i.example/2026/boats-in-harbour-640x427.jpg">'
+        "<figcaption>Boats in the harbour.</figcaption></figure>"
+    )
+    page = lead_page("https://i.example/2026/boats-in-harbour-1200x630.jpg", after_title=photo)
+    body = extract("https://news.example/2026/islands", page, "", "page").body
+    assert [img.get("src") for img in body.iter("img")] == ["https://i.example/2026/boats-in-harbour-640x427.jpg"]
+    assert "Boats in the harbour." in body.text_content()
+    # Before the first paragraph of the text, after the short lines above it.
+    first = body.xpath("//figure/following::p[1]")[0]
+    assert first.text_content().startswith("Paragraph 0")
+    # Named by an id in a crop of another name (images.ft.com, ichef), set above the title.
+    ident = "61dd7a7d-304b-4797-85db-aaa9101c8d5b"
+    above = f'<figure><img alt="" src="https://images.example/raw/ftcms:{ident}?width=700"></figure>'
+    page = lead_page(f"https://images.example/raw/https%3A%2F%2Fcdn.example%2F{ident}?social=1", before_title=above)
+    body = extract("https://news.example/2026/islands", page, "", "page").body
+    assert len(body.xpath("//img")) == 1
+    # A width given with height="0" (Next.js) is a size not given, and a Tailwind aspect-video
+    # box is a 16:9 frame, not a player.
+    framed = '<div class="relative aspect-video"><img width="1024" height="0" alt="" src="https://i.example/nebula_header.jpeg?w=1200"></div>'
+    page = lead_page("https://i.example/nebula_header.jpeg", after_title=framed)
+    body = extract("https://news.example/2026/islands", page, "", "page").body
+    assert len(body.xpath("//img")) == 1
+    # A short first paragraph the page shows under the photo stays under it; a photo before
+    # a paragraph in a list or quote goes before the list.
+    photo = '<figure><img alt="" src="https://i.example/2026/boats-in-harbour-640x427.jpg"></figure>'
+    short = (
+        lead_page("https://i.example/2026/boats-in-harbour-1200x630.jpg", after_title=photo)
+        .replace(
+            "<div class='body'>",
+            "<div class='body'><p>The boats came back to the harbour on Monday night.</p><blockquote>",
+        )
+        .replace("<p>Paragraph 1 ", "</blockquote><p>Paragraph 1 ")
+    )
+    body = extract("https://news.example/2026/islands", short, "", "page").body
+    after = body.xpath("//figure/following::p[1]")[0]
+    assert after.text_content().startswith("The boats came back") and not body.xpath("//blockquote//figure")
+    # A caption beside the photo's box rather than in a <figure> (Ars Technica, WIRED).
+    beside = (
+        '<div class="intro"><div class="frame"><a href="https://i.example/2026/boats-in-harbour-1152x648.jpg">'
+        '<img alt="" src="https://i.example/2026/boats-in-harbour-640x427.jpg"></a></div>'
+        '<div class="caption"><div class="caption-content">Boats in the harbour. Credit: A. Photographer</div></div></div>'
+    )
+    page = lead_page("https://i.example/2026/boats-in-harbour-1200x630.jpg", after_title=beside)
+    body = extract("https://news.example/2026/islands", page, "", "page").body
+    assert (
+        body.xpath("//figure[.//img]/figcaption")[0].text_content() == "Boats in the harbour. Credit: A. Photographer"
+    )
+
+
+def test_no_lead_photo_from_elsewhere_or_unnamed():
+    named = "https://i.example/2026/boats-in-harbour-1200x630.jpg"
+    cases = {
+        # A picture under the title that the page does not name: an author's portrait.
+        "portrait": lead_page(named, after_title='<img alt="" src="https://i.example/authors/jane-doe-portrait.jpg">'),
+        # The named picture is the site's logo, in the page's header outside the article.
+        "logo": lead_page(named).replace(
+            "<a href='/'>Site</a>", '<a href="/"><img alt="Site" src="https://i.example/2026/boats-in-harbour.jpg"></a>'
+        ),
+        # The named picture after the text begins: a card, a follow box.
+        "after": lead_page(
+            named, after_text='<div><img alt="" src="https://i.example/2026/boats-in-harbour.jpg"></div>'
+        ),
+        # A video's poster.
+        "video": lead_page(
+            named,
+            after_title='<figure><video controls poster="p.jpg"></video><img alt="" src="https://i.example/2026/boats-in-harbour.jpg"></figure>',
+        ),
+        # A tracking pixel by the name.
+        "pixel": lead_page(
+            named, after_title='<img width="0" height="0" alt="" src="https://i.example/2026/boats-in-harbour.jpg">'
+        ),
+        # No og:image at all.
+        "unnamed": lead_page("", after_title='<img alt="" src="https://i.example/2026/boats-in-harbour.jpg">'),
+    }
+    for name, page in cases.items():
+        body = extract("https://news.example/2026/islands", page, "", "page").body
+        assert not body.xpath("//img"), name
+    # A banner in the site's header, when the title sits outside it in a hero box.
+    banner = (
+        lead_page(named)
+        .replace(
+            "<a href='/'>Site</a>",
+            '<div class="header-image"><img alt="" src="https://i.example/2026/boats-in-harbour.jpg"></div>',
+        )
+        .replace("<header>", "<div id='page'><header>")
+        .replace("</article>", "</article></div>")
+    )
+    assert not extract("https://news.example/2026/islands", banner, "", "page").body.xpath("//img")
+    # A lazy picture whose shown address is the site's stand-in.
+    lazy = lead_page(
+        named,
+        after_title='<img class="lazyload" src="https://news.example/assets/img-placeholder-md.jpg" data-srcset="https://i.example/2026/boats-in-harbour-640x427.jpg 640w">',
+    )
+    srcs = [i.get("src") for i in extract("https://news.example/2026/islands", lazy, "", "page").body.iter("img")]
+    assert not any("placeholder" in s for s in srcs)
+    # A lazy <picture> showing a spinner: no other crop of its sources stands in for the photo.
+    spinner = lead_page(
+        named,
+        after_title='<picture><source data-srcset="https://i.example/2026/boats-in-harbour.webp">'
+        '<img class="lazyload" src="https://news.example/static/loading-spinner.gif" data-srcset="https://i.example/2026/boats-in-harbour.jpg"></picture>',
+    )
+    srcs = [i.get("src") for i in extract("https://news.example/2026/islands", spinner, "", "page").body.iter("img")]
+    assert not any("spinner" in s for s in srcs)
+    # With its photo's address beside the stand-in (Ghost's lazyload), the photo is shown.
+    lazy = lazy.replace('data-srcset="', 'data-src="https://i.example/2026/boats-in-harbour-640x427.jpg" data-srcset="')
+    srcs = [i.get("src") for i in extract("https://news.example/2026/islands", lazy, "", "page").body.iter("img")]
+    assert srcs == ["https://i.example/2026/boats-in-harbour-640x427.jpg"]
+    # Ghost(Pro): the site's id in every address; the author's portrait in the byline is not
+    # the named photo, which follows it.
+    site = "https://storage.example/c/aa/bb/ebaa2665-1111-4222-8333-944455556666/content/images"
+    ghost = lead_page(
+        f"{site}/size/w1200/2026/09/helping-each-other-repair.jpg",
+        after_title=(
+            f'<a href="/author/jane/"><img class="author-profile-image" src="{site}/2026/01/jane-doe-portrait.png"></a>'
+            f'<figure><img alt="" src="{site}/size/w2000/2026/09/helping-each-other-repair.jpg"></figure>'
+        ),
+    )
+    srcs = [i.get("src") for i in extract("https://news.example/2026/islands", ghost, "", "page").body.iter("img")]
+    assert srcs == [f"{site}/size/w2000/2026/09/helping-each-other-repair.jpg"]
+    # An article that already opens with a picture gets no second one.
+    own = '<figure><img alt="" src="https://i.example/2026/other-photo-of-boats.jpg"><figcaption>Boats.</figcaption></figure>'
+    page = lead_page(named, after_title='<img alt="" src="https://i.example/2026/boats-in-harbour.jpg">').replace(
+        "<div class='body'>", f"<div class='body'>{own}"
+    )
+    body = extract("https://news.example/2026/islands", page, "", "page").body
+    assert len(body.xpath("//img")) <= 1

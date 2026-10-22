@@ -492,9 +492,30 @@ All fetched content is treated as untrusted.
   has those words. When the article kept the figure's caption without its picture somewhere
   else (readability's copy can lack a credit line, so one caption's words holding the other's
   counts), the pictures go into that figure instead. A figure before the article's first
-  paragraph or after its last (a lead photo, related stories) is not taken. The headings the
-  article and the page have once count as such neighbours too, so a photo under a heading
-  stays in its section. At most 40 pictures come back to one article.
+  paragraph or after its last (an author's photo, related stories) is not taken this way. The
+  headings the article and the page have once count as such neighbours too, so a photo under a
+  heading stays in its section. At most 40 pictures come back to one article.
+- **The lead photo.** The photo a news page sets under its headline sits outside the box of
+  paragraphs readability keeps, so it is put back: the picture the page names as its own
+  (`og:image`), found on the page between the headline (or the top of the box holding the
+  headline and the text, where a photo is set above the headline) and the article's first
+  paragraph of 20 words or more. The address the book shows must be that photo too (not a lazy
+  stand-in), or another crop of it among the same `<picture>`'s sources. It goes before the first
+  of the article's paragraphs that the page shows after it, so a standfirst or a short first
+  line stays where the page has it, and before any list or quote holding that paragraph. Its
+  caption is the figure's own, or else a box named caption within a few boxes of the photo (Ars
+  Technica, WIRED), unless the article has that caption already. The named picture and the one
+  shown are matched by the file's name less the pieces that size or crop it (`-1200x630`,
+  `-superJumbo`, `-Social`; a name that is only a size names nothing), or by an id in their
+  addresses (a UUID, a long hex run) used by fewer than four of the page's pictures; an id alone
+  does not match two files of different names when neither name holds it (Ghost's site id is in
+  every address). Not taken: a picture the page does not name (an author's portrait), the named
+  picture elsewhere (a card after the text), in a menu or the site's header (a `<header>` holding
+  a menu or a link to the site's home, a banner, a masthead) when that does not also hold the
+  headline, a video's poster, a hidden or tiny picture (as for figure pictures above), nor a
+  second lead when the article already opens with a picture or has this one. For a picture's
+  size, 0 means not given, unless it is the only size given. A lazy picture's stand-in file
+  (`img-placeholder-md.jpg`) may carry a size.
 - **Stacks of photos.** A carousel or slideshow shows one photo at a time; the book shows its
   first, with its caption, and skips the rest. A stack is a box named carousel, slider,
   slideshow, swiper, slick, glide, splide or flickity, or marked
