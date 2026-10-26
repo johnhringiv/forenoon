@@ -2742,6 +2742,8 @@ async fn pages_are_compressed_and_the_form_token_never_reads_the_same_twice() {
     let request = Request::get("/login").header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
     let response = site.router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    // A proxy in front passes our encoding on rather than compressing the page again.
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store, no-transform");
     assert_eq!(response.headers()["cross-origin-opener-policy"], "same-origin");
     assert_eq!(response.headers()["cross-origin-resource-policy"], "same-origin");
     let csp = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
@@ -2780,7 +2782,7 @@ async fn icons_and_the_manifest_need_no_session() {
         let header = |name| response.headers().get(name).unwrap().to_str().unwrap().to_owned();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         assert_eq!(header(header::CONTENT_TYPE), media_type, "{path}");
-        assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400", "{path}");
+        assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400, no-transform", "{path}");
         // The share card may be shown on another site's page; nothing else may.
         let policy = if path.starts_with("/og.png") { "cross-origin" } else { "same-origin" };
         assert_eq!(header(header::HeaderName::from_static("cross-origin-resource-policy")), policy, "{path}");
@@ -2863,7 +2865,7 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     let (status, cookie, cache, page) = get("john.forenoon.test", "/").await;
     assert_eq!(status, StatusCode::OK);
     assert!(cookie.is_empty(), "no session for a visitor: {cookie}");
-    assert_eq!(cache, "public, max-age=300");
+    assert_eq!(cache, "public, max-age=300, no-transform");
     assert!(page.contains("Johns article") && !page.contains("Marys article"));
     // The personas to switch between, the persona's interests, and the buttons shown but inert.
     assert!(page.contains(r#"<span class="me">Reading as</span>"#), "{page}");
@@ -3040,7 +3042,12 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     // The page, to anyone, meant to be found and kept by a cache; dressed like every other answer.
     let (status, (kind, cache, robots, cookie), csp, page) = get("Forenoon.Test:443", "/").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(kind.starts_with("text/html") && cache == "public, max-age=300" && robots.is_empty() && cookie.is_empty());
+    assert!(
+        kind.starts_with("text/html")
+            && cache == "public, max-age=300, no-transform"
+            && robots.is_empty()
+            && cookie.is_empty()
+    );
     assert!(csp && page.contains("A morning paper edited for one reader"), "{page}");
     // What a shared link's preview needs, X's card type and the picture's size among it.
     for tag in [
@@ -3051,6 +3058,18 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
         r#"<meta name="twitter:card" content="summary_large_image">"#,
     ] {
         assert!(page.contains(tag), "{tag}");
+    }
+    // Compressed like every other page, though the landing host answers it before the router.
+    for encoding in ["zstd", "br", "gzip"] {
+        let request = Request::get("/")
+            .header(header::HOST, "forenoon.test")
+            .header(header::ACCEPT_ENCODING, encoding)
+            .body(Body::empty())
+            .unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.headers()[header::CONTENT_ENCODING], encoding);
+        assert_eq!(response.headers()[header::VARY], "accept-encoding");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=300, no-transform");
     }
     // Its pictures, and the icons it names.
     let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;

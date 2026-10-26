@@ -158,9 +158,7 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         .fallback(pages::not_found)
         .layer(auth)
         .layer(DefaultBodyLimit::max(MAX_FORM_BYTES))
-        .layer(middleware::from_fn(pages::security_headers))
-        // Text only: images are already compressed, and tiny answers are not worth it.
-        .layer(CompressionLayer::new());
+        .layer(middleware::from_fn(pages::security_headers));
     let router = if options.secure_cookies { router.layer(middleware::from_fn(pages::https_only)) } else { router };
     // Outermost, so a request for another host is sent on before anything else looks at it.
     let public = options.secure_cookies.then(|| pages::PublicAddress::new(&options.base_url, state.proxy.clone()));
@@ -183,5 +181,9 @@ pub async fn app(pool: SqlitePool, options: Options) -> Result<Router, Error> {
         }
         None => router,
     };
+    // Outside the hosts' gates, so what they answer themselves (the landing page, robots.txt,
+    // the sitemap) is compressed too. Text only: images are already compressed, and tiny
+    // answers are not worth it. Outermost, a proxy in front is told to pass on our encoding.
+    let router = router.layer(CompressionLayer::new()).layer(middleware::from_fn(pages::no_transform));
     Ok(router.with_state(state))
 }
