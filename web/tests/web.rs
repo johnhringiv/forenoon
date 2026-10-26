@@ -3059,6 +3059,16 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     ] {
         assert!(page.contains(tag), "{tag}");
     }
+    // Its one script is Cloudflare's analytics beacon, in the page, and its policy allows that
+    // alone; no other page does.
+    assert!(page.contains(r#"<script defer src="https://static.cloudflareinsights.com/beacon.min.js""#));
+    let request = Request::get("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    let policy = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(policy.contains("script-src https://static.cloudflareinsights.com;"), "{policy}");
+    assert!(policy.contains("connect-src https://cloudflareinsights.com;"), "{policy}");
+    let login = Browser::default().get(&site, "/login").await;
+    assert!(!login.csp.contains("cloudflareinsights"), "{}", login.csp);
     // Compressed like every other page, though the landing host answers it before the router.
     for encoding in ["zstd", "br", "gzip"] {
         let request = Request::get("/")

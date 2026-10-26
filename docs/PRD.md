@@ -1283,7 +1283,8 @@ database with the pipeline.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
   icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
-  It carries `Cache-Control: public, max-age=300`. It and the demo hosts' three pages are the
+  It carries `Cache-Control: public, max-age=300`, and Cloudflare's Web Analytics beacon for
+  forenoon.dev, the one script its policy allows. It and the demo hosts' three pages are the
   only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
   names it. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
