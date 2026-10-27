@@ -184,9 +184,19 @@ deploy is down (the NAS rebooting, the tunnel gone), a Cloudflare Worker,
 `deploy/cloudflare/outage-worker.js`, steps in as gotflashes's does: on `forenoon.dev` it
 serves the landing page itself from a copy of `web/site` bundled with the Worker, with a line
 under the masthead saying the demo behind its links is away; on a persona host it shows a
-short notice. It passes every other answer through, the pages' own errors included. The copy is
+short notice. It passes every other answer through, the pages' own errors included. It also
+asks the origin for the encodings the visitor accepts (of Brotli and gzip) rather than
+Cloudflare's fixed `br, gzip`: the pages say `no-transform`, so Cloudflare passes the origin's
+encoding on and cannot re-encode it, and a visitor without Brotli would otherwise get the page
+uncompressed. The copy is
 taken at deploy time, so a merge to `main` that changes `web/site`, `web/icons` or
 `deploy/cloudflare` deploys the Worker again (`.github/workflows/outage-worker.yml`, with the
 Cloudflare API token and account id as repository secrets; the token needs Workers Scripts: Edit
 on the account, and Workers Routes: Edit and Zone: Read on the forenoon.dev zone); `npx wrangler deploy` from that folder does the same by
-hand. Its routes cover `forenoon.dev` and every subdomain.
+hand. Its routes cover `forenoon.dev` and every subdomain. Set both routes' failure mode to
+**Fail open** in the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes →
+each route; or `request_limit_fail_open` on each of the zone's Worker routes through the
+API), once; wrangler cannot set it, and a redeploy keeps it. Both are set. Then if the Worker cannot
+run (the free plan's daily request limit reached, say), requests go straight to the origin and
+visitors see the site as usual, only without the outage copy and with gzip-only clients sent
+pages uncompressed, rather than Cloudflare's error 1027.
