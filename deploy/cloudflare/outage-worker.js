@@ -43,6 +43,8 @@ export default {
 // pages say no-transform, so Cloudflare cannot re-encode them: a visitor without Brotli was
 // sent the page uncompressed. The origin is asked instead for what the visitor accepts, of
 // the two encodings Cloudflare takes from an origin, and its answer passes through as it is.
+// Cloudflare overrides this header on its own unless the zone's Cache Rule sets Respect Strong
+// ETags (docs/demo.md), which forwards it.
 function toOrigin(request) {
   const accepted = request.cf?.clientAcceptEncoding;
   if (accepted === undefined) {
