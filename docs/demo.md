@@ -193,4 +193,9 @@ taken at deploy time, so a merge to `main` that changes `web/site`, `web/icons` 
 `deploy/cloudflare` deploys the Worker again (`.github/workflows/outage-worker.yml`, with the
 Cloudflare API token and account id as repository secrets; the token needs Workers Scripts: Edit
 on the account, and Workers Routes: Edit and Zone: Read on the forenoon.dev zone); `npx wrangler deploy` from that folder does the same by
-hand. Its routes cover `forenoon.dev` and every subdomain.
+hand. Its routes cover `forenoon.dev` and every subdomain. Set both routes' failure mode to
+**Fail open** in the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes →
+each route), once; wrangler cannot set it, and a redeploy keeps it. Then if the Worker cannot
+run (the free plan's daily request limit reached, say), requests go straight to the origin and
+visitors see the site as usual, only without the outage copy and with gzip-only clients sent
+pages uncompressed, rather than Cloudflare's error 1027.
