@@ -1306,8 +1306,9 @@ database with the pipeline.
   (`FORENOON_WEB_CLIENT_IP_HEADER`) only when the request came from a trusted address
   (`FORENOON_WEB_TRUSTED_PROXIES`, default loopback, which is where a tunnel sharing the
   container's network connects from); for a list such as `X-Forwarded-For`, the last entry.
-- Text responses are compressed (zstd, Brotli or gzip, as the browser asks), the landing
-  page, robots.txt and the sitemap included. Every response carries
+- Text responses are compressed (Brotli or gzip, as the browser asks), the landing page,
+  robots.txt and the sitemap included. Not zstd: Cloudflare takes only Brotli or gzip from
+  an origin, and Brotli is the smaller of the two on these pages anyway. Every response carries
   `Cache-Control: no-transform`, so a proxy in front (Cloudflare's) passes the encoding on
   rather than decompressing the response and compressing it again. The form token is
   sent under a fresh random mask on every page, so compressed sizes cannot reveal it next to

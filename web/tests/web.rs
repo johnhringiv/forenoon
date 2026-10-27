@@ -3069,16 +3069,19 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     assert!(policy.contains("connect-src https://cloudflareinsights.com;"), "{policy}");
     let login = Browser::default().get(&site, "/login").await;
     assert!(!login.csp.contains("cloudflareinsights"), "{}", login.csp);
-    // Compressed like every other page, though the landing host answers it before the router.
-    for encoding in ["zstd", "br", "gzip"] {
+    // Compressed like every other page, though the landing host answers it before the router:
+    // Brotli or gzip, never zstd, which Cloudflare does not pass on from an origin.
+    for (accepted, encoding) in
+        [("zstd, br, gzip", Some("br")), ("br", Some("br")), ("gzip", Some("gzip")), ("zstd", None)]
+    {
         let request = Request::get("/")
             .header(header::HOST, "forenoon.test")
-            .header(header::ACCEPT_ENCODING, encoding)
+            .header(header::ACCEPT_ENCODING, accepted)
             .body(Body::empty())
             .unwrap();
         let response = site.router.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.headers()[header::CONTENT_ENCODING], encoding);
-        assert_eq!(response.headers()[header::VARY], "accept-encoding");
+        let sent = response.headers().get(header::CONTENT_ENCODING).map(|value| value.to_str().unwrap());
+        assert_eq!(sent, encoding, "{accepted}");
         assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=300, no-transform");
     }
     // Its pictures, and the icons it names.
