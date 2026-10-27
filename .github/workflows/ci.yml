@@ -149,6 +149,46 @@ jobs:
               assert page.title() == "ok" and "Headless" not in page.evaluate("navigator.userAgent")
               b.close()
           print("browser ok")'
+      # As the deploy runs it: under its seccomp profile, launched as the fetcher launches Chrome
+      # for figure pictures (its own sandbox on, drawing in software: the container has no GPU),
+      # and drawn the moment the page is set, three times over. A Chrome that needs a system call
+      # the profile refuses, or cannot draw there at once, fails here rather than on a reader's run.
+      - name: The sandboxed browser draws a page under the deploy's seccomp profile
+        run: |
+          for run in 1 2 3; do
+            docker run --rm --init --read-only --tmpfs /tmp --cap-drop ALL \
+              --security-opt no-new-privileges:true --security-opt seccomp=browser/seccomp.json \
+              --tmpfs /browser:uid=1000,gid=1000 --entrypoint python3 forenoon-browser:ci -c '
+          import sys; sys.path.insert(0, "/usr/local/bin"); import fetcher
+          from playwright.sync_api import sync_playwright
+          fetcher._start_display()
+          with sync_playwright() as p:
+              b = fetcher._sandboxed(p, 9)  # no request leaves: the page is set, not fetched
+              page = b.new_page(viewport=fetcher.SHOT_VIEWPORT)
+              page.set_content("<title>ok</title><p>sandboxed</p>")
+              assert page.title() == "ok" and page.screenshot(type="jpeg", quality=80)
+              b.close()
+          print("sandboxed browser ok")'
+          done
+      - name: DIAG webgl identity with and without disable-gpu
+        if: always()
+        run: |
+          cat > /tmp/diag.py <<'PY'
+          import sys, os, json; sys.path.insert(0, "/usr/local/bin"); import fetcher
+          from playwright.sync_api import sync_playwright
+          fetcher._start_display()
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=False, args=json.loads(os.environ["FLAGS"]), ignore_default_args=["--enable-automation"])
+              page = b.new_page(); page.goto("data:text/html,<canvas id=c></canvas>")
+              print("RESULT", os.environ["FLAGS"], page.evaluate("""() => { const g = document.getElementById('c').getContext('webgl'); if (!g) return 'no webgl';
+                const d = g.getExtension('WEBGL_debug_renderer_info'); return [g.getParameter(g.VERSION), d && g.getParameter(d.UNMASKED_VENDOR_WEBGL), d && g.getParameter(d.UNMASKED_RENDERER_WEBGL), navigator.hardwareConcurrency].join(' | ') }"""))
+              b.close()
+          PY
+          for flags in '["--disable-dev-shm-usage"]' '["--disable-dev-shm-usage","--disable-gpu"]'; do
+            docker run --rm --init --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+              --tmpfs /browser:uid=1000,gid=1000 -e "FLAGS=$flags" -v /tmp/diag.py:/diag.py:ro \
+              --entrypoint python3 forenoon-browser:ci /diag.py 2>&1 | grep RESULT || true
+          done
       - uses: docker/login-action@v4
         if: env.PUBLISH == 'true'
         with:
