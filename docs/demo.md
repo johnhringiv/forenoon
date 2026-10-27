@@ -195,7 +195,8 @@ Cloudflare API token and account id as repository secrets; the token needs Worke
 on the account, and Workers Routes: Edit and Zone: Read on the forenoon.dev zone); `npx wrangler deploy` from that folder does the same by
 hand. Its routes cover `forenoon.dev` and every subdomain. Set both routes' failure mode to
 **Fail open** in the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes →
-each route), once; wrangler cannot set it, and a redeploy keeps it. Then if the Worker cannot
+each route; or `request_limit_fail_open` on each of the zone's Worker routes through the
+API), once; wrangler cannot set it, and a redeploy keeps it. Both are set. Then if the Worker cannot
 run (the free plan's daily request limit reached, say), requests go straight to the origin and
 visitors see the site as usual, only without the outage copy and with gzip-only clients sent
 pages uncompressed, rather than Cloudflare's error 1027.
