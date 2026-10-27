@@ -149,6 +149,33 @@ jobs:
               assert page.title() == "ok" and "Headless" not in page.evaluate("navigator.userAgent")
               b.close()
           print("browser ok")'
+      - name: DIAG screenshot under each combination
+        if: always()
+        run: |
+          cat > /tmp/diag.py <<'PY'
+          import sys, os; sys.path.insert(0, "/usr/local/bin"); import fetcher
+          from playwright.sync_api import sync_playwright
+          fetcher._start_display()
+          sandbox = os.environ["SANDBOX"] == "1"
+          with sync_playwright() as p:
+              print("chromium", p.chromium.executable_path)
+              b = p.chromium.launch(headless=False, chromium_sandbox=sandbox, args=["--disable-dev-shm-usage"])
+              print("version", b.version)
+              page = b.new_page(); page.set_content("<title>ok</title><p>x</p>")
+              try:
+                  print("RESULT screenshot bytes", len(page.screenshot()))
+              except Exception as e:
+                  print("RESULT screenshot FAILED", str(e).splitlines()[0])
+              b.close()
+          PY
+          for seccomp in browser/seccomp.json unconfined; do for sandbox in 1 0; do
+            echo "===== seccomp=$seccomp sandbox=$sandbox"
+            docker run --rm --init --read-only --tmpfs /tmp --cap-drop ALL \
+              --security-opt no-new-privileges:true --security-opt seccomp=$seccomp \
+              --tmpfs /browser:uid=1000,gid=1000 -e SANDBOX=$sandbox -e DEBUG=pw:browser \
+              -v /tmp/diag.py:/diag.py:ro --entrypoint python3 forenoon-browser:ci /diag.py 2>&1 \
+              | grep -v -i "fontconfig\|dbus" | tail -25 || true
+          done; done
       - uses: docker/login-action@v4
         if: env.PUBLISH == 'true'
         with:
