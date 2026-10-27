@@ -184,7 +184,11 @@ deploy is down (the NAS rebooting, the tunnel gone), a Cloudflare Worker,
 `deploy/cloudflare/outage-worker.js`, steps in as gotflashes's does: on `forenoon.dev` it
 serves the landing page itself from a copy of `web/site` bundled with the Worker, with a line
 under the masthead saying the demo behind its links is away; on a persona host it shows a
-short notice. It passes every other answer through, the pages' own errors included. The copy is
+short notice. It passes every other answer through, the pages' own errors included. It also
+asks the origin for the encodings the visitor accepts (of Brotli and gzip) rather than
+Cloudflare's fixed `br, gzip`: the pages say `no-transform`, so Cloudflare passes the origin's
+encoding on and cannot re-encode it, and a visitor without Brotli would otherwise get the page
+uncompressed. The copy is
 taken at deploy time, so a merge to `main` that changes `web/site`, `web/icons` or
 `deploy/cloudflare` deploys the Worker again (`.github/workflows/outage-worker.yml`, with the
 Cloudflare API token and account id as repository secrets; the token needs Workers Scripts: Edit
