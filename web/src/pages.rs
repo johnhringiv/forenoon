@@ -264,6 +264,22 @@ pub fn secured(mut response: Response) -> Response {
     response
 }
 
+/// A proxy in front (Cloudflare's, say) passes the response on as it is: without this, it
+/// decompresses ours and compresses it again, bigger and differently on every request.
+pub async fn no_transform(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    let value = match headers.get(header::CACHE_CONTROL).and_then(|value| value.to_str().ok()) {
+        Some(value) if value.split(',').any(|part| part.trim().eq_ignore_ascii_case("no-transform")) => {
+            return response;
+        }
+        Some(value) => HeaderValue::from_str(&format!("{value}, no-transform")).expect("a header with a word added"),
+        None => HeaderValue::from_static("no-transform"),
+    };
+    headers.insert(header::CACHE_CONTROL, value);
+    response
+}
+
 /// Served over https: browsers are told to keep to it for this host.
 pub async fn https_only(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;

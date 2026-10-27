@@ -1283,7 +1283,8 @@ database with the pipeline.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
   icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
-  It carries `Cache-Control: public, max-age=300`. It and the demo hosts' three pages are the
+  It carries `Cache-Control: public, max-age=300`, and Cloudflare's Web Analytics beacon for
+  forenoon.dev, the one script its policy allows. It and the demo hosts' three pages are the
   only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
   names it. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
@@ -1305,7 +1306,10 @@ database with the pipeline.
   (`FORENOON_WEB_CLIENT_IP_HEADER`) only when the request came from a trusted address
   (`FORENOON_WEB_TRUSTED_PROXIES`, default loopback, which is where a tunnel sharing the
   container's network connects from); for a list such as `X-Forwarded-For`, the last entry.
-- Text responses are compressed (zstd, Brotli or gzip, as the browser asks). The form token is
+- Text responses are compressed (zstd, Brotli or gzip, as the browser asks), the landing
+  page, robots.txt and the sitemap included. Every response carries
+  `Cache-Control: no-transform`, so a proxy in front (Cloudflare's) passes the encoding on
+  rather than decompressing the response and compressing it again. The form token is
   sent under a fresh random mask on every page, so compressed sizes cannot reveal it next to
   text a visitor chose (BREACH). Pages may not be framed, opened windows keep no handle on
   them, and other sites cannot load their responses (`frame-ancestors 'none'`,

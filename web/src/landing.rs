@@ -81,6 +81,13 @@ impl Landing {
     }
 }
 
+/// The page's own policy: no script but Cloudflare's Web Analytics beacon, which reports to
+/// cloudflareinsights.com. It is in the page itself rather than added by Cloudflare on the way
+/// out, since that would mean decompressing the page and compressing it again.
+const PAGE_POLICY: &str = "default-src 'none'; img-src 'self' http: https:; style-src 'unsafe-inline'; \
+     script-src https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; \
+     manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
 /// Served from the binary, dressed as every response is, and kept by a cache in front for a
 /// while: the page briefly, since it changes with a release; a picture for a day.
 fn file(media_type: &'static str, body: impl IntoResponse, cache: &'static str) -> Response {
@@ -112,7 +119,9 @@ pub async fn gate(State(landing): State<Arc<Landing>>, request: Request, next: N
         return file("application/xml", landing.sitemap.clone(), "public, max-age=300");
     }
     if looking && path == "/" {
-        return file("text/html; charset=utf-8", PAGE.as_bytes(), "public, max-age=300");
+        let mut response = file("text/html; charset=utf-8", PAGE.as_bytes(), "public, max-age=300");
+        response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(PAGE_POLICY));
+        return response;
     }
     if looking && let Some((_, body)) = IMAGES.iter().find(|(name, _)| *name == path) {
         return file("image/webp", *body, "public, max-age=86400");

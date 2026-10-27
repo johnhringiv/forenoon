@@ -164,8 +164,10 @@ names and one-line descriptions there in step with this page.
 The landing page is served by the web program itself, at the hostname in
 `FORENOON_WEB_LANDING` (`forenoon.dev`), so the public site is the same deploy as the demo
 behind it and needs nothing else running. On a persona host the wordmark at the top left
-leads back to it, so a visitor who came in from the landing page can return. It is one HTML page with its styles inline and no
-scripts, built into the binary from `web/site` with its pictures: a merge to `main` that
+leads back to it, so a visitor who came in from the landing page can return. It is one HTML page with its styles inline and one
+script, Cloudflare's Web Analytics beacon (in the page, not injected by Cloudflare, which the
+`no-transform` on every response stops; the page's CSP allows that script and its reports to
+`cloudflareinsights.com`, and no other page's does), built into the binary from `web/site` with its pictures: a merge to `main` that
 changes it reaches the site with the next image. Only the page, its pictures, the icons,
 `/robots.txt`, `/sitemap.xml` and the health check answer on that host; everything else there
 is 404. The sitemap lists the landing page and each persona's Newsstand, Archive and Sources
