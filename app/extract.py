@@ -1980,6 +1980,9 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
         # Comments and processing instructions; and a formula's old text, kept only to pick the article.
         if not isinstance(el.tag, str) or (marked and el.get(formulas.SHADOW)):
             el.drop_tree()
+    _drop_screen_reader_text(root)
+    _drop_self_links(root)
+    _separate_credits(root)
     _unnest_empty(root)
     _picture_fallbacks(root)
     if not marked:
@@ -2037,10 +2040,117 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
     _fix_nesting(root)
     _prune_empty(root)
     _drop_repeated_captions(root)
+    _drop_repeated_pictures(root)
     for note in root.iter("div"):
         if note.get("class") == "footnote":
             note.tag = "aside"  # after the passes above, which know only the allowlist's blocks
     return root
+
+
+def _drop_screen_reader_text(root: lxml.html.HtmlElement) -> None:
+    """Drop labels written for screen readers and hidden from sight (BBC's ", external", the
+    NYT's "Credit..."), and pull quotes the page hides from screen readers because they repeat
+    the text (the FT's). Not every aria-hidden box: charts drawn twice and lazy pictures use it."""
+    for el in list(root.iter()):
+        if not isinstance(el.tag, str) or el.getparent() is None:
+            continue
+        names = el.get("class") or ""
+        if SCREEN_READER.search(names):
+            if _redundant_label(el):
+                el.drop_tree()
+        elif PULL_QUOTE.search(names) and (el.get("aria-hidden") or "").strip().lower() == "true":
+            el.drop_tree()
+
+
+def _redundant_label(el: lxml.html.HtmlElement) -> bool:
+    """A short screen-reader label beside visible text, which says it already. Not the only
+    text of its box: a bar drawn with CSS ("2007–2008, Shut Down") has no other words."""
+    parent = el.getparent()
+    if parent is None or el.find(".//img") is not None:
+        return False
+    words = el.text_content().split()
+    if len(words) > SCREEN_READER_MAX_WORDS:
+        return False
+    return len(parent.text_content().split()) > len(words)
+
+
+def _drop_self_links(root: lxml.html.HtmlElement) -> None:
+    """Drop a heading's link to its own section ("#", "¶"), which themes show on hover; left
+    in, every heading ends in it ("IPO Pumping#")."""
+    for a in root.xpath(".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]//a"):
+        mark = a.text_content().strip() in SELF_LINK_MARKS and a.find(".//img") is None
+        if mark and (a.get("href") or "").strip().startswith("#"):
+            a.drop_tree()
+
+
+def _separate_credits(root: lxml.html.HtmlElement) -> None:
+    """Keep a caption's credit apart from its text. Pages set them in boxes side by side
+    ("…in Riyadh." then "Saudi Press Agency"), which run together once the boxes are gone."""
+    for caption in root.iter("figcaption"):
+        _space_boxes(caption)
+
+
+def _space_boxes(caption: lxml.html.HtmlElement) -> None:
+    for el in list(caption.iterdescendants()):
+        if not isinstance(el.tag, str):
+            continue
+        text = el.text_content()
+        if not text or text[0].isspace():
+            continue
+        prev = el.getprevious()
+        before = (prev.text_content() + (prev.tail or "")) if prev is not None else (el.getparent().text or "")
+        if not before or before[-1].isspace():
+            continue
+        if before[-1] in '.!?…”"’)]' or CREDIT_NAME.search(el.get("class") or ""):
+            if prev is not None:
+                prev.tail = (prev.tail or "") + " "
+            else:
+                parent = el.getparent()
+                parent.text = (parent.text or "") + " "
+
+
+def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
+    """Drop the second copy of a picture shown twice in a row: a feed's thumbnail and then
+    the article's own copy at another size (VTDigger's photo-scaled.jpg, photo-1200x900.jpg).
+    The copy with a caption stays. Only pictures standing alone, with next to no text
+    between them: the same small picture used again inline (a formula, an icon) is meant."""
+    last: tuple[str, lxml.html.HtmlElement, int] | None = None
+    words = 0
+    for el in list(root.iter()):
+        if not isinstance(el.tag, str):
+            continue
+        if el.tag == "img" and el.getparent() is not None:
+            block = _picture_block(el)
+            name = re.sub(r"-scaled(\.\w+)$", r"\1", _picture_name(el.get("src") or ""))
+            if block is not None and last is not None and last[0] == name and words - last[2] <= SAME_PICTURE_GAP:
+                earlier = last[1]
+                if earlier.find(".//figcaption") is None and block.find(".//figcaption") is not None:
+                    earlier.drop_tree()
+                else:
+                    block.drop_tree()
+                last = None
+                continue
+            last = (name, block, words) if block is not None else None
+        words += len((el.text or "").split()) + len((el.tail or "").split())
+
+
+def _picture_block(img: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
+    """The block that holds only this picture (and its caption), or None when it sits in text."""
+    box = img
+    while box.getparent() is not None and box.getparent().tag in ("a", "picture", "span"):
+        box = box.getparent()
+    parent = box.getparent()
+    if parent is None:
+        return None
+    if parent.tag == "figure":
+        return parent
+    if (
+        parent.tag in ("p", "div")
+        and not " ".join(parent.text_content().split())
+        and len(parent.findall(".//img")) == 1
+    ):
+        return parent
+    return None
 
 
 def _link_cards(root: lxml.html.HtmlElement) -> None:
@@ -2112,6 +2222,17 @@ HIDDEN_CLASS = re.compile(
     r"(^|\s)(hidden|sr-only|visually-hidden|screen-reader-text|d-none|invisible)(\s|$)", re.IGNORECASE
 )
 SIZED_NAME = re.compile(r"-\d{2,5}x\d{2,5}(\.\w+)$")
+# Text there for screen readers only: BBC's ", external" in every outside link
+# ("ssrcss-…-VisuallyHidden"), the NYT's "Credit..." before a photo's credit
+# ("…_accessibilityLabel"). Matched at the end of a class name, after a prefix or not.
+SCREEN_READER = re.compile(
+    r"(^|[\s_-])(sr-only|visually-?hidden|screen-?reader(-text|-only)?|accessibility-?label)(?=\s|$)", re.IGNORECASE
+)
+SCREEN_READER_MAX_WORDS = 12  # a label; a longer box (a chart's table, say) is left alone
+PULL_QUOTE = re.compile(r"pull-?quote", re.IGNORECASE)
+SELF_LINK_MARKS = {"#", "¶", "§", "🔗", "⚓"}  # a heading's link to itself, shown on hover
+CREDIT_NAME = re.compile(r"credit|source|copyright|byline|photographer", re.IGNORECASE)
+SAME_PICTURE_GAP = 5  # words between two copies of one picture shown one after the other
 # A box of pictures shown one at a time, paged through with next and previous: the book shows its
 # first. Not "gallery" or "lightbox": a grid of pictures shown at once, a picture that enlarges.
 STACK_NAME = re.compile(
@@ -4082,7 +4203,13 @@ def _beside_caption(img: lxml.html.HtmlElement, first: lxml.html.HtmlElement) ->
                 or el.find(".//img") is not None
             ):
                 continue
-            if words := " ".join(el.text_content().split()):
+            piece = copy.deepcopy(el)
+            piece.tail = None
+            holder = lxml.html.Element("div")
+            holder.append(piece)
+            _drop_screen_reader_text(holder)
+            _space_boxes(holder)  # WIRED: the text, then "Photograph: Getty Images" in a box beside it
+            if words := " ".join(holder.text_content().split()):
                 caption = lxml.html.Element("figcaption")
                 caption.text = words
                 return caption

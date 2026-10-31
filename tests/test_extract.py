@@ -3472,3 +3472,64 @@ def test_a_note_cited_only_from_another_note_is_kept_in_the_pages_order():
     <ol class="footnotes"><li id="fn:1">...because I ran out of space. <a href="#fnref:1">↩</a></li></ol>
     </article></body></html>"""
     assert notes_of(extract("https://blog.example/post", page, "", "page").body) == ["1 ...because I ran out of space."]
+
+
+def test_screen_reader_labels_go_when_their_box_says_it_already():
+    # BBC: ", external" inside every outside link; the NYT's "Credit..." before the credit.
+    page = forms_page(
+        '<p>The NHS says <a href="https://www.nhs.uk/x">a reaction is possible'
+        '<span class="visually-hidden ssrcss-i2z2ig-VisuallyHidden">, <!-- -->external</span></a> but rare.</p>'
+        '<figure><img src="https://static.example/a.jpg" width="800" height="600" alt="">'
+        '<figcaption><span>Students use it.</span><span><span class="iqSOia_accessibilityLabel">Credit...</span>'
+        "<span>Desiree Rios for The New York Times</span></span></figcaption></figure>"
+        # A bar drawn with CSS: its label is all it says.
+        '<ol><li><span>Mail Shoppe</span> <span class="bar"><span class="sr-only">2007–2008, Shut Down</span></span></li></ol>'
+    )
+    body = extract("https://blog.example/post", page, "", "page").body
+    text = " ".join(body.text_content().split())
+    assert "external" not in text and "possible but rare." in text
+    assert "Students use it. Desiree Rios for The New York Times" in text and "Credit" not in text
+    assert "2007–2008, Shut Down" in text
+
+
+def test_a_pull_quote_hidden_from_screen_readers_goes():
+    page = forms_page(
+        "<p>But the Crisis Group recently counted 65 ongoing conflicts around the world.</p>"
+        '<blockquote class="n-content-pullquote" aria-hidden="true"><p>The Crisis Group counted 65 conflicts</p></blockquote>'
+        "<blockquote><p>A quotation the author set, which stays.</p></blockquote>"
+    )
+    body = extract("https://blog.example/post", page, "", "page").body
+    quotes = [" ".join(q.text_content().split()) for q in body.iter("blockquote")]
+    assert quotes == ["A quotation the author set, which stays."]
+
+
+def test_a_headings_link_to_itself_and_glued_credits():
+    page = forms_page(
+        '<h2 id="ipo">IPO Pumping<a class="anchor" href="#ipo">#</a></h2><p>Words under it.</p>'
+        '<h2 id="see"><a href="#see">See the result</a></h2><p>More words.</p>'
+        '<figure><img src="https://static.example/b.jpg" width="800" height="600" alt="">'
+        '<figcaption><span class="caption__text">A blaze in Kyiv.</span>'
+        '<span class="caption__source">Genya Savilov / AFP</span></figcaption></figure>'
+    )
+    body = extract("https://blog.example/post", page, "", "page").body
+    heads = [" ".join(h.text_content().split()) for h in body.iter("h2", "h3")]
+    assert "IPO Pumping" in heads and "See the result" in heads
+    assert "A blaze in Kyiv. Genya Savilov / AFP" in " ".join(body.text_content().split())
+
+
+def test_a_picture_shown_twice_in_a_row_is_kept_once():
+    # VTDigger from the feed: the feed's thumbnail, then the article's copy at another size.
+    feed = (
+        '<figure><img src="https://vtdigger.org/wp-content/uploads/2026/10/Essex-scaled.jpg" width="1200" height="900"></figure>'
+        '<figure><img src="https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg" width="1200" height="900">'
+        "<figcaption>Residents vote in Essex.</figcaption></figure>"
+        + FORMS_FILLER
+        # The same small picture again in the text is meant.
+        + '<p>A formula <img src="https://blog.example/f.png" width="60" height="20"> and again '
+        '<img src="https://blog.example/f.png" width="60" height="20"> here.</p>'
+    )
+    body = sanitize(lxml.html.fromstring(f"<div>{feed}</div>"), "https://vtdigger.org/post")
+    srcs = [img.get("src") for img in body.iter("img")]
+    assert srcs.count("https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg") == 1
+    assert not any("scaled" in s for s in srcs) and srcs.count("https://blog.example/f.png") == 2
+    assert body.find(".//figcaption").text == "Residents vote in Essex."
