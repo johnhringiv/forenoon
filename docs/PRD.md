@@ -427,8 +427,9 @@ All fetched content is treated as untrusted.
   - A short label written for screen readers and hidden from sight (a box named `sr-only`,
     `visually-hidden`, `screen-reader-text` or an accessibility label) goes when its box has
     other words that say it: the BBC's ", external" in every outside link, the NYT's
-    "Credit..." before a photo's credit. One that is its box's only text stays: a bar drawn
-    with CSS has no other words ("2007–2008, Shut Down").
+    "Credit..." before a photo's credit. One that is its box's only text stays (a bar drawn
+    with CSS has no other words: "2007–2008, Shut Down"), and so does one without letters
+    (Wikipedia's "/" between a stacked fraction's parts).
   - A heading's link to its own section whose whole text is a mark (`#`, `¶`, `§`), shown on
     hover, goes; left in, every heading ends in it.
   - In a figure's caption, boxes set side by side keep a space between them where the first

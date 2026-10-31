@@ -2063,15 +2063,20 @@ def _drop_screen_reader_text(root: lxml.html.HtmlElement) -> None:
 
 
 def _redundant_label(el: lxml.html.HtmlElement) -> bool:
-    """A short screen-reader label beside visible text, which says it already. Not the only
-    text of its box: a bar drawn with CSS ("2007–2008, Shut Down") has no other words."""
+    """A short screen-reader label of words beside visible text, which says it already. Not
+    the only text of its box: a bar drawn with CSS ("2007–2008, Shut Down") has no other words."""
     parent = el.getparent()
     if parent is None or el.find(".//img") is not None:
         return False
     words = el.text_content().split()
-    if len(words) > SCREEN_READER_MAX_WORDS:
-        return False
-    return len(parent.text_content().split()) > len(words)
+    if len(words) > SCREEN_READER_MAX_WORDS or not any(c.isalpha() for c in "".join(words)):
+        return False  # a symbol is part of what is shown: Wikipedia's "/" between a stacked fraction's parts
+    hidden = sum(
+        len(box.text_content().split())
+        for box in parent.iter()
+        if isinstance(box.tag, str) and box is not parent and SCREEN_READER.search(box.get("class") or "")
+    )
+    return len(parent.text_content().split()) > hidden
 
 
 def _drop_self_links(root: lxml.html.HtmlElement) -> None:
@@ -2092,21 +2097,35 @@ def _separate_credits(root: lxml.html.HtmlElement) -> None:
 
 def _space_boxes(caption: lxml.html.HtmlElement) -> None:
     for el in list(caption.iterdescendants()):
-        if not isinstance(el.tag, str):
+        if not isinstance(el.tag, str) or el.tag in ("sup", "sub"):  # a note's number goes with its word
             continue
         text = el.text_content()
         if not text or text[0].isspace():
             continue
-        prev = el.getprevious()
-        before = (prev.text_content() + (prev.tail or "")) if prev is not None else (el.getparent().text or "")
-        if not before or before[-1].isspace():
+        before = _text_before(el)
+        if not before or before[-1].isspace() or before[-1] in "([{“‘\"'":
             continue
         if before[-1] in '.!?…”"’)]' or CREDIT_NAME.search(el.get("class") or ""):
+            prev = el.getprevious()
             if prev is not None:
                 prev.tail = (prev.tail or "") + " "
             else:
                 parent = el.getparent()
                 parent.text = (parent.text or "") + " "
+
+
+def _text_before(el: lxml.html.HtmlElement) -> str:
+    """The text of el's parent before el: its siblings' words and the text between them,
+    not a comment's (React writes "<!-- -->" between a caption and its credit)."""
+    parent = el.getparent()
+    parts = [parent.text or ""]
+    for sibling in parent:
+        if sibling is el:
+            break
+        if isinstance(sibling.tag, str):
+            parts.append(sibling.text_content())
+        parts.append(sibling.tail or "")
+    return "".join(parts)
 
 
 def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
@@ -2115,23 +2134,34 @@ def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
     The copy with a caption stays. Only pictures standing alone, with next to no text
     between them: the same small picture used again inline (a formula, an icon) is meant."""
     last: tuple[str, lxml.html.HtmlElement, int] | None = None
+    dropped: set[lxml.html.HtmlElement] = set()
     words = 0
     for el in list(root.iter()):
         if not isinstance(el.tag, str):
             continue
-        if el.tag == "img" and el.getparent() is not None:
+        if el.tag == "img" and not any(a in dropped for a in el.iterancestors()) and el.getparent() is not None:
             block = _picture_block(el)
             name = re.sub(r"-scaled(\.\w+)$", r"\1", _picture_name(el.get("src") or ""))
-            if block is not None and last is not None and last[0] == name and words - last[2] <= SAME_PICTURE_GAP:
+            apart = last is not None and block is not None and _apart(last[1], block)
+            if apart and last[0] == name and words - last[2] <= SAME_PICTURE_GAP:
                 earlier = last[1]
-                if earlier.find(".//figcaption") is None and block.find(".//figcaption") is not None:
-                    earlier.drop_tree()
-                else:
-                    block.drop_tree()
+                gone = (
+                    earlier
+                    if earlier.find(".//figcaption") is None and block.find(".//figcaption") is not None
+                    else block
+                )
+                gone.drop_tree()
+                dropped.add(gone)
                 last = None
                 continue
             last = (name, block, words) if block is not None else None
         words += len((el.text or "").split()) + len((el.tail or "").split())
+
+
+def _apart(a: lxml.html.HtmlElement, b: lxml.html.HtmlElement) -> bool:
+    """Two different blocks, neither inside the other: two sizes of one picture in one figure
+    (a thumbnail and its zoomed copy) are not a repeat to drop."""
+    return a is not b and a not in b.iterancestors() and b not in a.iterancestors()
 
 
 def _picture_block(img: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
@@ -2226,7 +2256,8 @@ SIZED_NAME = re.compile(r"-\d{2,5}x\d{2,5}(\.\w+)$")
 # ("ssrcss-…-VisuallyHidden"), the NYT's "Credit..." before a photo's credit
 # ("…_accessibilityLabel"). Matched at the end of a class name, after a prefix or not.
 SCREEN_READER = re.compile(
-    r"(^|[\s_-])(sr-only|visually-?hidden|screen-?reader(-text|-only)?|accessibility-?label)(?=\s|$)", re.IGNORECASE
+    r"(^|[\s_-])(?<!not-)(sr-only|visually-?hidden|screen-?reader(-text|-only)?|accessibility-?label)(?=\s|$)",
+    re.IGNORECASE,
 )
 SCREEN_READER_MAX_WORDS = 12  # a label; a longer box (a chart's table, say) is left alone
 PULL_QUOTE = re.compile(r"pull-?quote", re.IGNORECASE)

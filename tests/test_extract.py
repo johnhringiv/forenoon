@@ -3533,3 +3533,48 @@ def test_a_picture_shown_twice_in_a_row_is_kept_once():
     assert srcs.count("https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg") == 1
     assert not any("scaled" in s for s in srcs) and srcs.count("https://blog.example/f.png") == 2
     assert body.find(".//figcaption").text == "Residents vote in Essex."
+
+
+def test_repeated_pictures_and_credits_on_odd_markup():
+    one = '<img src="https://s.example/a-300x200.jpg" width="800" height="600">'
+    two = '<img src="https://s.example/b.jpg" width="800" height="600">'
+    # Copies in one figure (a thumbnail and its zoomed copy) stay, caption and all; a figure
+    # already dropped is not looked at again.
+    body = sanitize(
+        lxml.html.fromstring(
+            f'<div><figure>{one}<img src="https://s.example/a-1024x768.jpg" width="800" height="600">'
+            f"<figcaption>Cap</figcaption></figure><figure>{one}</figure><figure>{one}{two}</figure>"
+            f"<figure>{two}<figcaption>Second</figcaption></figure></div>"
+        ),
+        "https://s.example/post",
+    )
+    assert "Cap" in body.text_content() and "Second" in body.text_content()
+    # A comment between a caption and its credit; a note number and a bracket get no space.
+    lead = lxml.html.fromstring(
+        '<div><div class="caption">Officials met in Riyadh.<!-- --><span class="credit">Saudi Press Agency</span>'
+        '</div><img src="https://s.example/c.jpg"></div>'
+    )
+    caption = extract_module._beside_caption(lead.find(".//img"), lead)
+    assert caption.text == "Officials met in Riyadh. Saudi Press Agency"
+    fig = sanitize(
+        lxml.html.fromstring(
+            '<div><figure><img src="https://s.example/d.jpg"><figcaption>A coral.<sup>1</sup> '
+            '(<span class="credit">AP</span>)</figcaption></figure></div>'
+        ),
+        "https://s.example/post",
+    )
+    assert fig.find(".//figcaption").text_content() == "A coral.1 (AP)"
+    # Two hidden labels that are their box's only words stay, and Tailwind's not-sr-only is shown.
+    page = forms_page(
+        '<ol><li>Mail Shoppe <span class="bar"><span class="sr-only">2007–2008</span> <span class="sr-only">Shut Down</span></span></li>'
+        '<li>Air <span class="md:not-sr-only">Bulgarian</span></li></ol>'
+    )
+    text = " ".join(extract("https://blog.example/post", page, "", "page").body.text_content().split())
+    assert "2007–2008 Shut Down" in text and "Air Bulgarian" in text
+    # Wikipedia's inline fraction: numerator and denominator stacked, "/" for screen readers.
+    page = forms_page(
+        '<p>The Bessel function of order <span class="sfrac"><span class="num">n + 2</span>'
+        '<span class="sr-only">/</span><span class="den">2</span></span> here.</p>'
+    )
+    text = " ".join(extract("https://en.wikipedia.org/wiki/F", page, "", "page").body.text_content().split())
+    assert "n + 2/2" in text
