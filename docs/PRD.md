@@ -426,7 +426,7 @@ All fetched content is treated as untrusted.
     screen readers, is dropped with the link.
   - A short label written for screen readers and hidden from sight (a box named `sr-only`,
     `visually-hidden`, `screen-reader-text` or an accessibility label) goes when its box has
-    other words that say it: the BBC's ", external" in every outside link, the NYT's
+    other visible words: the BBC's ", external" in every outside link, the NYT's
     "Credit..." before a photo's credit. One that is its box's only text stays (a bar drawn
     with CSS has no other words: "2007–2008, Shut Down"), and so does one without letters
     (Wikipedia's "/" between a stacked fraction's parts).

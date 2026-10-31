@@ -2056,8 +2056,11 @@ def _drop_screen_reader_text(root: lxml.html.HtmlElement) -> None:
         if not isinstance(el.tag, str) or el.getparent() is None:
             continue
         names = el.get("class") or ""
-        if SCREEN_READER.search(names):
+        if SCREEN_READER.search(names) and not RESPONSIVE_SR_SHOWN.search(names):
             if _redundant_label(el, shown):
+                following = el.getnext()
+                if following is not None and isinstance(following.tag, str) and not (el.tail or "")[:1].isspace():
+                    el.tail = " " + (el.tail or "")  # it stood between "…on Sept. 28" and the credit
                 el.drop_tree()
         elif PULL_QUOTE.search(names) and (el.get("aria-hidden") or "").strip().lower() == "true":
             el.drop_tree()
@@ -2085,7 +2088,9 @@ def _redundant_label(el: lxml.html.HtmlElement, shown: dict[lxml.html.HtmlElemen
 
 
 def _chars(box: lxml.html.HtmlElement) -> int:
-    return len("".join(box.text_content().split()))
+    """Letters a reader sees in the box: not a script's, a style's or a drawing's title."""
+    texts = box.xpath(".//text()[not(ancestor::script or ancestor::style or ancestor::svg)]")
+    return sum(len("".join(text.split())) for text in texts)
 
 
 def _self_mark(el: lxml.html.HtmlElement, link: bool = False) -> bool:
@@ -2119,7 +2124,9 @@ def _drop_self_links(root: lxml.html.HtmlElement) -> None:
             heading.drop_tree()
             continue
         last = heading[-1] if len(heading) else None  # the link already unwrapped into the heading's id
-        if last is not None and isinstance(last.tag, str) and _self_mark(last) and not (last.tail or "").strip():
+        if last is None or not isinstance(last.tag, str) or last.tag in ("code", "kbd", "samp"):
+            continue  # "Comments start with <code>#</code>"
+        if _self_mark(last) and not (last.tail or "").strip():
             last.drop_tree()
 
 
@@ -2133,9 +2140,9 @@ def _separate_credits(root: lxml.html.HtmlElement) -> None:
 def _space_boxes(caption: lxml.html.HtmlElement) -> None:
     """Put a space between side-by-side boxes of a caption where the first ends a sentence or
     the second is a credit. Each box's children are walked once with the text so far."""
-    for parent in [caption, *caption.iterdescendants()]:
-        if not isinstance(parent.tag, str):
-            continue
+    for parent in caption.xpath(
+        "descendant-or-self::*[not(ancestor-or-self::code or ancestor-or-self::pre or ancestor-or-self::math)]"
+    ):
         before = parent.text or ""
         for el in list(parent):
             if isinstance(el.tag, str):
@@ -2165,29 +2172,37 @@ def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
     the article's own copy at another size (VTDigger's photo-scaled.jpg, photo-1200x900.jpg).
     The copy with a caption stays. Only pictures standing alone, with next to no text
     between them: the same small picture used again inline (a formula, an icon) is meant."""
-    last: tuple[str, lxml.html.HtmlElement, int] | None = None
-    dropped: set[lxml.html.HtmlElement] = set()
+    # First the pictures in order, with the words before each (a block's tail counts once
+    # the block is behind), read without changing the tree; then the drops.
+    seen: list[tuple[lxml.html.HtmlElement, int]] = []
     words = 0
-    for el in list(root.iter()):
+    for event, el in etree.iterwalk(root, events=("start", "end")):
         if not isinstance(el.tag, str):
             continue
-        if el.tag == "img" and not any(a in dropped for a in el.iterancestors()) and el.getparent() is not None:
-            block = _picture_block(el)
-            name = re.sub(r"-scaled(\.\w+)$", r"\1", _picture_name(el.get("src") or ""))
-            apart = last is not None and block is not None and _apart(last[1], block)
-            if apart and last[0] == name and words - last[2] <= SAME_PICTURE_GAP:
-                earlier = last[1]
-                gone = (
-                    earlier
-                    if earlier.find(".//figcaption") is None and block.find(".//figcaption") is not None
-                    else block
-                )
-                gone.drop_tree()
-                dropped.add(gone)
-                last = None
-                continue
-            last = (name, block, words) if block is not None else None
-        words += len((el.text or "").split()) + len((el.tail or "").split())
+        if event == "start":
+            if el.tag == "img":
+                seen.append((el, words))
+            words += len((el.text or "").split())
+        else:
+            words += len((el.tail or "").split())
+    boxes: dict[lxml.html.HtmlElement, tuple[bool, int]] = {}
+    last: tuple[str, lxml.html.HtmlElement, int] | None = None
+    dropped: set[lxml.html.HtmlElement] = set()
+    for img, at in seen:
+        if any(a in dropped for a in img.iterancestors()):
+            continue
+        block = _picture_block(img, boxes)
+        name = re.sub(r"-scaled(\.\w+)$", r"\1", _picture_name(img.get("src") or ""))
+        apart = last is not None and block is not None and _apart(last[1], block)
+        if apart and last[0] == name and at - last[2] <= SAME_PICTURE_GAP:
+            earlier = last[1]
+            captioned = block.find(".//figcaption") is not None
+            gone = earlier if earlier.find(".//figcaption") is None and captioned else block
+            gone.drop_tree()
+            dropped.add(gone)
+            last = None
+            continue
+        last = (name, block, at) if block is not None else None
 
 
 def _apart(a: lxml.html.HtmlElement, b: lxml.html.HtmlElement) -> bool:
@@ -2196,23 +2211,23 @@ def _apart(a: lxml.html.HtmlElement, b: lxml.html.HtmlElement) -> bool:
     return a is not b and a not in b.iterancestors() and b not in a.iterancestors()
 
 
-def _picture_block(img: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
-    """The block that holds only this picture (and its caption), or None when it sits in text."""
+def _picture_block(
+    img: lxml.html.HtmlElement, boxes: dict[lxml.html.HtmlElement, tuple[bool, int]]
+) -> lxml.html.HtmlElement | None:
+    """The block that holds only this picture (and its caption), or None when it sits in text.
+    `boxes` keeps each box's (has text, pictures) so a box of many pictures is read once."""
     box = img
     while box.getparent() is not None and box.getparent().tag in ("a", "picture", "span"):
         box = box.getparent()
     parent = box.getparent()
-    if parent is None:
+    if parent is None or parent.tag not in ("figure", "p", "div"):
         return None
-    if parent.tag == "figure":
-        return parent if len(parent.findall(".//img")) == 1 else None
-    if (
-        parent.tag in ("p", "div")
-        and not " ".join(parent.text_content().split())
-        and len(parent.findall(".//img")) == 1
-    ):
-        return parent
-    return None
+    if parent not in boxes:
+        boxes[parent] = (bool(parent.text_content().split()), len(parent.findall(".//img")))
+    has_text, pictures = boxes[parent]
+    if pictures != 1 or (parent.tag != "figure" and has_text):
+        return None
+    return parent
 
 
 def _link_cards(root: lxml.html.HtmlElement) -> None:
@@ -2291,6 +2306,7 @@ SCREEN_READER = re.compile(
     r"(^|[\s_-])(?<!not-)(sr-only|visually-?hidden|screen-?reader(-text|-only)?|accessibility-?label)(?=\s|$)",
     re.IGNORECASE,
 )
+RESPONSIVE_SR_SHOWN = re.compile(r"(?<![\w-])(sm|md|lg|xl|2xl):not-sr-only\b")  # shown on wider screens
 SCREEN_READER_MAX_WORDS = 12  # a label; a longer box (a chart's table, say) is left alone
 PULL_QUOTE = re.compile(r"pull-?quote", re.IGNORECASE)
 SELF_LINK_MARKS = {"#", "¶", "§", "🔗", "⚓"}  # a heading's link to itself, shown on hover

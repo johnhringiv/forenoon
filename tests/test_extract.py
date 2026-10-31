@@ -3619,3 +3619,25 @@ def test_many_labels_stay_fast_and_more_heading_marks_go():
     )
     assert [" ".join(h.text_content().split()) for h in body.iter("h2", "h3")] == ["1. CSS functions", "Docs"]
     assert body.find(".//figcaption").text_content() == 'Text, AP and "so it goes." Next'
+
+
+def test_many_pictures_in_one_box_stay_fast():
+    pictures = "".join(f'<img src="https://s.example/{i}.jpg"><br>Line {i}<br>' for i in range(4000))
+    start = time.monotonic()
+    body = sanitize(lxml.html.fromstring(f"<div><div>{pictures}</div></div>"), "https://blog.example/post")
+    assert time.monotonic() - start < 5 and len(body.findall(".//img")) == 4000
+
+
+def test_a_dropped_label_between_boxes_leaves_a_space():
+    # NYT, a caption without a final period: "Credit..." was all that stood between them.
+    fig = sanitize(
+        lxml.html.fromstring(
+            '<div><figure><img src="https://s.example/a.jpg"><figcaption><span>Kyiv, on Sept. 28</span>'
+            '<span class="css-3hmc0r"><span class="x_accessibilityLabel">Credit...</span><span>Finbarr O’Reilly</span>'
+            "</span></figcaption></figure>"
+            "<h2>Comments start with <code>#</code></h2><p>Text.</p></div>"
+        ),
+        "https://www.nytimes.com/x",
+    )
+    assert " ".join(fig.find(".//figcaption").text_content().split()) == "Kyiv, on Sept. 28 Finbarr O’Reilly"
+    assert fig.find(".//h2").text_content() == "Comments start with #"
