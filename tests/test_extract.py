@@ -3538,10 +3538,24 @@ def test_a_headings_mark_for_itself_goes():
         '<h2 id="t"><a href="#t"><span>Training at scale</span><span class="opacity-0">#</span></a></h2><p>Text.</p>'
         '<a href="#v"><h2 id="v">Victoria</h2><h2 class="hash">#</h2></a><p>Text.</p>'
         '<h2>Old post <a href="" title="Permalink to this post">⚓</a></h2><p>Text.</p>'
+        '<h2 id="c">Changelog<a class="headerlink" href="#c">¶</a></h2><p>Text.</p>'
+        '<h2 id="s">Scope<a href="https://blog.example/post#s">§</a></h2><p>Text.</p>'
+        '<h2 id="r">Rust<a href="#r"><span>🔗</span></a></h2><p>Text.</p>'
+        "<h2>Learning F<sub>#</sub></h2><p>Text.</p>"
     )
     heads = [_text(h) for h in extract("https://blog.example/post", page, "", "page").body.iter("h2", "h3")]
-    assert {"IPO Pumping", "See the result", "Training at scale", "Victoria", "Old post"} <= set(heads)
-    assert not [h for h in heads if h.endswith(("#", "⚓"))]
+    assert heads == [
+        "Post",
+        "IPO Pumping",
+        "See the result",
+        "Training at scale",
+        "Victoria",
+        "Old post",
+        "Changelog",
+        "Scope",
+        "Rust",
+        "Learning F#",
+    ]
 
 
 def test_icon_and_empty_links_in_headings():
@@ -3566,9 +3580,15 @@ def test_a_captions_credit_is_spaced_from_its_text():
         '(<span class="credit">AP</span>)</figcaption></figure>'
         '<figure><img src="https://s.example/d.jpg"><figcaption>Text<span class="credit">, AP</span> and '
         '"so it goes."<span>Next</span></figcaption></figure>'
+        '<figure><img src="https://s.example/e.jpg"><figcaption><span>the players’</span><span>union</span></figcaption></figure>'
     )
     captions = [c.text_content() for c in body.iter("figcaption")]
-    assert captions == ["A blaze in Kyiv. Genya Savilov / AFP", "A coral.1 (AP)", 'Text, AP and "so it goes." Next']
+    assert captions == [
+        "A blaze in Kyiv. Genya Savilov / AFP",
+        "A coral.1 (AP)",
+        'Text, AP and "so it goes." Next',
+        "the players’union",
+    ]
     # A lead photo's caption beside it, a comment between its text and credit (React's "<!-- -->").
     lead = lxml.html.fromstring(
         '<div><div class="caption">Officials met in Riyadh.<!-- --><span class="credit">Saudi Press Agency</span>'
@@ -3634,5 +3654,7 @@ def test_many_labels_pictures_and_credits_stay_fast():
         + "".join(f"<span>Part {i}.</span>" for i in range(3000))
         + "</figcaption></figure>"
     )
+    icons = '<a href="#x"><svg viewBox="0 0 1 1"></svg><span>Link to this heading</span></a>' * 4000
+    assert _text(quick(f"<h2>Title{icons}</h2>")) == "Title"
     pictures = "".join(f'<img src="https://s.example/{i}.jpg"><br>Line {i}<br>' for i in range(4000))
     assert len(quick(f"<div>{pictures}</div>").findall(".//img")) == 4000

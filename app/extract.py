@@ -1981,7 +1981,7 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
         if not isinstance(el.tag, str) or (marked and el.get(formulas.SHADOW)):
             el.drop_tree()
     _drop_screen_reader_text(root)
-    _drop_self_links(root)
+    _drop_self_links(root, base_url)
     _separate_credits(root)
     _unnest_empty(root)
     _picture_fallbacks(root)
@@ -2148,35 +2148,50 @@ def _self_mark(el: lxml.html.HtmlElement, link: bool = False) -> bool:
     return (text in SELF_LINK_MARKS or (link and not text)) and el.find(".//img") is None
 
 
-def _drop_self_links(root: lxml.html.HtmlElement) -> None:
+def _drop_self_links(root: lxml.html.HtmlElement, base_url: str = "") -> None:
     """Drop a heading's link to its own section ("#", "¶"), which themes show on hover; left
     in, every heading ends in it ("IPO Pumping#"). Also the mark alone at the end of such a
-    link ("Title #"), an icon link beside the heading's words whose label is hidden by a
-    class we cannot read ("Link to this heading1. CSS functions"), and a heading that is
+    link ("Title #"), an empty one (Docusaurus's), an icon link beside the heading's words
+    that says nothing else ("Link to this heading1. CSS functions"), and a heading that is
     only the mark (one theme sets it as an <h2>)."""
     headings = ".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]"
     for heading in root.xpath(headings):
         if heading.getparent() is None:
             continue
         dropped = False
+        total = _chars(heading)  # counted once; less each link dropped
         for a in list(heading.iter("a")):
-            href = (a.get("href") or "").strip()
-            if a.getparent() is None or (href and not href.startswith("#")):
+            if a.getparent() is None or not _in_page(a.get("href"), base_url):
                 continue
             icon = a.find(".//svg") is not None and HEADING_LINK_LABEL.match(" ".join(a.text_content().split()))
-            if _self_mark(a, link=True) or (icon and _chars(heading) > _chars(a)):
+            own = _chars(a)
+            if _self_mark(a, link=True) or (icon and total > own):
                 a.drop_tree()
-                dropped = True
+                dropped, total = True, total - own
             elif len(a) and isinstance(a[-1].tag, str) and _self_mark(a[-1]) and not (a[-1].tail or "").strip():
+                total -= _chars(a[-1])
                 a[-1].drop_tree()
-        if _self_mark(heading) or (dropped and not _chars(heading) and heading.find(".//img") is None):
+        if _self_mark(heading) or (dropped and not total and heading.find(".//img") is None):
             heading.drop_tree()
             continue
         last = heading[-1] if len(heading) else None  # the link already unwrapped into the heading's id
-        if last is None or not isinstance(last.tag, str) or last.tag in ("code", "kbd", "samp"):
-            continue  # "Comments start with <code>#</code>"
+        if last is None or not isinstance(last.tag, str) or last.tag in ("code", "kbd", "samp", "sub", "sup"):
+            continue  # "Comments start with <code>#</code>", "F<sub>#</sub>"
         if _self_mark(last) and not (last.tail or "").strip():
             last.drop_tree()
+
+
+def _in_page(href: str | None, base_url: str) -> bool:
+    """A link to this page: "#x", none at all, or the page's own address with a fragment."""
+    href = (href or "").strip()
+    if not href or href.startswith("#"):
+        return True
+    if "#" not in href or not base_url:
+        return False
+    try:
+        return urlsplit(_join(base_url, href))._replace(fragment="") == urlsplit(base_url)._replace(fragment="")
+    except ValueError:
+        return False
 
 
 def _separate_credits(root: lxml.html.HtmlElement) -> None:
@@ -2192,7 +2207,7 @@ def _space_boxes(caption: lxml.html.HtmlElement) -> None:
     for parent in caption.xpath(
         "descendant-or-self::*[not(ancestor-or-self::code or ancestor-or-self::pre or ancestor-or-self::math)]"
     ):
-        before = parent.text or ""
+        before = (parent.text or "")[-2:]  # the end of the text so far is all that is read
         for el in list(parent):
             if isinstance(el.tag, str):
                 text = el.text_content()
@@ -2203,8 +2218,8 @@ def _space_boxes(caption: lxml.html.HtmlElement) -> None:
                     else:
                         parent.text = (parent.text or "") + " "
                     before += " "
-                before += text
-            before += el.tail or ""  # not a comment's text: React writes "<!-- -->" between them
+                before = (before + text)[-2:]
+            before = (before + (el.tail or ""))[-2:]  # not a comment's text: React writes "<!-- -->" between them
 
 
 def _needs_space(before: str, text: str, el: lxml.html.HtmlElement) -> bool:
@@ -2212,7 +2227,9 @@ def _needs_space(before: str, text: str, el: lxml.html.HtmlElement) -> bool:
         return False
     if before[-1].isspace() or text[0].isspace() or before[-1] in "([{“‘" or text[0] in ",.;:!?)]":
         return False
-    ends = before[-1] in ".!?…”’)]" or (before[-1] in "\"'" and before[-2:-1] in tuple(".!?"))
+    # A closing quote or apostrophe ends a sentence only after its stop ("…so it goes."), not
+    # in "the players’ union".
+    ends = before[-1] in ".!?…”)]" or (before[-1] in "\"'’" and before[-2:-1] in tuple(".!?"))
     return ends or bool(CREDIT_NAME.search(el.get("class") or ""))
 
 
