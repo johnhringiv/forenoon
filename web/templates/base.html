@@ -52,8 +52,10 @@
   });
 })();
 </script>
-<title>{% block title %}Forenoon{% endblock %}</title>
-<link rel="icon" href="/favicon.ico" sizes="32x32">
+{% if let Some(demo) = crate::pages::demo_nav(nav.as_ref()) %}<title>{{ demo.title }}</title>
+<link rel="canonical" href="{{ demo.canonical }}">
+{% else %}<title>{% block title %}Forenoon{% endblock %}</title>
+{% endif %}<link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
