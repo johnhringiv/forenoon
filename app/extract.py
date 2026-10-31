@@ -2074,9 +2074,10 @@ def _drop_screen_reader_text(root: lxml.html.HtmlElement) -> None:
             inside += 1
     for el in drops:
         following = el.getnext()
-        between = following is not None and isinstance(following.tag, str) and not (el.tail or "")[:1].isspace()
-        if _is_label(el) and between:
-            el.tail = " " + (el.tail or "")  # it stood between "…on Sept. 28" and the credit
+        while following is not None and not isinstance(following.tag, str):
+            following = following.getnext()  # a comment between them: React's "<!-- -->"
+        if _is_label(el) and following is not None and not el.tail:
+            el.tail = " "  # it stood between "…on Sept. 28" and the credit
         el.drop_tree()
 
 
@@ -2171,12 +2172,15 @@ def _drop_self_links(root: lxml.html.HtmlElement, base_url: str = "") -> None:
             elif len(a) and isinstance(a[-1].tag, str) and _self_mark(a[-1]) and not (a[-1].tail or "").strip():
                 total -= _chars(a[-1])
                 a[-1].drop_tree()
-        if _self_mark(heading) or (dropped and not total and heading.find(".//img") is None):
+        whole = heading.text_content().strip() in SELF_LINK_MARKS - {"§"}  # "§" may be a section break
+        if whole or (dropped and not total and heading.find(".//img") is None):
             heading.drop_tree()
             continue
         last = heading[-1] if len(heading) else None  # the link already unwrapped into the heading's id
         if last is None or not isinstance(last.tag, str) or last.tag in ("code", "kbd", "samp", "sub", "sup"):
             continue  # "Comments start with <code>#</code>", "F<sub>#</sub>"
+        if last.tag == "a" and not _in_page(last.get("href"), base_url):
+            continue  # a mark that links to another page
         if _self_mark(last) and not (last.tail or "").strip():
             last.drop_tree()
 
@@ -2266,10 +2270,10 @@ def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
             earlier = last[1]
             first, second = _caption_text(earlier), _caption_text(block)
             if not (first and second and first != second):  # two captions that differ say two things
-                gone = earlier if not first and second else block
+                gone, kept = (earlier, block) if not first and second else (block, earlier)
                 gone.drop_tree()
                 dropped.add(gone)
-                last = None
+                last = (name, kept)  # a third copy is compared with the one kept
                 continue
         last = (name, block) if block is not None else None
 

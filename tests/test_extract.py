@@ -3558,6 +3558,15 @@ def test_a_headings_mark_for_itself_goes():
     ]
 
 
+def test_marks_that_are_not_a_headings_own_stay():
+    body = _sanitized(
+        '<h2>Intro<a href="https://ex.com/b#intro">#</a></h2><h2>§</h2>'
+        '<p>foo<span class="sr-only">x</span>bar<b>baz</b></p>'
+    )
+    assert [_text(h) for h in body.iter("h2")] == ["Intro#", "§"]
+    assert _text(body.find(".//p")) == "foobarbaz"
+
+
 def test_icon_and_empty_links_in_headings():
     body = _sanitized(
         # joshwcomeau: an icon link with a label we cannot see is hidden; Docusaurus: an empty link.
@@ -3596,6 +3605,11 @@ def test_a_captions_credit_is_spaced_from_its_text():
     )
     caption = extract_module._beside_caption(lead.find(".//img"), lead)
     assert caption.text == "Officials met in Riyadh. Saudi Press Agency"
+    lead = lxml.html.fromstring(
+        '<div><div class="caption"><span>On Sept. 28</span><span><span class="x_accessibilityLabel">Credit...</span>'
+        '<!-- --><span>Finbarr O’Reilly</span></span></div><img src="https://s.example/d.jpg"></div>'
+    )
+    assert extract_module._beside_caption(lead.find(".//img"), lead).text == "On Sept. 28 Finbarr O’Reilly"
 
 
 def test_a_picture_shown_twice_in_a_row_is_kept_once():
@@ -3633,6 +3647,9 @@ def test_copies_of_a_picture_that_say_different_things_stay():
     )
     assert [_text(c) for c in body.iter("figcaption")] == ["Thumb caption", "Full caption, longer."]
     assert len(body.findall(".//img")) == 4 and "An important paragraph." in _text(body)
+    # Three copies in a row keep one.
+    body = _sanitized(f"<figure>{two}</figure><figure>{two}</figure><figure>{two}<figcaption>Cap</figcaption></figure>")
+    assert len(body.findall(".//img")) == 1 and _text(body) == "Cap"
 
 
 def test_many_labels_pictures_and_credits_stay_fast():
