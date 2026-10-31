@@ -129,6 +129,17 @@ pub(crate) struct DemoNav {
     pub(crate) personas: Vec<Switch>,
     /// This persona's interests, as the model is given them: the demo's explanation of its picks.
     pub(crate) interests: String,
+    /// The page's title for search results and tabs, naming the persona: `Mara's archive · Forenoon demo`.
+    pub(crate) title: String,
+    /// The page's own address, without a query, for `<link rel="canonical">`. https: the public
+    /// demo is served no other way (the sitemap's addresses are the same).
+    pub(crate) canonical: String,
+}
+
+/// The demo half of a page's nav, for the page's head: on a demo host, the title and canonical
+/// address name the persona's page.
+pub(crate) fn demo_nav(nav: Option<&Nav>) -> Option<&DemoNav> {
+    nav.and_then(|nav| nav.demo.as_ref())
 }
 
 pub(crate) struct Switch {
@@ -191,7 +202,18 @@ impl Viewer {
                 current: persona.id == self.user.id,
             })
             .collect();
-        let demo = DemoNav { personas, interests: self.user.interests.trim().to_owned() };
+        let (page, path) = match current {
+            "archive" => ("archive", "/archive"),
+            "sources" => ("sources", "/sources"),
+            _ => ("newsstand", "/"),
+        };
+        let host = demo.personas.iter().find(|persona| persona.id == self.user.id).map_or("", |persona| &persona.host);
+        let demo = DemoNav {
+            personas,
+            interests: self.user.interests.trim().to_owned(),
+            title: format!("{}'s {page} · Forenoon demo", self.user.name),
+            canonical: format!("https://{host}{path}"),
+        };
         // A visitor came from the landing page, so that is where the wordmark goes back to.
         let home = state.landing.clone();
         Ok(Some(Nav { name: self.user.name.clone(), admin: false, problems: 0, current, home, demo: Some(demo) }))
@@ -261,6 +283,22 @@ pub fn secured(mut response: Response) -> Response {
     // Pages are never stored; a thumbnail sets its own, so it is not fetched again on every visit.
     headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     headers.insert("x-robots-tag", HeaderValue::from_static("noindex"));
+    response
+}
+
+/// A proxy in front (Cloudflare's, say) passes the response on as it is: without this, it
+/// decompresses ours and compresses it again, bigger and differently on every request.
+pub async fn no_transform(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    let value = match headers.get(header::CACHE_CONTROL).and_then(|value| value.to_str().ok()) {
+        Some(value) if value.split(',').any(|part| part.trim().eq_ignore_ascii_case("no-transform")) => {
+            return response;
+        }
+        Some(value) => HeaderValue::from_str(&format!("{value}, no-transform")).expect("a header with a word added"),
+        None => HeaderValue::from_static("no-transform"),
+    };
+    headers.insert(header::CACHE_CONTROL, value);
     response
 }
 

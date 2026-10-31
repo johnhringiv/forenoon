@@ -2,7 +2,9 @@
 # app image: it is large, and it is the only container that reads subscriber cookies. Chrome
 # runs unchanged on a virtual screen (Xvfb), as an ordinary browser rather than a headless one.
 FROM debian:bookworm-slim
-ARG PLAYWRIGHT_VERSION=1.55.0
+# 1.64.1 brings Chromium 156, whose bundled Brotli has the fix for CVE-2026-111497 (an
+# out-of-bounds write when decoding a site's "Content-Encoding: br" response).
+ARG PLAYWRIGHT_VERSION=1.64.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 python3-pip tzdata xvfb \
     && pip install --no-cache-dir --break-system-packages playwright==${PLAYWRIGHT_VERSION} \

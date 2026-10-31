@@ -263,7 +263,7 @@ def _browse(sync_playwright, url: str, cookie: str, domain: str, state: Path) ->
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=False,
-            args=["--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+            args=["--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"],
             ignore_default_args=["--enable-automation"],
         )
         try:
@@ -495,6 +495,7 @@ def _sandboxed(playwright, proxy_port: int):
         proxy={"server": f"http://127.0.0.1:{proxy_port}", "bypass": "<-loopback>"},
         args=[
             "--disable-dev-shm-usage",
+            "--disable-gpu",
             "--disable-blink-features=AutomationControlled",
             "--disable-quic",
             "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",

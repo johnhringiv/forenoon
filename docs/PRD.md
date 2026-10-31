@@ -343,6 +343,11 @@ All fetched content is treated as untrusted.
     out of the page and put back at the end of the article under "Notes", each with a link
     back. They are marked as footnotes so a reader that supports it shows them as pop-ups.
     Where a reference and its note link to each other, the later of the two is the note.
+    A link written against the page's `<base href>` or as the page's own address counts as
+    in-page, a trailing slash being no difference; a marker shown in brackets ("[1]",
+    Asciidoctor's) counts as its number. A note cited only from another note of the same list
+    is kept too, and then the notes keep the page's order. A note's own number, linked back to
+    the text, goes with the punctuation after it ("1. ").
   - Links to a heading on the same page stay links inside the book. Other in-page links
     still point at the site.
   - Inline code, callouts and asides (as block quotes), and comments (italic) and keywords
@@ -1293,9 +1298,14 @@ database with the pipeline.
 - **The landing host** (`FORENOON_WEB_LANDING`, a hostname). The project's public page,
   built into the program from `web/site`, is served at that hostname with its pictures, the
   icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
-  It carries `Cache-Control: public, max-age=300`. It and the demo hosts' three pages are the
-  only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
-  names it. Unset on an ordinary install.
+  It carries `Cache-Control: public, max-age=300`, and Cloudflare's Web Analytics beacon for
+  forenoon.dev, the one script its policy allows. It and the demo hosts' three pages are the
+  only pages meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
+  names it. Each demo page's title names the persona and the page ("Mara's archive ·
+  Forenoon demo"), and its canonical link is its own https address without a query. The
+  icons and the share card may be indexed on those hosts too, as may the landing page's
+  pictures; thumbnails, other sites' pictures, are disallowed in robots.txt and keep their
+  noindex. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
@@ -1315,7 +1325,11 @@ database with the pipeline.
   (`FORENOON_WEB_CLIENT_IP_HEADER`) only when the request came from a trusted address
   (`FORENOON_WEB_TRUSTED_PROXIES`, default loopback, which is where a tunnel sharing the
   container's network connects from); for a list such as `X-Forwarded-For`, the last entry.
-- Text responses are compressed (zstd, Brotli or gzip, as the browser asks). The form token is
+- Text responses are compressed (Brotli or gzip, as the browser asks), the landing page,
+  robots.txt and the sitemap included. Not zstd: Cloudflare takes only Brotli or gzip from
+  an origin, and Brotli is the smaller of the two on these pages anyway. Every response carries
+  `Cache-Control: no-transform`, so a proxy in front (Cloudflare's) passes the encoding on
+  rather than decompressing the response and compressing it again. The form token is
   sent under a fresh random mask on every page, so compressed sizes cannot reveal it next to
   text a visitor chose (BREACH). Pages may not be framed, opened windows keep no handle on
   them, and other sites cannot load their responses (`frame-ancestors 'none'`,

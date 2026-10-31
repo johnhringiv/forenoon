@@ -2,6 +2,7 @@
 // behind the tunnel as usual. When the origin cannot answer, the landing page is served from
 // a copy held at the edge (the static assets in wrangler.toml: web/site, bundled at deploy),
 // with a line saying the demo behind its links is away; a persona host gets a short notice.
+// The origin is asked for the encodings the visitor accepts (toOrigin).
 // Everything else, the pages' own errors included, passes through untouched. Deployed with
 // wrangler.toml beside this file; see docs/demo.md.
 
@@ -30,13 +31,33 @@ export default {
   async fetch(request, env) {
     let response;
     try {
-      response = await fetch(request);
+      response = await fetch(toOrigin(request));
     } catch {
       return outage(request, env);
     }
     return OUTAGE.has(response.status) ? outage(request, env) : response;
   },
 };
+
+// Cloudflare asks the origin for "br, gzip" whatever the visitor accepts, and the origin's
+// pages say no-transform, so Cloudflare cannot re-encode them: a visitor without Brotli was
+// sent the page uncompressed. The origin is asked instead for what the visitor accepts, of
+// the two encodings Cloudflare takes from an origin, and its answer passes through as it is.
+// Cloudflare overrides this header on its own unless the zone's Cache Rule sets Respect Strong
+// ETags (docs/demo.md), which forwards it.
+function toOrigin(request) {
+  const accepted = request.cf?.clientAcceptEncoding;
+  if (accepted === undefined) {
+    return request;
+  }
+  const ours = accepted
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => /^(br|gzip)\s*(;|$)/i.test(part));
+  const headers = new Headers(request.headers);
+  headers.set("accept-encoding", ours.join(", "));
+  return new Request(request, { headers });
+}
 
 async function outage(request, env) {
   const url = new URL(request.url);

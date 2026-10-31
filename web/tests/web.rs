@@ -2742,6 +2742,8 @@ async fn pages_are_compressed_and_the_form_token_never_reads_the_same_twice() {
     let request = Request::get("/login").header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
     let response = site.router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    // A proxy in front passes our encoding on rather than compressing the page again.
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store, no-transform");
     assert_eq!(response.headers()["cross-origin-opener-policy"], "same-origin");
     assert_eq!(response.headers()["cross-origin-resource-policy"], "same-origin");
     let csp = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
@@ -2780,7 +2782,7 @@ async fn icons_and_the_manifest_need_no_session() {
         let header = |name| response.headers().get(name).unwrap().to_str().unwrap().to_owned();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         assert_eq!(header(header::CONTENT_TYPE), media_type, "{path}");
-        assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400", "{path}");
+        assert_eq!(header(header::CACHE_CONTROL), "public, max-age=86400, no-transform", "{path}");
         // The share card may be shown on another site's page; nothing else may.
         let policy = if path.starts_with("/og.png") { "cross-origin" } else { "same-origin" };
         assert_eq!(header(header::HeaderName::from_static("cross-origin-resource-policy")), policy, "{path}");
@@ -2863,7 +2865,7 @@ async fn a_demo_host_shows_one_persona_to_anyone_read_only_and_without_a_session
     let (status, cookie, cache, page) = get("john.forenoon.test", "/").await;
     assert_eq!(status, StatusCode::OK);
     assert!(cookie.is_empty(), "no session for a visitor: {cookie}");
-    assert_eq!(cache, "public, max-age=300");
+    assert_eq!(cache, "public, max-age=300, no-transform");
     assert!(page.contains("Johns article") && !page.contains("Marys article"));
     // The personas to switch between, the persona's interests, and the buttons shown but inert.
     assert!(page.contains(r#"<span class="me">Reading as</span>"#), "{page}");
@@ -3040,7 +3042,12 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
     // The page, to anyone, meant to be found and kept by a cache; dressed like every other answer.
     let (status, (kind, cache, robots, cookie), csp, page) = get("Forenoon.Test:443", "/").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(kind.starts_with("text/html") && cache == "public, max-age=300" && robots.is_empty() && cookie.is_empty());
+    assert!(
+        kind.starts_with("text/html")
+            && cache == "public, max-age=300, no-transform"
+            && robots.is_empty()
+            && cookie.is_empty()
+    );
     assert!(csp && page.contains("A morning paper edited for one reader"), "{page}");
     // What a shared link's preview needs, X's card type and the picture's size among it.
     for tag in [
@@ -3051,6 +3058,31 @@ async fn the_landing_page_is_served_at_its_own_host_and_nothing_else_is() {
         r#"<meta name="twitter:card" content="summary_large_image">"#,
     ] {
         assert!(page.contains(tag), "{tag}");
+    }
+    // Its one script is Cloudflare's analytics beacon, in the page, and its policy allows that
+    // alone; no other page does.
+    assert!(page.contains(r#"<script defer src="https://static.cloudflareinsights.com/beacon.min.js""#));
+    let request = Request::get("/").header(header::HOST, "forenoon.test").body(Body::empty()).unwrap();
+    let response = site.router.clone().oneshot(request).await.unwrap();
+    let policy = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(policy.contains("script-src https://static.cloudflareinsights.com;"), "{policy}");
+    assert!(policy.contains("connect-src https://cloudflareinsights.com;"), "{policy}");
+    let login = Browser::default().get(&site, "/login").await;
+    assert!(!login.csp.contains("cloudflareinsights"), "{}", login.csp);
+    // Compressed like every other page, though the landing host answers it before the router:
+    // Brotli or gzip, never zstd, which Cloudflare does not pass on from an origin.
+    for (accepted, encoding) in
+        [("zstd, br, gzip", Some("br")), ("br", Some("br")), ("gzip", Some("gzip")), ("zstd", None)]
+    {
+        let request = Request::get("/")
+            .header(header::HOST, "forenoon.test")
+            .header(header::ACCEPT_ENCODING, accepted)
+            .body(Body::empty())
+            .unwrap();
+        let response = site.router.clone().oneshot(request).await.unwrap();
+        let sent = response.headers().get(header::CONTENT_ENCODING).map(|value| value.to_str().unwrap());
+        assert_eq!(sent, encoding, "{accepted}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=300, no-transform");
     }
     // Its pictures, and the icons it names.
     let (status, (kind, cache, _, _), _, _) = get("forenoon.test", "/images/kindle-cover.webp").await;
@@ -3145,10 +3177,29 @@ async fn the_landing_page_and_the_demo_hosts_pages_are_meant_to_be_found() {
 
     // A persona's pages may be indexed; its thumbnails, a page that is not there, and the
     // install's own pages may not.
-    for path in ["/", "/archive", "/sources"] {
-        let (status, (_, robots), _) = get("john.forenoon.test", path).await;
+    // Each names the persona in its title (the apostrophe escaped) and gives its own address, without a query, as canonical.
+    for (path, title) in [
+        ("/", "John&#39;s newsstand · Forenoon demo"),
+        ("/?show=rated", "John&#39;s newsstand · Forenoon demo"),
+        ("/archive", "John&#39;s archive · Forenoon demo"),
+        ("/sources", "John&#39;s sources · Forenoon demo"),
+    ] {
+        let (status, (_, robots), page) = get("john.forenoon.test", path).await;
         assert!(status == StatusCode::OK && robots.is_empty(), "{path}");
+        assert!(page.contains(&format!("<title>{title}</title>")), "{path}: {page}");
+        let canonical = format!("https://john.forenoon.test{}", path.split('?').next().unwrap());
+        assert!(page.contains(&format!(r#"<link rel="canonical" href="{canonical}">"#)), "{path}");
     }
+    // The mark may be found too, on the demo hosts and the landing host.
+    for host in ["john.forenoon.test", "forenoon.test"] {
+        for path in ["/favicon.ico", "/icon.svg", "/icon-512.png", "/og.png"] {
+            let (status, (_, robots), _) = get(host, path).await;
+            assert!(status == StatusCode::OK && robots.is_empty(), "{host}{path}");
+        }
+    }
+    // The install's own pages keep their usual title, and no canonical address.
+    let login = get("nas:8787", "/login").await.2;
+    assert!(login.contains("<title>") && !login.contains("Forenoon demo") && !login.contains("canonical"), "{login}");
     let (status, (_, robots), _) = get("john.forenoon.test", "/thumb/a1").await;
     assert!(status == StatusCode::OK && robots == "noindex");
     assert_eq!(get("nobody.forenoon.test", "/").await.1.1, "noindex");

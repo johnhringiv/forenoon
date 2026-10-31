@@ -164,27 +164,55 @@ names and one-line descriptions there in step with this page.
 The landing page is served by the web program itself, at the hostname in
 `FORENOON_WEB_LANDING` (`forenoon.dev`), so the public site is the same deploy as the demo
 behind it and needs nothing else running. On a persona host the wordmark at the top left
-leads back to it, so a visitor who came in from the landing page can return. It is one HTML page with its styles inline and no
-scripts, built into the binary from `web/site` with its pictures: a merge to `main` that
+leads back to it, so a visitor who came in from the landing page can return. It is one HTML page with its styles inline and one
+script, Cloudflare's Web Analytics beacon (in the page, not injected by Cloudflare, which the
+`no-transform` on every response stops; the page's CSP allows that script and its reports to
+`cloudflareinsights.com`, and no other page's does), built into the binary from `web/site` with its pictures: a merge to `main` that
 changes it reaches the site with the next image. Only the page, its pictures, the icons,
 `/robots.txt`, `/sitemap.xml` and the health check answer on that host; everything else there
 is 404. The sitemap lists the landing page and each persona's Newsstand, Archive and Sources
 (all https); each persona host's own `/robots.txt` names it, which is what lets one sitemap
-list another host's pages. Cloudflare's managed robots.txt, when it is on, is put in front of
+list another host's pages. A persona page's title names the persona and the page, and its
+canonical link is its own https address, so the nine pages are not taken for copies of one
+another; the icons and the share card are left indexable for an image search, and the
+thumbnails, other sites' pictures, are not. Cloudflare's managed robots.txt, when it is on, is put in front of
 ours. The Kindle pictures are the
 device's own screenshots (1264 by 1680) saved as WebP; the newsstand picture is the README's,
 taken with `tools/screenshots.py`, and should be retaken from a persona's demo host once the
 demo install runs, so that it shows the persona switcher rather than an admin's pages.
 
 Route the landing hostname to the web pages like the persona hostnames. The page and the
-persona pages carry `Cache-Control: public`, so Cloudflare's cache serves a busy day. When the
+persona pages carry `Cache-Control: public`, so Cloudflare's cache serves a busy day.
+
+One Cache Rule on the zone, matching `forenoon.dev` and every subdomain, makes the pages'
+compression pass through Cloudflare untouched. Cloudflare otherwise asks the origin for
+`br, gzip` whatever the visitor accepts (a Worker cannot change that), and since every response
+says `no-transform` it cannot re-encode the answer, so a visitor without Brotli got the page
+uncompressed. The rule sets Respect Strong ETags, which forwards the visitor's own
+`Accept-Encoding` to the origin, and Vary with `accept-encoding` normalized, so the cache keeps
+one copy per encoding and never hands one visitor's encoding to another. It also says to
+respect the origin's browser cache time: without that, a cache rule replaces `max-age=300`
+with the zone's default of four hours. Bypassing the cache is not an option here (Cloudflare
+refuses it alongside Respect Strong ETags), so the pages are cached for their five minutes;
+the admin host's pages say `no-store` and never are. As API action parameters:
+`{"respect_strong_etags": true, "browser_ttl": {"mode": "respect_origin"}, "vary": {"default": {"action": "bypass"}, "headers": {"accept-encoding": {"action": "normalize"}}}}`.
+Browsers get the origin's Brotli and gzip-only clients its gzip, byte for byte.
+
+When the
 deploy is down (the NAS rebooting, the tunnel gone), a Cloudflare Worker,
 `deploy/cloudflare/outage-worker.js`, steps in as gotflashes's does: on `forenoon.dev` it
 serves the landing page itself from a copy of `web/site` bundled with the Worker, with a line
 under the masthead saying the demo behind its links is away; on a persona host it shows a
-short notice. It passes every other answer through, the pages' own errors included. The copy is
+short notice. It passes every other answer through, the pages' own errors included. It asks
+the origin for the visitor's own encodings, the Brotli and gzip among them (the app offers no
+other), which reach the origin through the Cache Rule above. The copy is
 taken at deploy time, so a merge to `main` that changes `web/site`, `web/icons` or
 `deploy/cloudflare` deploys the Worker again (`.github/workflows/outage-worker.yml`, with the
 Cloudflare API token and account id as repository secrets; the token needs Workers Scripts: Edit
 on the account, and Workers Routes: Edit and Zone: Read on the forenoon.dev zone); `npx wrangler deploy` from that folder does the same by
-hand. Its routes cover `forenoon.dev` and every subdomain.
+hand. Its routes cover `forenoon.dev` and every subdomain. Set both routes' failure mode to
+**Fail open** in the dashboard (Workers & Pages → the Worker → Settings → Domains & Routes →
+each route; or `request_limit_fail_open` on each of the zone's Worker routes through the
+API), once; wrangler cannot set it, and a redeploy keeps it. Both are set. Then if the Worker cannot
+run (the free plan's daily request limit reached, say), requests go straight to the origin and
+visitors see the site as usual, only without the outage copy, rather than Cloudflare's error 1027.
