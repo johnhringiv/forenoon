@@ -2050,45 +2050,93 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
 def _drop_screen_reader_text(root: lxml.html.HtmlElement) -> None:
     """Drop labels written for screen readers and hidden from sight (BBC's ", external", the
     NYT's "Credit..."), and pull quotes the page hides from screen readers because they repeat
-    the text (the FT's). Not every aria-hidden box: charts drawn twice and lazy pictures use it."""
-    shown: dict[lxml.html.HtmlElement, int] = {}  # a box's letters outside its labels, counted once
-    for el in list(root.iter()):
-        if not isinstance(el.tag, str) or el.getparent() is None:
+    the text (the FT's). Not every aria-hidden box: charts drawn twice and lazy pictures use it.
+
+    A label goes when its box shows other characters (`_redundant_label`). The counts come
+    from one walk up the tree, so nested boxes cost no more than flat ones."""
+    shown, hidden, pictured = _shown_counts(root)
+    drops: list[lxml.html.HtmlElement] = []
+    inside = 0  # how many boxes above are already being dropped
+    for event, el in etree.iterwalk(root, events=("start", "end")):
+        if not isinstance(el.tag, str):
+            continue
+        if event == "end":
+            if drops and drops[-1] is el:
+                inside -= 1
+            continue
+        if inside or el.getparent() is None:
             continue
         names = el.get("class") or ""
-        if SCREEN_READER.search(names) and not RESPONSIVE_SR_SHOWN.search(names):
-            if _redundant_label(el, shown):
-                following = el.getnext()
-                if following is not None and isinstance(following.tag, str) and not (el.tail or "")[:1].isspace():
-                    el.tail = " " + (el.tail or "")  # it stood between "…on Sept. 28" and the credit
-                el.drop_tree()
-        elif PULL_QUOTE.search(names) and (el.get("aria-hidden") or "").strip().lower() == "true":
-            el.drop_tree()
+        label = _is_label(el)
+        pulled = not label and PULL_QUOTE.search(names) and (el.get("aria-hidden") or "").strip().lower() == "true"
+        if pulled or (label and _redundant_label(el, shown, hidden, pictured)):
+            drops.append(el)
+            inside += 1
+    for el in drops:
+        following = el.getnext()
+        between = following is not None and isinstance(following.tag, str) and not (el.tail or "")[:1].isspace()
+        if _is_label(el) and between:
+            el.tail = " " + (el.tail or "")  # it stood between "…on Sept. 28" and the credit
+        el.drop_tree()
 
 
-def _redundant_label(el: lxml.html.HtmlElement, shown: dict[lxml.html.HtmlElement, int]) -> bool:
+def _is_label(el: lxml.html.HtmlElement) -> bool:
+    names = el.get("class") or ""
+    return bool(SCREEN_READER.search(names)) and not RESPONSIVE_SR_SHOWN.search(names)
+
+
+def _shown_counts(
+    root: lxml.html.HtmlElement,
+) -> tuple[dict[lxml.html.HtmlElement, int], dict[lxml.html.HtmlElement, int], set[lxml.html.HtmlElement]]:
+    """For every box: the characters a reader sees in it (not a script's, a style's or a
+    drawing's), those of them inside screen-reader labels, and whether it holds a picture."""
+    shown: dict[lxml.html.HtmlElement, int] = {}
+    hidden: dict[lxml.html.HtmlElement, int] = {}
+    pictured: set[lxml.html.HtmlElement] = set()
+    for _, el in etree.iterwalk(root, events=("end",)):
+        if not isinstance(el.tag, str):
+            continue
+        seen = 0 if el.tag in ("script", "style", "svg") else _nonspace(el.text)
+        inner = 0
+        for child in el:
+            if isinstance(child.tag, str):
+                if el.tag not in ("script", "style", "svg"):
+                    seen += shown[child]
+                    inner += shown[child] if _is_label(child) else hidden[child]
+                if child in pictured:
+                    pictured.add(el)
+            seen += _nonspace(child.tail)
+        shown[el], hidden[el] = seen, inner
+        if el.tag == "img":
+            pictured.add(el)
+    return shown, hidden, pictured
+
+
+def _nonspace(text: str | None) -> int:
+    return len("".join(text.split())) if text else 0
+
+
+def _redundant_label(
+    el: lxml.html.HtmlElement,
+    shown: dict[lxml.html.HtmlElement, int],
+    hidden: dict[lxml.html.HtmlElement, int],
+    pictured: set[lxml.html.HtmlElement],
+) -> bool:
     """A short screen-reader label of words beside visible text, which says it already. Not
-    the only text of its box: a bar drawn with CSS ("2007–2008, Shut Down") has no other words."""
+    the only text of its box: a bar drawn with CSS ("2007–2008, Shut Down") has no other words.
+    Characters, not words, are compared: "said" beside ", external" is one word against two."""
     parent = el.getparent()
-    if parent is None or el.find(".//img") is not None:
+    if parent is None or el in pictured or shown[el] > SCREEN_READER_MAX_CHARS:
         return False
     words = el.text_content().split()
     if len(words) > SCREEN_READER_MAX_WORDS or not any(c.isalpha() for c in "".join(words)):
         return False  # a symbol is part of what is shown: Wikipedia's "/" between a stacked fraction's parts
-    if parent not in shown:
-        # Letters, not words: "said" beside ", external" is one word against two. Dropping a
-        # label takes its letters from both counts, so the difference holds for its siblings.
-        hidden = sum(
-            _chars(box)
-            for box in parent.iter()
-            if isinstance(box.tag, str) and box is not parent and SCREEN_READER.search(box.get("class") or "")
-        )
-        shown[parent] = _chars(parent) - hidden
-    return shown[parent] > 0
+    return shown[parent] - hidden[parent] > 0
 
 
 def _chars(box: lxml.html.HtmlElement) -> int:
-    """Letters a reader sees in the box: not a script's, a style's or a drawing's title."""
+    """The characters (not spaces) a reader sees in the box: not a script's, a style's or a
+    drawing's title."""
     texts = box.xpath(".//text()[not(ancestor::script or ancestor::style or ancestor::svg)]")
     return sum(len("".join(text.split())) for text in texts)
 
@@ -2115,12 +2163,13 @@ def _drop_self_links(root: lxml.html.HtmlElement) -> None:
             href = (a.get("href") or "").strip()
             if a.getparent() is None or (href and not href.startswith("#")):
                 continue
-            if _self_mark(a, link=True) or (a.find(".//svg") is not None and _chars(heading) > _chars(a)):
+            icon = a.find(".//svg") is not None and HEADING_LINK_LABEL.match(" ".join(a.text_content().split()))
+            if _self_mark(a, link=True) or (icon and _chars(heading) > _chars(a)):
                 a.drop_tree()
                 dropped = True
             elif len(a) and isinstance(a[-1].tag, str) and _self_mark(a[-1]) and not (a[-1].tail or "").strip():
                 a[-1].drop_tree()
-        if _self_mark(heading) or (dropped and not _chars(heading)):
+        if _self_mark(heading) or (dropped and not _chars(heading) and heading.find(".//img") is None):
             heading.drop_tree()
             continue
         last = heading[-1] if len(heading) else None  # the link already unwrapped into the heading's id
@@ -2175,6 +2224,7 @@ def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
     # First the pictures in order, with the words before each (a block's tail counts once
     # the block is behind), read without changing the tree; then the drops.
     seen: list[tuple[lxml.html.HtmlElement, int]] = []
+    ended: dict[lxml.html.HtmlElement, int] = {}  # the words before each box's end
     words = 0
     for event, el in etree.iterwalk(root, events=("start", "end")):
         if not isinstance(el.tag, str):
@@ -2184,9 +2234,10 @@ def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
                 seen.append((el, words))
             words += len((el.text or "").split())
         else:
+            ended[el] = words
             words += len((el.tail or "").split())
     boxes: dict[lxml.html.HtmlElement, tuple[bool, int]] = {}
-    last: tuple[str, lxml.html.HtmlElement, int] | None = None
+    last: tuple[str, lxml.html.HtmlElement] | None = None
     dropped: set[lxml.html.HtmlElement] = set()
     for img, at in seen:
         if any(a in dropped for a in img.iterancestors()):
@@ -2194,15 +2245,16 @@ def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:
         block = _picture_block(img, boxes)
         name = re.sub(r"-scaled(\.\w+)$", r"\1", _picture_name(img.get("src") or ""))
         apart = last is not None and block is not None and _apart(last[1], block)
-        if apart and last[0] == name and at - last[2] <= SAME_PICTURE_GAP:
+        if apart and last[0] == name and at - ended[last[1]] <= SAME_PICTURE_GAP:
             earlier = last[1]
-            captioned = block.find(".//figcaption") is not None
-            gone = earlier if earlier.find(".//figcaption") is None and captioned else block
-            gone.drop_tree()
-            dropped.add(gone)
-            last = None
-            continue
-        last = (name, block, at) if block is not None else None
+            first, second = _caption_text(earlier), _caption_text(block)
+            if not (first and second and first != second):  # two captions that differ say two things
+                gone = earlier if not first and second else block
+                gone.drop_tree()
+                dropped.add(gone)
+                last = None
+                continue
+        last = (name, block) if block is not None else None
 
 
 def _apart(a: lxml.html.HtmlElement, b: lxml.html.HtmlElement) -> bool:
@@ -2223,11 +2275,16 @@ def _picture_block(
     if parent is None or parent.tag not in ("figure", "p", "div"):
         return None
     if parent not in boxes:
-        boxes[parent] = (bool(parent.text_content().split()), len(parent.findall(".//img")))
+        # A figure's caption is its own; any other text means the box is more than the picture.
+        texts = parent.xpath(".//text()[not(ancestor::figcaption)]")
+        boxes[parent] = (any(text.strip() for text in texts), len(parent.findall(".//img")))
     has_text, pictures = boxes[parent]
-    if pictures != 1 or (parent.tag != "figure" and has_text):
-        return None
-    return parent
+    return parent if pictures == 1 and not has_text else None
+
+
+def _caption_text(block: lxml.html.HtmlElement) -> str:
+    caption = block.find(".//figcaption")
+    return " ".join(caption.text_content().split()) if caption is not None else ""
 
 
 def _link_cards(root: lxml.html.HtmlElement) -> None:
@@ -2308,8 +2365,13 @@ SCREEN_READER = re.compile(
 )
 RESPONSIVE_SR_SHOWN = re.compile(r"(?<![\w-])(sm|md|lg|xl|2xl):not-sr-only\b")  # shown on wider screens
 SCREEN_READER_MAX_WORDS = 12  # a label; a longer box (a chart's table, say) is left alone
+SCREEN_READER_MAX_CHARS = 200  # past this a box is no label, and its words are not read
 PULL_QUOTE = re.compile(r"pull-?quote", re.IGNORECASE)
 SELF_LINK_MARKS = {"#", "¶", "§", "🔗", "⚓"}  # a heading's link to itself, shown on hover
+# What an icon link to a heading says for screen readers ("Link to this heading"), or nothing.
+HEADING_LINK_LABEL = re.compile(
+    r"^((direct |copy |anchor )?(link|permalink|anchor)( to (this|the) (heading|section|header))?)?$", re.IGNORECASE
+)
 CREDIT_NAME = re.compile(r"credit|source|copyright|byline|photographer", re.IGNORECASE)
 SAME_PICTURE_GAP = 5  # words between two copies of one picture shown one after the other
 # A box of pictures shown one at a time, paged through with next and previous: the book shows its

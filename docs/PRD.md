@@ -426,22 +426,23 @@ All fetched content is treated as untrusted.
     screen readers, is dropped with the link.
   - A short label written for screen readers and hidden from sight (a box named `sr-only`,
     `visually-hidden`, `screen-reader-text` or an accessibility label) goes when its box has
-    other visible words: the BBC's ", external" in every outside link, the NYT's
+    other visible text: the BBC's ", external" in every outside link, the NYT's
     "Credit..." before a photo's credit. One that is its box's only text stays (a bar drawn
     with CSS has no other words: "2007–2008, Shut Down"), and so does one without letters
     (Wikipedia's "/" between a stacked fraction's parts).
   - A heading's hover mark for its own section (`#`, `¶`, `§`, `🔗`, `⚓`) goes: a link to
     the section that is only the mark, the mark ending such a link or the heading as its last
-    box, an icon link to the section beside the heading's words (its label hidden by a class:
-    "Link to this heading"), or a heading that is only the mark; left in, every heading ends
-    in it.
+    box, an icon link to the section beside the heading's words that says nothing else
+    ("Link to this heading", hidden by a class), or a heading that is only the mark; left
+    in, every heading ends in it.
   - In a figure's caption, boxes set side by side keep a space between them where the first
     ends a sentence or the second is named for a credit or source ("…in Riyadh. Saudi Press
     Agency", not "Riyadh.Saudi").
   - A picture shown twice in a row, standing alone each time with next to no text between
     (a feed's thumbnail, then the article's own copy at another size: `photo-scaled.jpg`,
-    `photo-1200x900.jpg`), is kept once, the copy with a caption. The same picture used again
-    in the text (a formula, an icon) stays.
+    `photo-1200x900.jpg`), is kept once, the copy with a caption. Not when both have captions
+    that differ, or a copy holds more than its caption; nor the same picture used again in the
+    text (a formula, an icon), or two sizes of it in one figure.
   - Asides that are not the article are dropped: a teaser (a short label and then only
     links, two or more, such as "Recommended" or "You may like") and one holding a form with an
     address field and little else (a newsletter sign-up). Never dropped: a box classed as a callout (a warning,

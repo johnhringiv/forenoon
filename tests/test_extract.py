@@ -3474,22 +3474,51 @@ def test_a_note_cited_only_from_another_note_is_kept_in_the_pages_order():
     assert notes_of(extract("https://blog.example/post", page, "", "page").body) == ["1 ...because I ran out of space."]
 
 
-def test_screen_reader_labels_go_when_their_box_says_it_already():
-    # BBC: ", external" inside every outside link; the NYT's "Credit..." before the credit.
-    page = forms_page(
+def _text(body: lxml.html.HtmlElement) -> str:
+    return " ".join(body.text_content().split())
+
+
+def _sanitized(html: str, url: str = "https://blog.example/post") -> lxml.html.HtmlElement:
+    return sanitize(lxml.html.fromstring(f"<div>{html}</div>"), url)
+
+
+def test_screen_reader_labels_go_beside_visible_words():
+    # BBC: ", external" inside every outside link, also beside a one-word link.
+    body = _sanitized(
         '<p>The NHS says <a href="https://www.nhs.uk/x">a reaction is possible'
         '<span class="visually-hidden ssrcss-i2z2ig-VisuallyHidden">, <!-- -->external</span></a> but rare.</p>'
-        '<figure><img src="https://static.example/a.jpg" width="800" height="600" alt="">'
-        '<figcaption><span>Students use it.</span><span><span class="iqSOia_accessibilityLabel">Credit...</span>'
-        "<span>Desiree Rios for The New York Times</span></span></figcaption></figure>"
-        # A bar drawn with CSS: its label is all it says.
-        '<ol><li><span>Mail Shoppe</span> <span class="bar"><span class="sr-only">2007–2008, Shut Down</span></span></li></ol>'
+        '<p>He <a href="https://x.example/">said<span class="VisuallyHidden">, external</span></a> so.</p>'
     )
-    body = extract("https://blog.example/post", page, "", "page").body
-    text = " ".join(body.text_content().split())
-    assert "external" not in text and "possible but rare." in text
-    assert "Students use it. Desiree Rios for The New York Times" in text and "Credit" not in text
-    assert "2007–2008, Shut Down" in text
+    assert [_text(p) for p in body.iter("p")] == ["The NHS says a reaction is possible but rare.", "He said so."]
+
+
+def test_a_credit_label_goes_and_leaves_the_credit_apart():
+    # The NYT: "Credit..." before the credit, with or without a final period before it.
+    body = _sanitized(
+        '<figure><img src="https://s.example/a.jpg"><figcaption><span>Students use it.</span>'
+        '<span><span class="iqSOia_accessibilityLabel">Credit...</span><span>Desiree Rios</span></span></figcaption></figure>'
+        '<figure><img src="https://s.example/b.jpg"><figcaption><span>Kyiv, on Sept. 28</span>'
+        '<span class="css-3hmc0r"><span class="x_accessibilityLabel">Credit...</span><span>Finbarr O’Reilly</span>'
+        "</span></figcaption></figure>",
+        "https://www.nytimes.com/x",
+    )
+    captions = [_text(c) for c in body.iter("figcaption")]
+    assert captions == ["Students use it. Desiree Rios", "Kyiv, on Sept. 28 Finbarr O’Reilly"]
+
+
+def test_screen_reader_text_that_is_all_a_box_says_stays():
+    # A bar drawn with CSS, its label in one span or two; Wikipedia's stacked fraction's "/";
+    # Tailwind's md:not-sr-only, shown on wider screens.
+    body = _sanitized(
+        '<ol><li>Mail Shoppe <span class="bar"><span class="sr-only">2007–2008, Shut Down</span></span></li>'
+        '<li>Air Bulgarian <span class="bar"><span class="sr-only">2010</span> <span class="sr-only">Shut Down</span></span></li>'
+        '<li>Air <span class="md:not-sr-only">Bulgarian</span></li></ol>'
+        '<p>Of order <span class="sfrac"><span class="num">n + 2</span><span class="sr-only">/</span>'
+        '<span class="den">2</span></span> here.</p>'
+    )
+    text = _text(body)
+    assert "2007–2008, Shut Down" in text and "2010 Shut Down" in text and "Air Bulgarian" in text
+    assert "n + 2/2" in text
 
 
 def test_a_pull_quote_hidden_from_screen_readers_goes():
@@ -3499,145 +3528,111 @@ def test_a_pull_quote_hidden_from_screen_readers_goes():
         "<blockquote><p>A quotation the author set, which stays.</p></blockquote>"
     )
     body = extract("https://blog.example/post", page, "", "page").body
-    quotes = [" ".join(q.text_content().split()) for q in body.iter("blockquote")]
-    assert quotes == ["A quotation the author set, which stays."]
+    assert [_text(q) for q in body.iter("blockquote")] == ["A quotation the author set, which stays."]
 
 
-def test_a_headings_link_to_itself_and_glued_credits():
+def test_a_headings_mark_for_itself_goes():
     page = forms_page(
         '<h2 id="ipo">IPO Pumping<a class="anchor" href="#ipo">#</a></h2><p>Words under it.</p>'
         '<h2 id="see"><a href="#see">See the result</a></h2><p>More words.</p>'
         '<h2 id="t"><a href="#t"><span>Training at scale</span><span class="opacity-0">#</span></a></h2><p>Text.</p>'
         '<a href="#v"><h2 id="v">Victoria</h2><h2 class="hash">#</h2></a><p>Text.</p>'
         '<h2>Old post <a href="" title="Permalink to this post">⚓</a></h2><p>Text.</p>'
-        '<figure><img src="https://static.example/b.jpg" width="800" height="600" alt="">'
-        '<figcaption><span class="caption__text">A blaze in Kyiv.</span>'
-        '<span class="caption__source">Genya Savilov / AFP</span></figcaption></figure>'
     )
-    body = extract("https://blog.example/post", page, "", "page").body
-    heads = [" ".join(h.text_content().split()) for h in body.iter("h2", "h3")]
+    heads = [_text(h) for h in extract("https://blog.example/post", page, "", "page").body.iter("h2", "h3")]
     assert {"IPO Pumping", "See the result", "Training at scale", "Victoria", "Old post"} <= set(heads)
     assert not [h for h in heads if h.endswith(("#", "⚓"))]
-    assert "A blaze in Kyiv. Genya Savilov / AFP" in " ".join(body.text_content().split())
 
 
-def test_a_picture_shown_twice_in_a_row_is_kept_once():
-    # VTDigger from the feed: the feed's thumbnail, then the article's copy at another size.
-    feed = (
-        '<figure><img src="https://vtdigger.org/wp-content/uploads/2026/10/Essex-scaled.jpg" width="1200" height="900"></figure>'
-        '<figure><img src="https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg" width="1200" height="900">'
-        "<figcaption>Residents vote in Essex.</figcaption></figure>"
-        + FORMS_FILLER
-        # The same small picture again in the text is meant.
-        + '<p>A formula <img src="https://blog.example/f.png" width="60" height="20"> and again '
-        '<img src="https://blog.example/f.png" width="60" height="20"> here.</p>'
+def test_icon_and_empty_links_in_headings():
+    body = _sanitized(
+        # joshwcomeau: an icon link with a label we cannot see is hidden; Docusaurus: an empty link.
+        '<h2 id="one"><a href="#one"><span><svg viewBox="0 0 1 1"></svg><span class="x1">Link to this heading</span>'
+        "</span></a>1. CSS functions</h2>"
+        '<h3><a href="#">¶</a></h3><h3>Docs<a href="#d" class="hash-link">\u200b</a></h3>'
+        # An icon beside words of the link's own stays; so does code ending a heading.
+        '<h3><a href="#foo"><svg viewBox="0 0 1 1"></svg> foo()</a> <small>deprecated</small></h3>'
+        "<h2>Comments start with <code>#</code></h2>"
     )
-    body = sanitize(lxml.html.fromstring(f"<div>{feed}</div>"), "https://vtdigger.org/post")
-    srcs = [img.get("src") for img in body.iter("img")]
-    assert srcs.count("https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg") == 1
-    assert not any("scaled" in s for s in srcs) and srcs.count("https://blog.example/f.png") == 2
-    assert body.find(".//figcaption").text == "Residents vote in Essex."
+    heads = [_text(h) for h in body.iter("h2", "h3")]
+    assert heads == ["1. CSS functions", "Docs", "foo() deprecated", "Comments start with #"]
 
 
-def test_repeated_pictures_and_credits_on_odd_markup():
-    one = '<img src="https://s.example/a-300x200.jpg" width="800" height="600">'
-    two = '<img src="https://s.example/b.jpg" width="800" height="600">'
-    # Copies in one figure (a thumbnail and its zoomed copy) stay, caption and all; a figure
-    # already dropped is not looked at again.
-    body = sanitize(
-        lxml.html.fromstring(
-            f'<div><figure>{one}<img src="https://s.example/a-1024x768.jpg" width="800" height="600">'
-            f"<figcaption>Cap</figcaption></figure><figure>{one}</figure><figure>{one}{two}</figure>"
-            f"<figure>{two}<figcaption>Second</figcaption></figure></div>"
-        ),
-        "https://s.example/post",
+def test_a_captions_credit_is_spaced_from_its_text():
+    body = _sanitized(
+        '<figure><img src="https://s.example/b.jpg"><figcaption><span class="caption__text">A blaze in Kyiv.</span>'
+        '<span class="caption__source">Genya Savilov / AFP</span></figcaption></figure>'
+        '<figure><img src="https://s.example/c.jpg"><figcaption>A coral.<sup>1</sup> '
+        '(<span class="credit">AP</span>)</figcaption></figure>'
+        '<figure><img src="https://s.example/d.jpg"><figcaption>Text<span class="credit">, AP</span> and '
+        '"so it goes."<span>Next</span></figcaption></figure>'
     )
-    assert "Cap" in body.text_content() and "Second" in body.text_content()
-    # A one-word link or credit beside its label: the label still goes.
-    page = forms_page(
-        '<p>He <a href="https://x.example/">said<span class="VisuallyHidden">, external</span></a> so.</p>'
-        '<figure><img src="https://s.example/e.jpg" width="800" height="600"><figcaption><span>A port.</span>'
-        '<span><span class="x_accessibilityLabel">Credit...</span><span>Reuters</span></span></figcaption></figure>'
-    )
-    text = " ".join(extract("https://blog.example/post", page, "", "page").body.text_content().split())
-    assert "He said so." in text and "A port. Reuters" in text
-    # A comment between a caption and its credit; a note number and a bracket get no space.
+    captions = [c.text_content() for c in body.iter("figcaption")]
+    assert captions == ["A blaze in Kyiv. Genya Savilov / AFP", "A coral.1 (AP)", 'Text, AP and "so it goes." Next']
+    # A lead photo's caption beside it, a comment between its text and credit (React's "<!-- -->").
     lead = lxml.html.fromstring(
         '<div><div class="caption">Officials met in Riyadh.<!-- --><span class="credit">Saudi Press Agency</span>'
         '</div><img src="https://s.example/c.jpg"></div>'
     )
     caption = extract_module._beside_caption(lead.find(".//img"), lead)
     assert caption.text == "Officials met in Riyadh. Saudi Press Agency"
-    fig = sanitize(
-        lxml.html.fromstring(
-            '<div><figure><img src="https://s.example/d.jpg"><figcaption>A coral.<sup>1</sup> '
-            '(<span class="credit">AP</span>)</figcaption></figure></div>'
-        ),
-        "https://s.example/post",
-    )
-    assert fig.find(".//figcaption").text_content() == "A coral.1 (AP)"
-    # Two hidden labels that are their box's only words stay, and Tailwind's not-sr-only is shown.
-    page = forms_page(
-        '<ol><li>Mail Shoppe <span class="bar"><span class="sr-only">2007–2008</span> <span class="sr-only">Shut Down</span></span></li>'
-        '<li>Air <span class="md:not-sr-only">Bulgarian</span></li></ol>'
-    )
-    text = " ".join(extract("https://blog.example/post", page, "", "page").body.text_content().split())
-    assert "2007–2008 Shut Down" in text and "Air Bulgarian" in text
-    # Wikipedia's inline fraction: numerator and denominator stacked, "/" for screen readers.
-    page = forms_page(
-        '<p>The Bessel function of order <span class="sfrac"><span class="num">n + 2</span>'
-        '<span class="sr-only">/</span><span class="den">2</span></span> here.</p>'
-    )
-    text = " ".join(extract("https://en.wikipedia.org/wiki/F", page, "", "page").body.text_content().split())
-    assert "n + 2/2" in text
 
 
-def test_many_labels_stay_fast_and_more_heading_marks_go():
-    # Thousands of hidden labels in one paragraph: each box's letters are counted once.
+def test_a_picture_shown_twice_in_a_row_is_kept_once():
+    # VTDigger from the feed: the feed's thumbnail, then the article's copy at another size.
+    body = _sanitized(
+        '<figure><img src="https://vtdigger.org/wp-content/uploads/2026/10/Essex-scaled.jpg"></figure>'
+        '<figure><img src="https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg">'
+        "<figcaption>Residents vote in Essex.</figcaption></figure>"
+        + FORMS_FILLER
+        # The same small picture again in the text is meant.
+        + '<p>A formula <img src="https://blog.example/f.png"> and again <img src="https://blog.example/f.png"> here.</p>',
+        "https://vtdigger.org/post",
+    )
+    srcs = [img.get("src") for img in body.iter("img")]
+    assert (
+        srcs
+        == ["https://vtdigger.org/wp-content/uploads/2026/10/Essex-1200x900.jpg"] + ["https://blog.example/f.png"] * 2
+    )
+    assert _text(body.find(".//figcaption")) == "Residents vote in Essex."
+
+
+def test_copies_of_a_picture_that_say_different_things_stay():
+    one, zoom, two = (f'<img src="https://s.example/{n}">' for n in ("a-300x200.jpg", "a-1024x768.jpg", "b.jpg"))
+    # Two sizes in one figure, and a figure holding two pictures, are never a repeat: all stay.
+    body = _sanitized(
+        f"<figure>{one}{zoom}<figcaption>Cap</figcaption></figure><figure>{one}</figure>"
+        f"<figure>{one}{two}</figure><figure>{two}<figcaption>Second</figcaption></figure>"
+    )
+    assert [_text(c) for c in body.iter("figcaption")] == ["Cap", "Second"] and len(body.findall(".//img")) == 6
+    # Two captions that differ, and a figure with a paragraph of its own.
+    body = _sanitized(
+        f"<figure>{two}<figcaption>Thumb caption</figcaption></figure>"
+        f"<figure>{two}<figcaption>Full caption, longer.</figcaption></figure>"
+        f"<figure>{one}</figure><figure>{one}<p>An important paragraph.</p></figure>"
+    )
+    assert [_text(c) for c in body.iter("figcaption")] == ["Thumb caption", "Full caption, longer."]
+    assert len(body.findall(".//img")) == 4 and "An important paragraph." in _text(body)
+
+
+def test_many_labels_pictures_and_credits_stay_fast():
+    def quick(html: str) -> lxml.html.HtmlElement:
+        start = time.monotonic()
+        body = _sanitized(html)
+        assert time.monotonic() - start < 5
+        return body
+
     labels = "".join(
         f'<a href="https://x.example/{i}">w{i}<span class="sr-only">, external</span></a> ' for i in range(3000)
     )
-    start = time.monotonic()
-    body = sanitize(lxml.html.fromstring(f"<div><p>{labels}</p></div>"), "https://blog.example/post")
-    assert time.monotonic() - start < 5 and "external" not in body.text_content()
-    caption = "".join(f"<span>Part {i}.</span>" for i in range(3000))
-    start = time.monotonic()
-    sanitize(
-        lxml.html.fromstring(
-            f'<div><figure><img src="https://s.example/a.jpg"><figcaption>{caption}</figcaption></figure></div>'
-        ),
-        "https://b.example/",
+    assert "external" not in quick(f"<p>{labels}</p>").text_content()
+    # Labels at every level of a deep nest.
+    level = '<span class="sr-only">x</span>' * 20
+    quick("".join(f"<div>{level}" for _ in range(250)) + "</div>" * 250)
+    quick(
+        "<figure><img src='https://s.example/a.jpg'><figcaption>"
+        + "".join(f"<span>Part {i}.</span>" for i in range(3000))
+        + "</figcaption></figure>"
     )
-    assert time.monotonic() - start < 5
-    body = sanitize(
-        lxml.html.fromstring(
-            '<div><h2 id="one"><a href="#one"><span><svg viewBox="0 0 1 1"></svg><span class="x1">Link to this heading</span></span></a>1. CSS functions</h2>'
-            '<h3><a href="#">¶</a></h3><h3>Docs<a href="#d" class="hash-link">\u200b</a></h3>'
-            '<figure><img src="https://s.example/b.jpg"><figcaption>Text<span class="credit">, AP</span> and "so it goes."<span>Next</span></figcaption></figure></div>'
-        ),
-        "https://blog.example/post",
-    )
-    assert [" ".join(h.text_content().split()) for h in body.iter("h2", "h3")] == ["1. CSS functions", "Docs"]
-    assert body.find(".//figcaption").text_content() == 'Text, AP and "so it goes." Next'
-
-
-def test_many_pictures_in_one_box_stay_fast():
     pictures = "".join(f'<img src="https://s.example/{i}.jpg"><br>Line {i}<br>' for i in range(4000))
-    start = time.monotonic()
-    body = sanitize(lxml.html.fromstring(f"<div><div>{pictures}</div></div>"), "https://blog.example/post")
-    assert time.monotonic() - start < 5 and len(body.findall(".//img")) == 4000
-
-
-def test_a_dropped_label_between_boxes_leaves_a_space():
-    # NYT, a caption without a final period: "Credit..." was all that stood between them.
-    fig = sanitize(
-        lxml.html.fromstring(
-            '<div><figure><img src="https://s.example/a.jpg"><figcaption><span>Kyiv, on Sept. 28</span>'
-            '<span class="css-3hmc0r"><span class="x_accessibilityLabel">Credit...</span><span>Finbarr O’Reilly</span>'
-            "</span></figcaption></figure>"
-            "<h2>Comments start with <code>#</code></h2><p>Text.</p></div>"
-        ),
-        "https://www.nytimes.com/x",
-    )
-    assert " ".join(fig.find(".//figcaption").text_content().split()) == "Kyiv, on Sept. 28 Finbarr O’Reilly"
-    assert fig.find(".//h2").text_content() == "Comments start with #"
+    assert len(quick(f"<div>{pictures}</div>").findall(".//img")) == 4000
