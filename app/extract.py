@@ -515,6 +515,100 @@ def _drop_account_boxes(root: lxml.html.HtmlElement) -> None:
             box.drop_tree()
 
 
+LINE_NUMBER_CLASS = re.compile(
+    r"(?<![\w-])(ln|line-?numbers?|linenumbers?|line-?no|linenos?|hljs-ln-numbers?|line-numbers-rows|gutter|rouge-gutter)(?![\w-])",
+    re.IGNORECASE,
+)
+LINE_NUMBERS = re.compile(r"[\d\s]*")  # a box of line numbers holds nothing else
+CREDIT_MIN_CHARS = 8  # a repeat shorter than this ("AP") may be a caption's own words
+CREDIT_CAPTION_MAX_CHARS = 2000  # a longer "caption" is a box of text, not a photo's line
+
+
+def _drop_hidden_breaks(root: lxml.html.HtmlElement) -> None:
+    """Drop line breaks hidden from screen readers: a layout's hints where a line may break
+    (anoma.ly sets one before every syllable), not breaks in the text."""
+    for br in list(root.iter("br")):
+        if (br.get("aria-hidden") or "").strip().lower() != "true":
+            continue
+        parent = br.getparent()
+        if parent is not None and parent.tag not in INLINE_WRAPPERS:  # between words of a block
+            br.tail = " " + (br.tail or "")
+        br.drop_tag()
+
+
+def _drop_line_numbers(root: lxml.html.HtmlElement) -> None:
+    """Take line numbers out of code. In a <pre>, a box named for line numbers (Shiki's "ln",
+    "line-number") or hidden from screen readers that holds only digits goes. A table whose
+    rows are a cell of line numbers beside a cell of code (Rouge's, Pygments') becomes the code."""
+    for pre in list(root.iter("pre")):
+        for el in list(pre.iterdescendants()):
+            if not isinstance(el.tag, str) or el.getparent() is None:
+                continue
+            named = LINE_NUMBER_CLASS.search(el.get("class") or "")
+            hidden = (el.get("aria-hidden") or "").strip().lower() == "true"
+            text = el.text_content()
+            # A box hidden but not named holds a number, or nothing: never only indentation.
+            if (named or (hidden and (not text or any(c.isdigit() for c in text)))) and LINE_NUMBERS.fullmatch(text):
+                el.drop_tree()
+    for table in list(root.iter("table")):
+        rows = table.xpath("./tr | ./tbody/tr | ./thead/tr")
+        code: list[lxml.html.HtmlElement] = []
+        for row in rows:
+            cells = [c for c in row if isinstance(c.tag, str) and c.tag in ("td", "th")]
+            pres = [cell.find(".//pre") for cell in cells]
+            if len(cells) != 2 or any(p is None for p in pres):
+                break
+            numbers, lines = pres
+            if not LINE_NUMBERS.fullmatch(numbers.text_content()) or LINE_NUMBERS.fullmatch(lines.text_content()):
+                break
+            if not any(LINE_NUMBER_CLASS.search(el.get("class") or "") for el in (cells[0], numbers)):
+                break  # a table of numbers beside code, not a gutter
+            code.append(lines)
+        else:
+            if code and table.getparent() is not None:
+                for pre in code:
+                    pre.tail = None
+                    table.addprevious(pre)
+                table.drop_tree()
+
+
+def _drop_repeated_credits(root: lxml.html.HtmlElement) -> None:
+    """Drop a box in a caption that repeats the words just before it (Ars Technica writes the
+    credit into the caption's text and again in a credit box beside it), in a <figcaption> or
+    in a figure's box named for a caption (its lightbox's copy)."""
+    captions = [
+        el
+        for el in root.iter()
+        if isinstance(el.tag, str)
+        and (el.tag == "figcaption" or "caption" in (el.get("class") or "").lower())
+        and next(el.iterancestors("figure"), None) is not None
+    ]
+    outer = set(captions)
+    for caption in captions:
+        # The outermost caption only: what it has said carries into the boxes within it.
+        if caption.getparent() is None or any(a in outer for a in caption.iterancestors()):
+            continue
+        if len(caption.text_content()) > CREDIT_CAPTION_MAX_CHARS:
+            continue
+        repeats: list[lxml.html.HtmlElement] = []
+        _find_repeats(caption, [caption.text or ""], repeats)
+        for el in repeats:
+            el.drop_tree()
+
+
+def _find_repeats(box: lxml.html.HtmlElement, said: list[str], repeats: list[lxml.html.HtmlElement]) -> None:
+    """The boxes within a caption whose words repeat those just before them, in order."""
+    for el in box:
+        if isinstance(el.tag, str):
+            words = _norm(el.text_content())
+            if len(words) >= CREDIT_MIN_CHARS and _norm(" ".join(said)).endswith(words):
+                repeats.append(el)
+            else:
+                said.append(el.text or "")
+                _find_repeats(el, said, repeats)
+        said.append(el.tail or "")
+
+
 def _unwrap_lightboxes(root: lxml.html.HtmlElement) -> None:
     """Take a picture out of a button that only enlarges it (Nautilus's "Enlarge image"): the
     book drops buttons, as they also hold a video's poster behind its play button. Only a
@@ -1438,6 +1532,9 @@ def _structure(
     except Exception:  # noqa: BLE001, S110 - hostile markup; the rest of the page is still rebuilt
         pass
     _unwrap_lightboxes(root)
+    _drop_hidden_breaks(root)
+    _drop_line_numbers(root)
+    _drop_repeated_credits(root)
     _object_pictures(root)
     _unscroll(root)
     if whole_page:  # a feed's copy is not the page a browser would show

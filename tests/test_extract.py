@@ -3357,6 +3357,68 @@ def test_no_lead_photo_from_elsewhere_or_unnamed():
     assert len(body.xpath("//img")) <= 1
 
 
+FORMS_FILLER = "<p>" + "Plain words about compilers and borrow checking and the long history of both. " * 30 + "</p>"
+
+
+def forms_page(inner: str) -> str:
+    return f"<html><body><article><h1>Post</h1>{FORMS_FILLER}{inner}{FORMS_FILLER}</article></body></html>"
+
+
+def test_hidden_line_breaks_and_line_numbers_in_code_go():
+    # anoma.ly: a break hidden from screen readers before every syllable.
+    page = forms_page(
+        '<p>A <span class="j-word"><br class="j-break" aria-hidden="true">major</span> <span class="j-word">over'
+        '<br class="j-break" aria-hidden="true">haul</span> of the tool, line<br>by line, '
+        'big<br aria-hidden="true">change.</p>'
+    )
+    body = extract("https://blog.example/post", page, "", "page").body
+    text = body.text_content()
+    assert len(body.xpath("//br")) == 1 and "major overhaul" in text and "big change." in text
+    # Shiki's "ln", a numbered line hidden from screen readers; a number in the code stays.
+    shiki = (
+        '<pre class="shiki"><code><span class="line"><span class="ln">1</span><span>let x = 42;</span></span>\n'
+        '<span class="line"><span aria-hidden="true" class="line-number"><span>2</span></span><span class="mi">7</span>;</span></code></pre>'
+    )
+    code = extract("https://blog.example/post", forms_page(shiki), "", "page").body.find(".//pre").text_content()
+    assert code == "let x = 42;\n7;"
+    # Rouge: a table of line numbers beside the code becomes the code.
+    rouge = (
+        '<div class="highlight"><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1\n2\n</pre></td>'
+        '<td class="rouge-code"><pre>#if A\nbreak();\n</pre></td></tr></tbody></table></div>'
+    )
+    body = extract("https://blog.example/post", forms_page(rouge), "", "page").body
+    assert not body.xpath("//table") and body.find(".//pre").text_content().startswith("#if A")
+    # A table of numbers beside text, or beside more numbers, stays a table.
+    for data in (
+        "<table><tr><td><pre>12\n13</pre></td><td>Rows of data.</td></tr></table>",
+        "<table><tr><td><pre>12</pre></td><td><pre>13</pre></td></tr></table>",
+    ):
+        root = lxml.html.fragment_fromstring(data, create_parent="div")
+        extract_module._drop_line_numbers(root)
+        assert root.find(".//table") is not None
+
+
+def test_a_credit_repeated_in_a_caption_goes_once():
+    # Ars Technica: the credit in the caption's text and again in a credit box, and the
+    # lightbox's copy of the caption with its own credit box.
+    figure = (
+        '<figure><div class="ars-lightbox"><a href="https://i.example/c.jpg"><img alt="" src="https://i.example/c.jpg"></a>'
+        '<div class="pswp-caption-content">The replica, with its bench. Credit: Museo de Historia'
+        '<div class="ars-gallery-caption-credit">Credit: Museo de Historia</div></div></div>'
+        '<figcaption><div class="caption-content">The replica, with its bench. Credit: Museo de Historia'
+        '<span class="caption-credit">Credit: Museo de Historia</span></div></figcaption></figure>'
+    )
+    body = extract("https://news.example/2026/story", forms_page(figure), "", "page").body
+    assert body.text_content().count("Museo de Historia") == 1
+    # Words a caption says twice apart, or a short repeat, stay.
+    figure = (
+        '<figure><img alt="" src="https://i.example/d.jpg"><figcaption>Rain in Oslo, then rain again. '
+        "<span>Rain in Oslo</span> by night. <b>AP</b> <i>AP</i></figcaption></figure>"
+    )
+    text = extract("https://news.example/2026/story", forms_page(figure), "", "page").body.text_content()
+    assert text.count("Rain in Oslo") == 2 and text.count("AP") == 2
+
+
 NOTE_FILLER = "<p>" + "Plain words about compilers and borrow checking and the long history of both. " * 30 + "</p>"
 
 
