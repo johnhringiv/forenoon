@@ -5,7 +5,8 @@ import time
 
 import lxml.html
 
-from app.extract import _wrap_loose_text, extract
+from app.extract import extract
+from app.extract.structure import _wrap_loose_text
 
 WORDS = " ".join(["The article goes on for a while about what this means for the reader and why."] * 6)
 
