@@ -3177,10 +3177,29 @@ async fn the_landing_page_and_the_demo_hosts_pages_are_meant_to_be_found() {
 
     // A persona's pages may be indexed; its thumbnails, a page that is not there, and the
     // install's own pages may not.
-    for path in ["/", "/archive", "/sources"] {
-        let (status, (_, robots), _) = get("john.forenoon.test", path).await;
+    // Each names the persona in its title (the apostrophe escaped) and gives its own address, without a query, as canonical.
+    for (path, title) in [
+        ("/", "John&#39;s newsstand · Forenoon demo"),
+        ("/?show=rated", "John&#39;s newsstand · Forenoon demo"),
+        ("/archive", "John&#39;s archive · Forenoon demo"),
+        ("/sources", "John&#39;s sources · Forenoon demo"),
+    ] {
+        let (status, (_, robots), page) = get("john.forenoon.test", path).await;
         assert!(status == StatusCode::OK && robots.is_empty(), "{path}");
+        assert!(page.contains(&format!("<title>{title}</title>")), "{path}: {page}");
+        let canonical = format!("https://john.forenoon.test{}", path.split('?').next().unwrap());
+        assert!(page.contains(&format!(r#"<link rel="canonical" href="{canonical}">"#)), "{path}");
     }
+    // The mark may be found too, on the demo hosts and the landing host.
+    for host in ["john.forenoon.test", "forenoon.test"] {
+        for path in ["/favicon.ico", "/icon.svg", "/icon-512.png", "/og.png"] {
+            let (status, (_, robots), _) = get(host, path).await;
+            assert!(status == StatusCode::OK && robots.is_empty(), "{host}{path}");
+        }
+    }
+    // The install's own pages keep their usual title, and no canonical address.
+    let login = get("nas:8787", "/login").await.2;
+    assert!(login.contains("<title>") && !login.contains("Forenoon demo") && !login.contains("canonical"), "{login}");
     let (status, (_, robots), _) = get("john.forenoon.test", "/thumb/a1").await;
     assert!(status == StatusCode::OK && robots == "noindex");
     assert_eq!(get("nobody.forenoon.test", "/").await.1.1, "noindex");

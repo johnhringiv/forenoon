@@ -126,8 +126,14 @@ pub async fn gate(State(landing): State<Arc<Landing>>, request: Request, next: N
     if looking && let Some((_, body)) = IMAGES.iter().find(|(name, _)| *name == path) {
         return file("image/webp", *body, "public, max-age=86400");
     }
-    if looking && (path == "/healthz" || icons::FILES.iter().any(|(icon, _, _)| *icon == path)) {
+    if looking && path == "/healthz" {
         return next.run(request).await;
+    }
+    // The mark and the share card may be found in an image search, like the page's pictures.
+    if looking && icons::FILES.iter().any(|(icon, _, _)| *icon == path) {
+        let mut response = next.run(request).await;
+        response.headers_mut().remove("x-robots-tag");
+        return response;
     }
     pages::secured(pages::not_found().await.unwrap_or_else(IntoResponse::into_response))
 }

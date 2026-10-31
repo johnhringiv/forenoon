@@ -172,7 +172,10 @@ changes it reaches the site with the next image. Only the page, its pictures, th
 `/robots.txt`, `/sitemap.xml` and the health check answer on that host; everything else there
 is 404. The sitemap lists the landing page and each persona's Newsstand, Archive and Sources
 (all https); each persona host's own `/robots.txt` names it, which is what lets one sitemap
-list another host's pages. Cloudflare's managed robots.txt, when it is on, is put in front of
+list another host's pages. A persona page's title names the persona and the page, and its
+canonical link is its own https address, so the nine pages are not taken for copies of one
+another; the icons and the share card are left indexable for an image search, and the
+thumbnails, other sites' pictures, are not. Cloudflare's managed robots.txt, when it is on, is put in front of
 ours. The Kindle pictures are the
 device's own screenshots (1264 by 1680) saved as WebP; the newsstand picture is the README's,
 taken with `tools/screenshots.py`, and should be retaken from a persona's demo host once the

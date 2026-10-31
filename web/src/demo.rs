@@ -98,8 +98,10 @@ pub async fn gate(State(personas): State<Arc<[Persona]>>, request: Request, next
     let Some(persona) = persona else {
         return next.run(request).await;
     };
-    // The pages are the demo's pitch, meant to be found; the rest keeps its noindex.
-    let page = matches!(request.uri().path(), "/" | "/archive" | "/sources");
+    // The pages are the demo's pitch, meant to be found, and so is the mark; the rest (other
+    // sites' thumbnails among it) keeps its noindex.
+    let path = request.uri().path();
+    let page = matches!(path, "/" | "/archive" | "/sources") || icons::FILES.iter().any(|(icon, _, _)| *icon == path);
     let mut response = if allowed(&request) {
         let mut request = request;
         request.extensions_mut().insert(Demo { reader: persona.id.clone(), personas: personas.clone() });

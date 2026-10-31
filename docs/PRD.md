@@ -1285,8 +1285,12 @@ database with the pipeline.
   icons, `/robots.txt`, `/sitemap.xml` and the health check; everything else there is 404.
   It carries `Cache-Control: public, max-age=300`, and Cloudflare's Web Analytics beacon for
   forenoon.dev, the one script its policy allows. It and the demo hosts' three pages are the
-  only ones meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
-  names it. Unset on an ordinary install.
+  only pages meant to be indexed: the sitemap lists them all, and each demo host's robots.txt
+  names it. Each demo page's title names the persona and the page ("Mara's archive ·
+  Forenoon demo"), and its canonical link is its own https address without a query. The
+  icons and the share card may be indexed on those hosts too, as may the landing page's
+  pictures; thumbnails, other sites' pictures, are disallowed in robots.txt and keep their
+  noindex. Unset on an ordinary install.
 - Who owns what in the database: the web program owns accounts (with the readers' settings), sources, follows
   and sessions; the pipeline owns everything else and only reads the accounts. A Python
   test applies the web program's migrations and reads readers through them, so a column the
