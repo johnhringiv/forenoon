@@ -32,7 +32,9 @@ from lxml import etree
 
 from . import archive, extract, models, sessions
 from .config import Config, User
-from .extract import MIN_WORDS, Extracted, _words
+from .extract import MIN_WORDS, Extracted
+from .extract.allowlist import _prune_empty
+from .extract.base import _join, _picture_address, _unnest_empty, _words
 from .fetch import FetchError
 from .llm import Backend, LlmError
 from .sources import Item
@@ -548,7 +550,7 @@ class _Article:
         if copied:
             edit["copies"] = copied  # the copies it pasted, by number: the page's own HTML
         self.edits.append(edit)
-        extract._prune_empty(self.body)
+        _prune_empty(self.body)
         _tidy_links(self.body)
         count = len(blocks(self.body))
         return f"Done. The article now has {count} blocks. Around the change, with their new numbers:\n" + self.listing(
@@ -731,7 +733,7 @@ class _Article:
         the page's. The page's own HTML (`from_page`) has its lazy images' addresses found and
         its h1 made an h2, as the extractor does."""
         fragment = _fragment(html)
-        extract._unnest_empty(fragment)  # a page's <picture> as lxml read it: its <img> inside a <source>
+        _unnest_empty(fragment)  # a page's <picture> as lxml read it: its <img> inside a <source>
         within: list[lxml.html.HtmlElement] = []
         for el in fragment.iter():
             if not isinstance(el.tag, str):
@@ -739,7 +741,7 @@ class _Article:
             for name in [name for name in el.attrib if name.startswith(extract.MARK)]:
                 del el.attrib[name]
             if el.tag == "img":
-                src = self._image(extract._picture_address(el) if from_page else el.get("src") or "")
+                src = self._image(_picture_address(el) if from_page else el.get("src") or "")
                 el.attrib.clear() if not src else _keep_only(el, src)
             if from_page:
                 el.attrib.pop("id", None)  # the page's own ids are not the article's
@@ -764,7 +766,7 @@ class _Article:
         src = src.strip()
         if src.startswith("picture:") and src[8:].isdigit() and 1 <= int(src[8:]) <= len(self.pictures):
             return self.pictures[int(src[8:]) - 1]
-        absolute = extract._join(self.url, src)
+        absolute = _join(self.url, src)
         if absolute.startswith(("http://", "https://")) and absolute in self.page_images | self._own_images():
             return absolute
         return ""
@@ -1082,13 +1084,13 @@ def _page_images(page_html: str, url: str) -> set[str]:
     for el in root.iter("img", "source"):
         for name in ("src", *extract.LAZY_SRC):
             if el.get(name):
-                found.add(extract._join(url, el.get(name).strip()))
+                found.add(_join(url, el.get(name).strip()))
         for name in ("srcset", "data-srcset"):
             for address in extract.srcset_urls(el.get(name) or ""):
-                found.add(extract._join(url, address))
+                found.add(_join(url, address))
     for meta in root.xpath('//meta[@property="og:image" or @name="twitter:image"]'):
         if meta.get("content"):
-            found.add(extract._join(url, meta.get("content").strip()))
+            found.add(_join(url, meta.get("content").strip()))
     return {src for src in found if src.startswith(("http://", "https://"))}
 
 
