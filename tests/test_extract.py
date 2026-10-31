@@ -3507,13 +3507,17 @@ def test_a_headings_link_to_itself_and_glued_credits():
     page = forms_page(
         '<h2 id="ipo">IPO Pumping<a class="anchor" href="#ipo">#</a></h2><p>Words under it.</p>'
         '<h2 id="see"><a href="#see">See the result</a></h2><p>More words.</p>'
+        '<h2 id="t"><a href="#t"><span>Training at scale</span><span class="opacity-0">#</span></a></h2><p>Text.</p>'
+        '<a href="#v"><h2 id="v">Victoria</h2><h2 class="hash">#</h2></a><p>Text.</p>'
+        '<h2>Old post <a href="" title="Permalink to this post">⚓</a></h2><p>Text.</p>'
         '<figure><img src="https://static.example/b.jpg" width="800" height="600" alt="">'
         '<figcaption><span class="caption__text">A blaze in Kyiv.</span>'
         '<span class="caption__source">Genya Savilov / AFP</span></figcaption></figure>'
     )
     body = extract("https://blog.example/post", page, "", "page").body
     heads = [" ".join(h.text_content().split()) for h in body.iter("h2", "h3")]
-    assert "IPO Pumping" in heads and "See the result" in heads
+    assert {"IPO Pumping", "See the result", "Training at scale", "Victoria", "Old post"} <= set(heads)
+    assert not [h for h in heads if h.endswith(("#", "⚓"))]
     assert "A blaze in Kyiv. Genya Savilov / AFP" in " ".join(body.text_content().split())
 
 
@@ -3549,6 +3553,14 @@ def test_repeated_pictures_and_credits_on_odd_markup():
         "https://s.example/post",
     )
     assert "Cap" in body.text_content() and "Second" in body.text_content()
+    # A one-word link or credit beside its label: the label still goes.
+    page = forms_page(
+        '<p>He <a href="https://x.example/">said<span class="VisuallyHidden">, external</span></a> so.</p>'
+        '<figure><img src="https://s.example/e.jpg" width="800" height="600"><figcaption><span>A port.</span>'
+        '<span><span class="x_accessibilityLabel">Credit...</span><span>Reuters</span></span></figcaption></figure>'
+    )
+    text = " ".join(extract("https://blog.example/post", page, "", "page").body.text_content().split())
+    assert "He said so." in text and "A port. Reuters" in text
     # A comment between a caption and its credit; a note number and a bracket get no space.
     lead = lxml.html.fromstring(
         '<div><div class="caption">Officials met in Riyadh.<!-- --><span class="credit">Saudi Press Agency</span>'

@@ -2071,21 +2071,42 @@ def _redundant_label(el: lxml.html.HtmlElement) -> bool:
     words = el.text_content().split()
     if len(words) > SCREEN_READER_MAX_WORDS or not any(c.isalpha() for c in "".join(words)):
         return False  # a symbol is part of what is shown: Wikipedia's "/" between a stacked fraction's parts
+    # Letters, not words: "said" beside ", external" is one word against two.
     hidden = sum(
-        len(box.text_content().split())
+        _chars(box)
         for box in parent.iter()
         if isinstance(box.tag, str) and box is not parent and SCREEN_READER.search(box.get("class") or "")
     )
-    return len(parent.text_content().split()) > hidden
+    return _chars(parent) > hidden
+
+
+def _chars(box: lxml.html.HtmlElement) -> int:
+    return len("".join(box.text_content().split()))
 
 
 def _drop_self_links(root: lxml.html.HtmlElement) -> None:
     """Drop a heading's link to its own section ("#", "¶"), which themes show on hover; left
-    in, every heading ends in it ("IPO Pumping#")."""
-    for a in root.xpath(".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]//a"):
-        mark = a.text_content().strip() in SELF_LINK_MARKS and a.find(".//img") is None
-        if mark and (a.get("href") or "").strip().startswith("#"):
+    in, every heading ends in it ("IPO Pumping#"). Also the mark alone at the end of such a
+    link ("Title #"), and a heading that is only the mark (one theme sets it as an <h2>)."""
+    headings = ".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]"
+    mark = lambda el: el.text_content().strip() in SELF_LINK_MARKS and el.find(".//img") is None
+    for a in root.xpath(f"{headings}//a"):
+        href = (a.get("href") or "").strip()
+        if a.getparent() is None or (href and not href.startswith("#")):
+            continue
+        if mark(a):
             a.drop_tree()
+        elif len(a) and isinstance(a[-1].tag, str) and mark(a[-1]) and not (a[-1].tail or "").strip():
+            a[-1].drop_tree()
+    for heading in root.xpath(headings):
+        if heading.getparent() is None:
+            continue
+        if mark(heading):
+            heading.drop_tree()
+            continue
+        last = heading[-1] if len(heading) else None  # the link already unwrapped into the heading's id
+        if last is not None and isinstance(last.tag, str) and mark(last) and not (last.tail or "").strip():
+            last.drop_tree()
 
 
 def _separate_credits(root: lxml.html.HtmlElement) -> None:
@@ -2173,7 +2194,7 @@ def _picture_block(img: lxml.html.HtmlElement) -> lxml.html.HtmlElement | None:
     if parent is None:
         return None
     if parent.tag == "figure":
-        return parent
+        return parent if len(parent.findall(".//img")) == 1 else None
     if (
         parent.tag in ("p", "div")
         and not " ".join(parent.text_content().split())
