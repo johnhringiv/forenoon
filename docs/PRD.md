@@ -430,9 +430,11 @@ All fetched content is treated as untrusted.
     "Credit..." before a photo's credit. One that is its box's only text stays (a bar drawn
     with CSS has no other words: "2007–2008, Shut Down"), and so does one without letters
     (Wikipedia's "/" between a stacked fraction's parts).
-  - A heading's hover mark for its own section (`#`, `¶`, `§`) goes: a link to the section
-    that is only the mark, the mark ending such a link or the heading, or a heading that is
-    only the mark; left in, every heading ends in it.
+  - A heading's hover mark for its own section (`#`, `¶`, `§`, `🔗`, `⚓`) goes: a link to
+    the section that is only the mark, the mark ending such a link or the heading as its last
+    box, an icon link to the section beside the heading's words (its label hidden by a class:
+    "Link to this heading"), or a heading that is only the mark; left in, every heading ends
+    in it.
   - In a figure's caption, boxes set side by side keep a space between them where the first
     ends a sentence or the second is named for a credit or source ("…in Riyadh. Saudi Press
     Agency", not "Riyadh.Saudi").

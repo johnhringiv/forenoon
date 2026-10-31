@@ -2051,18 +2051,19 @@ def _drop_screen_reader_text(root: lxml.html.HtmlElement) -> None:
     """Drop labels written for screen readers and hidden from sight (BBC's ", external", the
     NYT's "Credit..."), and pull quotes the page hides from screen readers because they repeat
     the text (the FT's). Not every aria-hidden box: charts drawn twice and lazy pictures use it."""
+    shown: dict[lxml.html.HtmlElement, int] = {}  # a box's letters outside its labels, counted once
     for el in list(root.iter()):
         if not isinstance(el.tag, str) or el.getparent() is None:
             continue
         names = el.get("class") or ""
         if SCREEN_READER.search(names):
-            if _redundant_label(el):
+            if _redundant_label(el, shown):
                 el.drop_tree()
         elif PULL_QUOTE.search(names) and (el.get("aria-hidden") or "").strip().lower() == "true":
             el.drop_tree()
 
 
-def _redundant_label(el: lxml.html.HtmlElement) -> bool:
+def _redundant_label(el: lxml.html.HtmlElement, shown: dict[lxml.html.HtmlElement, int]) -> bool:
     """A short screen-reader label of words beside visible text, which says it already. Not
     the only text of its box: a bar drawn with CSS ("2007–2008, Shut Down") has no other words."""
     parent = el.getparent()
@@ -2071,41 +2072,54 @@ def _redundant_label(el: lxml.html.HtmlElement) -> bool:
     words = el.text_content().split()
     if len(words) > SCREEN_READER_MAX_WORDS or not any(c.isalpha() for c in "".join(words)):
         return False  # a symbol is part of what is shown: Wikipedia's "/" between a stacked fraction's parts
-    # Letters, not words: "said" beside ", external" is one word against two.
-    hidden = sum(
-        _chars(box)
-        for box in parent.iter()
-        if isinstance(box.tag, str) and box is not parent and SCREEN_READER.search(box.get("class") or "")
-    )
-    return _chars(parent) > hidden
+    if parent not in shown:
+        # Letters, not words: "said" beside ", external" is one word against two. Dropping a
+        # label takes its letters from both counts, so the difference holds for its siblings.
+        hidden = sum(
+            _chars(box)
+            for box in parent.iter()
+            if isinstance(box.tag, str) and box is not parent and SCREEN_READER.search(box.get("class") or "")
+        )
+        shown[parent] = _chars(parent) - hidden
+    return shown[parent] > 0
 
 
 def _chars(box: lxml.html.HtmlElement) -> int:
     return len("".join(box.text_content().split()))
 
 
+def _self_mark(el: lxml.html.HtmlElement, link: bool = False) -> bool:
+    """Whether el is only a hover mark ("#", "¶"). A link may also be empty: Docusaurus's
+    holds a zero-width space and draws its "#" with CSS."""
+    text = el.text_content().replace("\u200b", "").strip()
+    return (text in SELF_LINK_MARKS or (link and not text)) and el.find(".//img") is None
+
+
 def _drop_self_links(root: lxml.html.HtmlElement) -> None:
     """Drop a heading's link to its own section ("#", "¶"), which themes show on hover; left
     in, every heading ends in it ("IPO Pumping#"). Also the mark alone at the end of such a
-    link ("Title #"), and a heading that is only the mark (one theme sets it as an <h2>)."""
+    link ("Title #"), an icon link beside the heading's words whose label is hidden by a
+    class we cannot read ("Link to this heading1. CSS functions"), and a heading that is
+    only the mark (one theme sets it as an <h2>)."""
     headings = ".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]"
-    mark = lambda el: el.text_content().strip() in SELF_LINK_MARKS and el.find(".//img") is None
-    for a in root.xpath(f"{headings}//a"):
-        href = (a.get("href") or "").strip()
-        if a.getparent() is None or (href and not href.startswith("#")):
-            continue
-        if mark(a):
-            a.drop_tree()
-        elif len(a) and isinstance(a[-1].tag, str) and mark(a[-1]) and not (a[-1].tail or "").strip():
-            a[-1].drop_tree()
     for heading in root.xpath(headings):
         if heading.getparent() is None:
             continue
-        if mark(heading):
+        dropped = False
+        for a in list(heading.iter("a")):
+            href = (a.get("href") or "").strip()
+            if a.getparent() is None or (href and not href.startswith("#")):
+                continue
+            if _self_mark(a, link=True) or (a.find(".//svg") is not None and _chars(heading) > _chars(a)):
+                a.drop_tree()
+                dropped = True
+            elif len(a) and isinstance(a[-1].tag, str) and _self_mark(a[-1]) and not (a[-1].tail or "").strip():
+                a[-1].drop_tree()
+        if _self_mark(heading) or (dropped and not _chars(heading)):
             heading.drop_tree()
             continue
         last = heading[-1] if len(heading) else None  # the link already unwrapped into the heading's id
-        if last is not None and isinstance(last.tag, str) and mark(last) and not (last.tail or "").strip():
+        if last is not None and isinstance(last.tag, str) and _self_mark(last) and not (last.tail or "").strip():
             last.drop_tree()
 
 
@@ -2117,36 +2131,33 @@ def _separate_credits(root: lxml.html.HtmlElement) -> None:
 
 
 def _space_boxes(caption: lxml.html.HtmlElement) -> None:
-    for el in list(caption.iterdescendants()):
-        if not isinstance(el.tag, str) or el.tag in ("sup", "sub"):  # a note's number goes with its word
+    """Put a space between side-by-side boxes of a caption where the first ends a sentence or
+    the second is a credit. Each box's children are walked once with the text so far."""
+    for parent in [caption, *caption.iterdescendants()]:
+        if not isinstance(parent.tag, str):
             continue
-        text = el.text_content()
-        if not text or text[0].isspace():
-            continue
-        before = _text_before(el)
-        if not before or before[-1].isspace() or before[-1] in "([{“‘\"'":
-            continue
-        if before[-1] in '.!?…”"’)]' or CREDIT_NAME.search(el.get("class") or ""):
-            prev = el.getprevious()
-            if prev is not None:
-                prev.tail = (prev.tail or "") + " "
-            else:
-                parent = el.getparent()
-                parent.text = (parent.text or "") + " "
+        before = parent.text or ""
+        for el in list(parent):
+            if isinstance(el.tag, str):
+                text = el.text_content()
+                if _needs_space(before, text, el):
+                    prev = el.getprevious()
+                    if prev is not None:
+                        prev.tail = (prev.tail or "") + " "
+                    else:
+                        parent.text = (parent.text or "") + " "
+                    before += " "
+                before += text
+            before += el.tail or ""  # not a comment's text: React writes "<!-- -->" between them
 
 
-def _text_before(el: lxml.html.HtmlElement) -> str:
-    """The text of el's parent before el: its siblings' words and the text between them,
-    not a comment's (React writes "<!-- -->" between a caption and its credit)."""
-    parent = el.getparent()
-    parts = [parent.text or ""]
-    for sibling in parent:
-        if sibling is el:
-            break
-        if isinstance(sibling.tag, str):
-            parts.append(sibling.text_content())
-        parts.append(sibling.tail or "")
-    return "".join(parts)
+def _needs_space(before: str, text: str, el: lxml.html.HtmlElement) -> bool:
+    if el.tag in ("sup", "sub") or not before or not text:  # a note's number goes with its word
+        return False
+    if before[-1].isspace() or text[0].isspace() or before[-1] in "([{“‘" or text[0] in ",.;:!?)]":
+        return False
+    ends = before[-1] in ".!?…”’)]" or (before[-1] in "\"'" and before[-2:-1] in tuple(".!?"))
+    return ends or bool(CREDIT_NAME.search(el.get("class") or ""))
 
 
 def _drop_repeated_pictures(root: lxml.html.HtmlElement) -> None:

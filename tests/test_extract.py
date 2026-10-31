@@ -3590,3 +3590,32 @@ def test_repeated_pictures_and_credits_on_odd_markup():
     )
     text = " ".join(extract("https://en.wikipedia.org/wiki/F", page, "", "page").body.text_content().split())
     assert "n + 2/2" in text
+
+
+def test_many_labels_stay_fast_and_more_heading_marks_go():
+    # Thousands of hidden labels in one paragraph: each box's letters are counted once.
+    labels = "".join(
+        f'<a href="https://x.example/{i}">w{i}<span class="sr-only">, external</span></a> ' for i in range(3000)
+    )
+    start = time.monotonic()
+    body = sanitize(lxml.html.fromstring(f"<div><p>{labels}</p></div>"), "https://blog.example/post")
+    assert time.monotonic() - start < 5 and "external" not in body.text_content()
+    caption = "".join(f"<span>Part {i}.</span>" for i in range(3000))
+    start = time.monotonic()
+    sanitize(
+        lxml.html.fromstring(
+            f'<div><figure><img src="https://s.example/a.jpg"><figcaption>{caption}</figcaption></figure></div>'
+        ),
+        "https://b.example/",
+    )
+    assert time.monotonic() - start < 5
+    body = sanitize(
+        lxml.html.fromstring(
+            '<div><h2 id="one"><a href="#one"><span><svg viewBox="0 0 1 1"></svg><span class="x1">Link to this heading</span></span></a>1. CSS functions</h2>'
+            '<h3><a href="#">¶</a></h3><h3>Docs<a href="#d" class="hash-link">\u200b</a></h3>'
+            '<figure><img src="https://s.example/b.jpg"><figcaption>Text<span class="credit">, AP</span> and "so it goes."<span>Next</span></figcaption></figure></div>'
+        ),
+        "https://blog.example/post",
+    )
+    assert [" ".join(h.text_content().split()) for h in body.iter("h2", "h3")] == ["1. CSS functions", "Docs"]
+    assert body.find(".//figcaption").text_content() == 'Text, AP and "so it goes." Next'
