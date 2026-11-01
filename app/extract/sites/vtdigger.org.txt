@@ -1,0 +1,7 @@
+# The feed entry's last line, a link back to the story.
+strip: //p[starts-with(normalize-space(), 'Read the story on VTDigger here')]
+# The "READ MORE" box in the article and its story cards (empty in the feed).
+strip: //h5[normalize-space() = 'READ MORE']
+strip_id_or_class: wp-block-newspack-blocks-homepage-articles
+# "Latest Opinion posts" after a letter.
+strip_id_or_class: newspack-popup

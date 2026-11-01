@@ -14,6 +14,7 @@ from readability import Document
 from readability.readability import clean as _readability_clean
 
 from .. import formulas
+from . import sites
 from .allowlist import sanitize
 from .base import (
     BLOCK,
@@ -505,6 +506,17 @@ CONTINUATION_LINK_SHARE = 0.25
 CONTINUATION_TAGS = ("p", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "blockquote", "pre", "figure", "table")
 
 
+def _site_body(page_html: str, rules: sites.Rules) -> lxml.html.HtmlElement | None:
+    """The article's box by the site's body rule, when it holds an article's worth of words."""
+    if not rules.body:
+        return None
+    try:
+        box = sites.body(lxml.html.fromstring(page_html), rules)
+    except Exception:  # noqa: BLE001 - hostile markup; readability picks instead
+        return None
+    return box if box is not None and _words(box.text_content()) >= MIN_WORDS else None
+
+
 def _continue_article(body: lxml.html.HtmlElement, page_html: str) -> None:
     """Put back the rest of an article that the page splits into boxes around an advert.
 
@@ -924,14 +936,18 @@ def extract(
     title = author = image = description = ""
     pictures: list[str] = []
     notes: dict[str, lxml.html.HtmlElement | None] = {}
+    rules = sites.rules_for(url)
+    if sites.not_article(url, rules):
+        return Extracted(None, "failed", ["not an article (site rule)"], 0)
     tex = formulas.page_tex(page_html or "")  # the feed's copy is written with the page's TeX
     if page_html and mode != "feed":
         # An XHTML page's "<?xml ... encoding=...?>": the text is decoded already, and lxml
         # refuses to parse a string that still declares an encoding.
         page_html = XML_DECLARATION.sub("", page_html, count=1)
-        page_html, notes["page"] = _lift(page_html, url, whole_page=True, tex=tex)
+        page_html, notes["page"] = _lift(page_html, url, whole_page=True, tex=tex, rules=rules)
         notes["page-wide"] = notes["page"]
-        page = _readability(page_html, url)
+        ruled = _site_body(page_html, rules)
+        page = ruled if ruled is not None else _readability(page_html, url)
         if page is not None:
             _refill_sections(page, page_html)
             _continue_article(page, page_html)
@@ -945,8 +961,9 @@ def extract(
         reference = _reference_words(formulas.strip_shadows(page_html))  # trafilatura reads no <math> either
         title, author, image, description = page_metadata(page_html)
         kept = _words(candidates["page"].text_content()) if "page" in candidates else 0
-        # Long articles only: on a short post the page furniture outweighs the text.
-        if reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
+        # Long articles only: on a short post the page furniture outweighs the text. Not when the
+        # site's rules say where the article is.
+        if ruled is None and reference >= WIDEN_MIN_WORDS and kept < 0.6 * reference:
             wide = _widest(page_html, reference)
             wide = sanitize(wide, url, marked=True) if wide is not None else None
             # Only when it recovers the article without dragging in much else.
@@ -956,14 +973,14 @@ def extract(
                 and _holds(wide, candidates.get("page"))
             ):
                 candidates["page-wide"] = wide
-        live = _live_blog(page_html, page)
+        live = _live_blog(page_html, page) if ruled is None else None
         live = sanitize(live, url, marked=True) if live is not None else None
         # Only when it has far more than readability kept: one entry of the day's reporting.
         if live is not None and _words(live.text_content()) >= LIVE_OVER_PAGE * kept:
             candidates["page-live"] = live
             notes["page-live"] = notes["page"]
     if mode != "page" or not candidates:
-        feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False, tex=tex)
+        feed_html, notes["feed"] = _lift(feed_html, url, whole_page=False, tex=tex, rules=rules)
         feed = _parse_fragment(feed_html)
         if feed is not None:
             candidates["feed"] = sanitize(feed, url, marked=True)

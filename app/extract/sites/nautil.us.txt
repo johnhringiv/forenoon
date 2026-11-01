@@ -1,0 +1,2 @@
+# "Enjoying Nautilus? Subscribe to our free newsletter." at the end of each article.
+strip: //p[starts-with(normalize-space(), 'Enjoying Nautilus?')]

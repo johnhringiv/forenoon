@@ -1,0 +1,8 @@
+# The subscription box over a feature article ("Please consider subscribing to LWN").
+strip: //blockquote[@class = 'ad']
+# A subscriber link's welcome and trial offer, and its "Did you like this article?" box.
+strip: //table[tr/td/h3[normalize-space() = 'Welcome to LWN.net']]
+strip: //blockquote[table[@class = 'Form']]
+# Where the comments would be: "The LWN site is currently under high scraper load…".
+strip: //hr/following-sibling::text()[contains(., 'under high scraper load')]
+strip: //p[contains(normalize-space(), 'avoid this step in the future by logging into your LWN account')][string-length(normalize-space()) < 200]

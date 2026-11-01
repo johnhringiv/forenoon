@@ -72,7 +72,11 @@ def _interactive(figure: lxml.html.HtmlElement) -> bool:
 def _drawn(figure: lxml.html.HtmlElement) -> bool:
     """Whether a figure is a drawing the book would lose: an inline SVG of some size (a chart,
     a diagram) or an embedded page that is not a video (a chart from Flourish, a demo), with no
-    picture, video, table, code or quote of its own. Not a player's (its controls are SVG)."""
+    picture, video, table, code or quote of its own. Not a player's (its controls are SVG). And a
+    graphic drawn once per screen width with its labels set over the art (ai2html's map, whose
+    place names would otherwise come out as lists of words under each copy of the picture)."""
+    if any(isinstance(el.tag, str) and ARTBOARD in _classes(el) and _text_key(el) for el in figure.iter()):
+        return True
     if figure.xpath(WIDGET_KEPT.replace(" | .//iframe", "")):
         return False
     names = (el for el in (figure, *figure.iterdescendants()) if isinstance(el.tag, str))
@@ -85,6 +89,16 @@ def _drawn(figure: lxml.html.HtmlElement) -> bool:
     if frames:
         return all(src and not VIDEO_LINK.match(src) and not PLAYER_EMBED.match(src) for src in frames)
     return any(len(svg.xpath(".//*")) >= DRAWN_MIN_ELEMENTS for svg in figure.iter("svg"))
+
+
+def _other_boards(figure: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
+    """A labelled graphic's copies for other screen widths than its widest labelled one (see
+    _drawn), whose labels would only repeat that copy's."""
+    boards = [el for el in figure.iter() if isinstance(el.tag, str) and ARTBOARD in _classes(el)]
+    widest = max((board for board in boards if _text_key(board)), key=_min_width, default=None)
+    if widest is None:
+        return []
+    return [board for board in boards if board is not widest and widest not in board.iterancestors()]
 
 
 RESTORE_MAX_PICTURES = 8  # more in one figure is a widget's grid or tabs, not its picture

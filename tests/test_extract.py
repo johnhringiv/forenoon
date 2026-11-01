@@ -3072,13 +3072,17 @@ def test_a_drawn_figure_is_marked_for_a_picture_and_a_players_is_not():
         '<figure><iframe src="https://www.youtube.com/embed/x"></iframe></figure>'
         f'<figure><div class="video-player">{chart}</div></figure>'
         "<figure><svg><path/></svg><figcaption>An icon</figcaption></figure>"
+        # A map drawn once per screen width with its labels over the art; a graphic without labels
+        # is its picture.
+        '<figure><div class="g-artboard"><img src="https://i.example/map.jpg"><p>IRAQ</p></div></figure>'
+        '<figure><div class="g-artboard"><img src="https://i.example/chart.jpg"></div></figure>'
         "</body></html>"
     )
     root = lxml.html.fromstring(page)
     extract_structure._mark_widgets(root)
     marks = [h.get(extract_module.MARK) for h in root.xpath(f"//p[@{extract_module.MARK}]")]
     numbers = [h.get(extract_module.MARK_N) for h in root.xpath(f"//p[@{extract_module.MARK}]")]
-    assert marks == ["drawn", "drawn"] and numbers == ["0", "1"]
+    assert marks == ["drawn", "drawn", "drawn"] and numbers == ["0", "1", "5"]
 
 
 def test_a_status_badge_is_not_a_picture():
@@ -3680,3 +3684,15 @@ def test_many_labels_pictures_and_credits_stay_fast():
     assert _text(quick(f"<h2>Title{icons}</h2>")) == "Title"
     pictures = "".join(f'<img src="https://s.example/{i}.jpg"><br>Line {i}<br>' for i in range(4000))
     assert len(quick(f"<div>{pictures}</div>").findall(".//img")) == 4000
+
+
+def test_a_drawn_map_keeps_only_its_widest_copys_labels():
+    root = lxml.html.fromstring(
+        '<html><body><figure><div class="ai2html">'
+        '<div class="g-artboard" data-min-width="0"><img src="https://i.example/s.jpg"><p>IRAQ</p></div>'
+        '<div class="g-artboard" data-min-width="600"><img src="https://i.example/l.jpg"><p>IRAQ</p></div>'
+        "</div></figure></body></html>"
+    )
+    extract_structure._mark_widgets(root)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/l.jpg"]
+    assert root.xpath(f"//p[@{extract_module.MARK}]")[0].get(extract_module.MARK) == "drawn"

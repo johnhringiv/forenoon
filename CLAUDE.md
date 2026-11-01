@@ -11,7 +11,8 @@ today; it is the spec, so a change in behaviour updates it in the same PR.
   reader's run), `rank.py`/`read.py`/`choose.py`/`learn.py`/`review.py` (the model's calls),
   `llm.py` and `models.py` (connections and model profiles), `render.py` (the books),
   `store.py` (the pipeline's tables), `config.py` (settings), `extract/` (the article from a
-  fetched page: chosen, cleaned and reduced to an allowlist; its `__init__` names the modules).
+  fetched page: chosen, cleaned and reduced to an allowlist; its `__init__` names the modules;
+  `extract/sites/` holds the rules for one site).
 - `web/`: the web pages (Rust: axum, sqlx, askama). `src/` handlers, `templates/`,
   `migrations/`, `settings.json` (the Settings page), `models.json` (the shipped models and
   prices, also read by the pipeline), `tests/web.rs`.

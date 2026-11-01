@@ -1,0 +1,37 @@
+# The article's box: readability drops a paragraph or heading alone in its own column (#126),
+# and the Upshot's charts and tables.
+body: //section[@name = 'articleBody']
+# Inside it: advertisement slots, the sponsor line, video and audio players (a caption without
+# its video), the news-tips and trust boxes, a form asking readers for their stories, a
+# reporter's pick from the comments, and the letters page's footer.
+strip: //div[starts-with(@id, 'story-ad-')]
+strip: //div[@id = 'sponsor-wrapper']
+strip: //*[starts-with(@data-testid, 'VideoBlock') or starts-with(@data-testid, 'AudioBlock')]
+strip: //section[@id = 'tips-promo-capsule']
+strip: //section[@data-testid = 'inline-interactive'][.//*[contains(@class, 'trust-survey-component')]]
+strip: //section[@data-testid = 'inline-interactive'][.//form or .//textarea]
+strip: //aside[starts-with(normalize-space(), 'From the comments')]
+strip: //p[starts-with(normalize-space(), 'The Times is committed to publishing a diversity of letters')]
+strip: //p[starts-with(normalize-space(), 'Follow the New York Times Opinion section on')]
+# A picture's "Image" label for screen readers, and the authors' portraits in a feature's byline.
+strip: //figure//span[contains(@class, 'accessibilityLabel')]
+strip: //a[contains(@href, 'nytimes.com/by/')][.//img]
+# A card for another Times story: one link holding its picture, headline and summary.
+strip: //div[@data-testid = 'interactive-block'][count(*) = 1][a[contains(@href, 'nytimes.com/')]]
+# Charts the book cannot show and the browser cannot take a picture of (see the PRD's figures):
+# a map or chart whose labels are paragraphs over the art (ai2html outside a <figure>, the race
+# maps' figures of labels) comes out as lists of words, twice over; a Datawrapper chart would
+# leave only its heading, so its section goes whole.
+strip: //section[@data-testid = 'inline-interactive'][count(.//p[string-length(normalize-space()) < 25]) >= 20][not(.//figure[.//svg[count(.//*) >= 20] or .//*[contains(concat(' ', @class, ' '), ' g-artboard ')]])]
+strip: //section[starts-with(@id, 'datawrapper_')]
+# Svelte's hidden announcer, which holds the page's title; and a chart's bars drawn as boxes
+# beside the table for screen readers that holds the same numbers (the table reads better).
+strip: //div[@id = 'svelte-announcer']
+strip: //table[contains(concat(' ', @class, ' '), ' sr-only ')]/../div[not(.//table)]
+# A feature's headline over its text (the book prints it), a newsletter's sign-up line, and the
+# "Listen · 37 min" button.
+strip: //section[@name = 'articleBody']//header//h1
+strip: //div[.//button[@data-testid = 'signup-button']][not(.//div[.//button[@data-testid = 'signup-button']])]
+strip: //div[starts-with(normalize-space(), 'Listen ·')][string-length(normalize-space()) < 30]
+# Podcast episodes. (Not video pages: some carry a reported transcript.)
+not_article: ^/\d{4}/\d\d/\d\d/podcasts/

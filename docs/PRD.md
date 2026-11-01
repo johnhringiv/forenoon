@@ -315,6 +315,40 @@ All fetched content is treated as untrusted.
     words or mostly its form. So is a box of cards for the site's other stories: three or more
     `<article>`s side by side, each of at most 80 words under a headline that links to another
     of the site's pages, not in a live blog, with the heading over it.
+- **Site rules.** A site the general rules read badly can have rules of its own, shipped with
+  the code in `app/extract/sites/` (one file per domain, covering its subdomains), in
+  FiveFilters' site-config format so its open configs can be borrowed: `strip` (XPath) and
+  `strip_id_or_class` drop what they select from the page and the feed entry before the
+  page's structure is rebuilt and readability reads it (a selected text node goes alone; never
+  the page's `<html>` or `<body>`); `body` names the article's box, used in place of
+  readability's pick (and of the wider and live-blog tries below) when it holds at least 40
+  words, and then put through the same steps as readability's pick (continued articles,
+  figure pictures); and Forenoon's own `not_article` names, by a pattern of the path, the
+  pages that hold no article (a site's video pages and podcast episodes), which are failed
+  without being fetched. A dropped element that parted two words leaves a space between them.
+  The page's figures are counted before anything is dropped, as the browser counts them when
+  it takes their pictures. FiveFilters directives Forenoon does not use (`title`, `test_url`,
+  `prune` and the like) are read and ignored; a file that does not read leaves its site to the
+  general rules (a test reads every shipped one).
+  - VTDigger: the feed entry's "Read the story on VTDigger here" line and the "READ MORE"
+    box with its story cards; "Latest Opinion posts".
+  - Nautilus: "Enjoying Nautilus? Subscribe to our free newsletter."
+  - LWN: the subscription box over a feature, a subscriber link's welcome and trial boxes, and
+    the comments notice ("under high scraper load") with its "Note" line.
+  - The New York Times: the article's box (`section[name=articleBody]`), as readability drops
+    a paragraph or heading alone in its own column, and the Upshot's tables and charts; in it,
+    advertisement slots, the sponsor line, video and audio players, the news-tips, trust and
+    reader-callout boxes, a reporter's pick from the comments, the letters page's footer, a
+    picture's screen-reader labels ("Image", "Credit"), the authors' portraits, a card for
+    another Times story, a feature's headline, a newsletter's
+    sign-up line, "Listen · 37 min", Svelte's hidden announcer of the page's title, a
+    chart's bars beside the screen-reader table holding the same numbers, Datawrapper charts with their headings (the
+    book would show only the heading), and maps and charts whose labels are paragraphs over
+    the art, which the browser cannot take a picture of (ai2html outside a `<figure>`, the
+    race maps), as they come out as lists of words. Not articles: podcast episodes (not video pages, some of which carry a reported
+    transcript).
+  - BBC: video pages (`/news/videos/`) and iPlayer and Sounds episodes are not articles.
+  - The Guardian: podcast episodes and video pages (`/audio/`, `/video/`) are not articles.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
@@ -573,7 +607,7 @@ All fetched content is treated as untrusted.
 - **Link cards.** An embedded "bookmark" link (a whole block wrapped in one link) is rebuilt
   as a bordered card: linked title, up to two lines of description, and the site's host name.
 - **Verdict.** Each article is `clean`, `degraded` or `failed`, with reasons:
-  - failed: fewer than 40 words, or nothing extracted;
+  - failed: fewer than 40 words, nothing extracted, or a page a site rule names as no article;
   - degraded: much shorter than the page (under 60%), under 150 words, a paywall marker, a
     cookie or bot-wall marker, or an ending that looks truncated.
     Degraded articles are still delivered; failed ones are not and are not retried. A page
@@ -942,7 +976,10 @@ Sonnet 5.5).
   book would lose: an inline SVG of 20 elements or more (a chart, a diagram) or an embedded
   page that is not a video, a player or a post (Spotify, SoundCloud, a podcast host,
   Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
-  either, and not a player's (named so: its controls are SVG). The room these pictures have in
+  either, and not a player's (named so: its controls are SVG); or a graphic drawn once per
+  screen width with its labels set as text over the art (ai2html's artboards: a map's place
+  names), pictures and all, as its labels alone are lists of words; the copies for other
+  widths are dropped, so without a picture the figure keeps one copy's labels. The room these pictures have in
   the article's budget leaves out its SVG pictures, mostly equations. A drawn figure's picture comes with no line
   under it; without one, the line sends the reader to the original page for the figure. Without the scripts it is often
   only its labels run together, so extraction puts a placeholder first in it, numbered by
