@@ -356,8 +356,8 @@ All fetched content is treated as untrusted.
     topic tags. Video pages (`/news/videos/`) and iPlayer and Sounds episodes are not articles.
   - The Guardian: the article's box (`div[data-gu-name=body]`) with its lead picture, on a page
     that has the box, as readability drops a live blog's post headers and with them each post's
-    heading; in it, videos (in the text and as the lead), cards for other Guardian stories, the
-    newsletter sign-up and reporter-callout boxes (with a "Read more…" line before a card) and
+    heading; in it, videos (in the text and as the lead), cards for other Guardian stories (with
+    a "Read more…" line before one), the newsletter sign-up and reporter-callout boxes and
     newsletter lines, the long read's podcast footer, each post's relative time ("2h ago") and
     contributor portrait, a kept pinned post's "From 45m ago" line, the "Key events" list when
     every post it links to is in the book (when it links to a post on a later page it stays, as
