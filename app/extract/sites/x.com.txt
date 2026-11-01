@@ -4,17 +4,19 @@
 # First the others' posts go: the replies the page's script streams in under the post, a post
 # the author replied to above it, and any later post of the author's below a reply. A post is
 # the author's when its own avatar link (the one inside no other article) is marked
-# aria-current, as the page's author's links are.
-strip: //main//article[not(ancestor::article)][not(.//a[@aria-current='page'][.//img][count(ancestor::article)=1]) or preceding::article[not(ancestor::article)][not(.//a[@aria-current='page'][.//img][count(ancestor::article)=1])][preceding::article[not(ancestor::article)][.//a[@aria-current='page'][.//img][count(ancestor::article)=1]]]]
+# aria-current, as the page's author's links are; on a page where none is, nothing goes.
+strip: //main//article[not(ancestor::article)][//main//article//a[@aria-current='page'][.//img]][not(.//a[@aria-current='page'][.//img][count(ancestor::article)=1]) or preceding::article[not(ancestor::article)][not(.//a[@aria-current='page'][.//img][count(ancestor::article)=1])][preceding::article[not(ancestor::article)][.//a[@aria-current='page'][.//img][count(ancestor::article)=1]]]]
 # Then each post's furniture: avatars and affiliation badges (profile pictures); the author's
 # name over each of their posts; the time and view count, which link to the post; the reply,
-# repost and like counts.
+# repost and like counts; a video's time badge; "Replying to @…" over a quoted post.
 strip: //main//article//a[.//img[starts-with(@alt, '@') or contains(@src, '/profile_images/')]]
-strip: //main//article//a[@aria-current='page'][count(ancestor::article)=1]
+strip: //main//article//a[@aria-current='page'][count(ancestor::article)=1][not(ancestor::div[@dir='auto'])]
 strip: //main//article//a[contains(@href, '/status/')][not(ancestor::div[@dir='auto'])][not(.//img)]
 strip: //main//article//span[@aria-hidden='true']
 strip: //main//article//div[@role='group']
 strip: //main//article//*[@data-engagement-action]
+strip: //main//article//div[contains(concat(' ', @class, ' '), ' aspect-video ')]//div[contains(concat(' ', @class, ' '), ' pointer-events-none ')][not(.//video or .//img)]
+strip: //main//article//article//div[starts-with(normalize-space(.), 'Replying to')][a]
 # The page's hidden heading, the whole post again as "<name> on X: <post>".
 strip: //h1[contains(concat(' ', normalize-space(@class), ' '), ' sr-only ')]
 body: //main//article[not(ancestor::article)]

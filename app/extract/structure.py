@@ -12,7 +12,7 @@ from lxml import etree
 from readability.readability import REGEXES as READABILITY_PATTERNS
 
 from .. import formulas
-from . import sites
+from . import sites, xposts
 from .allowlist import _unmark, sanitize
 from .base import (
     BOX_MAX_SHARE,
@@ -1204,6 +1204,8 @@ def _lift(
             return markup, None
         if whole_page:
             reveal_streamed(root)  # first: the browser counts figures with the parts in place
+            if xposts.is_x(base_url):
+                xposts.fill_cut_posts(root)  # before the rules drop the links that name each post
         counted = None
         if rules is not None and rules.strip:
             counted = _shown_figures(root) if whole_page else None  # before the rules drop any

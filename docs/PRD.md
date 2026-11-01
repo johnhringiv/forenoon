@@ -379,9 +379,13 @@ All fetched content is treated as untrusted.
     post it quotes, with the quoted post's author. The others' posts go: the replies the page
     streams in under the post, a post the author replied to above it, and the author's later
     posts below a reply. A post counts as the author's when its avatar link is marked as
-    the page's (`aria-current`). Each post loses its avatar, the author's name, its time and
-    view count and its reply, repost and like counts, and the page loses a hidden heading
-    that repeats the post.
+    the page's (`aria-current`); on a page where no avatar is marked, no post goes. Each post
+    loses its avatar, the author's name, its time and view count, its reply, repost and like
+    counts and a video's time badge, a quoted post loses its "Replying to @…", and the page
+    loses a hidden heading that repeats the post. X shows only the first 280 characters or so
+    of a long post in the thread or of a quoted post; the rest is added from the page's data
+    (`note_tweet`), only when that text begins with what is shown and the post's text box
+    ends with it.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
@@ -428,7 +432,7 @@ All fetched content is treated as untrusted.
     sets one before every syllable), so it goes; between two words of a block it leaves a
     space.
   - Text the page shows with its newlines (`white-space: pre-wrap` or `pre-line`, or
-    Tailwind's `whitespace-pre-wrap` class, as an X post's text) has them made line breaks,
+    Tailwind's `whitespace-pre-wrap` or `whitespace-pre-line` class, as an X post's text) has them made line breaks,
     since elsewhere a newline is a space and the paragraphs ran together. Only newlines
     between its words count, and none inside code.
   - In a figure's caption, or a box of a figure named for a caption (a lightbox's copy), a box

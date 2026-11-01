@@ -466,3 +466,16 @@ def test_an_x_post_comes_with_its_thread_and_quote_but_not_the_replies():
     for gone in ("A reply", "answering the reply", "Author Name", "@author", "Oct 2", "137"):
         assert gone not in text
     assert result.body.find(".//br") is not None
+
+
+def test_an_x_page_without_the_authors_marked_links_keeps_its_posts():
+    # If X stops marking the author's links, the posts are left to the general rules, not all dropped.
+    words = "words in the post about the subject, going on at some length " * 6
+    page = (
+        "<html><body><main>"
+        + x_post("author", f"The post, {words}", False)
+        + x_post("replier", "A reply.", False, status="3")
+        + "</main></body></html>"
+    )
+    result = extract("https://x.com/author/status/1", page, "")
+    assert result.body is not None and "The post," in result.body.text_content()
