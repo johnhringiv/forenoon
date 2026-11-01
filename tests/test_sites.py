@@ -420,3 +420,158 @@ def test_a_guardian_articles_lead_picture_is_taken_with_its_box():
     )
     result = extract(GUARDIAN, page, "")
     assert "The lead photo's caption" in result.body.text_content()
+
+
+NPR = "https://www.npr.org/2026/10/23/nx-s1-5995508/x"
+NYPOST = "https://nypost.com/2026/10/24/business/x/"
+GALLUP = "https://news.gallup.com/poll/708614/x.aspx"
+GN = "https://gamersnexus.net/news-features/x"
+
+
+@pytest.mark.parametrize(
+    ("url", "junk"),
+    [
+        (
+            NPR,
+            (
+                '<div class="credit-caption"><div class="caption-wrap"><div class="caption"><p>KEEP the caption. '
+                '<b class="credit">KEEP Photo/AP</b><b class="hide-caption"><b>JUNK hide caption</b></b></p></div>'
+                '<button class="toggle-caption"><b>JUNK toggle caption</b></button></div>'
+                '<span class="credit">JUNK Photo/AP</span></div>'
+            ),
+        ),
+        (NPR, '<p>📲 <em>JUNK Get the latest in the </em><a href="https://npr.app/stqe/x"><em>NPR App</em></a></p>'),
+        (NYPOST, '<div class="inline-module inline-module--newsletter"><h3>JUNK Start your day</h3></div>'),
+        (
+            NYPOST,
+            (
+                '<figure><a href="#"><img src="https://i.example/a.jpg"><span class="nyp-slideshow-modal-image__icon">'
+                "JUNK 5</span></a><figcaption>KEEP</figcaption></figure>"
+            ),
+        ),
+        (GALLUP, "<div data-embeddable-marker>###JUNK###</div>"),
+        (GALLUP, '<div class="c-additional-steps"><p>Explore more about JUNK</p></div>'),
+        (
+            GN,
+            (
+                '<figure><img src="https://i.example/t.jpg"><figcaption>Grab a <a href="https://store.gamersnexus.net/t">'
+                "JUNK Toolkit</a> to support our AD-FREE reviews</figcaption></figure>"
+            ),
+        ),
+        (
+            GN,
+            (
+                '<figure><a href="https://store.gamersnexus.net/g"><img src="https://i.example/g.jpg"></a><figcaption>JUNK '
+                "Glasses. Purchases keep us ad-free and directly support our reviews!</figcaption></figure>"
+            ),
+        ),
+        (NPR, '<div class="caption-wrap"><button class="toggle-caption"><b>JUNK toggle caption</b></button></div>'),
+        (GALLUP, "<p><em>Stay up to date with the latest insights by following @Gallup JUNK</em></p>"),
+        (GALLUP, '<p><em><span style="display:none">Top of Form</span></em></p>'),
+        (
+            GN,
+            (
+                '<figure><a href="https://store.gamersnexus.net/products/x"><img src="https://i.example/m.jpg"></a>'
+                "<figcaption>Grab a JUNK Modmat. Purchases directly fund our work!</figcaption></figure>"
+            ),
+        ),
+        (
+            GN,
+            (
+                '<figure><a href="https://www.patreon.com/gamersnexus"><img src="https://i.example/p.jpg"></a>'
+                "<figcaption>Visit our Patreon page JUNK</figcaption></figure>"
+            ),
+        ),
+        (
+            "https://duckdb.org/2026/10/21/x.html",
+            '<p><img src="/a-light.svg" class="lightmode-img"><img src="/JUNK-dark.svg" class="darkmode-img"> KEEP</p>',
+        ),
+        (GN, '<div class="col-md-2 credits"><h4>Credits</h4><h5>JUNK Host</h5><p>JUNK Steve</p></div>'),
+    ],
+)
+def test_each_npr_nypost_gallup_gamersnexus_and_duckdb_strip_rule_drops_its_furniture(url, junk):
+    root = lxml.html.fromstring(f"<html><body><main><p>KEEP the article.</p>{junk}</main></body></html>")
+    before = lxml.html.tostring(root, encoding="unicode")
+    sites.strip(root, sites.rules_for(url))
+    after = lxml.html.tostring(root, encoding="unicode")
+    assert after != before and "JUNK" not in after and "KEEP" in after
+
+
+@pytest.mark.parametrize(
+    ("url", "kept"),
+    [
+        # A caption without its credit in it keeps the credit under it.
+        (
+            NPR,
+            '<div class="credit-caption"><div class="caption"><p>The caption.</p></div><span class="credit">KEEP</span></div>',
+        ),
+        (
+            NPR,
+            (
+                '<p><a href="https://npr.app/x">KEEP a paragraph that links only to the app but goes on long enough '
+                "to be the article's own words about the app and what it does for readers.</a></p>"
+            ),
+        ),
+        (
+            NPR,
+            '<p>Read <a href="https://npr.app/x">our app</a> and <a href="https://www.npr.org/y">KEEP the story</a>.</p>',
+        ),
+        (
+            GN,
+            '<figure><a href="https://gamersnexus.net/u/chart.png"><img src="https://i.example/c.png"></a>KEEP</figure>',
+        ),
+        (
+            GN,
+            (
+                '<figure><a href="https://store.gamersnexus.net/products/x"><img src="https://i.example/mat.jpg"></a>'
+                "<figcaption>KEEP the new modmat, shown flat.</figcaption></figure>"
+            ),
+        ),
+        # A quote in a figure, its caption about the store, but no picture: not an ad.
+        (
+            GN,
+            (
+                '<figure><blockquote>KEEP what the reader wrote</blockquote><figcaption>A reader on <a href="https://'
+                'store.gamersnexus.net/">our store</a>, which helps fund our work</figcaption></figure>'
+            ),
+        ),
+    ],
+)
+def test_what_looks_like_furniture_on_those_sites_but_is_not_stays(url, kept):
+    root = lxml.html.fromstring(f"<html><body><main>{kept}</main></body></html>")
+    sites.strip(root, sites.rules_for(url))
+    assert "KEEP" in root.text_content()
+
+
+def test_a_gallup_chart_and_its_survey_methods_come_with_the_article():
+    page = (
+        "<html><head><title>T</title></head><body><main><article><div class='article-content'>"
+        + paragraphs(3)
+        + '<div class="sggt-image"><img alt="" src="https://asset.gallup.com/p/POLL/chart.png"></div>'
+        + paragraphs(3, 3)
+        + "</div><section class='section-rel--methodology'><h2>Survey Methods</h2><p>These results are based on "
+        "interviews with approximately 144,000 adults.</p></section></article><aside>"
+        + "<a href='/r'>Related</a>" * 20
+        + "</aside></main></body></html>"
+    )
+    result = extract(GALLUP, page, "")
+    assert [img.get("src") for img in result.body.iter("img")] == ["https://asset.gallup.com/p/POLL/chart.png"]
+    assert "144,000 adults" in result.body.text_content() and "Related" not in result.body.text_content()
+
+
+def test_an_npr_sections_front_page_is_no_article_but_a_story_under_it_is():
+    rules = sites.rules_for(NPR)
+    assert sites.not_article("https://www.npr.org/sections/technology/", rules)
+    assert not sites.not_article("https://www.npr.org/sections/health-shots/2026/10/20/nx-s1-1/x", rules)
+    assert not sites.not_article(NPR, rules)
+
+
+def test_gallups_survey_methods_alone_are_not_taken_for_the_article():
+    page = (
+        "<html><head><title>T</title></head><body><main><article><div class='story-body'>"
+        + paragraphs(8)
+        + "</div><section class='section-rel--methodology'><h2>Survey Methods</h2><p>"
+        + "These results are based on interviews with approximately 144,000 adults in many countries. " * 5
+        + "</p></section></article></main></body></html>"
+    )
+    assert "Paragraph 7" in extract(GALLUP, page, "").body.text_content()

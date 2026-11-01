@@ -1,0 +1,4 @@
+# The newsletter sign-up box in the article ("Start your day with all you need to know").
+strip: //div[contains(concat(' ', normalize-space(@class), ' '), ' inline-module--newsletter ')]
+# The slideshow button's photo count over each picture.
+strip: //span[contains(concat(' ', normalize-space(@class), ' '), ' nyp-slideshow-modal-image__icon ')]

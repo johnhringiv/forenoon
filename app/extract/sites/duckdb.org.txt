@@ -1,0 +1,2 @@
+# A chart drawn twice, for the light and the dark theme: the dark copy goes.
+strip: //img[contains(concat(' ', normalize-space(@class), ' '), ' darkmode-img ')]
