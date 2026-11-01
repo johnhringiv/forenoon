@@ -888,13 +888,15 @@ def test_a_control_character_in_a_feeds_title_does_not_spoil_the_book():
         title="Before\x01after",
         source="Feed\x1b",
         author="An\x02author",
-        reason="Picked\x03",
+        reason="Picked\x03\ud83d",
         story="A\x0bstory",
         continues="More\x0con",
+        discussion_url="https://news.example/item?id=1\x08",
         body=lxml.html.fragment_fromstring("<div><p>Text.</p></div>"),
     )
     day = datetime(2026, 10, 31, tzinfo=UTC)
-    for data in (render_epub(article, day), render_issue([IssueEntry(article)], day)):
+    issue = render_issue([IssueEntry(article)], day, title=article.title)  # a resent story's title
+    for data in (render_epub(article, day), issue):
         book = zipfile.ZipFile(io.BytesIO(data))
         for name in book.namelist():
             if name.endswith((".xhtml", ".opf", ".ncx")):

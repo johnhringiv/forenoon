@@ -23,16 +23,19 @@ from .extract import UNSETTABLE
 from .images import Asset
 from .tokens import LINK_SIGNALS
 
+# What XML refuses: control characters, and lone surrogates (which cannot even be written as UTF-8).
+_REFUSED = re.compile(UNSETTABLE.pattern[:-1] + "\ud800-\udfff]")
+
 
 def _text(value: str) -> str:
     """A string for the book's markup: escaped, with the control characters XML refuses (a feed
     title's "&#1;", decoded) made spaces, so one entry cannot spoil the whole book."""
-    return escape(UNSETTABLE.sub(" ", value))
+    return escape(_REFUSED.sub(" ", value))
 
 
 def _attr(value: str) -> str:
     """An attribute value from a feed or page (an address, a language), quoted the same way."""
-    return quoteattr(UNSETTABLE.sub(" ", value))
+    return quoteattr(_REFUSED.sub(" ", value))
 
 
 CSS = """\
