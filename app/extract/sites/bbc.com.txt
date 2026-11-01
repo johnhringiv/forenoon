@@ -12,6 +12,12 @@ strip: //div[@data-block = 'uploaderEmbed' or @data-block = 'topicList' or @data
 strip: //*[@data-testid = 'links-grid']
 strip: //p[starts-with(normalize-space(), 'This breaking news story is being updated')]
 strip: //p[starts-with(normalize-space(), 'You can receive Breaking News on a smartphone')]
+# bbc.com's other layout (styled components, no data-block): the same banners (their pictures
+# have no size, so by their description), newsletter lines, the "get in touch" line, topic tags.
+strip: //figure[not(.//figcaption)][.//div[@data-testid = 'image']//img[contains(@alt, 'banner promoting') or starts-with(@alt, 'Your Voice banner') or starts-with(@alt, 'Thin, ')]]
+strip: //p[contains(@class, 'Paragraph-styles__')][.//a[contains(@href, '/newsletters/')]][string-length(normalize-space()) < 400]
+strip: //p[contains(@class, 'Paragraph-styles__')][starts-with(normalize-space(), 'If it is safe to do so, you can also get in touch')]
+strip: //div[contains(@class, 'TagList-styles__')]
 # Video pages and iPlayer and Sounds episodes.
 not_article: ^/news/videos/
 not_article: ^/(iplayer|sounds)/

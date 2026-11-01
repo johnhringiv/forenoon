@@ -8,13 +8,16 @@ body: //div[@data-gu-name = 'body'] | //div[@data-gu-name = 'media'][//div[@data
 # live blog's posts and of its "Key events" list (the list stays: on a long blog it is the only
 # outline of the posts on later pages); a pinned post whose original is on this page.
 strip: //figure[contains(@data-spacefinder-type, 'YoutubeBlockElement')]
-strip: //div[@data-gu-name = 'media']//figure[.//gu-island[@name = 'YoutubeBlockComponent' or @name = 'SelfHostedVideo']]
+strip: //div[@data-gu-name = 'media']//figure[ancestor::gu-island[@name = 'YoutubeBlockComponent' or @name = 'SelfHostedVideo'] or .//gu-island[@name = 'YoutubeBlockComponent' or @name = 'SelfHostedVideo']]
 strip: //*[contains(@data-spacefinder-type, 'RichLinkBlockElement')]
 strip: //*[contains(@data-spacefinder-type, 'NewsletterSignupBlockElement')]
 strip: //*[contains(@data-spacefinder-type, 'ReporterCalloutBlockElement')]
 strip: //*[self::p or self::li][.//a[contains(@href, 'CMP=copyembed')]]
+strip: //figure[contains(@data-spacefinder-type, 'LinkBlockElement')][.//a[contains(@href, 'CMP=copyembed')]]
 strip: //p[starts-with(normalize-space(), 'Listen to our podcasts here and sign up to the long read weekly email')]
 strip: //gu-island[@name = 'KeyEventsCarousel']//time
+# A kept pinned post's "From 45m ago" line.
+strip: //div[@id = 'pinned-post']/div[gu-island[@name = 'RelativeTime'] or div/gu-island[@name = 'RelativeTime']]
 strip: //div[@id = 'pinned-post'][(.//a[contains(@href, '#block-')])[1][substring-after(@href, '#') = //div[@id = 'liveblog-body']/article/@id]]
 strip: //gu-island[@name = 'RelativeTime']
 # A live post's contributor portrait, in the post's header.

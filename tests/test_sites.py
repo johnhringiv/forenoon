@@ -204,7 +204,8 @@ def test_a_guardian_live_blog_keeps_each_posts_heading_without_its_furniture():
     result = extract("https://www.theguardian.com/world/live/2026/oct/23/x", page, "")
     text = result.body.text_content()
     assert all(f"Heading of post {n}" in text for n in range(3)) and "04.31 EDT" in text
-    for furniture in ("2h ago", "Read more", "Explore more"):
+    assert "A post on a later page" in text  # the Key events list stays, without its times
+    for furniture in ("2h ago", "3h ago", "Read more", "Explore more"):
         assert furniture not in text, furniture
     assert not result.body.xpath("//img")
 
@@ -271,3 +272,19 @@ def test_a_bbc_photo_or_paragraph_that_mentions_a_banner_or_newsletter_stays():
     sites.strip(root, rules)
     assert [img.get("src") for img in root.iter("img")] == ["https://i.example/p.jpg"]
     assert "newsletter archive" in root.text_content()
+
+
+def test_a_guardian_lead_video_and_newsletter_lines_go():
+    rules = sites.rules_for("https://www.theguardian.com/world/2026/oct/24/x")
+    root = lxml.html.fromstring(
+        '<html><body><div data-gu-name="media"><gu-island name="SelfHostedVideo"><figure><video></video>'
+        "<figcaption>Demonstrators gather in Paris – video</figcaption></figure></gu-island></div>"
+        '<div data-gu-name="media"><figure><img src="https://i.example/l.jpg"><figcaption>A photo</figcaption></figure></div>'
+        '<div data-gu-name="body"><p>Text.</p>'
+        '<figure data-spacefinder-type="model.dotcomrendering.pageElements.LinkBlockElement"><a href="https://'
+        'www.theguardian.com/email-newsletters?CMP=copyembed">Sign up for the Breaking News Australia email</a></figure>'
+        '<p><a href="https://www.theguardian.com/x?CMP=copyembed">Sign up for the Politics, really newsletter</a></p>'
+        "</div></body></html>"
+    )
+    sites.strip(root, rules)
+    assert "".join(root.text_content().split()) == "AphotoText."
