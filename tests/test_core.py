@@ -872,3 +872,35 @@ def test_an_account_deleted_meanwhile_keeps_nothing_the_pipeline_writes(tmp_path
     for table in ("deliveries", "ratings", "feedback_events", "book_checks"):
         rows = store.db.execute(f"SELECT user_id FROM {table}").fetchall()
         assert [row[0] for row in rows] == ["john"], table
+
+
+def test_a_control_character_in_a_feeds_title_does_not_spoil_the_book():
+    """feedparser decodes a title's "&#1;" to \\x01, which XML refuses (#103)."""
+    from datetime import UTC, datetime
+
+    import lxml.html
+
+    from app.render import Article, IssueEntry, render_epub, render_issue
+
+    article = Article(
+        id="x",
+        url="https://e.example/a\x07",
+        title="Before\x01after",
+        source="Feed\x1b",
+        author="An\x02author",
+        reason="Picked\x03\ud83d",
+        story="A\x0bstory",
+        continues="More\x0con",
+        discussion_url="https://news.example/item?id=1\x08",
+        body=lxml.html.fragment_fromstring("<div><p>Text.</p></div>"),
+    )
+    day = datetime(2026, 10, 31, tzinfo=UTC)
+    issue = render_issue([IssueEntry(article)], day, title=article.title)  # a resent story's title
+    for data in (render_epub(article, day), issue):
+        book = zipfile.ZipFile(io.BytesIO(data))
+        for name in book.namelist():
+            if name.endswith((".xhtml", ".opf", ".ncx")):
+                text = book.read(name)
+                etree.fromstring(text)  # well-formed
+                assert b"\x01" not in text and b"\x02" not in text, name
+        assert any(b"Before after" in book.read(n) for n in book.namelist() if n.endswith(".xhtml"))

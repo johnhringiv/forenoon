@@ -19,8 +19,24 @@ from lxml import etree
 
 from .cover import cover_image
 from .emoji import emoji_font, wrap_emoji
+from .extract import UNSETTABLE
 from .images import Asset
 from .tokens import LINK_SIGNALS
+
+# What XML refuses: control characters, and lone surrogates (which cannot even be written as UTF-8).
+_REFUSED = re.compile(UNSETTABLE.pattern[:-1] + "\ud800-\udfff]")
+
+
+def _text(value: str) -> str:
+    """A string for the book's markup: escaped, with the control characters XML refuses (a feed
+    title's "&#1;", decoded) made spaces, so one entry cannot spoil the whole book."""
+    return escape(_REFUSED.sub(" ", value))
+
+
+def _attr(value: str) -> str:
+    """An attribute value from a feed or page (an address, a language), quoted the same way."""
+    return quoteattr(_REFUSED.sub(" ", value))
+
 
 CSS = """\
 body { font-family: serif; line-height: 1.4; margin: 0 2%; }
@@ -271,25 +287,25 @@ def _content(article: Article, feedback_links: dict[str, str]) -> str:
         byline.append(f"{article.published:%-d %b %Y}")
     if article.reading_minutes:
         byline.append(f"{article.reading_minutes} min read")
-    byline_html = escape(" · ".join(part for part in byline if part))
+    byline_html = _text(" · ".join(part for part in byline if part))
     footer = _footer(feedback_links)
-    why = f'<p class="meta">Picked because: {escape(article.reason)}</p>\n' if article.reason else ""
+    why = f'<p class="meta">Picked because: {_text(article.reason)}</p>\n' if article.reason else ""
     if article.added:
         why = '<p class="meta">Added by you</p>\n' + why
-    talk = f" · <a href={quoteattr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
+    talk = f" · <a href={_attr(article.discussion_url)}>Discussion</a>" if article.discussion_url else ""
     if article.continues:
-        why += f'<p class="meta">More on: {escape(article.continues)}</p>\n'
+        why += f'<p class="meta">More on: {_text(article.continues)}</p>\n'
     if article.story:
-        why += f'<p class="meta">{escape(article.story)}</p>\n'
+        why += f'<p class="meta">{_text(article.story)}</p>\n'
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang={quoteattr(article.language)}>
-<head><meta charset="utf-8"/><title>{escape(article.title)}</title>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang={_attr(article.language)}>
+<head><meta charset="utf-8"/><title>{_text(article.title)}</title>
 <link rel="stylesheet" type="text/css" href="style.css"/></head>
 <body>
-<h1>{escape(article.title)}</h1>
+<h1>{_text(article.title)}</h1>
 <p class="meta">{byline_html}</p>
-{why}<p class="meta"><a href={quoteattr(article.url)}>Read the original</a>{talk}</p>
+{why}<p class="meta"><a href={_attr(article.url)}>Read the original</a>{talk}</p>
 <hr class="rule"/>
 {_body_xhtml(article.body)}
 {footer}
@@ -303,7 +319,7 @@ def _opf(article: Article, title: str, modified: datetime, assets: list[Asset], 
     images = "\n".join(
         f'    <item id="img{i}" href={quoteattr(a.name)} media-type="{a.media_type}"/>' for i, a in enumerate(assets, 1)
     )
-    creator = f"<dc:creator>{escape(article.author)}</dc:creator>" if article.author else ""
+    creator = f"<dc:creator>{_text(article.author)}</dc:creator>" if article.author else ""
     date = f"<dc:date>{article.published:%Y-%m-%d}</dc:date>" if article.published else ""
     cover_meta = '\n    <meta name="cover" content="cover"/>' if cover else ""
     cover_item = (
@@ -313,10 +329,10 @@ def _opf(article: Article, title: str, modified: datetime, assets: list[Asset], 
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="book-id">{book_id}</dc:identifier>
-    <dc:title>{escape(title)}</dc:title>
-    <dc:language>{escape(article.language)}</dc:language>
-    <dc:publisher>{escape(article.source)}</dc:publisher>
-    <dc:source>{escape(article.url)}</dc:source>
+    <dc:title>{_text(title)}</dc:title>
+    <dc:language>{_text(article.language)}</dc:language>
+    <dc:publisher>{_text(article.source)}</dc:publisher>
+    <dc:source>{_text(article.url)}</dc:source>
     {creator}{date}
     <meta property="dcterms:modified">{modified:%Y-%m-%dT%H:%M:%SZ}</meta>{cover_meta}
   </metadata>
@@ -340,7 +356,7 @@ def _nav(article: Article) -> str:
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><meta charset="utf-8"/><title>Contents</title></head>
 <body><nav epub:type="toc"><h1>Contents</h1>
-<ol><li><a href="article.xhtml">{escape(article.title)}</a></li></ol></nav></body>
+<ol><li><a href="article.xhtml">{_text(article.title)}</a></li></ol></nav></body>
 </html>
 """
 
@@ -350,8 +366,8 @@ def _ncx(article: Article) -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head><meta name="dtb:uid" content="{book_id}"/></head>
-  <docTitle><text>{escape(article.title)}</text></docTitle>
-  <navMap><navPoint id="article" playOrder="1"><navLabel><text>{escape(article.title)}</text>
+  <docTitle><text>{_text(article.title)}</text></docTitle>
+  <navMap><navPoint id="article" playOrder="1"><navLabel><text>{_text(article.title)}</text>
   </navLabel><content src="article.xhtml"/></navPoint></navMap>
 </ncx>
 """
@@ -451,25 +467,25 @@ def _issue_contents(entries: list[IssueEntry], title: str, day: datetime) -> str
         if a.continues:
             # A later article of the story above: listed under it, without repeating the reason.
             items += (
-                f'<p class="toc-more"><a href="a{index:02d}.xhtml">{escape(a.title)}</a></p>'
-                f'<p class="toc-more toc-detail">{escape(detail)}</p>'
+                f'<p class="toc-more"><a href="a{index:02d}.xhtml">{_text(a.title)}</a></p>'
+                f'<p class="toc-more toc-detail">{_text(detail)}</p>'
             )
             continue
         items += (
-            f'<p class="toc-title"><a href="a{index:02d}.xhtml">{escape(a.title)}</a></p>'
-            f'<p class="toc-detail">{escape(detail)}</p>'
-            + (f'<p class="toc-detail">{escape(a.story)}</p>' if a.story else "")
-            + (f'<p class="toc-detail">{escape(a.reason)}</p>' if a.reason else "")
+            f'<p class="toc-title"><a href="a{index:02d}.xhtml">{_text(a.title)}</a></p>'
+            f'<p class="toc-detail">{_text(detail)}</p>'
+            + (f'<p class="toc-detail">{_text(a.story)}</p>' if a.story else "")
+            + (f'<p class="toc-detail">{_text(a.reason)}</p>' if a.reason else "")
         )
     summary = _issue_summary(entries)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en">
-<head><meta charset="utf-8"/><title>{escape(title)}</title>
+<head><meta charset="utf-8"/><title>{_text(title)}</title>
 <link rel="stylesheet" type="text/css" href="style.css"/></head>
 <body>
 <h1>Forenoon</h1>
-<p class="meta">{day:%A %-d %B %Y} · {escape(summary)}</p>
+<p class="meta">{day:%A %-d %B %Y} · {_text(summary)}</p>
 <hr class="rule"/>
 {items}
 </body>
@@ -527,7 +543,7 @@ def render_issue(
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="book-id">{book_id}</dc:identifier>
-    <dc:title>{escape(title)}</dc:title>
+    <dc:title>{_text(title)}</dc:title>
     <dc:language>en</dc:language>
     <dc:creator>Forenoon</dc:creator>
     <dc:date>{day:%Y-%m-%d}</dc:date>
@@ -546,7 +562,7 @@ def render_issue(
   </spine>
 </package>
 """
-    nav_items = "".join(f'<li><a href="{name}.xhtml">{escape(label)}</a></li>' for name, label in toc)
+    nav_items = "".join(f'<li><a href="{name}.xhtml">{_text(label)}</a></li>' for name, label in toc)
     nav = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
@@ -556,14 +572,14 @@ def render_issue(
 </html>
 """
     points = "".join(
-        f'<navPoint id="{name}" playOrder="{order}"><navLabel><text>{escape(label)}</text>'
+        f'<navPoint id="{name}" playOrder="{order}"><navLabel><text>{_text(label)}</text>'
         f'</navLabel><content src="{name}.xhtml"/></navPoint>'
         for order, (name, label) in enumerate(toc, 1)
     )
     ncx = f"""<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head><meta name="dtb:uid" content="{book_id}"/></head>
-  <docTitle><text>{escape(title)}</text></docTitle>
+  <docTitle><text>{_text(title)}</text></docTitle>
   <navMap>{points}</navMap>
 </ncx>
 """
