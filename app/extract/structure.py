@@ -12,7 +12,7 @@ from lxml import etree
 from readability.readability import REGEXES as READABILITY_PATTERNS
 
 from .. import formulas
-from . import sites
+from . import sites, xposts
 from .allowlist import _unmark, sanitize
 from .base import (
     BOX_MAX_SHARE,
@@ -54,6 +54,7 @@ from .cleanup import (
 )
 from .media import mark_media
 from .pictures import _drawn, _interactive, _other_boards, _own_caption, _svg_label
+from .streamed import reveal_streamed
 
 # A button that only enlarges its picture (a lightbox's), unlike a video's play button.
 ENLARGE = re.compile(
@@ -240,6 +241,58 @@ def _drop_hidden_breaks(root: lxml.html.HtmlElement) -> None:
         if parent is not None and parent.tag not in INLINE_WRAPPERS:  # between words of a block
             br.tail = " " + (br.tail or "")
         br.drop_tag()
+
+
+PRE_WRAP_CLASS = re.compile(r"(?<![\w-])whitespace-pre-(wrap|line)(?![\w-])")  # Tailwind's
+PRE_WRAP_STYLE = re.compile(r"white-space\s*:\s*pre-(wrap|line)", re.IGNORECASE)
+KEEPS_ITS_SPACING = ("pre", "code", "textarea", "script", "style")
+
+
+def _keep_line_breaks(root: lxml.html.HtmlElement) -> None:
+    """Make line breaks of the newlines in text the page shows with its newlines (white-space
+    pre-wrap or pre-line, as an X post's text): elsewhere a newline is a space, and the post's
+    paragraphs ran together. Only the newlines between its words, not those around them."""
+    for el in list(root.iter()):
+        if not isinstance(el.tag, str) or el.tag in KEEPS_ITS_SPACING:
+            continue
+        if not (PRE_WRAP_CLASS.search(el.get("class") or "") or PRE_WRAP_STYLE.search(el.get("style") or "")):
+            continue
+        if any(a.tag in KEEPS_ITS_SPACING for a in el.iterancestors()):
+            continue
+        slots = list(_text_slots(el, el))
+        text = "".join(getattr(node, attr) or "" for node, attr in slots)
+        if "\n" not in text.strip():
+            continue
+        start, end = len(text) - len(text.lstrip()), len(text.rstrip())
+        at = 0
+        for node, attr in slots:
+            part = getattr(node, attr) or ""
+            pieces, cut = [], 0
+            for i, ch in enumerate(part):
+                if ch == "\n" and start < at + i < end:
+                    pieces.append(part[cut:i])
+                    cut = i + 1
+            at += len(part)
+            if not pieces:
+                continue
+            pieces.append(part[cut:])
+            setattr(node, attr, pieces[0])
+            parent, index = (node, 0) if attr == "text" else (node.getparent(), node.getparent().index(node) + 1)
+            for offset, piece in enumerate(pieces[1:]):
+                br = lxml.html.Element("br")
+                br.tail = piece
+                parent.insert(index + offset, br)
+
+
+def _text_slots(el: lxml.html.HtmlElement, top: lxml.html.HtmlElement):
+    """The places text sits in `el`, in order, as (element, "text" or "tail"), leaving out what
+    is inside code and the like; the tail of `top` is not its own."""
+    if isinstance(el.tag, str) and el.tag not in KEEPS_ITS_SPACING:
+        yield el, "text"
+        for child in el:
+            yield from _text_slots(child, top)
+    if el is not top:
+        yield el, "tail"
 
 
 def _drop_line_numbers(root: lxml.html.HtmlElement) -> None:
@@ -853,6 +906,7 @@ def _structure(
         pass
     _unwrap_lightboxes(root)
     _drop_hidden_breaks(root)
+    _keep_line_breaks(root)
     _drop_line_numbers(root)
     _drop_repeated_credits(root)
     _object_pictures(root)
@@ -1148,6 +1202,10 @@ def _lift(
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
+        if whole_page:
+            reveal_streamed(root)  # first: the browser counts figures with the parts in place
+            if xposts.is_x(base_url):
+                xposts.fill_cut_posts(root)  # before the rules drop the links that name each post
         counted = None
         if rules is not None and rules.strip:
             counted = _shown_figures(root) if whole_page else None  # before the rules drop any

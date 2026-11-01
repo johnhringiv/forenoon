@@ -291,6 +291,13 @@ All fetched content is treated as untrusted.
   used, since it is the author's own clean version.
 - **Picking the main content.** Readability (readability-lxml) picks the box with the most
   paragraph text, with these changes.
+  - First of all, a page React streams (Next.js and others) is put together as its scripts
+    would put it: the parts sent late in hidden boxes (`<div hidden id="S:1">`) are moved,
+    in the order of the page's calls, into the places the calls name: a loading
+    placeholder's fallback, up to the comment that closes it (`$RC`, or `$RR` for a part that
+    waits for its stylesheets; nothing is dropped when that comment is missing), or a
+    template (`$RS`). Otherwise the article stays in a hidden box and is dropped with it
+    (LessWrong, Tailscale).
   - A list item a sentence long (80 characters or more, at most a quarter links) counts as a
     paragraph would, for the box holding the list, so an article written as one numbered list
     (a communiqué's points) is seen at all. Not an item that opens with a headline or link (a
@@ -365,6 +372,21 @@ All fetched content is treated as untrusted.
     is on the page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
     article's sentence), and the topic tags. Podcast episodes and video pages (`/audio/`,
     `/video/`) are not articles.
+  - LessWrong and the Alignment Forum (one forum software): the post's box
+    (`div.PostsPage-postContent`), as readability takes a long post's appendix alone, or a
+    short post's byline.
+  - X: a post's page gives the post, the author's own posts that follow it (a thread) and any
+    post it quotes, with the quoted post's author. The others' posts go: the replies the page
+    streams in under the post, a post the author replied to above it, and the author's later
+    posts below a reply. A post counts as the author's when its avatar link is marked as
+    the page's (`aria-current`); on a page where no avatar is marked, no post goes. Each post
+    loses its avatar, the author's name, its time and view count, its reply, repost and like
+    counts and a video's time badge, a quoted post loses its "Replying to @…", and the page
+    loses a hidden heading that repeats the post. X shows only the first 280 characters or so
+    of a long post in the thread or of a quoted post; the rest is added from the page's data
+    (`note_tweet`), only when that text begins with what is shown and the post's text box
+    ends with it, with its links as links showing the address X shows. A post whose shown
+    part ends at a link, with fewer than 8 characters after it, is left cut.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
@@ -410,6 +432,10 @@ All fetched content is treated as untrusted.
   - A line break hidden from screen readers is a layout's hint where a line may break (anoma.ly
     sets one before every syllable), so it goes; between two words of a block it leaves a
     space.
+  - Text the page shows with its newlines (`white-space: pre-wrap` or `pre-line`, or
+    Tailwind's `whitespace-pre-wrap` or `whitespace-pre-line` class, as an X post's text) has them made line breaks,
+    since elsewhere a newline is a space and the paragraphs ran together. Only newlines
+    between its words count, and none inside code.
   - In a figure's caption, or a box of a figure named for a caption (a lightbox's copy), a box
     that repeats the words just before it goes: Ars Technica writes each credit twice.
   - Formulas are written once, as text: MathML, KaTeX and MathJax output, and TeX that the

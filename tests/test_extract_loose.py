@@ -6,7 +6,7 @@ import time
 import lxml.html
 
 from app.extract import extract
-from app.extract.structure import _wrap_loose_text
+from app.extract.structure import _keep_line_breaks, _wrap_loose_text
 
 WORDS = " ".join(["The article goes on for a while about what this means for the reader and why."] * 6)
 
@@ -166,3 +166,18 @@ def test_a_sentence_ending_inside_a_wrapped_paragraph_does_not_end_it():
         "Thanks for the explanation, that makes the whole thing a lot clearer to me.</div>"
     )
     assert "final link).<br>" in made[0] and "debuggers" in made[0]
+
+
+def test_newlines_the_page_shows_become_line_breaks():
+    # An X post's text: a box styled to show its newlines, which elsewhere are spaces.
+    box = lxml.html.fragment_fromstring(
+        '<div><div class="text whitespace-pre-wrap">\n  First line, <a href="/a">a link</a>\n\nSecond <b>line\nthird</b>'
+        "<code>a\nb</code>\n</div><p style='white-space: pre-line'>One\nTwo</p><p>Plain\ntext</p></div>"
+    )
+    _keep_line_breaks(box)
+    post, styled, plain = box
+    assert lxml.html.tostring(post, encoding="unicode") == (
+        '<div class="text whitespace-pre-wrap">\n  First line, <a href="/a">a link</a><br><br>Second <b>line<br>third</b>'
+        "<code>a\nb</code>\n</div>"
+    )
+    assert len(styled.findall("br")) == 1 and plain.find("br") is None
