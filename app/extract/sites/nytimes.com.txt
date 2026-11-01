@@ -23,6 +23,10 @@ strip: //div[@data-testid = 'interactive-block'][count(*) = 1][a[contains(@href,
 # maps) comes out as lists of words, twice over; a Datawrapper chart leaves only its heading.
 strip: //section[@data-testid = 'inline-interactive'][count(.//p[string-length(normalize-space()) < 25]) >= 20][not(.//figure[.//svg[count(.//*) >= 20] or .//*[contains(concat(' ', @class, ' '), ' g-artboard ')]])]
 strip: //section[starts-with(@id, 'datawrapper_')]
+# Svelte's hidden announcer, which holds the page's title; and a chart's bars drawn as boxes
+# beside the table for screen readers that holds the same numbers (the table reads better).
+strip: //div[@id = 'svelte-announcer']
+strip: //div[not(.//table)][../table[contains(concat(' ', @class, ' '), ' sr-only ')]]
 # A feature's headline over its text (the book prints it), a newsletter's sign-up line, and the
 # "Listen · 37 min" button.
 strip: //section[@name = 'articleBody']//header//h1

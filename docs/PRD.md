@@ -318,12 +318,18 @@ All fetched content is treated as untrusted.
 - **Site rules.** A site the general rules read badly can have rules of its own, shipped with
   the code in `app/extract/sites/` (one file per domain, covering its subdomains), in
   FiveFilters' site-config format so its open configs can be borrowed: `strip` (XPath) and
-  `strip_id_or_class` drop what they select from the page and the feed entry before anything
-  else reads them (a selected text node goes alone); `body` names the article's box, used in
-  place of readability's pick (and of the wider and live-blog tries below) when it holds at
-  least 40 words; and Forenoon's own `not_article` names, by a pattern of the path, the pages
-  that hold no article (a site's video pages and podcast episodes), which are failed without
-  being fetched. A dropped element that parted two words leaves a space between them.
+  `strip_id_or_class` drop what they select from the page and the feed entry before the
+  page's structure is rebuilt and readability reads it (a selected text node goes alone; never
+  the page's `<html>` or `<body>`); `body` names the article's box, used in place of
+  readability's pick (and of the wider and live-blog tries below) when it holds at least 40
+  words, and then put through the same steps as readability's pick (continued articles,
+  figure pictures); and Forenoon's own `not_article` names, by a pattern of the path, the
+  pages that hold no article (a site's video pages and podcast episodes), which are failed
+  without being fetched. A dropped element that parted two words leaves a space between them.
+  The page's figures are counted before anything is dropped, as the browser counts them when
+  it takes their pictures. FiveFilters directives Forenoon does not use (`title`, `test_url`,
+  `prune` and the like) are read and ignored; a file that does not read leaves its site to the
+  general rules (a test reads every shipped one).
   - VTDigger: the feed entry's "Read the story on VTDigger here" line and the "READ MORE"
     box with its story cards; "Latest Opinion posts".
   - Nautilus: "Enjoying Nautilus? Subscribe to our free newsletter."
@@ -335,7 +341,8 @@ All fetched content is treated as untrusted.
     reader-callout boxes, a reporter's pick from the comments, the letters page's footer, a
     picture's screen-reader labels ("Image", "Credit"), the authors' portraits, a card for
     another Times story, a feature's headline, a newsletter's
-    sign-up line, "Listen · 37 min", Datawrapper charts (only their heading is left), and maps
+    sign-up line, "Listen · 37 min", Svelte's hidden announcer of the page's title, a
+    chart's bars beside the screen-reader table holding the same numbers, Datawrapper charts (only their heading is left), and maps
     whose labels are paragraphs over the art outside a `<figure>` (no picture can be taken of
     them). Not articles: podcast episodes (not video pages, some of which carry a reported
     transcript).

@@ -156,17 +156,27 @@ def _letters(el: lxml.html.HtmlElement):
         yield from text
 
 
-def _mark_widgets(root: lxml.html.HtmlElement) -> None:
-    """Put a placeholder first in each interactive figure, saying which of the page's figures
-    it is (counted in document order as a browser with scripts counts them: not inside
-    <noscript> or <template>) and how many the page has. A browser can then take a picture of
-    that figure for the book; the figure's own text stays for when it cannot."""
-    figures = [
+def _shown_figures(root: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
+    """The page's figures as a browser running scripts counts them: not inside <noscript> or <template>."""
+    return [
         figure
         for figure in root.iter("figure")
         if not any(ancestor.tag in ("noscript", "template") for ancestor in figure.iterancestors())
     ]
-    for number, figure in enumerate(figures):
+
+
+def _mark_widgets(root: lxml.html.HtmlElement, counted: list[lxml.html.HtmlElement] | None = None) -> None:
+    """Put a placeholder first in each interactive figure, saying which of the page's figures
+    it is (in document order, see _shown_figures) and how many the page has. A browser can then
+    take a picture of that figure for the book; the figure's own text stays for when it cannot.
+    `counted` is the page's figures as fetched, before a site's rules dropped any: the browser
+    counts the page as it is."""
+    counted = counted if counted is not None else _shown_figures(root)
+    number_of = {id(figure): number for number, figure in enumerate(counted)}
+    for figure in _shown_figures(root):
+        number = number_of.get(id(figure))
+        if number is None:
+            continue
         # A figure holding figures is not the drawing: the innermost is (and each is read once).
         drawn = figure.find(".//figure") is None and not _interactive(figure) and _drawn(figure)
         if not drawn and not _interactive(figure):
@@ -177,7 +187,7 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         holder = lxml.html.Element("p")
         holder.set(MARK, DRAWN if drawn else "shot")
         holder.set(MARK_N, str(number))
-        holder.set(MARK_OF, str(len(figures)))
+        holder.set(MARK_OF, str(len(counted)))
         holder.text = "A figure from the original page." if drawn else "An interactive figure from the original page."
         holder.tail = figure.text
         figure.text = None
@@ -795,7 +805,11 @@ def _unclass_data_tables(root: lxml.html.HtmlElement) -> None:
 
 
 def _structure(
-    root: lxml.html.HtmlElement, base_url: str, whole_page: bool = False, tex: formulas.Tex | None = None
+    root: lxml.html.HtmlElement,
+    base_url: str,
+    whole_page: bool = False,
+    tex: formulas.Tex | None = None,
+    counted: list[lxml.html.HtmlElement] | None = None,
 ) -> lxml.html.HtmlElement | None:
     """Rebuild what a page says only with class names and in-page links, before both are removed.
 
@@ -826,7 +840,7 @@ def _structure(
     _object_pictures(root)
     _unscroll(root)
     if whole_page:  # a feed's copy is not the page a browser would show
-        _mark_widgets(root)
+        _mark_widgets(root, counted)
         _drop_account_boxes(root)
         _drop_story_cards(root, base_url)
     # The page's own quotes only: before asides and callouts are made quotes below.
@@ -1115,10 +1129,12 @@ def _lift(
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
-        if rules is not None:
+        counted = None
+        if rules is not None and rules.strip:
+            counted = _shown_figures(root) if whole_page else None  # before the rules drop any
             sites.strip(root, rules)
         _unnest_empty(root)
-        notes = _structure(root, base_url, whole_page, tex)
+        notes = _structure(root, base_url, whole_page, tex, counted)
         return lxml.html.tostring(root, encoding="unicode"), notes
     except Exception:  # noqa: BLE001 - hostile input; the article is still delivered without this
         # Unprocessed, so any marker in it is the page's own: make sure none is acted on.

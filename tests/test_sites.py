@@ -150,3 +150,23 @@ def test_a_page_that_is_no_article_is_not_fetched():
     item = Item("1", "https://www.bbc.co.uk/news/videos/c8x", Source("BBC"), "T", "", None, paragraphs(5))
     result = pipeline._extract(item, NoFetch(), None)
     assert result.status == "failed" and result.reasons == ["not an article (site rule)"]
+
+
+def test_a_borrowed_configs_other_directives_are_ignored():
+    rules = sites.parse("title: //h1\ntest_url: https://x.example/a\nstrip: //aside\nreplace_string(<p>): x\n")
+    assert len(rules.strip) == 1
+
+
+def test_a_host_written_with_its_final_dot_takes_its_rules():
+    assert sites.rules_for("https://www.nytimes.com./2026/10/25/x.html").body
+
+
+def test_figures_keep_the_numbers_the_page_gives_them_after_a_rule_drops_some():
+    from app.extract import MARK, MARK_N, structure
+
+    chart = "<figure><svg>" + "<rect/>" * 30 + "</svg></figure>"
+    page = f"<html><body><figure data-testid='VideoBlock'>video</figure><figure>ad</figure>{chart}</body></html>"
+    rules = sites.parse("strip: //figure[@data-testid = 'VideoBlock']")
+    html, _ = structure._lift(page, "https://www.example.com/a", whole_page=True, rules=rules)
+    marked = lxml.html.fromstring(html).xpath(f"//p[@{MARK}]")
+    assert [(p.get(MARK_N), p.get("data-fn-of")) for p in marked] == [("2", "3")]

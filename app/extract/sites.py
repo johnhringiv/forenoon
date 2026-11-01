@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
-from functools import cache
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,13 +26,46 @@ import lxml.html
 from lxml import etree
 
 SITES = Path(__file__).with_name("sites")
+# FiveFilters directives a borrowed config may hold that Forenoon does not use: read and ignored.
+FTR_UNUSED = {
+    "title",
+    "author",
+    "date",
+    "test_url",
+    "test_contains",
+    "prune",
+    "tidy",
+    "autodetect_on_failure",
+    "single_page_link",
+    "next_page_link",
+    "find_string",
+    "replace_string",
+    "http_header",
+    "parser",
+    "login_uri",
+    "login_username_field",
+    "login_password_field",
+    "not_logged_in_xpath",
+    "login_extra_fields",
+    "native_ad_clue",
+    "dissolve",
+    "move_into",
+    "strip_image_src",
+    "src_lazy_load_attr",
+    "if_page_contains",
+    "insert_detected_image",
+    "skip_json_ld",
+    "wrap_in",
+    "strip_attr",
+    "replace_with_shadow",
+}
 
 
 @dataclass(frozen=True)
 class Rules:
     strip: tuple[etree.XPath, ...] = ()
     body: tuple[etree.XPath, ...] = ()
-    not_article: tuple[re.Pattern[str], ...] = field(default=())
+    not_article: tuple[re.Pattern[str], ...] = ()
 
 
 def _id_or_class(name: str) -> str:
@@ -62,15 +95,20 @@ def parse(text: str) -> Rules:
             body.append(etree.XPath(value))
         elif directive == "not_article":
             not_article.append(re.compile(value))
-        else:
+        elif directive.split("(", 1)[0] not in FTR_UNUSED:
             raise ValueError(f"line {number}: unknown directive: {directive}")
     return Rules(tuple(strip), tuple(body), tuple(not_article))
 
 
-@cache
+@lru_cache(maxsize=512)
 def _load(domain: str) -> Rules | None:
     path = SITES / f"{domain}.txt"
-    return parse(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return parse(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a broken file (the tests read every one) leaves the site to the general rules
+        return Rules()
 
 
 def rules_for(url: str) -> Rules:
@@ -80,7 +118,7 @@ def rules_for(url: str) -> Rules:
         host = (urlsplit(url).hostname or "").lower()
     except ValueError:
         return Rules()
-    labels = host.removeprefix("www.").split(".")
+    labels = host.rstrip(".").removeprefix("www.").split(".")
     for i in range(len(labels) - 1):
         domain = ".".join(labels[i:])
         if re.fullmatch(r"[a-z0-9.-]+", domain) and (rules := _load(domain)) is not None:
