@@ -75,8 +75,9 @@ def _interactive(figure: lxml.html.HtmlElement) -> bool:
 
 def _drawn(figure: lxml.html.HtmlElement) -> bool:
     """Whether a figure is a drawing the book would lose: an inline SVG of some size (a chart,
-    a diagram) or one that describes what it shows (see _svg_label) or an embedded page that is not a video (a chart from Flourish, a demo), with no
-    picture, video, table, code or quote of its own. Not a player's (its controls are SVG). And a
+    a diagram) or one that describes what it shows (see _svg_label) or an embedded page that
+    is not a video (a chart from Flourish, a demo), with no picture, video, table, code or quote
+    of its own. Not a player's (its controls are SVG). And a
     graphic drawn once per screen width with its labels set over the art (ai2html's map, whose
     place names would otherwise come out as lists of words under each copy of the picture)."""
     if any(isinstance(el.tag, str) and ARTBOARD in _classes(el) and _text_key(el) for el in figure.iter()):

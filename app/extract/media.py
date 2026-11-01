@@ -104,7 +104,7 @@ NOT_A_TITLE = re.compile(r"://|\barrow keys\b", re.IGNORECASE)  # an address, or
 XML_NAME = re.compile(r"[A-Za-z_][\w.-]*")  # a name an SVG file may hold ("@click" and "[x]" are not)
 UNSHOWN = ("style", "script", "template", "noscript")  # boxes whose text no reader sees
 # Wrappers a line may be put in front of, when they hold nothing but the embed.
-EMPTY_WRAPPERS = ("div", "p", "span", "section", "a", "center")
+EMPTY_WRAPPERS = ("div", "p", "span", "section", "center", "strong", "em", "b", "i")
 WRAPPER_DEPTH = 8
 
 # An inline SVG outside a figure that is a drawing (a diagram), not an icon: of this size in
@@ -254,7 +254,7 @@ def _put_before(el: lxml.html.HtmlElement, line: lxml.html.HtmlElement) -> None:
         ):
             break
         outer = parent
-    if outer.getparent() is not None and outer.getparent().tag in ("p", "span", "a", "em", "strong", "b", "i"):
+    if outer.getparent() is not None and outer.getparent().tag in ("p", "span", "em", "strong", "b", "i"):
         line.attrib.clear()
         line.tag = "span"
         line.text = " " + (line.text or "")

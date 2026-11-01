@@ -219,3 +219,15 @@ def test_a_drawn_figure_gives_each_description_once():
     crop = '<svg viewBox="0 0 64 64" role="img" aria-label="Selected crop from the figure"></svg>'
     page = article(paragraphs(4) + f"<figure>{crop * 5}</figure>" + paragraphs(4, 4))
     assert book(page).text_content().count("Selected crop from the figure") == 1
+
+
+def test_an_embed_alone_in_emphasis_leaves_a_line_of_its_own():
+    page = article(
+        paragraphs(4)
+        + '<p><strong><iframe src="https://www.youtube.com/embed/x" title="The segment"></iframe></strong></p>'
+        + paragraphs(4, 4)
+    )
+    body = book(page)
+    assert lines(body) == ["Video: The segment. See it on the original page."]
+    [line] = [p for p in body.iter("p") if "original page" in p.text_content()]
+    assert line.find("strong") is None and line.text.startswith("Video:")
