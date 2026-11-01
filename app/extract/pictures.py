@@ -92,11 +92,11 @@ def _drawn(figure: lxml.html.HtmlElement) -> bool:
 
 
 def _other_boards(figure: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
-    """A labelled graphic's copies for other screen widths than its widest (see _drawn), whose
-    labels would only repeat the widest copy's."""
+    """A labelled graphic's copies for other screen widths than its widest labelled one (see
+    _drawn), whose labels would only repeat that copy's."""
     boards = [el for el in figure.iter() if isinstance(el.tag, str) and ARTBOARD in _classes(el)]
-    widest = max(boards, key=_min_width, default=None)
-    if widest is None or not _text_key(widest):
+    widest = max((board for board in boards if _text_key(board)), key=_min_width, default=None)
+    if widest is None:
         return []
     return [board for board in boards if board is not widest and widest not in board.iterancestors()]
 

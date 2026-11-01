@@ -342,9 +342,10 @@ All fetched content is treated as untrusted.
     picture's screen-reader labels ("Image", "Credit"), the authors' portraits, a card for
     another Times story, a feature's headline, a newsletter's
     sign-up line, "Listen · 37 min", Svelte's hidden announcer of the page's title, a
-    chart's bars beside the screen-reader table holding the same numbers, Datawrapper charts (only their heading is left), and maps
-    whose labels are paragraphs over the art outside a `<figure>` (no picture can be taken of
-    them). Not articles: podcast episodes (not video pages, some of which carry a reported
+    chart's bars beside the screen-reader table holding the same numbers, Datawrapper charts with their headings (the
+    book would show only the heading), and maps and charts whose labels are paragraphs over
+    the art, which the browser cannot take a picture of (ai2html outside a `<figure>`, the
+    race maps), as they come out as lists of words. Not articles: podcast episodes (not video pages, some of which carry a reported
     transcript).
   - BBC: video pages (`/news/videos/`) and iPlayer and Sounds episodes are not articles.
   - The Guardian: podcast episodes and video pages (`/audio/`, `/video/`) are not articles.

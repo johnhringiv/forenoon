@@ -58,6 +58,9 @@ FTR_UNUSED = {
     "wrap_in",
     "strip_attr",
     "replace_with_shadow",
+    "single_page_link_in_feed",
+    "requires_login",
+    "next_page_link_in_feed",
 }
 
 

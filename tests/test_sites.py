@@ -163,10 +163,21 @@ def test_a_host_written_with_its_final_dot_takes_its_rules():
 
 def test_figures_keep_the_numbers_the_page_gives_them_after_a_rule_drops_some():
     from app.extract import MARK, MARK_N, structure
+    from app.extract.base import MARK_OF
 
     chart = "<figure><svg>" + "<rect/>" * 30 + "</svg></figure>"
     page = f"<html><body><figure data-testid='VideoBlock'>video</figure><figure>ad</figure>{chart}</body></html>"
     rules = sites.parse("strip: //figure[@data-testid = 'VideoBlock']")
     html, _ = structure._lift(page, "https://www.example.com/a", whole_page=True, rules=rules)
     marked = lxml.html.fromstring(html).xpath(f"//p[@{MARK}]")
-    assert [(p.get(MARK_N), p.get("data-fn-of")) for p in marked] == [("2", "3")]
+    assert [(p.get(MARK_N), p.get(MARK_OF)) for p in marked] == [("2", "3")]
+
+
+def test_a_rules_file_that_does_not_read_leaves_its_site_to_the_general_rules(tmp_path, monkeypatch):
+    (tmp_path / "broken.example.txt").write_text("strip: //div[\n", encoding="utf-8")
+    monkeypatch.setattr(sites, "SITES", tmp_path)
+    sites._load.cache_clear()
+    try:
+        assert sites.rules_for("https://broken.example/a") == sites.Rules()
+    finally:
+        sites._load.cache_clear()
