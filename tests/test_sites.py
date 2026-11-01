@@ -317,6 +317,21 @@ SF = "model.dotcomrendering.pageElements."
                 '</gu-island></div></div><div id="collapsible-body"><p>KEEP</p></div></div>'
             ),
         ),
+        (GUARDIAN, '<aside data-gu-name="pullquote"><blockquote>JUNK a sentence of the article</blockquote></aside>'),
+        (
+            GUARDIAN,
+            (
+                '<div id="pinned-post"><div id="collapsible-body"><article><header><img src="https://i.example/JUNK.png">'
+                "</header><p>KEEP</p></article></div></div>"
+            ),
+        ),
+        (
+            GUARDIAN,
+            (
+                '<div id="pinned-post"><div>JUNK <gu-island name="RelativeTime"><time>1h ago</time></gu-island></div>'
+                '<div id="collapsible-body"><p>KEEP</p></div></div>'
+            ),
+        ),
         (
             BBC,
             '<div data-block="text"><p>Get our flagship newsletter JUNK. <a href="/newsletters/z1">Sign up</a></p></div>',
@@ -359,3 +374,13 @@ def test_guardian_podcast_and_video_pages_are_not_articles():
     assert sites.not_article("https://www.theguardian.com/news/audio/2026/oct/23/x-podcast", rules)
     assert sites.not_article("https://www.theguardian.com/world/video/2026/oct/23/x", rules)
     assert not sites.not_article(GUARDIAN, rules)
+
+
+def test_a_guardian_articles_lead_picture_is_taken_with_its_box():
+    page = (
+        '<html><body><main><div data-gu-name="media"><figure><img src="https://i.example/lead.jpg">'
+        "<figcaption>The lead photo's caption</figcaption></figure></div>"
+        f'<div data-gu-name="body">{paragraphs(6)}</div></main></body></html>'
+    )
+    result = extract(GUARDIAN, page, "")
+    assert "The lead photo's caption" in result.body.text_content()

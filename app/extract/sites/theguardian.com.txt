@@ -20,10 +20,12 @@ strip: //gu-island[@name = 'KeyEventsCarousel']//time
 strip: //div[@id = 'pinned-post']/div[gu-island[@name = 'RelativeTime'] or div/gu-island[@name = 'RelativeTime']]
 strip: //div[@id = 'pinned-post'][(.//a[contains(@href, '#block-')])[1][substring-after(@href, '#') = //div[@id = 'liveblog-body']/article/@id]]
 strip: //gu-island[@name = 'RelativeTime']
-# A live post's contributor portrait, in the post's header.
-strip: //article[starts-with(@id, 'block-')]/header//img
+# A live post's contributor portrait, in the post's header (a pinned post's too).
+strip: //article[starts-with(@id, 'block-') or ancestor::div[@id = 'pinned-post']]/header//img
 # A lead picture's caption shown on a tap over the photo, a copy of the caption under it.
 strip: //div[@id = 'the-caption']
+# A pull quote, which repeats a sentence of the article.
+strip: //aside[@data-gu-name = 'pullquote']
 # The topic tags after the article ("Explore more on these topics").
 strip: //div[span[normalize-space() = 'Explore more on these topics']]
 # Podcast episodes and video pages.

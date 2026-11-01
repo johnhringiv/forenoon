@@ -348,8 +348,8 @@ All fetched content is treated as untrusted.
     race maps), as they come out as lists of words. Not articles: podcast episodes (not video pages, some of which carry a reported
     transcript).
   - BBC: promotion banners (a wide strip of a picture with no caption described as a banner,
-    BBC Verify's logo) and the lines they head (a newsletter's sign-up, BBC Africa's "Follow us", "What do
-    you want BBC Verify to investigate?", the BBC Your Voice line), the "Get in touch" form, topic tags, story lists
+    BBC Verify's logo); promotion lines (a newsletter's sign-up, BBC Africa's "Follow us", "What do you
+    want BBC Verify to investigate?", the BBC Your Voice line), the "Get in touch" form, topic tags, story lists
     and cards, event promotions, and a breaking story's lines about getting breaking news. On
     bbc.com's other layout (no `data-block`), the banners by their description (their
     pictures carry no size), newsletter lines, the "get in touch" line and topic tags.
@@ -361,7 +361,8 @@ All fetched content is treated as untrusted.
     the long read's podcast footer, each post's relative time ("2h ago") and contributor
     portrait, a kept pinned post's "From 45m ago" line, the relative times in the "Key events" list (the list stays: on a long blog it
     is the only outline of posts on later pages), a pinned post whose original is on the
-    page, the lead picture's second caption (shown on a tap), and the topic tags. Podcast
+    page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
+    article's sentence), and the topic tags. Podcast
     episodes and video pages (`/audio/`, `/video/`) are not articles.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
