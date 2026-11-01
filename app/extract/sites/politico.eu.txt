@@ -2,3 +2,5 @@
 # takes one alone (or only the standfirst). Not a newsletter's page (Playbook), whose box also
 # holds the email's masthead, sponsor and advertisements: readability reads it well.
 body: //body[not(contains(concat(' ', normalize-space(@class), ' '), ' single-newsletter '))]//div[contains(concat(' ', normalize-space(@class), ' '), ' article__content ')]
+# A podcast episode's "Listen on Spotify / Apple Music / Amazon Music" bar.
+strip: //div[contains(concat(' ', normalize-space(@class), ' '), ' listen-on ')]

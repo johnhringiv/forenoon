@@ -447,3 +447,13 @@ def test_a_politico_europe_newsletter_is_left_to_readability():
         "PRESENTED BY</div><p>The issue.</p></div></body></html>"
     )
     assert sites.body(page, sites.rules_for("https://www.politico.eu/newsletter/brussels-playbook/x/")) is None
+
+
+def test_a_politico_europe_podcasts_listen_on_bar_goes():
+    root = lxml.html.fromstring(
+        "<html><body><div class='article__content'><div class='listen-on '><h3>JUNK Listen on"
+        "</h3><ul><li><a href='https://open.spotify.com/x'>Spotify</a></li></ul></div><p>KEEP the notes.</p></div>"
+        "</body></html>"
+    )
+    sites.strip(root, sites.rules_for("https://www.politico.eu/podcast/brussels-playbook-podcast/x/"))
+    assert "JUNK" not in root.text_content() and "KEEP" in root.text_content()
