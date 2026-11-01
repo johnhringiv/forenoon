@@ -365,6 +365,8 @@ All fetched content is treated as untrusted.
     is on the page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
     article's sentence), and the topic tags. Podcast episodes and video pages (`/audio/`,
     `/video/`) are not articles.
+  - Politico Europe: the article's boxes (`div.article__content`), as it is set in several with
+    advertisements between them and readability takes one alone, or only the standfirst.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500

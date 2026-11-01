@@ -1,0 +1,3 @@
+# The article's boxes: it is set in several, with advertisements between them, and readability
+# takes one alone (or only the standfirst).
+body: //div[contains(concat(' ', normalize-space(@class), ' '), ' article__content ')]
