@@ -368,7 +368,7 @@ All fetched content is treated as untrusted.
   - Politico Europe: an article's boxes (`div.article__content`), as it is set in several with
     advertisements between them and readability takes one alone, or only the standfirst; not
     on a newsletter's page (Playbook), whose box also holds the email's masthead, sponsor and
-    advertisements. In the box, a podcast episode's "Listen on Spotify…" bar.
+    advertisements. A podcast episode's "Listen on Spotify…" bars.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
