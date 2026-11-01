@@ -12,6 +12,7 @@ from lxml import etree
 from readability.readability import REGEXES as READABILITY_PATTERNS
 
 from .. import formulas
+from . import sites
 from .allowlist import _unmark, sanitize
 from .base import (
     BOX_MAX_SHARE,
@@ -1099,13 +1100,20 @@ def _same_address(a: str, b: str) -> bool:
 
 
 def _lift(
-    markup: str, base_url: str, whole_page: bool, tex: formulas.Tex | None = None
+    markup: str,
+    base_url: str,
+    whole_page: bool,
+    tex: formulas.Tex | None = None,
+    rules: sites.Rules | None = None,
 ) -> tuple[str, lxml.html.HtmlElement | None]:
-    """The markup with its structure rebuilt and its notes taken out, and those notes."""
+    """The markup with the site's strip rules applied, its structure rebuilt and its notes taken
+    out, and those notes."""
     try:
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
+        if rules is not None:
+            sites.strip(root, rules)
         _unnest_empty(root)
         notes = _structure(root, base_url, whole_page, tex)
         return lxml.html.tostring(root, encoding="unicode"), notes

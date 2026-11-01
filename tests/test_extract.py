@@ -3072,13 +3072,17 @@ def test_a_drawn_figure_is_marked_for_a_picture_and_a_players_is_not():
         '<figure><iframe src="https://www.youtube.com/embed/x"></iframe></figure>'
         f'<figure><div class="video-player">{chart}</div></figure>'
         "<figure><svg><path/></svg><figcaption>An icon</figcaption></figure>"
+        # A map drawn once per screen width with its labels over the art; a graphic without labels
+        # is its picture.
+        '<figure><div class="g-artboard"><img src="https://i.example/map.jpg"><p>IRAQ</p></div></figure>'
+        '<figure><div class="g-artboard"><img src="https://i.example/chart.jpg"></div></figure>'
         "</body></html>"
     )
     root = lxml.html.fromstring(page)
     extract_structure._mark_widgets(root)
     marks = [h.get(extract_module.MARK) for h in root.xpath(f"//p[@{extract_module.MARK}]")]
     numbers = [h.get(extract_module.MARK_N) for h in root.xpath(f"//p[@{extract_module.MARK}]")]
-    assert marks == ["drawn", "drawn"] and numbers == ["0", "1"]
+    assert marks == ["drawn", "drawn", "drawn"] and numbers == ["0", "1", "5"]
 
 
 def test_a_status_badge_is_not_a_picture():

@@ -1,0 +1,3 @@
+# Video pages and iPlayer and Sounds episodes.
+not_article: ^/news/videos/
+not_article: ^/(iplayer|sounds)/

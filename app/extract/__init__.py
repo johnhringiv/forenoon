@@ -3,9 +3,10 @@
 Everything handled here is untrusted third-party content. The sanitiser is an allowlist:
 anything not on its list (allowlist.py) is unwrapped (text kept) or dropped (text removed).
 
-The modules, each using only those before it: base (shared helpers), allowlist
-(sanitising), cleanup (what is not the article), pictures, structure (what the page
-marks up before readability), article (choosing the article, and extract() itself).
+The modules, each using only those before it: sites (one site's rules, from the files in
+sites/), base (shared helpers), allowlist (sanitising), cleanup (what is not the article),
+pictures, structure (what the page marks up before readability), article (choosing the
+article, and extract() itself).
 """
 
 from .allowlist import SHOT_ID, sanitize

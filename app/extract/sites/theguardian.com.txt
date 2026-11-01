@@ -1,0 +1,2 @@
+# Podcast episodes and video pages.
+not_article: /(audio|video)/\d{4}/
