@@ -1,0 +1,5 @@
+# GN's own advertisements in the article: a picture linking to its store or Patreon, captioned
+# with the offer ("Grab a GN15 Large Anti-Static Modmat…").
+strip: //figure[a[contains(@href, '//store.gamersnexus.net') or contains(@href, 'patreon.com/')]//img]
+# The video's credits beside an article adapted from one.
+strip: //div[contains(concat(' ', normalize-space(@class), ' '), ' credits ')][h4[normalize-space() = 'Credits']]

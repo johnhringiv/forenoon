@@ -365,6 +365,16 @@ All fetched content is treated as untrusted.
     is on the page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
     article's sentence), and the topic tags. Podcast episodes and video pages (`/audio/`,
     `/video/`) are not articles.
+  - NPR: a picture's "hide caption" toggle, the credit repeated under a caption that already
+    ends with it, and the "Get the latest … in the NPR App" line. A section's front page
+    (`/sections/technology/`) is not an article.
+  - The New York Post: the newsletter sign-up box and the slideshow's photo count over each
+    picture.
+  - Gallup: the article's box and its survey methods, as readability drops a chart's picture
+    (a box of its own with no text); in it, the "###Embeddable###" placeholders where a
+    script puts a chart, the "follow @Gallup" line and a hidden "Top of Form".
+  - GamersNexus: its advertisements (a picture linking to its store or Patreon, captioned with
+    the offer) and a video's credits beside an article adapted from it.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500

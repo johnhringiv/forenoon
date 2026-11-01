@@ -1,0 +1,8 @@
+# The article's box and its survey methods, as readability drops a chart's picture (a box of
+# its own with no text).
+body: //div[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')] | //section[contains(@class, 'section-rel--methodology')]
+# Where a chart is placed on the page by its script ("###Embeddable###").
+strip: //div[@data-embeddable-marker]
+strip: //p[starts-with(normalize-space(), 'Stay up to date with the latest insights by following @Gallup')]
+# A form editor's leftover, hidden on the page.
+strip: //p[normalize-space() = 'Top of Form']

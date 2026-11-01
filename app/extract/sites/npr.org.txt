@@ -1,0 +1,9 @@
+# A picture's caption toggle ("hide caption"), and the credit repeated under the caption when
+# the caption already ends with it.
+strip: //b[contains(concat(' ', normalize-space(@class), ' '), ' hide-caption ')]
+strip: //button[contains(concat(' ', normalize-space(@class), ' '), ' toggle-caption ')]
+strip: //div[contains(concat(' ', normalize-space(@class), ' '), ' credit-caption ')][.//div[contains(concat(' ', normalize-space(@class), ' '), ' caption ')]//b[contains(concat(' ', normalize-space(@class), ' '), ' credit ')]]/span[contains(concat(' ', normalize-space(@class), ' '), ' credit ')]
+# "Get the latest on the midterms & more in the NPR App": a line whose only link is to the app.
+strip: //p[a[contains(@href, '//npr.app/')] and not(a[not(contains(@href, '//npr.app/'))]) and string-length(normalize-space()) < 120]
+# A section's front page (/sections/technology/) is a list of its stories, not an article.
+not_article: ^/sections/[^/]+/?$
