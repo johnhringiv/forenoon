@@ -347,18 +347,20 @@ All fetched content is treated as untrusted.
     the art, which the browser cannot take a picture of (ai2html outside a `<figure>`, the
     race maps), as they come out as lists of words. Not articles: podcast episodes (not video pages, some of which carry a reported
     transcript).
-  - BBC: promotion banners (a picture with no caption described as a banner, BBC Verify's
-    logo) and the lines they head (a newsletter's sign-up, BBC Africa's "Follow us", "What do
+  - BBC: promotion banners (a wide strip of a picture with no caption described as a banner,
+    BBC Verify's logo) and the lines they head (a newsletter's sign-up, BBC Africa's "Follow us", "What do
     you want BBC Verify to investigate?"), the "Get in touch" form, topic tags, story lists
     and cards, event promotions, and a breaking story's lines about getting breaking news.
     Video pages (`/news/videos/`) and iPlayer and Sounds episodes are not articles.
   - The Guardian: the article's box (`div[data-gu-name=body]`) with its lead picture, on a
     page that has the box, as readability drops a live blog's post headers and with them
-    each post's heading; in it, YouTube videos, cards for other Guardian stories, the
-    newsletter sign-up and reporter-callout boxes, a live blog's "Key events" list, each
-    post's relative time ("2h ago") and contributor portrait, the lead picture's second
-    caption (shown on a tap), and the topic tags. Podcast episodes and video pages
-    (`/audio/`, `/video/`) are not articles.
+    each post's heading; in it, videos (in the text and as the lead), cards for other
+    Guardian stories, the newsletter sign-up and reporter-callout boxes and newsletter lines,
+    the long read's podcast footer, each post's relative time ("2h ago") and contributor
+    portrait, the relative times in the "Key events" list (the list stays: on a long blog it
+    is the only outline of posts on later pages), a pinned post whose original is on the
+    page, the lead picture's second caption (shown on a tap), and the topic tags. Podcast
+    episodes and video pages (`/audio/`, `/video/`) are not articles.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500

@@ -1,7 +1,7 @@
-# Promotion banners (a picture with no caption whose description says it is a banner, or BBC
-# Verify's logo), and the lines they head: a newsletter's sign-up (a link to /newsletters/),
+# Promotion banners (a wide strip of a picture with no caption whose description says it is a
+# banner, or BBC Verify's logo), and the lines they head: a newsletter's sign-up (a link to /newsletters/),
 # BBC Africa's "Go to BBCAfrica.com… Follow us", "What do you want BBC Verify to investigate?".
-strip: //div[@data-block = 'image'][not(.//figcaption)][.//img[contains(@alt, 'banner') or contains(@alt, 'Banner') or @alt = 'BBC Verify logo']]
+strip: //div[@data-block = 'image'][not(.//figcaption)][.//img[@alt = 'BBC Verify logo' or ((contains(@alt, 'banner') or contains(@alt, 'Banner')) and number(@width) > 3 * number(@height))]]
 strip: //div[@data-block = 'text'][.//a[contains(@href, '/newsletters/')]][string-length(normalize-space()) < 400]
 strip: //div[@data-block = 'text'][starts-with(normalize-space(), 'Go to BBCAfrica.com')]
 strip: //div[@data-block = 'text'][normalize-space() = 'What do you want BBC Verify to investigate?']

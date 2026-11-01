@@ -193,7 +193,9 @@ def test_a_guardian_live_blog_keeps_each_posts_heading_without_its_furniture():
     blocks = "".join(post.format(n=n, text=paragraphs(3, 3 * n)) for n in range(3))
     page = (
         '<html><body><main><div data-gu-name="standfirst"><p>Standfirst.</p></div>'
-        '<div data-gu-name="body"><gu-island name="KeyEventsCarousel"><span>Key events</span></gu-island>'
+        '<div data-gu-name="body"><gu-island name="KeyEventsCarousel"><span>Key events</span><ul><li>'
+        '<a href="?page=with%3Ablock-9#block-9"><div><time>3h ago</time></div><div>A post on a later page</div></a>'
+        "</li></ul></gu-island>"
         f'<div id="liveblog-body">{blocks}</div>'
         '<aside data-spacefinder-type="model.dotcomrendering.pageElements.RichLinkBlockElement">Read more</aside>'
         '<div><span>Explore more on these topics</span><ul><li><a href="/world">World</a></li></ul></div>'
@@ -202,7 +204,7 @@ def test_a_guardian_live_blog_keeps_each_posts_heading_without_its_furniture():
     result = extract("https://www.theguardian.com/world/live/2026/oct/23/x", page, "")
     text = result.body.text_content()
     assert all(f"Heading of post {n}" in text for n in range(3)) and "04.31 EDT" in text
-    for furniture in ("2h ago", "Key events", "Read more", "Explore more"):
+    for furniture in ("2h ago", "Read more", "Explore more"):
         assert furniture not in text, furniture
     assert not result.body.xpath("//img")
 
@@ -211,7 +213,7 @@ def test_a_bbc_newsletter_promotion_and_contact_form_are_dropped():
     page = (
         '<html><body><main><article><div data-block="text">' + paragraphs(6) + "</div>"
         '<div data-block="image"><figure><img src="https://i.example/b.png" alt="Thin, red banner promoting the'
-        ' Politics Essential newsletter"></figure></div>'
+        ' Politics Essential newsletter" width="1920" height="316"></figure></div>'
         '<div data-block="text"><p>Sign up for our Politics Essential newsletter. <a href="/newsletters/z7">Sign up</a></p></div>'
         '<div data-block="image"><figure><img src="https://i.example/p.jpg" alt="Protesters hold a banner">'
         "<figcaption>Image caption, Protesters in the square</figcaption></figure></div>"
@@ -224,3 +226,48 @@ def test_a_bbc_newsletter_promotion_and_contact_form_are_dropped():
     root = lxml.html.fromstring(page)
     sites.strip(root, sites.rules_for("https://www.bbc.com/news/articles/c1"))
     assert [img.get("src") for img in root.iter("img")] == ["https://i.example/p.jpg"]  # a news photo stays
+
+
+def test_a_guardian_page_without_its_body_box_is_left_to_readability():
+    page = (
+        '<html><body><main><div data-gu-name="media"><figure><img src="https://i.example/l.jpg">'
+        "<figcaption>" + "A long caption for the lead photo of this feature. " * 6 + "</figcaption></figure></div>"
+        f"<article><div>{paragraphs(8)}</div></article></main></body></html>"
+    )
+    result = extract("https://www.theguardian.com/world/2026/oct/30/feature", page, "")
+    assert "Paragraph 7" in result.body.text_content()
+
+
+def test_a_guardian_pinned_post_goes_only_when_its_original_is_on_the_page():
+    rules = sites.rules_for("https://www.theguardian.com/world/live/2026/oct/23/x")
+
+    def page(pinned_to: str) -> str:
+        return (
+            '<html><body><div data-gu-name="body"><div id="pinned-post">'
+            f'<a href="?page=with%3Ablock-{pinned_to}#block-{pinned_to}">10.02 EDT</a><p>Summary.</p></div>'
+            '<div id="liveblog-body"><article id="block-1"><p>Summary.</p></article></div></div></body></html>'
+        )
+
+    for pinned_to, kept in (("1", False), ("7", True)):
+        root = lxml.html.fromstring(page(pinned_to))
+        sites.strip(root, rules)
+        assert bool(root.xpath("//div[@id = 'pinned-post']")) == kept
+
+
+def test_the_bbc_rules_are_the_same_for_both_its_domains():
+    assert (sites.SITES / "bbc.co.uk.txt").read_text() == (sites.SITES / "bbc.com.txt").read_text()
+
+
+def test_a_bbc_photo_or_paragraph_that_mentions_a_banner_or_newsletter_stays():
+    rules = sites.rules_for("https://www.bbc.co.uk/news/articles/c1")
+    long = "A paragraph of the story that links to the newsletter archive among other things. " * 6
+    root = lxml.html.fromstring(
+        '<div><div data-block="image"><img src="https://i.example/p.jpg" alt="A protester holds a banner"'
+        ' width="976" height="549"></div>'
+        '<div data-block="image"><img src="https://i.example/b.png" alt="News Daily banner" width="1920"'
+        ' height="316"></div>'
+        f'<div data-block="text"><p>{long}<a href="/newsletters/z1">archive</a></p></div></div>'
+    )
+    sites.strip(root, rules)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/p.jpg"]
+    assert "newsletter archive" in root.text_content()
