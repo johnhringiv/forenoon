@@ -420,3 +420,40 @@ def test_a_guardian_articles_lead_picture_is_taken_with_its_box():
     )
     result = extract(GUARDIAN, page, "")
     assert "The lead photo's caption" in result.body.text_content()
+
+
+def test_a_politico_europe_article_set_in_several_boxes_is_taken_whole():
+    def box(n: int) -> str:
+        return (
+            "<div class='sidebar-grid__container'><div class='sidebar-grid__content article__content'>"
+            f"{paragraphs(3, n)}</div></div><div class='ad-slot'><p>Advertisement</p></div>"
+        )
+
+    page = lxml.html.fromstring(
+        "<html><body><article><header><div class='hero article__hero'><h1>Title</h1></div></header>"
+        + box(0)
+        + box(3)
+        + box(6)
+        + "</article></body></html>"
+    )
+    found = sites.body(page, sites.rules_for("https://www.politico.eu/article/x/"))
+    text = found.text_content()
+    assert "Paragraph 0" in text and "Paragraph 8" in text and "Advertisement" not in text and "Title" not in text
+
+
+def test_a_politico_europe_newsletter_is_left_to_readability():
+    page = lxml.html.fromstring(
+        "<html><body class='single single-newsletter'><div class='article__content'><div id='pl-nh-sponsor'>"
+        "PRESENTED BY</div><p>The issue.</p></div></body></html>"
+    )
+    assert sites.body(page, sites.rules_for("https://www.politico.eu/newsletter/brussels-playbook/x/")) is None
+
+
+def test_a_politico_europe_podcasts_listen_on_bar_goes():
+    root = lxml.html.fromstring(
+        "<html><body><div class='article__content'><div class='listen-on '><h3>JUNK Listen on"
+        "</h3><ul><li><a href='https://open.spotify.com/x'>Spotify</a></li></ul></div><p>KEEP the notes.</p></div>"
+        "</body></html>"
+    )
+    sites.strip(root, sites.rules_for("https://www.politico.eu/podcast/brussels-playbook-podcast/x/"))
+    assert "JUNK" not in root.text_content() and "KEEP" in root.text_content()
