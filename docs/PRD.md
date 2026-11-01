@@ -375,9 +375,13 @@ All fetched content is treated as untrusted.
   - LessWrong and the Alignment Forum (one forum software): the post's box
     (`div.PostsPage-postContent`), as readability takes a long post's appendix alone, or a
     short post's byline.
-  - X: every article after a post's own, which the page streams in under it: the replies, and
-    with them the author's own follow-up posts in a thread and a quoted post (readability
-    dropped those before as well).
+  - X: a post's page gives the post, the author's own posts that follow it (a thread) and any
+    post it quotes, with the quoted post's author. The others' posts go: the replies the page
+    streams in under the post, a post the author replied to above it, and the author's later
+    posts below a reply. A post counts as the author's when its avatar link is marked as
+    the page's (`aria-current`). Each post loses its avatar, the author's name, its time and
+    view count and its reply, repost and like counts, and the page loses a hidden heading
+    that repeats the post.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
@@ -423,6 +427,10 @@ All fetched content is treated as untrusted.
   - A line break hidden from screen readers is a layout's hint where a line may break (anoma.ly
     sets one before every syllable), so it goes; between two words of a block it leaves a
     space.
+  - Text the page shows with its newlines (`white-space: pre-wrap` or `pre-line`, or
+    Tailwind's `whitespace-pre-wrap` class, as an X post's text) has them made line breaks,
+    since elsewhere a newline is a space and the paragraphs ran together. Only newlines
+    between its words count, and none inside code.
   - In a figure's caption, or a box of a figure named for a caption (a lightbox's copy), a box
     that repeats the words just before it goes: Ars Technica writes each credit twice.
   - Formulas are written once, as text: MathML, KaTeX and MathJax output, and TeX that the

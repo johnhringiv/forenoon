@@ -1,3 +1,20 @@
-# A post's page: the replies under the post (the articles after its own), which the page's
-# script streams in after the post.
-strip: (//main//article)[position() > 1]
+# A post's page: the post, the author's own posts that follow it (a thread), and any post it
+# quotes (an article inside its article).
+#
+# First the others' posts go: the replies the page's script streams in under the post, a post
+# the author replied to above it, and any later post of the author's below a reply. A post is
+# the author's when its own avatar link (the one inside no other article) is marked
+# aria-current, as the page's author's links are.
+strip: //main//article[not(ancestor::article)][not(.//a[@aria-current='page'][.//img][count(ancestor::article)=1]) or preceding::article[not(ancestor::article)][not(.//a[@aria-current='page'][.//img][count(ancestor::article)=1])][preceding::article[not(ancestor::article)][.//a[@aria-current='page'][.//img][count(ancestor::article)=1]]]]
+# Then each post's furniture: avatars and affiliation badges (profile pictures); the author's
+# name over each of their posts; the time and view count, which link to the post; the reply,
+# repost and like counts.
+strip: //main//article//a[.//img[starts-with(@alt, '@') or contains(@src, '/profile_images/')]]
+strip: //main//article//a[@aria-current='page'][count(ancestor::article)=1]
+strip: //main//article//a[contains(@href, '/status/')][not(ancestor::div[@dir='auto'])][not(.//img)]
+strip: //main//article//span[@aria-hidden='true']
+strip: //main//article//div[@role='group']
+strip: //main//article//*[@data-engagement-action]
+# The page's hidden heading, the whole post again as "<name> on X: <post>".
+strip: //h1[contains(concat(' ', normalize-space(@class), ' '), ' sr-only ')]
+body: //main//article[not(ancestor::article)]

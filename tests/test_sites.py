@@ -431,3 +431,38 @@ def test_a_forummagnum_post_is_taken_from_its_box_on_both_sites():
     for url in ("https://www.lesswrong.com/posts/x/y", "https://www.alignmentforum.org/posts/x/y"):
         box = sites.body(lxml.html.fromstring(page), sites.rules_for(url))
         assert box is not None and box.text_content() == "The post."
+
+
+def x_post(handle: str, text: str, own: bool, inner: str = "", status: str = "1") -> str:
+    """An article as an X post's page writes it: avatar, name, time, text, counts."""
+    current = " aria-current='page'" if own else ""
+    return (
+        f"<article><a href='/{handle}'{current}><img alt='@{handle}' src='https://pbs.twimg.com/profile_images/1/a.jpg'></a>"
+        f"<a href='/{handle}'{current}><div>{handle.title()} Name</div></a><a href='/{handle}'{current}>@{handle}</a>"
+        f"<a href='/{handle}/status/{status}'>Oct 2</a><div dir='auto' class='whitespace-pre-wrap'>{text}</div>{inner}"
+        f"<div role='group'><a href='/compose/post?in_reply_to={status}'>137</a></div></article>"
+    )
+
+
+def test_an_x_post_comes_with_its_thread_and_quote_but_not_the_replies():
+    words = "words in the post about the subject, going on at some length " * 4
+    page = (
+        "<html><head><title>Author on X</title></head><body><h1 class='sr-only'>Author on X: the post</h1><main>"
+        + x_post(
+            "author",
+            f"The post opens.\n\nIts second paragraph, {words}",
+            True,
+            x_post("other", "The quoted post.", False),
+        )
+        + x_post("author", f"The thread goes on, {words}", True, status="2")
+        + x_post("replier", "A reply from someone else.", False, status="3")
+        + x_post("author", "The author answering the reply.", True, status="4")
+        + "</main></body></html>"
+    )
+    result = extract("https://x.com/author/status/1", page, "")
+    text = " ".join(result.body.text_content().split())
+    assert "The post opens." in text and "The thread goes on" in text
+    assert "Other Name" in text and "@other" in text and "The quoted post." in text
+    for gone in ("A reply", "answering the reply", "Author Name", "@author", "Oct 2", "137"):
+        assert gone not in text
+    assert result.body.find(".//br") is not None
