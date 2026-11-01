@@ -54,6 +54,7 @@ from .cleanup import (
 )
 from .media import mark_media
 from .pictures import _drawn, _interactive, _other_boards, _own_caption, _svg_label
+from .streamed import reveal_streamed
 
 # A button that only enlarges its picture (a lightbox's), unlike a video's play button.
 ENLARGE = re.compile(
@@ -1148,6 +1149,8 @@ def _lift(
         root = lxml.html.fromstring(markup) if whole_page else _parse_fragment(markup)
         if root is None:
             return markup, None
+        if whole_page:
+            reveal_streamed(root)  # first: the browser counts figures with the parts in place
         counted = None
         if rules is not None and rules.strip:
             counted = _shown_figures(root) if whole_page else None  # before the rules drop any

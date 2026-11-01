@@ -1,0 +1,3 @@
+# A post's page: the replies under the post (the articles after its own), which the page's
+# script streams in after the post.
+strip: (//main//article)[position() > 1]

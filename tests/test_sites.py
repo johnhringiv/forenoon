@@ -420,3 +420,14 @@ def test_a_guardian_articles_lead_picture_is_taken_with_its_box():
     )
     result = extract(GUARDIAN, page, "")
     assert "The lead photo's caption" in result.body.text_content()
+
+
+def test_a_forummagnum_post_is_taken_from_its_box_on_both_sites():
+    page = (
+        "<html><body><div class='PostsPage-postInfo'>by A. Writer</div>"
+        "<div class='PostsPage-postContent instapaper_body'><p>The post.</p></div>"
+        "<div class='CommentsSection'><p>A comment.</p></div></body></html>"
+    )
+    for url in ("https://www.lesswrong.com/posts/x/y", "https://www.alignmentforum.org/posts/x/y"):
+        box = sites.body(lxml.html.fromstring(page), sites.rules_for(url))
+        assert box is not None and box.text_content() == "The post."

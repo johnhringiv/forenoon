@@ -1,0 +1,3 @@
+# The post's box (ForumMagnum, shared by LessWrong and the Alignment Forum), as readability
+# takes a long post's appendix alone, or the byline of a short one.
+body: //div[contains(concat(' ', normalize-space(@class), ' '), ' PostsPage-postContent ')]

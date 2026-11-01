@@ -307,6 +307,12 @@ All fetched content is treated as untrusted.
   - Readability joins a box of the article's class when it is at most a quarter links, not a
     fifth (a podcast's first chunk with its show notes).
   - A table inside a table's cell (arXiv's two-line column headings) is kept.
+  - First of all, a page React streams (Next.js and others) is put together as its scripts
+    would put it: the parts sent late in hidden boxes (`<div hidden id="S:1">`) are moved,
+    in the order of the page's calls, into the places the calls name, a loading
+    placeholder's fallback (`$RC`, up to the comment that closes it; nothing when that comment
+    is missing) or a template (`$RS`). Otherwise the article stays in a hidden box and is
+    dropped with it (LessWrong, Tailscale).
   - Before readability reads the page: Tailwind's scroll margins (`scroll-mt-28`) are taken
     off every box, as readability reads "scroll" as a scrolling widget. The site's sign-in or
     registration box is dropped: named for one by a word of its class or id (`c13-register`,
@@ -365,6 +371,10 @@ All fetched content is treated as untrusted.
     is on the page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
     article's sentence), and the topic tags. Podcast episodes and video pages (`/audio/`,
     `/video/`) are not articles.
+  - LessWrong and the Alignment Forum (one forum software): the post's box
+    (`div.PostsPage-postContent`), as readability takes a long post's appendix alone, or a
+    short post's byline.
+  - X: the replies under a post (the articles after its own).
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
