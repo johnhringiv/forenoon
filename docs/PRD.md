@@ -537,11 +537,13 @@ All fetched content is treated as untrusted.
     Instagram, TikTok and the like) leaves a line in its place: "A chart. See it on the
     original page.", or with its name when it has one ("Audio: Korridorsangen – Mari Boine.
     Listen on the original page."), from Substack's embed data or the frame's title or label
-    (not one that only names the kind, such as "Interactive or visual content", nor a
-    player's name before it, as in "Spotify Embed: …"). "original page" links to the article's
+    (not one that only names the kind, such as "Interactive or visual content", an address,
+    or a player's instructions, nor a player's name before it, as in "Spotify Embed: …"). "original page" links to the article's
     page. The line stands in front of the boxes that hold only the embed, as its own
-    paragraph, or inside a sentence that has words of its own. Not for an embed of another
-    kind (an advertisement, a sign-up box), a hidden one, a tracker's frame of 0 or 1 pixel,
+    paragraph, or inside a sentence that has words of its own. An embed whose box also
+    shows a picture of it (a Datawrapper chart's print copy) gets only its name over the
+    picture, or nothing when it has none. Not for an embed of another kind (an advertisement,
+    a sign-up box), one in a link (an advertisement), a hidden one, a tracker's frame of 0 or 1 pixel,
     nor one in a figure the browser is asked to take a picture of (below). Readability keeps
     such a short paragraph between the article's only when its words before the link hold a
     full stop, so the link is made after it; and the line comes back between its two
@@ -549,13 +551,15 @@ All fetched content is treated as untrusted.
   - A `<video>` becomes its poster (the picture shown before it plays), with its label as the
     alt text; a grid of videos gives each one's. One without a poster leaves a line ("A video.
     See it on the original page."). Not a video whose figure or box holds a picture of the
-    page's own (a player's poster), a hidden one, or one in a figure the browser pictures.
+    page's own (a player's poster), one in a link (a banner advertisement), a hidden one, or
+    one in a figure the browser pictures.
   - An inline SVG outside a figure that is a drawing (at least 150 by 40 CSS pixels with 5
     shapes or more, not hidden from screen readers, not in a link, button, navigation, header or
     footer) becomes a picture of itself (an embedded SVG, drawn for the book as any SVG is), its
     label or `<title>` the alt text. Not one dressed by the page's stylesheet (a class with no
     `<style>` of its own, or a CSS variable), nor one using another SVG's parts or holding
-    HTML, which would come out black or empty.
+    HTML, which would come out black or empty. Attribute names no SVG file can hold (a script
+    framework's `@click`) are left out of the picture.
   - Readability's cleaner drops an SVG's address, and the page's own attributes are never
     acted on, so the drawing and the link travel in marker attributes of extraction's own until
     the allowlist.
@@ -1021,7 +1025,7 @@ Sonnet 5.5).
   and no picture, player, table, code or quote of its own; and of drawn figures, which the
   book would lose: an inline SVG of 20 elements or more (a chart, a diagram), or one saying
   what it shows (`role="img"` with a label of three words or more: a chart a script draws
-  into an empty SVG), whose label is put beside it for when no picture is taken, or an embedded
+  into an empty SVG), whose label is put beside it, once, for when no picture is taken, or an embedded
   page that is not a video, a player or a post (Spotify, SoundCloud, a podcast host,
   Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
   either, and not a player's (named so: its controls are SVG); or a graphic drawn once per

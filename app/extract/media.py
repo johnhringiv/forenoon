@@ -8,7 +8,9 @@ from __future__ import annotations
 import base64
 import itertools
 import json
+import math
 import re
+from collections.abc import Iterator
 
 import lxml.html
 from lxml import etree
@@ -98,6 +100,8 @@ PLAYER_PREFIX = re.compile(
     re.IGNORECASE,
 )
 TITLE_CHARS = 200
+NOT_A_TITLE = re.compile(r"://|\barrow keys\b", re.IGNORECASE)  # an address, or a player's instructions
+XML_NAME = re.compile(r"[A-Za-z_][\w.-]*")  # a name an SVG file may hold ("@click" and "[x]" are not)
 UNSHOWN = ("style", "script", "template", "noscript")  # boxes whose text no reader sees
 # Wrappers a line may be put in front of, when they hold nothing but the embed.
 EMPTY_WRAPPERS = ("div", "p", "span", "section", "a", "center")
@@ -188,7 +192,7 @@ def _shot(el: lxml.html.HtmlElement) -> bool:
 
 def _title(text: str | None) -> str:
     text = PLAYER_PREFIX.sub("", " ".join((text or "").split()))
-    return "" if GENERIC_TITLE.fullmatch(text) else text[:TITLE_CHARS]
+    return "" if GENERIC_TITLE.fullmatch(text) or NOT_A_TITLE.search(text) else text[:TITLE_CHARS]
 
 
 def _embed_title(frame: lxml.html.HtmlElement) -> str:
@@ -203,14 +207,19 @@ def _embed_title(frame: lxml.html.HtmlElement) -> str:
     return _title(frame.get("title")) or _title(frame.get("aria-label"))
 
 
-def _line(kind: str, title: str, number: int) -> lxml.html.HtmlElement:
+def _line(kind: str, title: str, number: int, link: bool = True) -> lxml.html.HtmlElement:
+    """The line for an embed; without `link`, only its name (for one beside a picture of itself)."""
     plain, label, verb = LINES[kind]
     # Numbered, to be put back where readability drops it (see pictures._restore_dropped_figures).
     line = lxml.html.Element("p", {MARK: EMBED_LINE, MARK_N: str(number)})
-    line.text = f"{label}: {title.rstrip('.')}. {verb} on the " if title else f"{plain}. {verb} on the "
-    link = etree.SubElement(line, "span", {MARK: PAGE_LINK})  # a link to the page, made by sanitize
-    link.text = "original page"
-    link.tail = "."
+    named = f"{label}: {title}" + ("" if title[-1:] in ".?!…" else ".") if title else f"{plain}."
+    if not link:
+        line.text = named
+        return line
+    line.text = f"{named} {verb} on the "
+    page = etree.SubElement(line, "span", {MARK: PAGE_LINK})  # a link to the page, made by sanitize
+    page.text = "original page"
+    page.tail = "."
     return line
 
 
@@ -249,19 +258,30 @@ def _put_before(el: lxml.html.HtmlElement, line: lxml.html.HtmlElement) -> None:
         line.attrib.clear()
         line.tag = "span"
         line.text = " " + (line.text or "")
-        link = line[-1]
-        link.tail = ". "
+        if len(line):
+            line[-1].tail = ". "
+        else:
+            line.text += " "
     outer.addprevious(line)
     line.tail = None
 
 
-def mark_embeds(root: lxml.html.HtmlElement) -> None:
+def mark_media(root: lxml.html.HtmlElement, page: str) -> None:
+    """Embeds and videos (numbering their lines in one count), then drawings: see each."""
+    numbers = itertools.count()
+    mark_embeds(root, numbers)
+    mark_videos(root, page, numbers)
+    svg_pictures(root)
+
+
+def mark_embeds(root: lxml.html.HtmlElement, numbers: Iterator[int]) -> None:
     """A line in front of each embedded player, chart, map, document or post the book drops,
-    naming it when it is named, with the original page linked. Not for one in a figure the
-    browser is asked to take a picture of, nor for one hidden or not on the list of kinds."""
-    numbers = itertools.count(len(root.xpath(f"//p[@{MARK} = '{EMBED_LINE}']")))
+    naming it when it is named, with the original page linked; beside a picture of its own (a
+    chart's print copy), only its name, or nothing when it has none. Not for one in a figure the
+    browser is asked to take a picture of, in a link (an advertisement), hidden, or not on the
+    list of kinds."""
     for frame in list(root.iter("iframe")):
-        if frame.getparent() is None or _in(frame, "noscript", "template") or _shot(frame) or _hidden(frame):
+        if frame.getparent() is None or _in(frame, "noscript", "template", "a") or _shot(frame) or _hidden(frame):
             continue
         if any((frame.get(side) or "").strip() in ("0", "1", "0px", "1px") for side in ("width", "height")):
             continue  # a tracker's frame
@@ -269,19 +289,24 @@ def mark_embeds(root: lxml.html.HtmlElement) -> None:
         kind = next((kind for kind, pattern in EMBED_KINDS if pattern.match(src)), None)
         if kind is None:
             continue
-        _put_before(frame, _line(kind, _embed_title(frame), next(numbers)))
+        title = _embed_title(frame)
+        box = frame.getparent()  # the embed's own box: no words, its picture beside it
+        if not _shown_text(box) and any(frame not in img.iterancestors() for img in box.iter("img")):
+            if title:  # the picture is the chart; its name over it
+                _put_before(frame, _line(kind, title, next(numbers), link=False))
+            continue
+        _put_before(frame, _line(kind, title, next(numbers)))
 
 
-def mark_videos(root: lxml.html.HtmlElement, page: str) -> None:
+def mark_videos(root: lxml.html.HtmlElement, page: str, numbers: Iterator[int]) -> None:
     """A video becomes its poster, the picture the page shows before it plays, taken as a
     still with the video's label as its description; a video without one leaves a line sending
     the reader to the original page. Not a video whose figure or box shows a picture of its
-    own (a player's poster), one in a figure the browser is asked to take a picture of, nor a
-    hidden one."""
-    numbers = itertools.count(len(root.xpath(f"//p[@{MARK} = '{EMBED_LINE}']")))
+    own (a player's poster), one in a figure the browser is asked to take a picture of, one in
+    a link (a banner advertisement), nor a hidden one."""
     posters: set[lxml.html.HtmlElement] = set()  # those made here: a grid of videos shows each
     for video in list(root.iter("video")):
-        if video.getparent() is None or _in(video, "noscript", "template") or _shot(video) or _hidden(video):
+        if video.getparent() is None or _in(video, "noscript", "template", "a") or _shot(video) or _hidden(video):
             continue
         holder = next((a for a in video.iterancestors() if a.tag == "figure"), video.getparent())
         if any(img not in posters and video not in img.iterancestors() for img in holder.iter("img")):
@@ -311,6 +336,8 @@ def _svg_size(svg: lxml.html.HtmlElement) -> tuple[float, float]:
         bw, bh = (float(box[2]), float(box[3])) if len(box) == 4 else (0.0, 0.0)
     except ValueError:
         bw, bh = 0.0, 0.0
+    if not all(math.isfinite(n) and n >= 0 for n in (bw, bh)):
+        bw, bh = 0.0, 0.0
     if width and height:
         return width, height
     if width and bw and bh:
@@ -325,17 +352,19 @@ def _svg_markup(svg: lxml.html.HtmlElement) -> str:
 
     def copy_into(src: lxml.html.HtmlElement, dst: etree._Element) -> None:
         for name, value in src.attrib.items():
-            if name in ("xmlns",) or name.startswith("xmlns:"):
+            if name == "xmlns" or name.startswith("xmlns:"):
                 continue
-            if name.startswith("xlink:"):
+            if name.startswith("xlink:") and XML_NAME.fullmatch(name[6:]):
                 dst.set("{http://www.w3.org/1999/xlink}" + name[6:], value)
-            elif ":" not in name:
+            elif XML_NAME.fullmatch(name):  # not a script framework's "@click"
                 dst.set(SVG_CASED.get(name, name), value)
         dst.text = src.text
         for child in src:
             if not isinstance(child.tag, str):
                 continue
             tag = SVG_CASED.get(child.tag.split(":")[-1], child.tag.split(":")[-1])
+            if not XML_NAME.fullmatch(tag):
+                continue
             node = etree.SubElement(dst, f"{{{SVG_NS}}}{tag}")
             copy_into(child, node)
             node.tail = child.tail
@@ -384,7 +413,10 @@ def svg_pictures(root: lxml.html.HtmlElement) -> None:
             continue
         title = svg.find("title")
         alt = " ".join((svg.get("aria-label") or (title.text_content() if title is not None else "")).split())
-        data = base64.b64encode(_svg_markup(svg).encode()).decode()
+        try:
+            data = base64.b64encode(_svg_markup(svg).encode()).decode()
+        except ValueError:  # what lxml will not write (a name or text no XML holds): left to go
+            continue
         img = lxml.html.Element("img", {MARK_SVG: data, "alt": alt[:300]})
         width, height = _svg_size(svg)
         img.set("width", f"{width:g}")
