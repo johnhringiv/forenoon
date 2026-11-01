@@ -530,6 +530,40 @@ All fetched content is treated as untrusted.
   source's code, or U+FFFE/U+FFFF), written or as a reference, is read as a space in the page
   and the feed; the book check reads the page, and the model's HTML, the same way. A caption a figure also shows over its picture (an overlay, a lightbox's
   text) appears once.
+- **Embeds, videos and drawings.** What the book drops is not dropped without a word:
+  - An embedded page from a known video, audio, chart, map, document or post host (YouTube,
+    Vimeo, a Facebook video; Spotify, SoundCloud, podcast hosts; Flourish, Datawrapper,
+    Infogram, Observable, Tableau, Our World in Data; Google Maps; a PDF, Google Docs; X,
+    Instagram, TikTok and the like) leaves a line in its place: "A chart. See it on the
+    original page.", or with its name when it has one ("Audio: Korridorsangen – Mari Boine.
+    Listen on the original page."), from Substack's embed data or the frame's title or label
+    (not one that only names the kind, such as "Interactive or visual content", an address,
+    or a player's instructions, nor a player's name before it, as in "Spotify Embed: …"). "original page" links to the article's
+    page. The line stands in front of the boxes that hold only the embed (emphasis around it
+    included), as its own paragraph, or inside a sentence that has words of its own. An embed whose box also
+    shows a picture of it (a Datawrapper chart's print copy) gets only its name over the
+    picture, or nothing when it has none. Not for an embed of another kind (an advertisement,
+    a sign-up box), one in a link (an advertisement), a hidden one, a tracker's frame of 0 or 1 pixel,
+    nor one in a figure the browser is asked to take a picture of (below). Readability keeps
+    such a short paragraph between the article's only when its words before the link hold a
+    full stop, so the link is made after it; and the line comes back between its two
+    paragraphs as a dropped figure does (below).
+  - A `<video>` becomes its poster (the picture shown before it plays), with its label as the
+    alt text; a grid of videos gives each one's. One without a poster leaves a line ("A video.
+    See it on the original page."). Not a video whose figure or box holds a picture of the
+    page's own (a player's poster), one in a link (a banner advertisement), a hidden one, or
+    one in a figure the browser pictures.
+  - An inline SVG outside a figure that is a drawing (at least 150 by 40 CSS pixels with 5
+    shapes or more, not hidden from screen readers, not in a link, button, label, navigation,
+    header, footer, another SVG, `<noscript>` or `<template>`) becomes a picture of itself (an embedded SVG, drawn for the book as any SVG is), its
+    label or `<title>` the alt text. Not one dressed by the page's stylesheet (a class with no
+    `<style>` of its own, or a CSS variable), nor one using another SVG's parts or holding
+    HTML, which would come out black or empty. Attribute and element names no SVG file can
+    hold (a script framework's `@click`) are left out of the picture, an element with what it
+    holds.
+  - Readability's cleaner drops an SVG's address, and the page's own attributes are never
+    acted on, so the drawing and the link travel in marker attributes of extraction's own until
+    the allowlist.
 - **Figure pictures.** Readability takes a box holding only a picture for empty, so a figure
   can keep its caption and lose its photo (a box of its own, a lightbox button). After
   readability, such a figure gets back the pictures of the page's figure with the same caption
@@ -581,7 +615,8 @@ All fetched content is treated as untrusted.
   counts), the pictures go into that figure instead. A figure before the article's first
   paragraph or after its last (an author's photo, related stories) is not taken this way. The
   headings the article and the page have once count as such neighbours too, so a photo under a
-  heading stays in its section. At most 40 pictures come back to one article.
+  heading stays in its section. At most 40 pictures come back to one article. An embed's line
+  (above) comes back the same way, once.
 - **The lead photo.** The photo a news page sets under its headline sits outside the box of
   paragraphs readability keeps, so it is put back: the picture the page names as its own
   (`og:image`), found on the page between the headline (or the top of the box holding the
@@ -989,7 +1024,9 @@ Sonnet 5.5).
 - It also takes pictures of interactive figures: a `<figure>` the page's scripts draw (a
   chart, a slider comparing pictures), recognised by having controls, a canvas or a script,
   and no picture, player, table, code or quote of its own; and of drawn figures, which the
-  book would lose: an inline SVG of 20 elements or more (a chart, a diagram) or an embedded
+  book would lose: an inline SVG of 20 elements or more (a chart, a diagram), or one saying
+  what it shows (`role="img"` with a label of three words or more: a chart a script draws
+  into an empty SVG), whose label is put beside it, once, for when no picture is taken, or an embedded
   page that is not a video, a player or a post (Spotify, SoundCloud, a podcast host,
   Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
   either, and not a player's (named so: its controls are SVG); or a graphic drawn once per

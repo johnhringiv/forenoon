@@ -19,6 +19,8 @@ from .base import (
     MARK_FIRST,
     MARK_N,
     MARK_OF,
+    MARK_SVG,
+    PAGE_LINK,
     SELF_LINK_MARKS,
     _image_src,
     _join,
@@ -47,6 +49,7 @@ ATTRS = {"td": ("colspan", "rowspan"), "th": ("colspan", "rowspan"), "ol": ("sta
 
 
 # A status badge (a README's "build passing"), drawn by a badge service or a CI's badge.svg.
+SVG_BASE64 = re.compile(r"[A-Za-z0-9+/]+={0,2}")
 BADGE = re.compile(r"//(img\.)?shields\.io/|//badgen\.net/|//badge\.fury\.io/|/badge\.svg(\?|$)", re.IGNORECASE)
 
 
@@ -96,6 +99,10 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
         el.tag = "h2"
     for el in list(root.iterdescendants()):
         tag = el.tag.lower() if el.tag.isascii() else ""
+        if marked and tag == "span" and el.get(MARK) == PAGE_LINK:
+            el.tag, tag = "a", "a"
+            el.attrib.clear()
+            el.set("href", base_url)
         if tag in DROP:
             el.drop_tree()
             continue
@@ -124,7 +131,10 @@ def sanitize(root: lxml.html.HtmlElement, base_url: str, marked: bool = False) -
                 keep["href"] = href
         elif tag == "img":
             src = _image_src(el)
-            if src.startswith("data:image/"):
+            drawing = el.get(MARK_SVG, "") if marked else ""
+            if drawing and SVG_BASE64.fullmatch(drawing):
+                keep["src"] = f"data:image/svg+xml;base64,{drawing}"
+            elif src.startswith("data:image/"):
                 keep["src"] = src
             elif src:
                 src = _join(base_url, src)
