@@ -58,3 +58,22 @@ def test_a_page_without_the_calls_or_with_a_call_to_nothing_is_unchanged():
     before = lxml.html.tostring(root)
     reveal_streamed(root)
     assert lxml.html.tostring(root) == before
+
+
+def test_a_box_inside_its_own_fallback_is_moved_and_the_rest_of_the_fallback_goes():
+    root = lxml.html.fromstring(
+        "<html><body><div id='a'><template id='B:0'></template>Loading<div hidden id='S:0'>Shown</div> more"
+        '<!--/$--> after</div><script>$RC("B:0","S:0")</script></body></html>'
+    )
+    reveal_streamed(root)
+    assert text(root.get_element_by_id("a")) == "Shown after"
+
+
+def test_a_part_that_waits_for_its_stylesheets_is_put_in_place_too():
+    root = lxml.html.fromstring(
+        "<html><body><div id='a'><template id='B:0'></template>Loading<!--/$--></div>"
+        "<div hidden id='S:0'>Shown</div>"
+        '<script>$RR("B:0","S:0",[["/a.css","high"]])</script></body></html>'
+    )
+    reveal_streamed(root)
+    assert text(root.get_element_by_id("a")) == "Shown"

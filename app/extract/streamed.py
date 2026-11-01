@@ -16,7 +16,8 @@ import re
 import lxml.html
 from lxml import etree
 
-CALL = re.compile(r'\$R([CS])\("([BPS]:[0-9a-z]+)","([BPS]:[0-9a-z]+)"\)')
+# $RR is $RC for a part that waits for its stylesheets (React 19), with them as a third argument.
+CALL = re.compile(r'\$R([CRS])\("([BPS]:[0-9a-z]+)","([BPS]:[0-9a-z]+)"')
 SEGMENT = re.compile(r"S:[0-9a-z]+")
 
 
@@ -32,15 +33,17 @@ def reveal_streamed(root: lxml.html.HtmlElement) -> None:
     }
     templates = {el.get("id"): el for el in root.iter("template") if el.get("id")}
     for kind, first, second in calls:
-        boundary, segment = (first, second) if kind == "C" else (second, first)
+        boundary, segment = (second, first) if kind == "S" else (first, second)
         box, template = boxes.pop(segment, None), templates.pop(boundary, None)
         if box is None or template is None or box.getparent() is None or template.getparent() is None:
             continue
         if any(a is box for a in template.iterancestors()):
             continue  # a place inside its own box: nothing a page could mean
-        if kind == "C":
+        text, children = box.text, list(box)
+        _remove_keeping_tail(box)  # first, as React does: the box may sit in the fallback
+        if kind != "S":
             _drop_fallback(template)
-        _put_in_place(box, template)
+        _put_in_place(text, children, template)
 
 
 def _drop_fallback(template: lxml.html.HtmlElement) -> None:
@@ -66,10 +69,8 @@ def _drop_fallback(template: lxml.html.HtmlElement) -> None:
         el.getparent().remove(el)  # its tail is the fallback's text too
 
 
-def _put_in_place(box: lxml.html.HtmlElement, template: lxml.html.HtmlElement) -> None:
-    """Put the box's contents where the template is, and drop both (their tails stay)."""
-    text, children = box.text, list(box)
-    _remove_keeping_tail(box)
+def _put_in_place(text: str | None, children: list, template: lxml.html.HtmlElement) -> None:
+    """Put a box's contents where the template is, and drop the template (its tail stays)."""
     parent = template.getparent()
     at, tail = parent.index(template), template.tail
     parent.remove(template)

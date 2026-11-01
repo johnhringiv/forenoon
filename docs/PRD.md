@@ -291,6 +291,13 @@ All fetched content is treated as untrusted.
   used, since it is the author's own clean version.
 - **Picking the main content.** Readability (readability-lxml) picks the box with the most
   paragraph text, with these changes.
+  - First of all, a page React streams (Next.js and others) is put together as its scripts
+    would put it: the parts sent late in hidden boxes (`<div hidden id="S:1">`) are moved,
+    in the order of the page's calls, into the places the calls name: a loading
+    placeholder's fallback, up to the comment that closes it (`$RC`, or `$RR` for a part that
+    waits for its stylesheets; nothing is dropped when that comment is missing), or a
+    template (`$RS`). Otherwise the article stays in a hidden box and is dropped with it
+    (LessWrong, Tailscale).
   - A list item a sentence long (80 characters or more, at most a quarter links) counts as a
     paragraph would, for the box holding the list, so an article written as one numbered list
     (a communiqué's points) is seen at all. Not an item that opens with a headline or link (a
@@ -307,12 +314,6 @@ All fetched content is treated as untrusted.
   - Readability joins a box of the article's class when it is at most a quarter links, not a
     fifth (a podcast's first chunk with its show notes).
   - A table inside a table's cell (arXiv's two-line column headings) is kept.
-  - First of all, a page React streams (Next.js and others) is put together as its scripts
-    would put it: the parts sent late in hidden boxes (`<div hidden id="S:1">`) are moved,
-    in the order of the page's calls, into the places the calls name, a loading
-    placeholder's fallback (`$RC`, up to the comment that closes it; nothing when that comment
-    is missing) or a template (`$RS`). Otherwise the article stays in a hidden box and is
-    dropped with it (LessWrong, Tailscale).
   - Before readability reads the page: Tailwind's scroll margins (`scroll-mt-28`) are taken
     off every box, as readability reads "scroll" as a scrolling widget. The site's sign-in or
     registration box is dropped: named for one by a word of its class or id (`c13-register`,
@@ -374,7 +375,9 @@ All fetched content is treated as untrusted.
   - LessWrong and the Alignment Forum (one forum software): the post's box
     (`div.PostsPage-postContent`), as readability takes a long post's appendix alone, or a
     short post's byline.
-  - X: the replies under a post (the articles after its own).
+  - X: every article after a post's own, which the page streams in under it: the replies, and
+    with them the author's own follow-up posts in a thread and a quoted post (readability
+    dropped those before as well).
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500

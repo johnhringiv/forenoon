@@ -4,10 +4,10 @@ Everything handled here is untrusted third-party content. The sanitiser is an al
 anything not on its list (allowlist.py) is unwrapped (text kept) or dropped (text removed).
 
 The modules, each using only those before it: sites (one site's rules, from the files in
-sites/), streamed (a React page's late parts put in place), base (shared helpers), allowlist (sanitising), cleanup (what is not the article),
-pictures, media (embeds, videos and drawings the book cannot carry as they are),
-structure (what the page marks up before readability), article (choosing the
-article, and extract() itself).
+sites/), streamed (a React page's late parts put in place), base (shared helpers),
+allowlist (sanitising), cleanup (what is not the article), pictures, media (embeds, videos
+and drawings the book cannot carry as they are), structure (what the page marks up before
+readability), article (choosing the article, and extract() itself).
 """
 
 from .allowlist import SHOT_ID, sanitize
