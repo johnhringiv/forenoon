@@ -181,3 +181,242 @@ def test_a_rules_file_that_does_not_read_leaves_its_site_to_the_general_rules(tm
         assert sites.rules_for("https://broken.example/a") == sites.Rules()
     finally:
         sites._load.cache_clear()
+
+
+def test_a_guardian_live_blog_keeps_each_posts_heading_without_its_furniture():
+    post = (
+        '<article id="block-{n}" class="block"><header><div><a href="#block-{n}"><span>'
+        '<gu-island name="RelativeTime"><time>2h ago</time></gu-island></span><span>04.31 EDT</span></a></div>'
+        '<div><img src="https://i.example/reporter.png" alt="Reporter"></div>'
+        "<h2>Heading of post {n}</h2></header>{text}</article>"
+    )
+    blocks = "".join(post.format(n=n, text=paragraphs(3, 3 * n)) for n in range(3))
+    page = (
+        '<html><body><main><div data-gu-name="standfirst"><p>Standfirst.</p></div>'
+        '<div data-gu-name="body"><gu-island name="KeyEventsCarousel"><span>Key events</span><ul><li>'
+        '<a href="?page=with%3Ablock-9#block-9"><div><time>3h ago</time></div><div>A post on a later page</div></a>'
+        "</li></ul></gu-island>"
+        f'<div id="liveblog-body">{blocks}</div>'
+        '<aside data-spacefinder-type="model.dotcomrendering.pageElements.RichLinkBlockElement">Read more</aside>'
+        '<div><span>Explore more on these topics</span><ul><li><a href="/world">World</a></li></ul></div>'
+        "</div></main></body></html>"
+    )
+    result = extract("https://www.theguardian.com/world/live/2026/oct/23/x", page, "")
+    text = result.body.text_content()
+    assert all(f"Heading of post {n}" in text for n in range(3)) and "04.31 EDT" in text
+    assert "A post on a later page" in text  # the Key events list stays, without its times
+    for furniture in ("2h ago", "3h ago", "Read more", "Explore more"):
+        assert furniture not in text, furniture
+    assert not result.body.xpath("//img")
+
+
+def test_a_bbc_newsletter_promotion_and_contact_form_are_dropped():
+    page = (
+        '<html><body><main><article><div data-block="text">' + paragraphs(6) + "</div>"
+        '<div data-block="image"><figure><img src="https://i.example/b.png" alt="Thin, red banner promoting the'
+        ' Politics Essential newsletter" width="1920" height="316"></figure></div>'
+        '<div data-block="text"><p>Sign up for our Politics Essential newsletter. <a href="/newsletters/z7">Sign up</a></p></div>'
+        '<div data-block="image"><figure><img src="https://i.example/p.jpg" alt="Protesters hold a banner">'
+        "<figcaption>Image caption, Protesters in the square</figcaption></figure></div>"
+        '<div data-block="uploaderEmbed"><p>Are you personally affected by the issues raised in this story?</p></div>'
+        "</article></main></body></html>"
+    )
+    result = extract("https://www.bbc.co.uk/news/articles/c1", page, "")
+    text = result.body.text_content()
+    assert "newsletter" not in text and "personally affected" not in text
+    root = lxml.html.fromstring(page)
+    sites.strip(root, sites.rules_for("https://www.bbc.com/news/articles/c1"))
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/p.jpg"]  # a news photo stays
+
+
+def test_a_guardian_page_without_its_body_box_is_left_to_readability():
+    page = (
+        '<html><body><main><div data-gu-name="media"><figure><img src="https://i.example/l.jpg">'
+        "<figcaption>" + "A long caption for the lead photo of this feature. " * 6 + "</figcaption></figure></div>"
+        f"<article><div>{paragraphs(8)}</div></article></main></body></html>"
+    )
+    result = extract("https://www.theguardian.com/world/2026/oct/30/feature", page, "")
+    assert "Paragraph 7" in result.body.text_content()
+
+
+def test_a_guardian_pinned_post_goes_only_when_its_original_is_on_the_page():
+    rules = sites.rules_for("https://www.theguardian.com/world/live/2026/oct/23/x")
+
+    def page(pinned_to: str) -> str:
+        return (
+            '<html><body><div data-gu-name="body"><div id="pinned-post">'
+            f'<a href="?page=with%3Ablock-{pinned_to}#block-{pinned_to}">10.02 EDT</a><p>Summary.</p></div>'
+            '<div id="liveblog-body"><article id="block-1"><p>Summary.</p></article></div></div></body></html>'
+        )
+
+    for pinned_to, kept in (("1", False), ("7", True)):
+        root = lxml.html.fromstring(page(pinned_to))
+        sites.strip(root, rules)
+        assert bool(root.xpath("//div[@id = 'pinned-post']")) == kept
+
+
+def test_a_guardian_read_more_line_stays_without_its_card():
+    root = lxml.html.fromstring("<html><body><p>Text.</p><p>Read more…</p><p>Next.</p></body></html>")
+    sites.strip(root, sites.rules_for(GUARDIAN))
+    assert "Read more…" in root.text_content()
+
+
+def test_a_guardian_key_events_list_stays_when_it_links_to_a_post_not_in_the_book():
+    rules = sites.rules_for("https://www.theguardian.com/world/live/2026/oct/23/x")
+    root = lxml.html.fromstring(
+        '<html><body><gu-island name="KeyEventsCarousel">Key events<a href="#block-1">A</a><a href="#block-9">B</a>'
+        '</gu-island><div id="pinned-post"><a href="#block-2">10.02</a></div>'
+        '<div id="liveblog-body"><article id="block-1"><p>Text.</p></article></div></body></html>'
+    )
+    sites.strip(root, rules)
+    assert root.xpath("//gu-island[@name = 'KeyEventsCarousel']")
+
+
+def test_the_bbc_rules_are_the_same_for_both_its_domains():
+    assert (sites.SITES / "bbc.co.uk.txt").read_text() == (sites.SITES / "bbc.com.txt").read_text()
+
+
+def test_a_bbc_photo_or_paragraph_that_mentions_a_banner_or_newsletter_stays():
+    rules = sites.rules_for("https://www.bbc.co.uk/news/articles/c1")
+    long = "A paragraph of the story that links to the newsletter archive among other things. " * 6
+    root = lxml.html.fromstring(
+        '<div><div data-block="image"><img src="https://i.example/p.jpg" alt="A protester holds a banner"'
+        ' width="976" height="549"></div>'
+        '<div data-block="image"><img src="https://i.example/b.png" alt="News Daily banner" width="1920"'
+        ' height="316"></div>'
+        f'<div data-block="text"><p>{long}<a href="/newsletters/z1">archive</a></p></div></div>'
+    )
+    sites.strip(root, rules)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/p.jpg"]
+    assert "newsletter archive" in root.text_content()
+
+
+def test_a_guardian_lead_video_and_newsletter_lines_go():
+    rules = sites.rules_for("https://www.theguardian.com/world/2026/oct/24/x")
+    root = lxml.html.fromstring(
+        '<html><body><div data-gu-name="media"><gu-island name="SelfHostedVideo"><figure><video></video>'
+        "<figcaption>Demonstrators gather in Paris – video</figcaption></figure></gu-island></div>"
+        '<div data-gu-name="media"><figure><img src="https://i.example/l.jpg"><figcaption>A photo</figcaption></figure></div>'
+        '<div data-gu-name="body"><p>Text.</p>'
+        '<figure data-spacefinder-type="model.dotcomrendering.pageElements.LinkBlockElement"><a href="https://'
+        'www.theguardian.com/email-newsletters?CMP=copyembed">Sign up for the Breaking News Australia email</a></figure>'
+        '<p><a href="https://www.theguardian.com/x?CMP=copyembed">Sign up for the Politics, really newsletter</a></p>'
+        "</div></body></html>"
+    )
+    sites.strip(root, rules)
+    assert "".join(root.text_content().split()) == "AphotoText."
+
+
+GUARDIAN = "https://www.theguardian.com/world/2026/oct/24/x"
+BBC = "https://www.bbc.co.uk/news/articles/c1"
+SF = "model.dotcomrendering.pageElements."
+
+
+@pytest.mark.parametrize(
+    ("url", "junk"),
+    [
+        (GUARDIAN, '<div id="the-caption"><figcaption>JUNK caption shown on a tap</figcaption></div>'),
+        (
+            GUARDIAN,
+            f'<figure data-spacefinder-type="{SF}YoutubeBlockElement"><figcaption>JUNK – video</figcaption></figure>',
+        ),
+        (
+            GUARDIAN,
+            '<gu-island name="SelfHostedVideo"><figure><figcaption>JUNK – video</figcaption></figure></gu-island>',
+        ),
+        (GUARDIAN, f'<figure data-spacefinder-type="{SF}NewsletterSignupBlockElement">JUNK</figure>'),
+        (GUARDIAN, f'<figure data-spacefinder-type="{SF}ReporterCalloutBlockElement">JUNK</figure>'),
+        (GUARDIAN, "<p>Listen to our podcasts here and sign up to the long read weekly email here. JUNK</p>"),
+        (
+            GUARDIAN,
+            (
+                '<div id="pinned-post"><div><div>From JUNK <gu-island name="RelativeTime"><time>1h ago</time>'
+                '</gu-island></div></div><div id="collapsible-body"><p>KEEP</p></div></div>'
+            ),
+        ),
+        (GUARDIAN, f'<p>Read more JUNK</p><figure data-spacefinder-type="{SF}RichLinkBlockElement">JUNK</figure>'),
+        (
+            GUARDIAN,
+            (
+                '<gu-island name="KeyEventsCarousel">JUNK Key events<a href="?page=with%3Ablock-1#block-1">A</a>'
+                '<a href="#block-2">B</a></gu-island><div id="pinned-post"><a href="#block-2">10.02</a><p>KEEP</p></div>'
+                '<div id="liveblog-body"><article id="block-1"><p>KEEP</p></article></div>'
+            ),
+        ),
+        (GUARDIAN, '<aside data-gu-name="pullquote"><blockquote>JUNK a sentence of the article</blockquote></aside>'),
+        (
+            GUARDIAN,
+            (
+                '<div id="pinned-post"><div id="collapsible-body"><article><header><img src="https://i.example/JUNK.png">'
+                "</header><p>KEEP</p></article></div></div>"
+            ),
+        ),
+        (
+            GUARDIAN,
+            (
+                '<div id="pinned-post"><div>JUNK <gu-island name="RelativeTime"><time>1h ago</time></gu-island></div>'
+                '<div id="collapsible-body"><p>KEEP</p></div></div>'
+            ),
+        ),
+        (
+            BBC,
+            '<div data-block="text"><p>Get our flagship newsletter JUNK. <a href="/newsletters/z1">Sign up</a></p></div>',
+        ),
+        (BBC, '<div data-block="text"><p>Go to BBCAfrica.com for more news JUNK</p></div>'),
+        (BBC, '<div data-block="text"><p>What do you want BBC Verify to investigate?</p></div>'),
+        (BBC, "<p>If there are issues JUNK, you can get in touch via BBC Your Voice.</p>"),
+        (BBC, '<div data-block="topicList">JUNK</div><div data-block="promoList">JUNK</div>'),
+        (BBC, '<div data-block="links">JUNK</div><div data-block="eventPromo">JUNK</div>'),
+        (BBC, '<div data-testid="links-grid">JUNK www.bbc.co.uk</div>'),
+        (BBC, '<div data-block="uploaderEmbed"><p>Are you personally affected? JUNK</p></div>'),
+        (BBC, '<div data-block="image"><img src="https://i.example/v.png" alt="BBC Verify logo"></div>'),
+        (
+            BBC,
+            '<figure><div data-testid="image"><img src="https://i.example/y.png" alt="Your Voice banner JUNK"></div></figure>',
+        ),
+        (
+            BBC,
+            '<figure><div data-testid="image"><img src="https://i.example/n.png" alt="A banner promoting JUNK"></div></figure>',
+        ),
+        (
+            BBC,
+            "<p>This breaking news story is being updated JUNK</p><p>You can receive Breaking News on a smartphone JUNK</p>",
+        ),
+        (
+            BBC,
+            '<figure><div data-testid="image"><img src="https://i.example/b.png" alt="Thin, red banner JUNK"></div></figure>',
+        ),
+        (BBC, '<p class="Paragraph-styles__P">Sign up JUNK <a href="/newsletters/z7">here</a></p>'),
+        (BBC, '<p class="Paragraph-styles__P">If it is safe to do so, you can also get in touch JUNK</p>'),
+        (BBC, '<div class="TagList-styles__TagListStyled">JUNK</div>'),
+    ],
+)
+def test_each_guardian_and_bbc_strip_rule_drops_its_furniture(url, junk):
+    root = lxml.html.fromstring(f"<html><body><main><p>KEEP the article.</p>{junk}</main></body></html>")
+    before = lxml.html.tostring(root, encoding="unicode")
+    sites.strip(root, sites.rules_for(url))
+    after = lxml.html.tostring(root, encoding="unicode")
+    assert after != before and "JUNK" not in after and "KEEP" in after
+
+
+def test_bbc_iplayer_and_sounds_pages_are_not_articles():
+    rules = sites.rules_for(BBC)
+    assert sites.not_article("https://www.bbc.co.uk/iplayer/episode/m0033jlx", rules)
+    assert sites.not_article("https://www.bbc.co.uk/sounds/play/m002", rules)
+
+
+def test_guardian_podcast_and_video_pages_are_not_articles():
+    rules = sites.rules_for(GUARDIAN)
+    assert sites.not_article("https://www.theguardian.com/news/audio/2026/oct/23/x-podcast", rules)
+    assert sites.not_article("https://www.theguardian.com/world/video/2026/oct/23/x", rules)
+    assert not sites.not_article(GUARDIAN, rules)
+
+
+def test_a_guardian_articles_lead_picture_is_taken_with_its_box():
+    page = (
+        '<html><body><main><div data-gu-name="media"><figure><img src="https://i.example/lead.jpg">'
+        "<figcaption>The lead photo's caption</figcaption></figure></div>"
+        f'<div data-gu-name="body">{paragraphs(6)}</div></main></body></html>'
+    )
+    result = extract(GUARDIAN, page, "")
+    assert "The lead photo's caption" in result.body.text_content()
