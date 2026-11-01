@@ -3684,3 +3684,15 @@ def test_many_labels_pictures_and_credits_stay_fast():
     assert _text(quick(f"<h2>Title{icons}</h2>")) == "Title"
     pictures = "".join(f'<img src="https://s.example/{i}.jpg"><br>Line {i}<br>' for i in range(4000))
     assert len(quick(f"<div>{pictures}</div>").findall(".//img")) == 4000
+
+
+def test_a_drawn_map_keeps_only_its_widest_copys_labels():
+    root = lxml.html.fromstring(
+        '<html><body><figure><div class="ai2html">'
+        '<div class="g-artboard" data-min-width="0"><img src="https://i.example/s.jpg"><p>IRAQ</p></div>'
+        '<div class="g-artboard" data-min-width="600"><img src="https://i.example/l.jpg"><p>IRAQ</p></div>'
+        "</div></figure></body></html>"
+    )
+    extract_structure._mark_widgets(root)
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/l.jpg"]
+    assert root.xpath(f"//p[@{extract_module.MARK}]")[0].get(extract_module.MARK) == "drawn"

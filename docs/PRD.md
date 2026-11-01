@@ -322,7 +322,8 @@ All fetched content is treated as untrusted.
   else reads them (a selected text node goes alone); `body` names the article's box, used in
   place of readability's pick (and of the wider and live-blog tries below) when it holds at
   least 40 words; and Forenoon's own `not_article` names, by a pattern of the path, the pages
-  that hold no article (a site's video pages and podcast episodes), which are failed.
+  that hold no article (a site's video pages and podcast episodes), which are failed without
+  being fetched. A dropped element that parted two words leaves a space between them.
   - VTDigger: the feed entry's "Read the story on VTDigger here" line and the "READ MORE"
     box with its story cards; "Latest Opinion posts".
   - Nautilus: "Enjoying Nautilus? Subscribe to our free newsletter."
@@ -332,10 +333,12 @@ All fetched content is treated as untrusted.
     a paragraph or heading alone in its own column, and the Upshot's tables and charts; in it,
     advertisement slots, the sponsor line, video and audio players, the news-tips, trust and
     reader-callout boxes, a reporter's pick from the comments, the letters page's footer, a
-    picture's "Image" label, the authors' portraits, a feature's headline, a newsletter's
+    picture's screen-reader labels ("Image", "Credit"), the authors' portraits, a card for
+    another Times story, a feature's headline, a newsletter's
     sign-up line, "Listen · 37 min", Datawrapper charts (only their heading is left), and maps
     whose labels are paragraphs over the art outside a `<figure>` (no picture can be taken of
-    them). Not articles: `/video/` and podcast episodes.
+    them). Not articles: podcast episodes (not video pages, some of which carry a reported
+    transcript).
   - BBC: video pages (`/news/videos/`) and iPlayer and Sounds episodes are not articles.
   - The Guardian: podcast episodes and video pages (`/audio/`, `/video/`) are not articles.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
@@ -964,7 +967,8 @@ Sonnet 5.5).
   Instagram, TikTok, X and the like) but a Flourish chart or a demo, with none of those
   either, and not a player's (named so: its controls are SVG); or a graphic drawn once per
   screen width with its labels set as text over the art (ai2html's artboards: a map's place
-  names), pictures and all, as its labels alone are lists of words. The room these pictures have in
+  names), pictures and all, as its labels alone are lists of words; the copies for other
+  widths are dropped, so without a picture the figure keeps one copy's labels. The room these pictures have in
   the article's budget leaves out its SVG pictures, mostly equations. A drawn figure's picture comes with no line
   under it; without one, the line sends the reader to the original page for the figure. Without the scripts it is often
   only its labels run together, so extraction puts a placeholder first in it, numbered by

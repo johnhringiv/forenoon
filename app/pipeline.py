@@ -29,6 +29,7 @@ from .deliver import (
 )
 from .discover import is_article, read_listing, site_host, site_source
 from .extract import DRAWN, SHOT_ID, Extracted, extract
+from .extract import sites as extract_sites
 from .fetch import Fetcher, FetchError
 from .images import SVG_ADDRESS, embed_images
 from .llm import API_KEY_ENV, Backend, models_for_run
@@ -223,6 +224,8 @@ def _extract(item: Item, fetcher: Fetcher, cfg: Config, keep: bool = False, reus
     if item.source.extract == "link":
         # A link-only source: its pages are never fetched, and its picks are shown as links.
         return Extracted(None, "link", ["a link-only source"])
+    if extract_sites.not_article(item.url, extract_sites.rules_for(item.url)):
+        return extract(item.url, None, item.feed_html, item.source.extract)  # failed, and never fetched
     page_html, fetch_error = None, ""
     reused = False
     if item.source.extract != "feed":

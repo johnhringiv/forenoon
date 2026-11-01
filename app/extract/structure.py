@@ -52,7 +52,7 @@ from .cleanup import (
     _holds_only,
     _promo,
 )
-from .pictures import _drawn, _interactive
+from .pictures import _drawn, _interactive, _other_boards
 
 # A button that only enlarges its picture (a lightbox's), unlike a video's play button.
 ENLARGE = re.compile(
@@ -171,6 +171,9 @@ def _mark_widgets(root: lxml.html.HtmlElement) -> None:
         drawn = figure.find(".//figure") is None and not _interactive(figure) and _drawn(figure)
         if not drawn and not _interactive(figure):
             continue
+        if drawn:  # should no picture be taken, the widest copy's labels alone
+            for board in _other_boards(figure):
+                board.drop_tree()
         holder = lxml.html.Element("p")
         holder.set(MARK, DRAWN if drawn else "shot")
         holder.set(MARK_N, str(number))

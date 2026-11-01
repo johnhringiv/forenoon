@@ -16,6 +16,7 @@ can be borrowed: one `directive: value` per line, `#` for a comment. Directives:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -100,13 +101,22 @@ def strip(root: lxml.html.HtmlElement, rules: Rules) -> None:
     for xpath in rules.strip:
         for hit in xpath(root):
             if isinstance(hit, lxml.html.HtmlElement):
-                if hit.getparent() is not None:
-                    hit.drop_tree()
+                if hit.getparent() is not None and hit.tag not in ("html", "body"):
+                    _drop_apart(hit)
             elif isinstance(hit, str) and (parent := getattr(hit, "getparent", lambda: None)()) is not None:
                 if hit.is_tail:
                     parent.tail = None
                 elif hit.is_text:
                     parent.text = None
+
+
+def _drop_apart(el: lxml.html.HtmlElement) -> None:
+    """Drop an element, leaving a space where it may have parted two words ("Sept. 28" and
+    "Finbarr" around a "Credit..." label); not before punctuation, and spaces collapse."""
+    tail = el.tail or ""
+    if not tail[:1].isspace() and not (tail and unicodedata.category(tail[0]).startswith("P")):
+        el.tail = " " + tail
+    el.drop_tree()
 
 
 def body(page: lxml.html.HtmlElement, rules: Rules) -> lxml.html.HtmlElement | None:

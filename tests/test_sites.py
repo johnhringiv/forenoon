@@ -56,7 +56,7 @@ def test_strip_drops_an_element_and_keeps_what_follows_it_or_only_a_text_node():
         '<div><p>Before <span class="ad">Buy now</span>after.</p><hr> The site is under high scraper load. <p>End.</p></div>'
     )
     sites.strip(root, rules)
-    assert lxml.html.tostring(root, encoding="unicode") == "<div><p>Before after.</p><hr><p>End.</p></div>"
+    assert lxml.html.tostring(root, encoding="unicode") == "<div><p>Before  after.</p><hr><p>End.</p></div>"
 
 
 def test_the_body_rule_gathers_its_boxes_without_the_text_between_them():
@@ -110,3 +110,43 @@ def test_a_body_rule_that_finds_too_little_leaves_the_pick_to_readability():
     )
     result = extract("https://www.nytimes.com/2026/10/17/us/x.html", page, "")
     assert "Paragraph 7" in result.body.text_content()
+
+
+def test_a_strip_leaves_the_words_on_either_side_apart():
+    rules = sites.parse("strip: //span[@class = 'label']")
+    root = lxml.html.fromstring(
+        '<div><p>On Sept. 28<span class="label">Credit...</span>Finbarr</p>'
+        '<p><b>Photo</b><span class="label">x</span>by</p><p>End<span class="label">x</span>.</p>'
+        '<p><span>On Sept. 28</span><span><span class="label">Credit...</span><span>Finbarr</span></span></p></div>'
+    )
+    sites.strip(root, rules)
+    texts = [" ".join(p.text_content().split()) for p in root.iter("p")]
+    assert texts == ["On Sept. 28 Finbarr", "Photo by", "End.", "On Sept. 28 Finbarr"]
+
+
+def test_a_strip_never_drops_the_page_itself():
+    root = lxml.html.fromstring('<html><body class="post single-promo"><p>The article.</p></body></html>')
+    sites.strip(root, sites.parse("strip_id_or_class: promo"))
+    assert root.text_content() == "The article."
+
+
+def test_every_shipped_rule_selects_nodes():
+    page = lxml.html.fromstring("<html><body><section><p>Text <span>x</span></p><hr>tail</section></body></html>")
+    for path in sorted(sites.SITES.glob("*.txt")):
+        rules = sites.parse(path.read_text(encoding="utf-8"))
+        for xpath in (*rules.strip, *rules.body):
+            assert isinstance(xpath(page), list), (path.name, xpath.path)
+
+
+def test_a_page_that_is_no_article_is_not_fetched():
+    from app import pipeline
+    from app.config import Source
+    from app.sources import Item
+
+    class NoFetch:
+        def get(self, url):
+            raise AssertionError("fetched")
+
+    item = Item("1", "https://www.bbc.co.uk/news/videos/c8x", Source("BBC"), "T", "", None, paragraphs(5))
+    result = pipeline._extract(item, NoFetch(), None)
+    assert result.status == "failed" and result.reasons == ["not an article (site rule)"]

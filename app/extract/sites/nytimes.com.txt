@@ -16,6 +16,8 @@ strip: //p[starts-with(normalize-space(), 'Follow the New York Times Opinion sec
 # A picture's "Image" label for screen readers, and the authors' portraits in a feature's byline.
 strip: //figure//span[contains(@class, 'accessibilityLabel')]
 strip: //a[contains(@href, 'nytimes.com/by/')][.//img]
+# A card for another Times story: one link holding its picture, headline and summary.
+strip: //div[@data-testid = 'interactive-block'][count(*) = 1][a[contains(@href, 'nytimes.com/')]]
 # Charts the book cannot show and the browser cannot take a picture of (see the PRD's figures):
 # a map whose place names are paragraphs over the art (ai2html outside a <figure>, the race
 # maps) comes out as lists of words, twice over; a Datawrapper chart leaves only its heading.
@@ -26,6 +28,5 @@ strip: //section[starts-with(@id, 'datawrapper_')]
 strip: //section[@name = 'articleBody']//header//h1
 strip: //div[.//button[@data-testid = 'signup-button']][not(.//div[.//button[@data-testid = 'signup-button']])]
 strip: //div[starts-with(normalize-space(), 'Listen ·')][string-length(normalize-space()) < 30]
-# Video pages and podcast episodes.
-not_article: ^/video/
+# Podcast episodes. (Not video pages: some carry a reported transcript.)
 not_article: ^/\d{4}/\d\d/\d\d/podcasts/
