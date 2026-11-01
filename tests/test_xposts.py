@@ -43,6 +43,7 @@ def test_a_cut_post_gets_the_rest_of_its_text_from_the_pages_data():
         SHOWN + " where it is cut; the rest, with a link example.com/a, is in the page's data."
     )
     assert box.find("button") is None
+    assert [(a.get("href"), a.text) for a in box.iter("a")] == [("https://t.co/abc", "example.com/a")]
     assert root.xpath("//article//article/div[@dir='auto']")[0].text_content() == "Quoted."
 
 

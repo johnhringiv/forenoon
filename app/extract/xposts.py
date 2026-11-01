@@ -55,11 +55,17 @@ def fill_cut_posts(root: lxml.html.HtmlElement) -> None:
             continue  # not the text the data says is shown, or shown whole already
         for button in buttons:
             button.drop_tree()
-        last = box[-1] if len(box) else None
-        if last is not None:
-            last.tail = (last.tail or "") + more
-        else:
-            box.text = (box.text or "") + more
+        for piece in more:
+            if isinstance(piece, str):
+                last = box[-1] if len(box) else None
+                if last is not None:
+                    last.tail = (last.tail or "") + piece
+                else:
+                    box.text = (box.text or "") + piece
+            else:
+                link = lxml.html.Element("a", href=piece[0])
+                link.text = piece[1]
+                box.append(link)
 
 
 def _framed(link: lxml.html.HtmlElement, article: lxml.html.HtmlElement) -> bool:
@@ -72,9 +78,13 @@ def _framed(link: lxml.html.HtmlElement, article: lxml.html.HtmlElement) -> bool
     return False
 
 
-def _rests(root: lxml.html.HtmlElement) -> dict[str, tuple[str, str]]:
-    """For each cut post in the page's data, its id, the last words shown and the text after."""
-    rest: dict[str, tuple[str, str]] = {}
+# The rest of a post: its text, with each link as (address, the text it shows).
+Rest = list[str | tuple[str, str]]
+
+
+def _rests(root: lxml.html.HtmlElement) -> dict[str, tuple[str, Rest]]:
+    """For each cut post in the page's data, its id, the last words shown and the rest."""
+    rest: dict[str, tuple[str, Rest]] = {}
     for script in root.iter("script"):
         code = script.text or ""
         if "note_tweet" not in code:
@@ -90,7 +100,7 @@ def _rests(root: lxml.html.HtmlElement) -> dict[str, tuple[str, str]]:
     return rest
 
 
-def _collect(data: object, rest: dict[str, tuple[str, str]]) -> None:
+def _collect(data: object, rest: dict[str, tuple[str, Rest]]) -> None:
     stack = [data]
     while stack:
         item = stack.pop()
@@ -111,19 +121,27 @@ def _collect(data: object, rest: dict[str, tuple[str, str]]) -> None:
         if isinstance(shown, list) and len(shown) == 2 and all(isinstance(i, int) for i in shown):
             cut = cut[shown[0] : shown[1]]
         cut = html.unescape(cut)
-        end = " ".join(cut.split())[-20:]
-        if not end or SHORT_LINK.search(end):
-            continue  # a link ends what is shown: it reads differently on the page
+        # The last words shown, after any link: a link reads differently on the page.
+        after = " ".join(SHORT_LINK.split(cut)[-1].split())
+        if len(after) < 8:
+            continue
+        end = after[-20:]
         # The whole text begins with it, where a link may be given another t.co address.
         begins = re.match(SHORT_LINK.pattern.join(re.escape(part) for part in SHORT_LINK.split(cut)), whole)
         if begins is None or begins.end() >= len(whole):
             continue
         links = {
-            u.get("url"): u.get("display_url") or u.get("expanded_url")
+            u.get("url"): (u.get("expanded_url") or u.get("url"), u.get("display_url") or u.get("expanded_url"))
             for u in (note.get("entity_set") or {}).get("urls") or []
-            if isinstance(u, dict)
+            if isinstance(u, dict) and isinstance(u.get("url"), str)
         }
-        rest[post] = (
-            end,
-            SHORT_LINK.sub(lambda m, links=links: links.get(m.group(0)) or m.group(0), whole[begins.end() :]),
-        )
+        more: Rest = []
+        tail = whole[begins.end() :]
+        at = 0
+        for found in SHORT_LINK.finditer(tail):
+            more.append(tail[at : found.start()])
+            address, label = links.get(found.group(0)) or (found.group(0), found.group(0))
+            more.append((address, label) if isinstance(address, str) and isinstance(label, str) else found.group(0))
+            at = found.end()
+        more.append(tail[at:])
+        rest[post] = end, more

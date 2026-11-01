@@ -385,7 +385,8 @@ All fetched content is treated as untrusted.
     loses a hidden heading that repeats the post. X shows only the first 280 characters or so
     of a long post in the thread or of a quoted post; the rest is added from the page's data
     (`note_tweet`), only when that text begins with what is shown and the post's text box
-    ends with it.
+    ends with it, with its links as links showing the address X shows. A post whose shown
+    part ends at a link, with fewer than 8 characters after it, is left cut.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500
