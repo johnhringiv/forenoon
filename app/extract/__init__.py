@@ -5,7 +5,7 @@ anything not on its list (allowlist.py) is unwrapped (text kept) or dropped (tex
 
 The modules, each using only those before it: sites (one site's rules, from the files in
 sites/), base (shared helpers), allowlist (sanitising), cleanup (what is not the article),
-pictures, structure (what the page marks up before readability), article (choosing the
+pictures, media (embeds, videos and drawings the book cannot carry as they are), structure (what the page marks up before readability), article (choosing the
 article, and extract() itself).
 """
 

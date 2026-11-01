@@ -16,8 +16,11 @@ from .base import (
     BLOCK,
     DROP,
     ELSEWHERE,
+    EMBED_LINE,
     HIDDEN_CLASS,
     LAZY_SRC,
+    MARK,
+    MARK_N,
     MAX_PREVIEW_URL,
     NAMES_CHARS,
     PLAYER_NAME_PICTURE,
@@ -50,6 +53,7 @@ PLAYER_EMBED = re.compile(
     re.IGNORECASE,
 )
 DRAWN_MIN_ELEMENTS = 20
+SVG_LABEL_WORDS = 3  # a description, not a name ("Logo")
 
 
 URL_CHARS = 2048  # of an embedded page's address read for whose it is
@@ -71,7 +75,7 @@ def _interactive(figure: lxml.html.HtmlElement) -> bool:
 
 def _drawn(figure: lxml.html.HtmlElement) -> bool:
     """Whether a figure is a drawing the book would lose: an inline SVG of some size (a chart,
-    a diagram) or an embedded page that is not a video (a chart from Flourish, a demo), with no
+    a diagram) or one that describes what it shows (see _svg_label) or an embedded page that is not a video (a chart from Flourish, a demo), with no
     picture, video, table, code or quote of its own. Not a player's (its controls are SVG). And a
     graphic drawn once per screen width with its labels set over the art (ai2html's map, whose
     place names would otherwise come out as lists of words under each copy of the picture)."""
@@ -88,7 +92,14 @@ def _drawn(figure: lxml.html.HtmlElement) -> bool:
     frames = [(f.get("src") or f.get("data-src") or "").strip()[:URL_CHARS] for f in figure.iter("iframe")]
     if frames:
         return all(src and not VIDEO_LINK.match(src) and not PLAYER_EMBED.match(src) for src in frames)
-    return any(len(svg.xpath(".//*")) >= DRAWN_MIN_ELEMENTS for svg in figure.iter("svg"))
+    return any(len(svg.xpath(".//*")) >= DRAWN_MIN_ELEMENTS or _svg_label(svg) for svg in figure.iter("svg"))
+
+
+def _svg_label(svg: lxml.html.HtmlElement) -> str:
+    """What an SVG drawing says it shows (role="img", aria-label of a few words): a chart a
+    script draws into it may be all the page has of it."""
+    label = " ".join((svg.get("aria-label") or "").split())
+    return label if (svg.get("role") or "").strip().lower() == "img" and len(label.split()) >= SVG_LABEL_WORDS else ""
 
 
 def _other_boards(figure: lxml.html.HtmlElement) -> list[lxml.html.HtmlElement]:
@@ -242,7 +253,7 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
     stories or furniture within the article's box, nor one whose caption the article already
     has; only the pictures the book would show (see _shown_pictures) that the article lacks,
     with the figure's own caption. Of a stack of photos paged through (a carousel), only the
-    first."""
+    first. The line standing for an embed (see media) goes back the same way."""
     try:
         page = lxml.html.fromstring(page_html)
     except (etree.ParserError, ValueError):
@@ -281,6 +292,7 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
     half: float | None = None  # of the page's words, counted on first need
     elsewhere: dict[lxml.html.HtmlElement, bool] = {}
     stacks: set[lxml.html.HtmlElement] = set()  # those whose first photo was seen
+    lines = {p.get(MARK_N) for p in body.iter("p") if _embed_line(p)}  # embeds' lines the article has
     added = 0
 
     def other_stories(box: lxml.html.HtmlElement) -> bool:
@@ -302,7 +314,7 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
     walk = [el for el in region.iter(*MARK_BLOCKS, "figure") if next(el.iterancestors("figure"), None) is None]
     holders = {a for el in walk if el.tag != "figure" and _text_key(el) in marks for a in el.iterancestors()}
     for el in walk:
-        if el.tag == "figure":
+        if el.tag == "figure" or _embed_line(el):
             between.append(el)
         elif (key := _text_key(el)) in marks:
             if between and last is not None and following.get(last) == key:
@@ -316,7 +328,7 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
             dropped.append(el)
 
     for key, figures in gaps:
-        if not any(_shown_pictures(f, url, region) for f in figures):
+        if not any(_embed_line(f) or _shown_pictures(f, url, region) for f in figures):
             continue
         anchor = anchors[key]
         while anchor.getparent() is not None and anchor.getparent().tag not in (
@@ -334,6 +346,17 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
             if added >= RESTORE_DROPPED_MAX:
                 return
             boxes = own_boxes(figure)
+            if _embed_line(figure):
+                number = figure.get(MARK_N)
+                if number in lines or any(_unlikely(b) or other_stories(b) for b in boxes):
+                    continue
+                lines.add(number)
+                line = copy.deepcopy(figure)
+                line.tail = anchor.tail
+                anchor.tail = None
+                anchor.addnext(line)
+                anchor = line
+                continue
             if any(_clone(b) for b in boxes if any(_stack(a) for a in b.iterancestors())):
                 continue  # a looping carousel's copy of a slide
             stack = next((b for b in reversed(boxes) if _stack(b)), None)  # the carousel, not its slide
@@ -395,6 +418,11 @@ def _restore_dropped_figures(body: lxml.html.HtmlElement, page_html: str, url: s
             anchor.tail = None
             anchor.addnext(restored)
             anchor = restored
+
+
+def _embed_line(el: lxml.html.HtmlElement) -> bool:
+    """Whether a paragraph is the line standing for an embed (see media.mark_embeds)."""
+    return el.tag == "p" and el.get(MARK) == EMBED_LINE
 
 
 def _same_caption(

@@ -52,6 +52,9 @@ MARK = "data-fn"  # our own marker attributes, set by _structure and read by san
 MARK_N = "data-fn-n"
 MARK_FIRST = "data-fn-first"
 MARK_OF = "data-fn-of"  # a shot's placeholder: how many figures the page has
+MARK_SVG = "data-fn-svg"  # an inline drawing made a picture: the SVG, base64 (readability drops an SVG address)
+EMBED_LINE = "embed"  # a MARK on a paragraph: the line standing for an embed (see media)
+PAGE_LINK = "page"  # a MARK on a span: a link to the original page, made by sanitize (readability counts links)
 
 
 MAX_PREVIEW_URL = 2000

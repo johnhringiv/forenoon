@@ -52,7 +52,8 @@ from .cleanup import (
     _holds_only,
     _promo,
 )
-from .pictures import _drawn, _interactive, _other_boards
+from .media import mark_embeds, mark_videos, svg_pictures
+from .pictures import _drawn, _interactive, _other_boards, _own_caption, _svg_label
 
 # A button that only enlarges its picture (a lightbox's), unlike a video's play button.
 ENLARGE = re.compile(
@@ -184,6 +185,7 @@ def _mark_widgets(root: lxml.html.HtmlElement, counted: list[lxml.html.HtmlEleme
         if drawn:  # should no picture be taken, the widest copy's labels alone
             for board in _other_boards(figure):
                 board.drop_tree()
+            _describe_drawings(figure)
         holder = lxml.html.Element("p")
         holder.set(MARK, DRAWN if drawn else "shot")
         holder.set(MARK_N, str(number))
@@ -192,6 +194,20 @@ def _mark_widgets(root: lxml.html.HtmlElement, counted: list[lxml.html.HtmlEleme
         holder.tail = figure.text
         figure.text = None
         figure.insert(0, holder)
+
+
+def _describe_drawings(figure: lxml.html.HtmlElement) -> None:
+    """Put what each SVG of a drawn figure says it shows beside it, for when no picture is taken
+    (the book drops SVG, and with it the description); not one its caption already says."""
+    caption = _own_caption(figure)
+    said = " ".join(caption.text_content().split()) if caption is not None else ""
+    for svg in list(figure.iter("svg")):
+        label = _svg_label(svg)
+        if label and label not in said and svg.getparent() is not None:
+            line = lxml.html.Element("p")
+            line.text = label
+            line.tail, svg.tail = svg.tail, None
+            svg.addnext(line)
 
 
 def _unscroll(root: lxml.html.HtmlElement) -> None:
@@ -843,6 +859,9 @@ def _structure(
         _mark_widgets(root, counted)
         _drop_account_boxes(root)
         _drop_story_cards(root, base_url)
+    mark_embeds(root)
+    mark_videos(root, base_url)
+    svg_pictures(root)
     # The page's own quotes only: before asides and callouts are made quotes below.
     _unclass_quotes(root)
     # Boxes are judged against the page as it was, before any is dropped.
