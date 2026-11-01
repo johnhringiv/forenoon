@@ -10,6 +10,7 @@ never given words that are not its own, and only to a text box that ends with th
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from urllib.parse import urlsplit
@@ -46,11 +47,14 @@ def fill_cut_posts(root: lxml.html.HtmlElement) -> None:
         if post not in rest or box is None:
             continue
         end, more = rest[post]
-        for button in list(box.iter("button")):
-            button.drop_tree()  # "Show more"
+        buttons = list(box.iter("button"))  # "Show more"
         shown = " ".join(box.text_content().split())
+        for button in buttons:
+            shown = shown.removesuffix(" ".join(button.text_content().split())).rstrip()
         if not shown.endswith(end):
             continue  # not the text the data says is shown, or shown whole already
+        for button in buttons:
+            button.drop_tree()
         last = box[-1] if len(box) else None
         if last is not None:
             last.tail = (last.tail or "") + more
@@ -102,14 +106,24 @@ def _collect(data: object, rest: dict[str, tuple[str, str]]) -> None:
         post = item.get("rest_id")
         if not (isinstance(whole, str) and isinstance(cut, str) and isinstance(post, str)):
             continue
-        if isinstance(shown, list) and len(shown) == 2 and isinstance(shown[1], int):
-            cut = cut[: shown[1]]
+        # What is shown: the range of the cut text (after a reply's "@name"), which is written
+        # with HTML's entities (&amp;) where the whole text is not.
+        if isinstance(shown, list) and len(shown) == 2 and all(isinstance(i, int) for i in shown):
+            cut = cut[shown[0] : shown[1]]
+        cut = html.unescape(cut)
         end = " ".join(cut.split())[-20:]
-        if not end or SHORT_LINK.search(end) or not whole.startswith(cut) or len(whole) <= len(cut):
+        if not end or SHORT_LINK.search(end):
             continue  # a link ends what is shown: it reads differently on the page
+        # The whole text begins with it, where a link may be given another t.co address.
+        begins = re.match(SHORT_LINK.pattern.join(re.escape(part) for part in SHORT_LINK.split(cut)), whole)
+        if begins is None or begins.end() >= len(whole):
+            continue
         links = {
             u.get("url"): u.get("display_url") or u.get("expanded_url")
             for u in (note.get("entity_set") or {}).get("urls") or []
             if isinstance(u, dict)
         }
-        rest[post] = end, SHORT_LINK.sub(lambda m, links=links: links.get(m.group(0)) or m.group(0), whole[len(cut) :])
+        rest[post] = (
+            end,
+            SHORT_LINK.sub(lambda m, links=links: links.get(m.group(0)) or m.group(0), whole[begins.end() :]),
+        )

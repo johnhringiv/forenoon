@@ -2,7 +2,7 @@ import json
 
 import lxml.html
 
-from app.extract import extract
+from app.extract.structure import _lift
 from app.extract.xposts import fill_cut_posts, is_x
 
 SHOWN = "The thread post begins and runs on to the limit, to"
@@ -57,5 +57,30 @@ def test_a_post_whose_whole_text_does_not_begin_with_what_is_shown_is_left_alone
 def test_only_x_pages_are_filled():
     assert is_x("https://x.com/a/status/7") and is_x("https://mobile.twitter.com/a/status/7")
     assert not is_x("https://notx.com/a") and not is_x("https://example.com/x.com")
-    result = extract("https://example.com/a/status/7", page(data_script("7", SHOWN, WHOLE)), "")
-    assert result.body is None or "where it is cut" not in result.body.text_content()
+    markup = page(data_script("7", SHOWN, WHOLE))
+
+    def post(url: str) -> str:
+        return (
+            lxml.html.fromstring(_lift(markup, url, whole_page=True)[0]).xpath("//div[@dir='auto']")[0].text_content()
+        )
+
+    assert "where it is cut" not in post("https://example.com/a/status/7")
+    assert "where it is cut" in post("https://x.com/a/status/7")
+
+
+def test_a_cut_post_is_matched_across_entities_another_link_address_and_a_replys_name():
+    shown = "Tips &amp; tricks, see https://t.co/one and then the post runs on, to"
+    whole = "Tips & tricks, see https://t.co/two and then the post runs on, to the end."
+    tweet = {
+        "rest_id": "7",
+        "details": {"full_text": "@someone " + shown, "display_text_range": [9, 9 + len(shown)]},
+        "note_tweet": {"note_tweet_results": {"result": {"text": whole}}},
+    }
+    script = f"<script>x={{data:{json.dumps(json.dumps(tweet))}}}</script>"
+    root = lxml.html.fromstring(
+        "<html><body><main><article><a href='/a/status/7'>Oct 2</a><div dir='auto'>Tips &amp; tricks, see "
+        "<a href='https://t.co/one'>example.com</a> and then the post runs on, to<button>Show more</button></div>"
+        f"</article></main>{script}</body></html>"
+    )
+    fill_cut_posts(root)
+    assert root.xpath("//div[@dir='auto']")[0].text_content().endswith("runs on, to the end.")
