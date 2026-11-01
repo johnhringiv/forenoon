@@ -633,6 +633,9 @@ fetched, and at most 200 pictures are fetched for one article, in at most five m
 - **Format `articles`.** One EPUB per article, titled `FN YYYY-MM-DD · Source · Title`.
 - Output is EPUB 3 with an NCX for older converters, and is byte-for-byte reproducible for
   the same input.
+- Titles, authors, source names and the model's lines (why an article was picked, its story)
+  come from feeds and the model, so a control character XML refuses in them (a feed title's
+  `&#1;`, decoded) is set as a space: one entry cannot make the book unreadable.
 - Code is set in JetBrains Mono NL (no ligatures), embedded only in books that contain code
   (about 200 KB), left-aligned and never hyphenated. The image downloads the font from a
   pinned release, checked against its hash; without the file (`FORENOON_CODE_FONT`, default
