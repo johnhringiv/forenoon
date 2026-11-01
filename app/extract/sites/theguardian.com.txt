@@ -12,7 +12,7 @@ strip: //figure[ancestor::gu-island[@name = 'YoutubeBlockComponent' or @name = '
 strip: //*[contains(@data-spacefinder-type, 'RichLinkBlockElement')]
 strip: //*[contains(@data-spacefinder-type, 'NewsletterSignupBlockElement')]
 strip: //*[contains(@data-spacefinder-type, 'ReporterCalloutBlockElement')]
-strip: //*[self::p or self::li][.//a[contains(@href, 'CMP=copyembed')]]
+strip: //*[self::p or self::li][.//a[contains(@href, 'CMP=copyembed')]][string-length(normalize-space()) < 300]
 strip: //figure[contains(@data-spacefinder-type, 'LinkBlockElement')][.//a[contains(@href, 'CMP=copyembed')]]
 strip: //p[starts-with(normalize-space(), 'Listen to our podcasts here and sign up to the long read weekly email')]
 strip: //gu-island[@name = 'KeyEventsCarousel']//time

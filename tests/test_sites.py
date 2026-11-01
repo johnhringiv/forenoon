@@ -342,6 +342,16 @@ SF = "model.dotcomrendering.pageElements."
         (BBC, '<div data-block="topicList">JUNK</div><div data-block="promoList">JUNK</div>'),
         (BBC, '<div data-block="links">JUNK</div><div data-block="eventPromo">JUNK</div>'),
         (BBC, '<div data-testid="links-grid">JUNK www.bbc.co.uk</div>'),
+        (BBC, '<div data-block="uploaderEmbed"><p>Are you personally affected? JUNK</p></div>'),
+        (BBC, '<div data-block="image"><img src="https://i.example/v.png" alt="BBC Verify logo"></div>'),
+        (
+            BBC,
+            '<figure><div data-testid="image"><img src="https://i.example/y.png" alt="Your Voice banner JUNK"></div></figure>',
+        ),
+        (
+            BBC,
+            '<figure><div data-testid="image"><img src="https://i.example/n.png" alt="A banner promoting JUNK"></div></figure>',
+        ),
         (
             BBC,
             "<p>This breaking news story is being updated JUNK</p><p>You can receive Breaking News on a smartphone JUNK</p>",
