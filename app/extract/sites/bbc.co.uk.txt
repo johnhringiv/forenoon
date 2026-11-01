@@ -5,6 +5,7 @@ strip: //div[@data-block = 'image'][not(.//figcaption)][.//img[@alt = 'BBC Verif
 strip: //div[@data-block = 'text'][.//a[contains(@href, '/newsletters/')]][string-length(normalize-space()) < 400]
 strip: //div[@data-block = 'text'][starts-with(normalize-space(), 'Go to BBCAfrica.com')]
 strip: //div[@data-block = 'text'][normalize-space() = 'What do you want BBC Verify to investigate?']
+strip: //p[contains(normalize-space(), 'you can get in touch via BBC Your Voice')][string-length(normalize-space()) < 200]
 # The "Get in touch" form ("Are you personally affected…?"), the topic tags, story lists and
 # event promotions; a breaking story's two closing lines about how to get breaking news.
 strip: //div[@data-block = 'uploaderEmbed' or @data-block = 'topicList' or @data-block = 'promoList' or @data-block = 'links' or @data-block = 'eventPromo']

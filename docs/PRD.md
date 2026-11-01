@@ -349,7 +349,7 @@ All fetched content is treated as untrusted.
     transcript).
   - BBC: promotion banners (a wide strip of a picture with no caption described as a banner,
     BBC Verify's logo) and the lines they head (a newsletter's sign-up, BBC Africa's "Follow us", "What do
-    you want BBC Verify to investigate?"), the "Get in touch" form, topic tags, story lists
+    you want BBC Verify to investigate?", the BBC Your Voice line), the "Get in touch" form, topic tags, story lists
     and cards, event promotions, and a breaking story's lines about getting breaking news. On
     bbc.com's other layout (no `data-block`), the banners by their description (their
     pictures carry no size), newsletter lines, the "get in touch" line and topic tags.

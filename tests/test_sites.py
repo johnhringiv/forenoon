@@ -288,3 +288,74 @@ def test_a_guardian_lead_video_and_newsletter_lines_go():
     )
     sites.strip(root, rules)
     assert "".join(root.text_content().split()) == "AphotoText."
+
+
+GUARDIAN = "https://www.theguardian.com/world/2026/oct/24/x"
+BBC = "https://www.bbc.co.uk/news/articles/c1"
+SF = "model.dotcomrendering.pageElements."
+
+
+@pytest.mark.parametrize(
+    ("url", "junk"),
+    [
+        (GUARDIAN, '<div id="the-caption"><figcaption>JUNK caption shown on a tap</figcaption></div>'),
+        (
+            GUARDIAN,
+            f'<figure data-spacefinder-type="{SF}YoutubeBlockElement"><figcaption>JUNK – video</figcaption></figure>',
+        ),
+        (
+            GUARDIAN,
+            '<gu-island name="SelfHostedVideo"><figure><figcaption>JUNK – video</figcaption></figure></gu-island>',
+        ),
+        (GUARDIAN, f'<figure data-spacefinder-type="{SF}NewsletterSignupBlockElement">JUNK</figure>'),
+        (GUARDIAN, f'<figure data-spacefinder-type="{SF}ReporterCalloutBlockElement">JUNK</figure>'),
+        (GUARDIAN, "<p>Listen to our podcasts here and sign up to the long read weekly email here. JUNK</p>"),
+        (
+            GUARDIAN,
+            (
+                '<div id="pinned-post"><div><div>From JUNK <gu-island name="RelativeTime"><time>1h ago</time>'
+                '</gu-island></div></div><div id="collapsible-body"><p>KEEP</p></div></div>'
+            ),
+        ),
+        (
+            BBC,
+            '<div data-block="text"><p>Get our flagship newsletter JUNK. <a href="/newsletters/z1">Sign up</a></p></div>',
+        ),
+        (BBC, '<div data-block="text"><p>Go to BBCAfrica.com for more news JUNK</p></div>'),
+        (BBC, '<div data-block="text"><p>What do you want BBC Verify to investigate?</p></div>'),
+        (BBC, "<p>If there are issues JUNK, you can get in touch via BBC Your Voice.</p>"),
+        (BBC, '<div data-block="topicList">JUNK</div><div data-block="promoList">JUNK</div>'),
+        (BBC, '<div data-block="links">JUNK</div><div data-block="eventPromo">JUNK</div>'),
+        (BBC, '<div data-testid="links-grid">JUNK www.bbc.co.uk</div>'),
+        (
+            BBC,
+            "<p>This breaking news story is being updated JUNK</p><p>You can receive Breaking News on a smartphone JUNK</p>",
+        ),
+        (
+            BBC,
+            '<figure><div data-testid="image"><img src="https://i.example/b.png" alt="Thin, red banner JUNK"></div></figure>',
+        ),
+        (BBC, '<p class="Paragraph-styles__P">Sign up JUNK <a href="/newsletters/z7">here</a></p>'),
+        (BBC, '<p class="Paragraph-styles__P">If it is safe to do so, you can also get in touch JUNK</p>'),
+        (BBC, '<div class="TagList-styles__TagListStyled">JUNK</div>'),
+    ],
+)
+def test_each_guardian_and_bbc_strip_rule_drops_its_furniture(url, junk):
+    root = lxml.html.fromstring(f"<html><body><main><p>KEEP the article.</p>{junk}</main></body></html>")
+    before = lxml.html.tostring(root, encoding="unicode")
+    sites.strip(root, sites.rules_for(url))
+    after = lxml.html.tostring(root, encoding="unicode")
+    assert after != before and "JUNK" not in after and "KEEP" in after
+
+
+def test_bbc_iplayer_and_sounds_pages_are_not_articles():
+    rules = sites.rules_for(BBC)
+    assert sites.not_article("https://www.bbc.co.uk/iplayer/episode/m0033jlx", rules)
+    assert sites.not_article("https://www.bbc.co.uk/sounds/play/m002", rules)
+
+
+def test_guardian_podcast_and_video_pages_are_not_articles():
+    rules = sites.rules_for(GUARDIAN)
+    assert sites.not_article("https://www.theguardian.com/news/audio/2026/oct/23/x-podcast", rules)
+    assert sites.not_article("https://www.theguardian.com/world/video/2026/oct/23/x", rules)
+    assert not sites.not_article(GUARDIAN, rules)
