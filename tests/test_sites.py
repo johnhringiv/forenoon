@@ -181,3 +181,46 @@ def test_a_rules_file_that_does_not_read_leaves_its_site_to_the_general_rules(tm
         assert sites.rules_for("https://broken.example/a") == sites.Rules()
     finally:
         sites._load.cache_clear()
+
+
+def test_a_guardian_live_blog_keeps_each_posts_heading_without_its_furniture():
+    post = (
+        '<article id="block-{n}" class="block"><header><div><a href="#block-{n}"><span>'
+        '<gu-island name="RelativeTime"><time>2h ago</time></gu-island></span><span>04.31 EDT</span></a></div>'
+        '<div><img src="https://i.example/reporter.png" alt="Reporter"></div>'
+        "<h2>Heading of post {n}</h2></header>{text}</article>"
+    )
+    blocks = "".join(post.format(n=n, text=paragraphs(3, 3 * n)) for n in range(3))
+    page = (
+        '<html><body><main><div data-gu-name="standfirst"><p>Standfirst.</p></div>'
+        '<div data-gu-name="body"><gu-island name="KeyEventsCarousel"><span>Key events</span></gu-island>'
+        f'<div id="liveblog-body">{blocks}</div>'
+        '<aside data-spacefinder-type="model.dotcomrendering.pageElements.RichLinkBlockElement">Read more</aside>'
+        '<div><span>Explore more on these topics</span><ul><li><a href="/world">World</a></li></ul></div>'
+        "</div></main></body></html>"
+    )
+    result = extract("https://www.theguardian.com/world/live/2026/oct/23/x", page, "")
+    text = result.body.text_content()
+    assert all(f"Heading of post {n}" in text for n in range(3)) and "04.31 EDT" in text
+    for furniture in ("2h ago", "Key events", "Read more", "Explore more"):
+        assert furniture not in text, furniture
+    assert not result.body.xpath("//img")
+
+
+def test_a_bbc_newsletter_promotion_and_contact_form_are_dropped():
+    page = (
+        '<html><body><main><article><div data-block="text">' + paragraphs(6) + "</div>"
+        '<div data-block="image"><figure><img src="https://i.example/b.png" alt="Thin, red banner promoting the'
+        ' Politics Essential newsletter"></figure></div>'
+        '<div data-block="text"><p>Sign up for our Politics Essential newsletter. <a href="/newsletters/z7">Sign up</a></p></div>'
+        '<div data-block="image"><figure><img src="https://i.example/p.jpg" alt="Protesters hold a banner">'
+        "<figcaption>Image caption, Protesters in the square</figcaption></figure></div>"
+        '<div data-block="uploaderEmbed"><p>Are you personally affected by the issues raised in this story?</p></div>'
+        "</article></main></body></html>"
+    )
+    result = extract("https://www.bbc.co.uk/news/articles/c1", page, "")
+    text = result.body.text_content()
+    assert "newsletter" not in text and "personally affected" not in text
+    root = lxml.html.fromstring(page)
+    sites.strip(root, sites.rules_for("https://www.bbc.com/news/articles/c1"))
+    assert [img.get("src") for img in root.iter("img")] == ["https://i.example/p.jpg"]  # a news photo stays
