@@ -255,6 +255,23 @@ def test_a_guardian_pinned_post_goes_only_when_its_original_is_on_the_page():
         assert bool(root.xpath("//div[@id = 'pinned-post']")) == kept
 
 
+def test_a_guardian_read_more_line_stays_without_its_card():
+    root = lxml.html.fromstring("<html><body><p>Text.</p><p>Read more…</p><p>Next.</p></body></html>")
+    sites.strip(root, sites.rules_for(GUARDIAN))
+    assert "Read more…" in root.text_content()
+
+
+def test_a_guardian_key_events_list_stays_when_it_links_to_a_post_not_in_the_book():
+    rules = sites.rules_for("https://www.theguardian.com/world/live/2026/oct/23/x")
+    root = lxml.html.fromstring(
+        '<html><body><gu-island name="KeyEventsCarousel">Key events<a href="#block-1">A</a><a href="#block-9">B</a>'
+        '</gu-island><div id="pinned-post"><a href="#block-2">10.02</a></div>'
+        '<div id="liveblog-body"><article id="block-1"><p>Text.</p></article></div></body></html>'
+    )
+    sites.strip(root, rules)
+    assert root.xpath("//gu-island[@name = 'KeyEventsCarousel']")
+
+
 def test_the_bbc_rules_are_the_same_for_both_its_domains():
     assert (sites.SITES / "bbc.co.uk.txt").read_text() == (sites.SITES / "bbc.com.txt").read_text()
 
@@ -315,6 +332,15 @@ SF = "model.dotcomrendering.pageElements."
             (
                 '<div id="pinned-post"><div><div>From JUNK <gu-island name="RelativeTime"><time>1h ago</time>'
                 '</gu-island></div></div><div id="collapsible-body"><p>KEEP</p></div></div>'
+            ),
+        ),
+        (GUARDIAN, f'<p>Read more JUNK</p><figure data-spacefinder-type="{SF}RichLinkBlockElement">JUNK</figure>'),
+        (
+            GUARDIAN,
+            (
+                '<gu-island name="KeyEventsCarousel">JUNK Key events<a href="?page=with%3Ablock-1#block-1">A</a>'
+                '<a href="#block-2">B</a></gu-island><div id="pinned-post"><a href="#block-2">10.02</a><p>KEEP</p></div>'
+                '<div id="liveblog-body"><article id="block-1"><p>KEEP</p></article></div>'
             ),
         ),
         (GUARDIAN, '<aside data-gu-name="pullquote"><blockquote>JUNK a sentence of the article</blockquote></aside>'),

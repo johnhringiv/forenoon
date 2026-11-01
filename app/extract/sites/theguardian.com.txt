@@ -5,16 +5,22 @@ body: //div[@data-gu-name = 'body'] | //div[@data-gu-name = 'media'][//div[@data
 # Inside it: videos (a caption without its video: YouTube or self-hosted, in the text or as the
 # lead), cards for other Guardian stories, the newsletter sign-up and reporter-callout
 # boxes and newsletter lines, the long read's podcast footer; the relative times ("2h ago") of a
-# live blog's posts and of its "Key events" list (the list stays: on a long blog it is the only
-# outline of the posts on later pages); a pinned post whose original is on this page.
+# live blog's posts and of its "Key events" list (the list stays when it links to a post on a
+# later page: it is then the only outline of those posts); a pinned post whose original is on
+# this page.
 strip: //figure[contains(@data-spacefinder-type, 'YoutubeBlockElement')]
 strip: //figure[ancestor::gu-island[@name = 'YoutubeBlockComponent' or @name = 'SelfHostedVideo'] or .//gu-island[@name = 'YoutubeBlockComponent' or @name = 'SelfHostedVideo']]
+# A "Read more…" line left by the card it introduced (before the card's own rule drops it).
+strip: //p[starts-with(normalize-space(), 'Read more')][string-length(normalize-space()) < 15][following-sibling::*[1][contains(@data-spacefinder-type, 'RichLinkBlockElement')]]
 strip: //*[contains(@data-spacefinder-type, 'RichLinkBlockElement')]
 strip: //*[contains(@data-spacefinder-type, 'NewsletterSignupBlockElement')]
 strip: //*[contains(@data-spacefinder-type, 'ReporterCalloutBlockElement')]
 strip: //*[self::p or self::li][.//a[contains(@href, 'CMP=copyembed')]][string-length(normalize-space()) < 300]
 strip: //figure[contains(@data-spacefinder-type, 'LinkBlockElement')][.//a[contains(@href, 'CMP=copyembed')]]
 strip: //p[starts-with(normalize-space(), 'Listen to our podcasts here and sign up to the long read weekly email')]
+# The "Key events" list when every post it links to is in the book (on this page or pinned):
+# then it is only navigation.
+strip: //gu-island[@name = 'KeyEventsCarousel'][.//a[contains(@href, '#block-')]][not(.//a[contains(@href, '#block-')][not(substring-after(@href, '#') = //div[@id = 'liveblog-body']/article/@id or substring-after(@href, '#') = substring-after((//div[@id = 'pinned-post']//a[contains(@href, '#block-')])[1]/@href, '#'))])]
 strip: //gu-island[@name = 'KeyEventsCarousel']//time
 # A kept pinned post's "From 45m ago" line.
 strip: //div[@id = 'pinned-post']/div[gu-island[@name = 'RelativeTime'] or div/gu-island[@name = 'RelativeTime']]

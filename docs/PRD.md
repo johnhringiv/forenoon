@@ -357,11 +357,12 @@ All fetched content is treated as untrusted.
   - The Guardian: the article's box (`div[data-gu-name=body]`) with its lead picture, on a page
     that has the box, as readability drops a live blog's post headers and with them each post's
     heading; in it, videos (in the text and as the lead), cards for other Guardian stories, the
-    newsletter sign-up and reporter-callout boxes and newsletter lines, the long read's podcast
-    footer, each post's relative time ("2h ago") and contributor portrait, a kept pinned post's
-    "From 45m ago" line, the relative times in the "Key events" list (the list stays: on a long
-    blog it is the only outline of posts on later pages), a pinned post whose original is on the
-    page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
+    newsletter sign-up and reporter-callout boxes (with a "Read more…" line before a card) and
+    newsletter lines, the long read's podcast footer, each post's relative time ("2h ago") and
+    contributor portrait, a kept pinned post's "From 45m ago" line, the "Key events" list when
+    every post it links to is in the book (when it links to a post on a later page it stays, as
+    the only outline of those posts, without its relative times), a pinned post whose original
+    is on the page, the lead picture's second caption (shown on a tap), pull quotes (a repeat of the
     article's sentence), and the topic tags. Podcast episodes and video pages (`/audio/`,
     `/video/`) are not articles.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
