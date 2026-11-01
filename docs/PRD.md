@@ -366,15 +366,18 @@ All fetched content is treated as untrusted.
     article's sentence), and the topic tags. Podcast episodes and video pages (`/audio/`,
     `/video/`) are not articles.
   - NPR: a picture's "hide caption" toggle, the credit repeated under a caption that already
-    ends with it, and the "Get the latest … in the NPR App" line. A section's front page
+    holds it, and the "Get the latest … in the NPR App" line. A section's front page
     (`/sections/technology/`) is not an article.
   - The New York Post: the newsletter sign-up box and the slideshow's photo count over each
     picture.
   - Gallup: the article's box and its survey methods, as readability drops a chart's picture
-    (a box of its own with no text); in it, the "###Embeddable###" placeholders where a
-    script puts a chart, the "follow @Gallup" line and a hidden "Top of Form".
+    (a box of its own with no text), the methods only beside the article's box; in it, the
+    "###Embeddable###" placeholders where a script puts a chart (the charts themselves do not
+    reach the book), the "follow @Gallup" line and a hidden "Top of Form".
+  - DuckDB: the dark theme's copy of a chart drawn for each theme.
   - GamersNexus: its advertisements (a picture linking to its store or Patreon, captioned with
-    the offer) and a video's credits beside an article adapted from it.
+    the offer and what it pays for, not a product photo) and a video's credits beside an
+    article adapted from it.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
 - **Split articles.** When the chosen content holds under 60% of a long page's text (500

@@ -1,6 +1,6 @@
 # The article's box and its survey methods, as readability drops a chart's picture (a box of
-# its own with no text).
-body: //div[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')] | //section[contains(@class, 'section-rel--methodology')]
+# its own with no text). The methods only beside the article's box, never alone.
+body: //div[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')] | //section[contains(concat(' ', normalize-space(@class), ' '), ' section-rel--methodology ')][//div[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')]]
 # Where a chart is placed on the page by its script ("###Embeddable###").
 strip: //div[@data-embeddable-marker]
 strip: //p[starts-with(normalize-space(), 'Stay up to date with the latest insights by following @Gallup')]

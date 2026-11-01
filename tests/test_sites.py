@@ -456,10 +456,20 @@ GN = "https://gamersnexus.net/news-features/x"
             GN,
             (
                 '<figure><a href="https://store.gamersnexus.net/products/x"><img src="https://i.example/m.jpg"></a>'
-                "<figcaption>Grab a JUNK Modmat</figcaption></figure>"
+                "<figcaption>Grab a JUNK Modmat. Purchases directly fund our work!</figcaption></figure>"
             ),
         ),
-        (GN, '<figure><a href="https://www.patreon.com/gamersnexus"><img src="https://i.example/p.jpg"></a></figure>'),
+        (
+            GN,
+            (
+                '<figure><a href="https://www.patreon.com/gamersnexus"><img src="https://i.example/p.jpg"></a>'
+                "<figcaption>Visit our Patreon page JUNK</figcaption></figure>"
+            ),
+        ),
+        (
+            "https://duckdb.org/2026/10/21/x.html",
+            '<p><img src="/a-light.svg" class="lightmode-img"><img src="/JUNK-dark.svg" class="darkmode-img"> KEEP</p>',
+        ),
         (GN, '<div class="col-md-2 credits"><h4>Credits</h4><h5>JUNK Host</h5><p>JUNK Steve</p></div>'),
     ],
 )
@@ -486,6 +496,13 @@ def test_each_npr_nypost_gallup_and_gamersnexus_strip_rule_drops_its_furniture(u
         (
             GN,
             '<figure><a href="https://gamersnexus.net/u/chart.png"><img src="https://i.example/c.png"></a>KEEP</figure>',
+        ),
+        (
+            GN,
+            (
+                '<figure><a href="https://store.gamersnexus.net/products/x"><img src="https://i.example/mat.jpg"></a>'
+                "<figcaption>KEEP the new modmat, shown flat.</figcaption></figure>"
+            ),
         ),
     ],
 )
@@ -516,3 +533,14 @@ def test_an_npr_sections_front_page_is_no_article_but_a_story_under_it_is():
     assert sites.not_article("https://www.npr.org/sections/technology/", rules)
     assert not sites.not_article("https://www.npr.org/sections/health-shots/2026/10/20/nx-s1-1/x", rules)
     assert not sites.not_article(NPR, rules)
+
+
+def test_gallups_survey_methods_alone_are_not_taken_for_the_article():
+    page = (
+        "<html><head><title>T</title></head><body><main><article><div class='story-body'>"
+        + paragraphs(8)
+        + "</div><section class='section-rel--methodology'><h2>Survey Methods</h2><p>"
+        + "These results are based on interviews with approximately 144,000 adults in many countries. " * 5
+        + "</p></section></article></main></body></html>"
+    )
+    assert "Paragraph 7" in extract(GALLUP, page, "").body.text_content()
