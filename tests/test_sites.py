@@ -439,3 +439,11 @@ def test_a_politico_europe_article_set_in_several_boxes_is_taken_whole():
     found = sites.body(page, sites.rules_for("https://www.politico.eu/article/x/"))
     text = found.text_content()
     assert "Paragraph 0" in text and "Paragraph 8" in text and "Advertisement" not in text and "Title" not in text
+
+
+def test_a_politico_europe_newsletter_is_left_to_readability():
+    page = lxml.html.fromstring(
+        "<html><body class='single single-newsletter'><div class='article__content'><div id='pl-nh-sponsor'>"
+        "PRESENTED BY</div><p>The issue.</p></div></body></html>"
+    )
+    assert sites.body(page, sites.rules_for("https://www.politico.eu/newsletter/brussels-playbook/x/")) is None

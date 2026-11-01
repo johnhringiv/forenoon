@@ -1,3 +1,4 @@
-# The article's boxes: it is set in several, with advertisements between them, and readability
-# takes one alone (or only the standfirst).
-body: //div[contains(concat(' ', normalize-space(@class), ' '), ' article__content ')]
+# An article's boxes: it is set in several, with advertisements between them, and readability
+# takes one alone (or only the standfirst). Not a newsletter's page (Playbook), whose box also
+# holds the email's masthead, sponsor and advertisements: readability reads it well.
+body: //body[not(contains(concat(' ', normalize-space(@class), ' '), ' single-newsletter '))]//div[contains(concat(' ', normalize-space(@class), ' '), ' article__content ')]
