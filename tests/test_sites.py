@@ -450,6 +450,22 @@ GN = "https://gamersnexus.net/news-features/x"
             ),
         ),
         (GALLUP, "<div data-embeddable-marker>###JUNK###</div>"),
+        (GALLUP, '<div class="c-additional-steps"><p>Explore more about JUNK</p></div>'),
+        (
+            GN,
+            (
+                '<figure><img src="https://i.example/t.jpg"><figcaption>Grab a <a href="https://store.gamersnexus.net/t">'
+                "JUNK Toolkit</a> to support our AD-FREE reviews</figcaption></figure>"
+            ),
+        ),
+        (
+            GN,
+            (
+                '<figure><a href="https://store.gamersnexus.net/g"><img src="https://i.example/g.jpg"></a><figcaption>JUNK '
+                "Glasses. Purchases keep us ad-free and directly support our reviews!</figcaption></figure>"
+            ),
+        ),
+        (NPR, '<div class="caption-wrap"><button class="toggle-caption"><b>JUNK toggle caption</b></button></div>'),
         (GALLUP, "<p><em>Stay up to date with the latest insights by following @Gallup JUNK</em></p>"),
         (GALLUP, '<p><em><span style="display:none">Top of Form</span></em></p>'),
         (
@@ -473,7 +489,7 @@ GN = "https://gamersnexus.net/news-features/x"
         (GN, '<div class="col-md-2 credits"><h4>Credits</h4><h5>JUNK Host</h5><p>JUNK Steve</p></div>'),
     ],
 )
-def test_each_npr_nypost_gallup_and_gamersnexus_strip_rule_drops_its_furniture(url, junk):
+def test_each_npr_nypost_gallup_gamersnexus_and_duckdb_strip_rule_drops_its_furniture(url, junk):
     root = lxml.html.fromstring(f"<html><body><main><p>KEEP the article.</p>{junk}</main></body></html>")
     before = lxml.html.tostring(root, encoding="unicode")
     sites.strip(root, sites.rules_for(url))
@@ -488,6 +504,13 @@ def test_each_npr_nypost_gallup_and_gamersnexus_strip_rule_drops_its_furniture(u
         (
             NPR,
             '<div class="credit-caption"><div class="caption"><p>The caption.</p></div><span class="credit">KEEP</span></div>',
+        ),
+        (
+            NPR,
+            (
+                '<p><a href="https://npr.app/x">KEEP a paragraph that links only to the app but goes on long enough '
+                "to be the article's own words about the app and what it does for readers.</a></p>"
+            ),
         ),
         (
             NPR,

@@ -373,10 +373,11 @@ All fetched content is treated as untrusted.
   - Gallup: the article's box and its survey methods, as readability drops a chart's picture
     (a box of its own with no text), the methods only beside the article's box; in it, the
     "###Embeddable###" placeholders where a script puts a chart (the charts themselves do not
-    reach the book), the "follow @Gallup" line and a hidden "Top of Form".
+    reach the book), the "follow @Gallup" line, a hidden "Top of Form" and the "Explore more
+    about…" box of links.
   - DuckDB: the dark theme's copy of a chart drawn for each theme.
-  - GamersNexus: its advertisements (a picture linking to its store or Patreon, captioned with
-    the offer and what it pays for, not a product photo) and a video's credits beside an
+  - GamersNexus: its advertisements (a picture with a link to its store or Patreon, captioned
+    with the offer and what it pays for, not a product photo) and a video's credits beside an
     article adapted from it.
 - **The page's own word count** (used for the checks below and the "extracted N of ~M
   words" warning) is trafilatura's reading of the article, without the comments under it.
