@@ -527,6 +527,14 @@ def test_each_npr_nypost_gallup_gamersnexus_and_duckdb_strip_rule_drops_its_furn
                 "<figcaption>KEEP the new modmat, shown flat.</figcaption></figure>"
             ),
         ),
+        # A quote in a figure, its caption about the store, but no picture: not an ad.
+        (
+            GN,
+            (
+                '<figure><blockquote>KEEP what the reader wrote</blockquote><figcaption>A reader on <a href="https://'
+                'store.gamersnexus.net/">our store</a>, which helps fund our work</figcaption></figure>'
+            ),
+        ),
     ],
 )
 def test_what_looks_like_furniture_on_those_sites_but_is_not_stays(url, kept):
